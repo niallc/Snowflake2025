@@ -17,10 +17,15 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union
 import logging
+import re
+import string
 
 from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION
 
 logger = logging.getLogger(__name__)
+
+TRMPH_BOARD_PATTERN = re.compile(r"#(\d+),")
+LETTERS = string.ascii_lowercase
 
 
 # ============================================================================
@@ -125,20 +130,62 @@ def load_trmph_files(data_dir: str) -> List[str]:
 
 def strip_trmph_preamble(trmph_text: str) -> str:
     """
-    Remove the preamble from a trmph string.
-    
-    Args:
-        trmph_text: Full trmph string with preamble
-        
-    Returns:
-        Trmph string with only the moves
-        
-    Example:
-        "http://www.trmph.com/hex/board#13,a1b2c3" → "a1b2c3"
+    Remove the preamble from a trmph string (e.g., 'http://...#13,a1b2c3' -> 'a1b2c3').
     """
-    # TODO: Implement preamble stripping
-    # Should use legacy StripTrmphPreamble() logic
-    pass
+    match = TRMPH_BOARD_PATTERN.search(trmph_text)
+    if not match:
+        raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
+    return trmph_text[match.end():]
+
+
+def split_trmph_moves(bare_moves: str) -> list[str]:
+    """
+    Split a bare trmph move string into a list of moves (e.g., 'a1b2c3' -> ['a1','b2','c3']).
+    """
+    moves = []
+    i = 0
+    while i < len(bare_moves):
+        if bare_moves[i] not in LETTERS:
+            raise ValueError(f"Expected letter at position {i} in {bare_moves}")
+        j = i + 1
+        while j < len(bare_moves) and bare_moves[j].isdigit():
+            j += 1
+        moves.append(bare_moves[i:j])
+        i = j
+    return moves
+
+
+def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, int]:
+    """
+    Convert a trmph move (e.g., 'a1') to (row, col) coordinates (0-indexed).
+    """
+    if len(move) < 2 or len(move) > 4:
+        raise ValueError(f"Invalid trmph move: {move}")
+    letter = move[0]
+    number = int(move[1:])
+    if letter not in LETTERS[:board_size]:
+        raise ValueError(f"Invalid letter in move: {move}")
+    if not (1 <= number <= board_size):
+        raise ValueError(f"Invalid number in move: {move}")
+    row = number - 1
+    col = LETTERS.index(letter)
+    return row, col
+
+
+def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE) -> np.ndarray:
+    """
+    Parse a trmph string to a board matrix (0=empty, 1=blue, 2=red).
+    """
+    bare_moves = strip_trmph_preamble(trmph_text)
+    moves = split_trmph_moves(bare_moves)
+    board = np.zeros((board_size, board_size), dtype=np.int8)
+    for i, move in enumerate(moves):
+        row, col = trmph_move_to_rowcol(move, board_size)
+        color = 1 if i % 2 == 0 else 2  # Blue starts
+        if board[row, col] != 0:
+            raise ValueError(f"Duplicate move at {(row, col)} in {trmph_text}")
+        board[row, col] = color
+    return board
 
 
 def trmph_to_dothex(trmph_text: str) -> np.ndarray:
