@@ -114,12 +114,13 @@ One possible logical path for development would be to build the components in or
 - Environment: Python virtual environment with PyTorch, NumPy, Pandas, Matplotlib, WandB, Jupyter
 
 **Architecture Decisions:**
-- Starting with ResNet-18 (concerned ResNet-34 might be too large/slow)
-- Open to attention-based architectures if practical and beneficial
+- Starting with ResNet-18 (proven, efficient, good for 1-10M games)
+- Open to attention-based architectures if resources allow
 - Flexible on precise design - can iterate and improve
 - Board representation: `(2, 13, 13)` tensors (2 channels for two players)
 - Policy head: 169 outputs (13x13 board positions)
 - Value head: 1 output (binary classification)
+- Modern practices: Mixed precision training, gradient checkpointing, efficient data loading
 
 **Development Approach:**
 - Start with simple architecture, upgrade later if needed
@@ -148,11 +149,23 @@ data/                   # For processed data
 requirements.txt
 ```
 
+**Current Progress:**
+- ✅ Project scaffolding complete with clean, modular structure
+- ✅ Virtual environment set up with all dependencies
+- ✅ Comprehensive documentation of data formats and legacy code analysis
+- ✅ Detailed placeholder interfaces for data pipeline with type hints
+- ✅ Basic test suite in place and passing
+- ✅ Configuration system with constants and settings
+
 **Next Steps:**
-1. Set up project scaffolding with placeholder files
-2. Create virtual environment and install dependencies
-3. Begin with model architecture (Phase B) to understand data format requirements
-4. Implement data pipeline (Phase A) once model requirements are clear
-5. Build training loop (Phase C)
-6. Add logging and full training (Phase D)
-7. Implement validation (Phase E)
+1. ✅ Set up project scaffolding with placeholder files
+2. ✅ Create virtual environment and install dependencies
+3. ✅ Document data formats and processing pipeline (`hex_ai/data_formats.md`)
+4. ✅ Create detailed placeholder interfaces for data pipeline (`hex_ai/data_utils.py`)
+5. ✅ Analyze modern architecture choices and resource requirements
+6. **Next: Implement ResNet-18 model (Phase B)** with modern best practices
+7. **Then: Implement data pipeline (Phase A)** once model requirements are clear
+8. **Then: Build training loop (Phase C)** with mixed precision and efficient loading
+9. **Then: Add logging and full training (Phase D)**
+10. **Then: Implement validation (Phase E)**
+11. **Future: Experiment with attention models if resources allow**

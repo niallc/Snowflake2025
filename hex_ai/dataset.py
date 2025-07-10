@@ -1,174 +1,145 @@
 """
-Dataset handling for Hex AI training data.
+Dataset and data loading utilities for Hex AI training.
 
-This module contains the HexDataset class and related utilities for loading
-and processing Hex game data. The dataset interfaces with pre-processed
-game data and provides PyTorch tensors for training.
+This module provides PyTorch Dataset classes and data loading utilities
+for training the Hex AI model on game data.
 """
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from typing import Tuple, Optional, List
 import numpy as np
 from pathlib import Path
-from typing import Tuple, List, Optional
-import pickle
 
-from .config import (
-    BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    TRMPH_EXTENSION, NUMPY_EXTENSION, PICKLE_EXTENSION
-)
+from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .data_utils import load_trmph_file, convert_to_matrix_format, augment_board
 
 
 class HexDataset(Dataset):
     """
     PyTorch Dataset for Hex game data.
     
-    This dataset loads pre-processed game positions and returns them as
-    PyTorch tensors suitable for training. It handles:
-    - Loading from various data formats (.trmph, .npy, .pkl)
-    - Converting to PyTorch tensors with correct shapes
-    - Optional data augmentation (rotation, reflection)
-    - Efficient loading of sharded data
+    This dataset loads .trmph files and converts them to the format
+    expected by the neural network model.
     """
     
-    def __init__(self, 
-                 data_path: str,
-                 transform: Optional[callable] = None,
-                 augment: bool = True):
+    def __init__(self, data_dir: str, augment: bool = True):
         """
-        Initialize the HexDataset.
+        Initialize the dataset.
         
         Args:
-            data_path: Path to the data directory or file
-            transform: Optional transform to apply to the data
+            data_dir: Directory containing .trmph files
             augment: Whether to apply data augmentation
         """
-        self.data_path = Path(data_path)
-        self.transform = transform
+        self.data_dir = Path(data_dir)
         self.augment = augment
         
-        # TODO: Implement data loading logic
-        # Should:
-        # - Scan for data files (.trmph, .npy, .pkl)
-        # - Create list of available data points
-        # - Handle different data formats
+        # Find all .trmph files
+        self.files = list(self.data_dir.glob("*.trmph"))
         
-        self.data_files = []
-        self.data_indices = []
-        
+        if not self.files:
+            raise ValueError(f"No .trmph files found in {data_dir}")
+    
     def __len__(self) -> int:
-        """Return the total number of data points."""
-        # TODO: Implement length calculation
-        return len(self.data_indices)
+        """Return the number of samples in the dataset."""
+        return len(self.files)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Get a single data point.
+        Get a single sample from the dataset.
         
         Args:
-            idx: Index of the data point
+            idx: Index of the sample
             
         Returns:
-            Tuple of (board_tensor, policy_target, value_target):
-            - board_tensor: Shape (2, 13, 13) - board representation
-            - policy_target: Shape (169) - move probabilities
-            - value_target: Shape (1) - win probability
+            Tuple of (board_state, policy_target, value_target)
         """
-        # TODO: Implement data loading
-        # Should:
-        # - Load the specific data point
-        # - Convert to PyTorch tensors
-        # - Apply transforms/augmentation
-        # - Return correct shapes
+        # Load the .trmph file
+        file_path = self.files[idx]
+        game_data = load_trmph_file(str(file_path))
         
-        # Placeholder return
-        board_tensor = torch.zeros(2, 13, 13, dtype=torch.float32)
-        policy_target = torch.zeros(169, dtype=torch.float32)
-        value_target = torch.zeros(1, dtype=torch.float32)
+        # Convert to matrix format
+        board_state, policy_target, value_target = convert_to_matrix_format(game_data)
         
-        return board_tensor, policy_target, value_target
-    
-    def _load_trmph_file(self, file_path: Path) -> List[Tuple]:
-        """
-        Load data from a .trmph file.
+        # Apply augmentation if enabled
+        if self.augment:
+            board_state, policy_target = augment_board(board_state, policy_target)
         
-        Args:
-            file_path: Path to the .trmph file
-            
-        Returns:
-            List of (board, policy, value) tuples
-        """
-        # TODO: Implement .trmph file loading
-        # Should use legacy code utilities or rewrite for modern Python
-        pass
-    
-    def _load_numpy_file(self, file_path: Path) -> np.ndarray:
-        """
-        Load data from a .npy file.
+        # Convert to tensors
+        board_tensor = torch.FloatTensor(board_state)
+        policy_tensor = torch.FloatTensor(policy_target)
+        value_tensor = torch.FloatTensor([value_target])
         
-        Args:
-            file_path: Path to the .npy file
-            
-        Returns:
-            Numpy array of data
-        """
-        # TODO: Implement .npy file loading
-        pass
-    
-    def _load_pickle_file(self, file_path: Path) -> dict:
-        """
-        Load data from a .pkl file.
-        
-        Args:
-            file_path: Path to the .pkl file
-            
-        Returns:
-            Dictionary containing the data
-        """
-        # TODO: Implement .pkl file loading
-        pass
-    
-    def _apply_augmentation(self, 
-                           board: torch.Tensor, 
-                           policy: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Apply data augmentation (rotation, reflection).
-        
-        Args:
-            board: Board tensor of shape (2, 13, 13)
-            policy: Policy tensor of shape (169)
-            
-        Returns:
-            Augmented (board, policy) tuple
-        """
-        # TODO: Implement data augmentation
-        # Should handle:
-        # - Random rotations (90, 180, 270 degrees)
-        # - Random reflections (horizontal, vertical)
-        # - Corresponding policy adjustments
-        pass
+        return board_tensor, policy_tensor, value_tensor
 
 
-def create_dataloader(dataset: HexDataset, 
-                     batch_size: int = 32,
-                     shuffle: bool = True,
-                     num_workers: int = 0) -> torch.utils.data.DataLoader:
+def create_sample_data(batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Create a DataLoader for the HexDataset.
+    Create sample data for testing purposes.
     
     Args:
-        dataset: HexDataset instance
+        batch_size: Number of samples to create
+        
+    Returns:
+        Tuple of (boards, policies, values) tensors
+    """
+    # Create random board states (2 channels for 2 players)
+    boards = torch.randn(batch_size, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+    
+    # Create random policy targets (169 possible moves)
+    policies = torch.randn(batch_size, POLICY_OUTPUT_SIZE)
+    policies = torch.softmax(policies, dim=1)  # Convert to probabilities
+    
+    # Create random value targets (single value per board)
+    values = torch.randn(batch_size, VALUE_OUTPUT_SIZE)
+    values = torch.sigmoid(values)  # Convert to [0, 1] range
+    
+    return boards, policies, values
+
+
+def create_dataloader(data_dir: str, batch_size: int = 32, 
+                     shuffle: bool = True, num_workers: int = 4,
+                     augment: bool = True) -> DataLoader:
+    """
+    Create a DataLoader for the Hex dataset.
+    
+    Args:
+        data_dir: Directory containing .trmph files
         batch_size: Batch size for training
         shuffle: Whether to shuffle the data
         num_workers: Number of worker processes
+        augment: Whether to apply data augmentation
         
     Returns:
-        Configured DataLoader
+        PyTorch DataLoader
     """
-    return torch.utils.data.DataLoader(
+    dataset = HexDataset(data_dir, augment=augment)
+    
+    return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True
-    ) 
+    )
+
+
+def get_dataset_info(data_dir: str) -> dict:
+    """
+    Get information about the dataset.
+    
+    Args:
+        data_dir: Directory containing .trmph files
+        
+    Returns:
+        Dictionary with dataset information
+    """
+    data_path = Path(data_dir)
+    files = list(data_path.glob("*.trmph"))
+    
+    return {
+        "num_files": len(files),
+        "data_dir": str(data_path),
+        "file_extensions": [f.suffix for f in files[:5]],  # First 5 file extensions
+        "total_size_mb": sum(f.stat().st_size for f in files) / (1024 * 1024)
+    } 
