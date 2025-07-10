@@ -4,18 +4,18 @@
 
 The goal of this project is to create a modern, high-performance Hex AI by re-implementing an existing 2018 TensorFlow 1.1 project in PyTorch.
 
-The new architecture will be a **two-headed ResNet** (ResNet-18 or similar) with a modern head design (Global Average Pooling). The core principle is to **reuse the project's proven data-processing logic** while building the PyTorch model, dataset interface, and training loop from scratch to follow modern best practices.
+A possible new architecture will be a **two-headed ResNet** (ResNet-18 or similar) with a modern head design (Global Average Pooling). We might also save some time by reusing or adapting the project's proven data-processing logic in legacy_code while building the PyTorch model, dataset interface, and training loop from scratch to follow modern best practices.
 
-**Note:** This document is a strategic guide to get the project started. You are encouraged to ask clarifying questions and suggest improvements or alternative implementations that align with the goals of creating a clean, efficient, and powerful program.
+**Note:** This document is a guide to get the project started. You are encouraged to overrule the guide and update it while creating a clean, efficient, and powerful program.
 
 ## 2. The Overall Plan
 
 The development will proceed in five main phases:
 1.  **Project Scaffolding:** Setting up a clean, organized repository.
 2.  **The Data Pipeline:** Creating a PyTorch `Dataset` to interface with our pre-processed game data.
-3.  **The Model Architecture:** Implementing the new two-headed ResNet model.
-4.  **The Training Loop:** Building a script to train the model on a GPU, with modern optimization and logging.
-5.  **Validation:** Establishing a tournament to measure the new model's performance against the old one.
+3.  **The Model Architecture:** Implementing the new model, e.g. two-headed ResNet.
+4.  **The Training Loop:** Building a script to train the model on a GPU, with modern optimization and logging. We can start with an extensive library of existing games.
+5.  **Validation:** Establishing a tournament to maesure each model iterations performance against previous rounds, to find the best models and identify rates of progress.
 
 ## 3. Detailed Next Steps (Coding Tasks)
 
@@ -23,9 +23,10 @@ The development will proceed in five main phases:
 
 Create a `HexDataset` class that interfaces with pre-processed, sharded NumPy data.
 
+The implementation details can be figured out as we go, but an option might be:
 * Inherit from `torch.utils.data.Dataset`.
 * The `__init__` method should take a path to the processed data directory and create a list of all data shards.
-* The `__getitem__` method should load a data point (board, policy target, value target) by index, convert the NumPy arrays to PyTorch tensors, and return them.
+* The `__getitem__` method should be responsible for loading a data point (board, policy target, value target) by index, converting the NumPy arrays to PyTorch tensors, and returning them.
 * **Assumed Tensor Shapes (Update if necessary):**
     * `board_tensor`: `torch.float32`, shape `(2, 13, 13)`
     * `policy_tensor`: `torch.float32`, shape `(169)`
@@ -33,7 +34,7 @@ Create a `HexDataset` class that interfaces with pre-processed, sharded NumPy da
 
 ### Task 3.2: The Model Architecture (`hex_ai/models.py`)
 
-Implement the two-headed ResNet architecture.
+Implement the new architecture. For example, a two-headed ResNet architecture following e.g.
 
 1.  **`ResNetBlock` Module:** Create a `nn.Module` for a standard ResNet block. It should contain two sequences of `Conv2d` -> `BatchNorm2d` -> `ReLU`. It must handle residual connections, including projection shortcuts for when dimensions change.
 2.  **`TwoHeadedResNet` Module:** Create the main model `nn.Module`.
@@ -48,7 +49,7 @@ Implement the two-headed ResNet architecture.
 
 Set up the main training script to orchestrate the process.
 
-* **Setup:** Instantiate the `HexDataset`, wrap it in a `DataLoader`, and instantiate the `TwoHeadedResNet` model.
+* **Setup:** Instantiate the `HexDataset`, wrap it in a `DataLoader`, and instantiate the new  model. One possible setup for this could be the following, though suggestions for more modern, robust, mainainable, or efficient regimes are welcomed:
 * **Loss Function:**
     * `policy_loss = nn.CrossEntropyLoss(policy_logits, policy_targets)`
     * `value_loss = nn.BCEWithLogitsLoss(value_logit, value_targets)`
@@ -56,5 +57,42 @@ Set up the main training script to orchestrate the process.
 * **Optimizer & Scheduler:**
     * Use `torch.optim.AdamW`.
     * Use `torch.optim.lr_scheduler.CosineAnnealingLR`.
-* **Training Loop:** Write a standard training loop that iterates through epochs and batches, calculates the combined loss, performs backpropagation, and updates the weights.
 * **Logging:** Integrate `wandb` to log the losses and learning rate for each step.
+
+---
+## 4. Suggested Workflow and Development Plan
+
+This section provides a suggested approach to the development process.
+
+### 4.1 The `legacy_code` Directory
+
+The `./legacy_code` directory contains files from the original project, such as `ReadHexGamesFiles.py` and `FileConversion.py`. These files contain the battle-tested logic for:
+* Parsing `.trmph` game files.
+* Generating training positions from game histories.
+* Performing data augmentation via rotation and reflection.
+
+This code can be used to create a one-off pre-processing script to convert the raw game data into sharded NumPy arrays for our new `HexDataset` to consume. Or it can simply be used as a way of understanding the locations and structures of the original data, or as a starting point for new and more efficient processing code.
+
+There is no requirement to reuse any of this legacy code. It is provided primarily as a reference. If it's simpler to rewrite a particular utility from scratch in a more modern or efficient way, please do so.
+
+### 4.2 Development Workflow
+
+We recommend the following workflow to maintain a clean and reproducible project:
+1.  **Develop Locally:** All core library code in the `hex_ai/` directory should be developed and tested on a local machine.
+2.  **Commit to GitHub:** Use Git for version control with frequent, small commits. Push changes regularly to a central GitHub repository to serve as the single source of truth.
+3.  **Execute in Colab:** The `notebooks/train_model.ipynb` is the execution environment. To run an experiment, it should start by cloning the latest version of the repository from GitHub (`!git clone ...`). This ensures that training runs are always performed on the most up-to-date, version-controlled code. The purpose of running in colab is only to use modern GPUs to save time. Early runs will probably be run locally, until we're ready to use more resources for a full train.
+
+### 4.3 Phased Development Schedule
+
+One possible logical path for development would be to build the components in order of dependency:
+
+* **Phase A: Data Interface (`dataset.py`):** Start here. Implement the `HexDataset` class. The immediate goal is to successfully load a single pre-processed data point and return it as a correctly shaped Torch tensor.
+* **Phase B: Model Architecture (`models.py`):** With a way to get data, implement the `TwoHeadedResNet`. The goal is to ensure a batch of data can pass through the model's `forward()` method without shape errors.
+* **Phase C: Core Training Step (`train_model.ipynb`):** Implement the core logic of the training loop. The goal is to run a single training step on one batch of data, calculating the combined loss and successfully executing `loss.backward()` and `optimizer.step()`.
+* **Phase D: Full Training & Logging:** Expand the loop to run for a full epoch. Integrate `wandb` to log metrics. The goal is to ensure the training process is stable and that the loss decreases over time.
+* **Phase E: Validation:** Once a model is trained, implement the tournament logic to validate its performance.
+
+### 4.4 Testing and Documentation
+
+* **Testing:** Please write unit tests for critical utility functions where possible (e.g., any new data transformation or game logic functions). For the main components, "integration tests" are key—for example, a test that confirms the `DataLoader` and `TwoHeadedResNet` can work together for one forward/backward pass is extremely valuable.
+* **Documentation:** Use clear docstrings, focusing on the **"why"** for major architectural decisions in key modules (`models.py`, `dataset.py`). The goal is to help a future developer quickly understand the high-level design. Avoid low-level comments that merely state *what* the code is doing. Only log changes to a CHANGELOG file, other documentation should be kept clean and _not_ reference every change in design, only the main current design points at any given time.

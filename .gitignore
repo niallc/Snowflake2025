@@ -1,5 +1,6 @@
 # Niall's files to ignore
 legacy_code/
+data/
 
 
 # Byte-compiled / optimized / DLL files
