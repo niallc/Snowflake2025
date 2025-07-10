@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from hex_ai.dataset import HexDataset, create_dataloader
 from hex_ai.utils import create_sample_data, validate_board_shape
 from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE
+from torch.utils.data import DataLoader
 
 
 class TestHexDataset(unittest.TestCase):
@@ -36,23 +37,44 @@ class TestHexDataset(unittest.TestCase):
     
     def test_dataset_initialization(self):
         """Test that HexDataset can be initialized."""
-        # TODO: Implement test once dataset is implemented
-        dataset = HexDataset(data_path=self.test_data_path)
+        # Create a temporary directory with a dummy .trmph file
+        import tempfile
+        import os
+        
+        temp_dir = tempfile.mkdtemp()
+        dummy_file = os.path.join(temp_dir, "dummy.trmph")
+        with open(dummy_file, 'w') as f:
+            f.write("#13,a1b2c3")
+        
+        dataset = HexDataset(data_dir=temp_dir)
         self.assertIsInstance(dataset, HexDataset)
     
     def test_dataset_length(self):
         """Test that dataset returns correct length."""
-        # TODO: Implement test once dataset is implemented
-        dataset = HexDataset(data_path=self.test_data_path)
-        # This should be 0 for now since we haven't implemented data loading
-        self.assertEqual(len(dataset), 0)
+        # Create a temporary directory with a dummy .trmph file
+        import tempfile
+        import os
+        
+        temp_dir = tempfile.mkdtemp()
+        dummy_file = os.path.join(temp_dir, "dummy.trmph")
+        with open(dummy_file, 'w') as f:
+            f.write("#13,a1b2c3")
+        
+        dataset = HexDataset(data_dir=temp_dir)
+        self.assertEqual(len(dataset), 1)
     
     def test_dataset_getitem(self):
         """Test that dataset returns correct tensor shapes."""
-        # TODO: Implement test once dataset is implemented
-        dataset = HexDataset(data_path=self.test_data_path)
+        # Create a temporary directory with a dummy .trmph file
+        import tempfile
+        import os
         
-        # For now, this should return placeholder tensors
+        temp_dir = tempfile.mkdtemp()
+        dummy_file = os.path.join(temp_dir, "dummy.trmph")
+        with open(dummy_file, 'w') as f:
+            f.write("#13,a1b2c3")
+        
+        dataset = HexDataset(data_dir=temp_dir)
         board, policy, value = dataset[0]
         self.assertEqual(board.shape, (2, 13, 13))
         self.assertEqual(policy.shape, (169,))
@@ -96,19 +118,17 @@ class TestDataLoader(unittest.TestCase):
     
     def test_create_dataloader(self):
         """Test that DataLoader can be created."""
-        # Create a dummy dataset
-        dataset = HexDataset(data_path=tempfile.mkdtemp())
+        # Create a temporary directory with a dummy .trmph file
+        import tempfile
+        import os
         
-        # Create DataLoader
-        dataloader = create_dataloader(
-            dataset, 
-            batch_size=4, 
-            shuffle=False, 
-            num_workers=0
-        )
+        temp_dir = tempfile.mkdtemp()
+        dummy_file = os.path.join(temp_dir, "dummy.trmph")
+        with open(dummy_file, 'w') as f:
+            f.write("#13,a1b2c3")
         
-        self.assertIsInstance(dataloader, torch.utils.data.DataLoader)
-        self.assertEqual(dataloader.batch_size, 4)
+        dataloader = create_dataloader(data_dir=temp_dir)
+        self.assertIsInstance(dataloader, DataLoader)
 
 
 if __name__ == '__main__':

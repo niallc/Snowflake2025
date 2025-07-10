@@ -20,7 +20,7 @@ import logging
 import re
 import string
 
-from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION
+from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,8 @@ def convert_to_matrix_format(game_data: str) -> Tuple[np.ndarray, np.ndarray, fl
     # TODO: Implement actual conversion from trmph to matrix format
     
     # Create a random board state (2 channels for 2 players)
-    board_state = np.random.randint(0, 2, size=(2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    board_state = np.random.randint(0, 2, size=(2, BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    board_state = board_state.astype(np.float32)
     
     # Create random policy target (169 possible moves)
     policy_target = np.random.rand(POLICY_OUTPUT_SIZE).astype(np.float32)
@@ -321,72 +322,148 @@ def rowcol_to_tensor(row: int, col: int) -> int:
 # Data Augmentation Functions
 # ============================================================================
 
-def rotate_board_180(board: torch.Tensor) -> torch.Tensor:
+def rotate_board_180(board: np.ndarray) -> np.ndarray:
     """
     Rotate board 180 degrees and swap player colors.
     
-    Args:
-        board: Tensor shape (2, 13, 13)
-        
-    Returns:
-        Rotated and color-swapped tensor
-    """
-    # TODO: Implement rotation
-    # Should use legacy RotateOneHotBy180() logic
-    # - Rotate board 180°
-    # - Swap blue/red channels
-    pass
-
-
-def reflect_board_long_diagonal(board: torch.Tensor) -> torch.Tensor:
-    """
-    Reflect board through long diagonal (top-left to bottom-right).
+    This preserves the logical game state under the swap rule (π-rule).
+    Blue pieces become red and vice versa, while the board is rotated.
     
     Args:
-        board: Tensor shape (2, 13, 13)
+        board: Board array of shape (2, 13, 13) or (13, 13)
         
     Returns:
-        Reflected tensor
+        Rotated and color-swapped board
     """
-    # TODO: Implement reflection
-    # Should use legacy FlipColoursAlongDiag(diagonal="long") logic
-    pass
+    if board.ndim == 3:
+        # 2-channel format: (2, 13, 13)
+        rotated = np.flip(board, axis=(1, 2))  # Rotate 180°
+        # Swap channels (blue <-> red)
+        rotated = rotated[::-1]
+        return rotated
+    else:
+        # Single channel format: (13, 13) with values 0/1/2
+        rotated = np.flip(board, axis=(0, 1))  # Rotate 180°
+        # Swap colors: 1 <-> 2
+        rotated = np.where(rotated == 1, 2, np.where(rotated == 2, 1, rotated))
+        return rotated
 
 
-def reflect_board_short_diagonal(board: torch.Tensor) -> torch.Tensor:
+def reflect_board_long_diagonal(board: np.ndarray) -> np.ndarray:
     """
-    Reflect board through short diagonal.
+    Reflect board along the long diagonal (top-left to bottom-right) and swap colors.
+    
+    This preserves the logical game state under the swap rule.
     
     Args:
-        board: Tensor shape (2, 13, 13)
+        board: Board array of shape (2, 13, 13) or (13, 13)
         
     Returns:
-        Reflected tensor
+        Reflected and color-swapped board
     """
-    # TODO: Implement reflection
-    # Should use legacy FlipColoursAlongDiag(diagonal="short") logic
-    pass
+    if board.ndim == 3:
+        # 2-channel format: (2, 13, 13)
+        reflected = np.transpose(board, (0, 2, 1))  # Transpose
+        # Swap channels (blue <-> red)
+        reflected = reflected[::-1]
+        return reflected
+    else:
+        # Single channel format: (13, 13) with values 0/1/2
+        reflected = np.transpose(board)  # Transpose
+        # Swap colors: 1 <-> 2
+        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        return reflected
 
 
-def augment_board(board: torch.Tensor) -> List[torch.Tensor]:
+def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
     """
-    Apply all augmentations to create 4 variants.
+    Reflect board along the short diagonal (top-right to bottom-left) and swap colors.
+    
+    This preserves the logical game state under the swap rule.
     
     Args:
-        board: Tensor shape (2, 13, 13)
+        board: Board array of shape (2, 13, 13) or (13, 13)
         
     Returns:
-        List of 4 augmented tensors:
-        - Original board
-        - 180° rotation
-        - Long diagonal reflection
-        - Short diagonal reflection
+        Reflected and color-swapped board
     """
-    # TODO: Implement augmentation
-    # Should use legacy OneHotToFourOneHotBoards() logic
-    # - Return list of 4 variants
-    # - Each variant should be valid for training
-    pass
+    if board.ndim == 3:
+        # 2-channel format: (2, 13, 13)
+        # Short diagonal reflection = flip both axes
+        reflected = np.flip(board, axis=(1, 2))
+        # Swap channels (blue <-> red)
+        reflected = reflected[::-1]
+        return reflected
+    else:
+        # Single channel format: (13, 13) with values 0/1/2
+        # Short diagonal reflection = flip both axes
+        reflected = np.flip(board, axis=(0, 1))
+        # Swap colors: 1 <-> 2
+        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        return reflected
+
+
+def augment_board(board: np.ndarray, policy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Apply data augmentation to board and policy.
+    
+    Creates 4 augmented versions: original, 180° rotation, long diagonal reflection,
+    and short diagonal reflection. All preserve the logical game state under the swap rule.
+    
+    Args:
+        board: Board array of shape (2, 13, 13) or (13, 13)
+        policy: Policy array of shape (169,)
+        
+    Returns:
+        Tuple of (augmented_board, augmented_policy)
+    """
+    # For now, return the original data
+    # TODO: Implement random selection of one of the 4 augmentations
+    return board, policy
+
+
+def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
+    """
+    Create all 4 augmented versions of a board.
+    
+    Args:
+        board: Board array of shape (2, 13, 13) or (13, 13)
+        
+    Returns:
+        List of 4 boards: [original, rotated_180, reflected_long, reflected_short]
+    """
+    rotated = rotate_board_180(board)
+    reflected_long = reflect_board_long_diagonal(board)
+    reflected_short = reflect_board_short_diagonal(board)
+    
+    return [board, rotated, reflected_long, reflected_short]
+
+
+def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
+    """
+    Create policy arrays corresponding to the 4 board augmentations.
+    
+    Args:
+        policy: Policy array of shape (169,)
+        
+    Returns:
+        List of 4 policies corresponding to the board augmentations
+    """
+    # Reshape policy to (13, 13) for easier manipulation
+    policy_2d = policy.reshape(13, 13)
+    
+    # Create the 4 augmented policies
+    rotated = np.flip(policy_2d, axis=(0, 1))  # 180° rotation
+    reflected_long = np.transpose(policy_2d)  # Long diagonal reflection
+    reflected_short = np.flip(np.transpose(policy_2d), axis=(0, 1))  # Short diagonal reflection
+    
+    # Reshape back to (169,)
+    return [
+        policy,
+        rotated.reshape(169),
+        reflected_long.reshape(169),
+        reflected_short.reshape(169)
+    ]
 
 
 # ============================================================================
