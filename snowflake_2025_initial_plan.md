@@ -96,3 +96,63 @@ One possible logical path for development would be to build the components in or
 
 * **Testing:** Please write unit tests for critical utility functions where possible (e.g., any new data transformation or game logic functions). For the main components, "integration tests" are key—for example, a test that confirms the `DataLoader` and `TwoHeadedResNet` can work together for one forward/backward pass is extremely valuable.
 * **Documentation:** Use clear docstrings, focusing on the **"why"** for major architectural decisions in key modules (`models.py`, `dataset.py`). The goal is to help a future developer quickly understand the high-level design. Avoid low-level comments that merely state *what* the code is doing. Only log changes to a CHANGELOG file, other documentation should be kept clean and _not_ reference every change in design, only the main current design points at any given time.
+
+---
+## 5. Design Decisions and Discussion Log
+
+### 5.1 Initial Discussion (Current Session)
+
+**Data Availability:**
+- Raw game data is available in `data/twoNetGames/` directory
+- Contains ~100+ `.trmph` format game files (various sizes from 3KB to 9MB)
+- Legacy code contains utilities to convert `.trmph` to other formats and create sharded data
+
+**Hardware & Environment:**
+- Development machine: M1 Mac (no dedicated GPU)
+- Can handle test runs and slow training (~1M games/day with old architecture)
+- Plan to use Google Colab or other GPU resources for faster training
+- Environment: Python virtual environment with PyTorch, NumPy, Pandas, Matplotlib, WandB, Jupyter
+
+**Architecture Decisions:**
+- Starting with ResNet-18 (concerned ResNet-34 might be too large/slow)
+- Open to attention-based architectures if practical and beneficial
+- Flexible on precise design - can iterate and improve
+- Board representation: `(2, 13, 13)` tensors (2 channels for two players)
+- Policy head: 169 outputs (13x13 board positions)
+- Value head: 1 output (binary classification)
+
+**Development Approach:**
+- Start with simple architecture, upgrade later if needed
+- Set up network and training system first, then format data accordingly
+- Focus on maintainable, high-performance code
+- Use modern PyTorch practices and best practices
+
+**Project Structure:**
+```
+hex_ai/
+├── __init__.py
+├── dataset.py          # HexDataset class
+├── models.py           # TwoHeadedResNet architecture
+├── utils.py            # Utility functions
+└── config.py           # Configuration constants
+
+notebooks/
+└── train_model.ipynb   # Training script
+
+tests/
+└── test_dataset.py     # Unit tests
+
+data/                   # For processed data
+└── processed/
+
+requirements.txt
+```
+
+**Next Steps:**
+1. Set up project scaffolding with placeholder files
+2. Create virtual environment and install dependencies
+3. Begin with model architecture (Phase B) to understand data format requirements
+4. Implement data pipeline (Phase A) once model requirements are clear
+5. Build training loop (Phase C)
+6. Add logging and full training (Phase D)
+7. Implement validation (Phase E)

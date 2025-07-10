@@ -83,6 +83,10 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Python environment
+.python-version
+hex_ai_env/
+
 # IPython
 profile_default/
 ipython_config.py
