@@ -2,7 +2,18 @@
 legacy_code/
 data/
 test_checkpoints/
+checkpoints/
 
+# Mac specific files
+.DS_Store
+
+# Windows specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux specific files
+.directory
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -60,12 +60,13 @@ def load_trmph_file(file_path: str) -> str:
         raise ValueError(f"Error reading file {file_path}: {e}")
 
 
-def convert_to_matrix_format(game_data: str) -> Tuple[np.ndarray, np.ndarray, float]:
+def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Convert game data to matrix format for training.
     
     Args:
         game_data: Trmph string representing a game
+        debug_info: Optional debug information (e.g., line number)
         
     Returns:
         Tuple of (board_state, policy_target, value_target):
@@ -74,7 +75,7 @@ def convert_to_matrix_format(game_data: str) -> Tuple[np.ndarray, np.ndarray, fl
         - value_target: Shape (1,) - win probability (0.0 or 1.0)
     """
     # Parse the trmph string to get the board state
-    board_matrix = parse_trmph_to_board(game_data)
+    board_matrix = parse_trmph_to_board(game_data, debug_info=debug_info)
     
     # Convert to 2-channel format for the model
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
@@ -289,19 +290,51 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
     return row, col
 
 
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE) -> np.ndarray:
+def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_info: str = "") -> np.ndarray:
     """
-    Parse a trmph string to a board matrix (0=empty, 1=blue, 2=red).
+    Parse a trmph string to a board matrix.
+    
+    Args:
+        trmph_text: Complete trmph string
+        board_size: Size of the board
+        debug_info: Optional debug information (e.g., line number)
+        
+    Returns:
+        Board matrix with 0=empty, 1=blue, 2=red
     """
+    # Strip preamble and get moves
     bare_moves = strip_trmph_preamble(trmph_text)
     moves = split_trmph_moves(bare_moves)
+    
+    # Initialize board
     board = np.zeros((board_size, board_size), dtype=np.int8)
+    
+    # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
-        color = 1 if i % 2 == 0 else 2  # Blue starts
+        
+        # Check for duplicate moves
         if board[row, col] != 0:
-            raise ValueError(f"Duplicate move at {(row, col)} in {trmph_text}")
-        board[row, col] = color
+            # Enhanced debugging output
+            import traceback
+            frame = traceback.extract_stack()[-2]  # Get calling frame
+            logger.error(f"DUPLICATE MOVE DETECTED:")
+            if debug_info:
+                logger.error(f"  {debug_info}")
+            logger.error(f"  File: {frame.filename}")
+            logger.error(f"  Line: {frame.lineno}")
+            logger.error(f"  Function: {frame.name}")
+            logger.error(f"  Move: '{move}' at position ({row}, {col})")
+            logger.error(f"  Move index: {i}")
+            logger.error(f"  Board value at position: {board[row, col]}")
+            logger.error(f"  Full trmph string: {trmph_text}")
+            logger.error(f"  All moves: {moves}")
+            raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
+        
+        # Place move (alternating players: blue=1, red=2)
+        player = (i % 2) + 1
+        board[row, col] = player
+    
     return board
 
 

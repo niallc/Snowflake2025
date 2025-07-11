@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 LEGACY_CODE_DIR = PROJECT_ROOT / "legacy_code"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
+CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 
 # Data configuration
 BOARD_SIZE = 13

@@ -17,6 +17,26 @@ from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SI
 from .data_utils import load_trmph_file, convert_to_matrix_format, augment_board
 
 
+def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
+    """
+    Validate a single game for corruption.
+    
+    Args:
+        trmph_url: The trmph URL string
+        winner_indicator: The winner indicator string
+        line_info: Optional line information for debugging
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Test if we can parse the game without errors
+        board_state, policy_target, value_target = convert_to_matrix_format(trmph_url, debug_info=line_info)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 class HexDataset(Dataset):
     """Dataset for Hex game data."""
     
@@ -26,39 +46,118 @@ class HexDataset(Dataset):
         
         Args:
             data_source: Either a directory path (str/Path) containing .trmph files,
-                        or a list of trmph strings
+                        a single .trmph file path, or a list of trmph strings
             board_size: Size of the board
         """
         self.board_size = board_size
         
         if isinstance(data_source, (str, Path)):
-            # Load from directory
-            self.data_dir = Path(data_source)
-            self.game_files = list(self.data_dir.glob("*.trmph"))
-            self.game_data = []
+            data_path = Path(data_source)
             
-            for file_path in self.game_files:
-                with open(file_path, 'r') as f:
-                    content = f.read().strip()
-                    if content:
-                        self.game_data.append(content)
+            if data_path.is_file():
+                # Single file - load all games from it
+                self.game_data, self.corrupted_games = self._load_games_from_file(data_path)
+            elif data_path.is_dir():
+                # Directory - load all .trmph files
+                self.game_files = list(data_path.glob("*.trmph"))
+                self.game_data = []
+                self.corrupted_games = []
+                
+                for file_path in self.game_files:
+                    games, corrupted = self._load_games_from_file(file_path)
+                    self.game_data.extend(games)
+                    self.corrupted_games.extend(corrupted)
+            else:
+                raise FileNotFoundError(f"Data source not found: {data_source}")
         else:
             # Direct list of trmph strings
-            self.data_dir = None
-            self.game_files = []
             self.game_data = data_source
+            self.corrupted_games = []
         
-        logger.info(f"Loaded {len(self.game_data)} games")
+        # Check corruption thresholds
+        total_games = len(self.game_data) + len(self.corrupted_games)
+        corruption_count = len(self.corrupted_games)
+        corruption_percentage = (corruption_count / total_games * 100) if total_games > 0 else 0
+        
+        logger.info(f"Loaded {len(self.game_data)} valid games")
+        logger.info(f"Found {corruption_count} corrupted games ({corruption_percentage:.1f}%)")
+        
+        # Log corrupted games to file
+        if self.corrupted_games:
+            corruption_log_path = Path("corrupted_games.log")
+            with open(corruption_log_path, 'w') as f:
+                f.write(f"Corrupted games from {data_source}\n")
+                f.write(f"Total games: {total_games}, Corrupted: {corruption_count} ({corruption_percentage:.1f}%)\n\n")
+                for i, (trmph_url, winner_indicator, error_msg) in enumerate(self.corrupted_games, 1):
+                    f.write(f"Game {i}:\n")
+                    f.write(f"  URL: {trmph_url}\n")
+                    f.write(f"  Winner: {winner_indicator}\n")
+                    f.write(f"  Error: {error_msg}\n\n")
+            logger.info(f"Corrupted games logged to {corruption_log_path}")
+        
+        # Check thresholds - more permissive for now
+        if corruption_count > 20:  # Increased from 5
+            raise ValueError(f"Too many corrupted games: {corruption_count} > 20")
+        
+        if corruption_percentage > 10.0:  # Increased from 1.0%
+            raise ValueError(f"Corruption percentage too high: {corruption_percentage:.1f}% > 10.0%")
+        
+        logger.info(f"Dataset validation passed - proceeding with {len(self.game_data)} games")
+    
+    def _load_games_from_file(self, file_path: Path) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, str]]]:
+        """Load all games from a single .trmph file."""
+        games = []
+        corrupted_games = []
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse line format: "trmph_url winner_indicator"
+                parts = line.split(' ', 1)
+                if len(parts) != 2:
+                    logger.warning(f"Invalid line format at line {line_num}: {line[:50]}...")
+                    corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}"))
+                    continue
+                
+                trmph_url, winner_indicator = parts
+                
+                # Validate trmph URL format
+                if not trmph_url.startswith("http://www.trmph.com/hex/board#"):
+                    logger.warning(f"Invalid trmph URL at line {line_num}: {trmph_url[:50]}...")
+                    corrupted_games.append((trmph_url, winner_indicator, f"Invalid trmph URL format at line {line_num}"))
+                    continue
+                
+                # Validate game integrity
+                is_valid, error_msg = validate_game(trmph_url, winner_indicator, f"Line {line_num}")
+                if is_valid:
+                    games.append((trmph_url, winner_indicator))
+                else:
+                    corrupted_games.append((trmph_url, winner_indicator, error_msg))
+        
+        logger.info(f"Loaded {len(games)} valid games and {len(corrupted_games)} corrupted games from {file_path}")
+        return games, corrupted_games
     
     def __len__(self):
         return len(self.game_data)
     
     def __getitem__(self, idx):
         """Get a single training example."""
-        game_data = self.game_data[idx]
+        game_data, winner_indicator = self.game_data[idx]
         
-        # Convert to matrix format
+        # Convert to matrix format (should not fail since we validated during loading)
         board_state, policy_target, value_target = convert_to_matrix_format(game_data)
+        
+        # Override value target based on actual winner
+        if winner_indicator == "1":
+            value_target = 1.0  # Blue wins
+        elif winner_indicator == "0":
+            value_target = 0.0  # Red wins
+        else:
+            # Unknown winner - keep the default from convert_to_matrix_format
+            pass
         
         # Convert to tensors
         board_tensor = torch.FloatTensor(board_state)

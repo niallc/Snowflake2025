@@ -173,12 +173,14 @@ class Trainer:
         val_avg = {key: np.mean(values) for key, values in val_metrics.items()}
         return val_avg
     
-    def train(self, num_epochs: int, save_dir: str = "checkpoints") -> Dict:
+    def train(self, num_epochs: int, save_dir: str = "checkpoints", 
+              max_checkpoints: int = 5, compress_checkpoints: bool = True) -> Dict:
         """Train the model for specified number of epochs."""
         save_path = Path(save_dir)
         save_path.mkdir(exist_ok=True)
         
         logger.info(f"Starting training for {num_epochs} epochs")
+        logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
         
         for epoch in range(num_epochs):
             self.current_epoch = epoch
@@ -194,33 +196,18 @@ class Trainer:
             if val_metrics:
                 logger.info(f"Epoch {epoch}: Val Loss: {val_metrics['total_loss']:.4f}")
             
-            # Save checkpoint
-            self.save_checkpoint(save_path / f"checkpoint_epoch_{epoch}.pt", 
-                               train_metrics, val_metrics)
+            # Save checkpoint with smart management
+            self._save_checkpoint_smart(save_path, epoch, train_metrics, val_metrics, 
+                                      max_checkpoints, compress_checkpoints)
             
-            # Save best model
+            # Update best model if validation loss improved
             if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
                 self.best_val_loss = val_metrics['total_loss']
-                self.save_checkpoint(save_path / "best_model.pt", 
-                                   train_metrics, val_metrics)
+                self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
                 logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
-            
-            # Track history
-            self.training_history.append({
-                'epoch': epoch,
-                'train': train_metrics,
-                'val': val_metrics
-            })
-        
-        # Save training history
-        with open(save_path / "training_history.json", 'w') as f:
-            json.dump(self.training_history, f, indent=2)
         
         logger.info("Training completed!")
-        return {
-            'history': self.training_history,
-            'best_val_loss': self.best_val_loss
-        }
+        return {"best_val_loss": self.best_val_loss}
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
         """Save model checkpoint."""
@@ -242,6 +229,59 @@ class Trainer:
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
         logger.info(f"Loaded checkpoint from epoch {self.current_epoch}")
+
+    def _save_checkpoint_smart(self, save_path: Path, epoch: int, 
+                              train_metrics: Dict, val_metrics: Dict,
+                              max_checkpoints: int, compress_checkpoints: bool):
+        """Save checkpoint with smart management to control storage usage."""
+        import gzip
+        import pickle
+        
+        # Create checkpoint data
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'train_metrics': train_metrics,
+            'val_metrics': val_metrics,
+            'best_val_loss': self.best_val_loss
+        }
+        
+        # Save current checkpoint
+        checkpoint_file = save_path / f"checkpoint_epoch_{epoch}.pt"
+        if compress_checkpoints:
+            # Save compressed checkpoint
+            with gzip.open(checkpoint_file, 'wb') as f:
+                pickle.dump(checkpoint_data, f)
+        else:
+            # Save uncompressed checkpoint
+            torch.save(checkpoint_data, checkpoint_file)
+        
+        # Clean up old checkpoints
+        self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
+    
+    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
+        """Remove old checkpoints to keep storage under control."""
+        # Get all checkpoint files
+        if compress_checkpoints:
+            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
+        else:
+            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
+        
+        # Sort by epoch number
+        checkpoint_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
+        
+        # Keep only the most recent max_checkpoints
+        if len(checkpoint_files) > max_checkpoints:
+            files_to_delete = checkpoint_files[:-max_checkpoints]
+            for file_path in files_to_delete:
+                try:
+                    file_path.unlink()
+                    logger.debug(f"Deleted old checkpoint: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete {file_path}: {e}")
+            
+            logger.info(f"Cleaned up {len(files_to_delete)} old checkpoints, keeping {max_checkpoints} most recent")
 
 
 def create_trainer(model: TwoHeadedResNet, 
