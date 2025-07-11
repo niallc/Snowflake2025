@@ -71,6 +71,54 @@ class PolicyValueLoss(nn.Module):
         return total_loss, loss_dict
 
 
+class MixedPrecisionTrainer:
+    """Wrapper for mixed precision training capabilities."""
+    
+    def __init__(self, device: str):
+        self.device = device
+        self.use_mixed_precision = device == 'cuda'
+        
+        if self.use_mixed_precision:
+            try:
+                from torch.cuda.amp import autocast, GradScaler
+                self.autocast = autocast
+                self.scaler = GradScaler()
+                logger.info("Mixed precision training enabled for GPU")
+            except ImportError:
+                logger.warning("PyTorch AMP not available, falling back to full precision")
+                self.use_mixed_precision = False
+        else:
+            logger.info("Mixed precision disabled (CPU training)")
+            self.use_mixed_precision = False
+    
+    def autocast_context(self):
+        """Get autocast context if available."""
+        if self.use_mixed_precision:
+            return self.autocast()
+        else:
+            # Return a no-op context manager
+            from contextlib import nullcontext
+            return nullcontext()
+    
+    def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
+        """Scale loss for mixed precision training."""
+        if self.use_mixed_precision:
+            return self.scaler.scale(loss)
+        return loss
+    
+    def step_optimizer(self, optimizer: optim.Optimizer):
+        """Step optimizer with proper scaling."""
+        if self.use_mixed_precision:
+            self.scaler.step(optimizer)
+        else:
+            optimizer.step()
+    
+    def update_scaler(self):
+        """Update gradient scaler."""
+        if self.use_mixed_precision:
+            self.scaler.update()
+
+
 class Trainer:
     """Training manager for Hex AI models."""
     
@@ -78,11 +126,15 @@ class Trainer:
                  train_loader: DataLoader,
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
-                 device: str = DEVICE):
+                 device: str = DEVICE,
+                 enable_system_analysis: bool = True):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        
+        # Initialize mixed precision
+        self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Optimizer and loss
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -93,9 +145,41 @@ class Trainer:
         self.best_val_loss = float('inf')
         self.training_history = []
         
+        # System analysis
+        if enable_system_analysis:
+            self._run_system_analysis()
+        
         logger.info(f"Initialized trainer with {len(train_loader)} training batches")
         if val_loader:
             logger.info(f"Validation set with {len(val_loader)} batches")
+    
+    def _run_system_analysis(self):
+        """Run system analysis and log recommendations."""
+        try:
+            from .system_utils import get_system_info, calculate_optimal_batch_size
+            
+            system_info = get_system_info()
+            optimal_batch_size, batch_analysis = calculate_optimal_batch_size()
+            
+            logger.info("=== System Analysis ===")
+            logger.info(f"Platform: {system_info['platform']}")
+            logger.info(f"Memory: {system_info['memory_available_gb']:.1f} GB available")
+            logger.info(f"GPU: {'Available' if system_info['gpu_available'] else 'Not available'}")
+            logger.info(f"Optimal batch size: {batch_analysis['optimal_batch_size']}")
+            logger.info(f"Current batch size: {self.train_loader.batch_size}")
+            
+            # Warn if batch size is suboptimal
+            if batch_analysis['optimal_batch_size'] > self.train_loader.batch_size:
+                logger.warning(f"Consider increasing batch size to {batch_analysis['optimal_batch_size']} for better efficiency")
+            
+            # Warn about GPU usage
+            if not system_info['gpu_available'] and self.device == 'cuda':
+                logger.warning("CUDA device requested but no GPU available, falling back to CPU")
+            
+        except ImportError as e:
+            logger.warning(f"System analysis unavailable: {e}")
+        except Exception as e:
+            logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
@@ -113,16 +197,20 @@ class Trainer:
             policies = policies.to(self.device)
             values = values.to(self.device)
             
-            # Forward pass
+            # Forward pass with mixed precision
             self.optimizer.zero_grad()
-            policy_pred, value_pred = self.model(boards)
             
-            # Compute loss
-            total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+            with self.mixed_precision.autocast_context():
+                policy_pred, value_pred = self.model(boards)
+                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
             
-            # Backward pass
-            total_loss.backward()
-            self.optimizer.step()
+            # Backward pass with scaling
+            scaled_loss = self.mixed_precision.scale_loss(total_loss)
+            scaled_loss.backward()
+            
+            # Optimizer step with scaling
+            self.mixed_precision.step_optimizer(self.optimizer)
+            self.mixed_precision.update_scaler()
             
             # Track metrics
             epoch_losses.append(loss_dict['total_loss'])
@@ -158,11 +246,10 @@ class Trainer:
                 policies = policies.to(self.device)
                 values = values.to(self.device)
                 
-                # Forward pass
-                policy_pred, value_pred = self.model(boards)
-                
-                # Compute loss
-                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                # Forward pass with mixed precision
+                with self.mixed_precision.autocast_context():
+                    policy_pred, value_pred = self.model(boards)
+                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
                 
                 # Track metrics
                 val_losses.append(loss_dict['total_loss'])
@@ -289,7 +376,8 @@ def create_trainer(model: TwoHeadedResNet,
                   val_data: Optional[List[str]] = None,
                   batch_size: int = BATCH_SIZE,
                   learning_rate: float = LEARNING_RATE,
-                  device: str = DEVICE) -> Trainer:
+                  device: str = DEVICE,
+                  enable_system_analysis: bool = True) -> Trainer:
     """Create a trainer with data loaders."""
     
     # Create datasets
@@ -302,7 +390,7 @@ def create_trainer(model: TwoHeadedResNet,
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Create trainer
-    trainer = Trainer(model, train_loader, val_loader, learning_rate, device)
+    trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
 
@@ -313,8 +401,9 @@ def train_model(model: TwoHeadedResNet,
                 batch_size: int = BATCH_SIZE,
                 learning_rate: float = LEARNING_RATE,
                 save_dir: str = "checkpoints",
-                device: str = DEVICE) -> Dict:
+                device: str = DEVICE,
+                enable_system_analysis: bool = True) -> Dict:
     """Convenience function to train a model."""
     
-    trainer = create_trainer(model, train_data, val_data, batch_size, learning_rate, device)
+    trainer = create_trainer(model, train_data, val_data, batch_size, learning_rate, device, enable_system_analysis)
     return trainer.train(num_epochs, save_dir) 
