@@ -1,0 +1,248 @@
+"""
+Integration tests for the complete Hex AI pipeline.
+
+This module tests the entire pipeline from data loading through model training,
+saving, and loading to ensure everything works together correctly.
+"""
+
+import unittest
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import tempfile
+import os
+import numpy as np
+from pathlib import Path
+
+from hex_ai.models import TwoHeadedResNet, create_model, count_parameters
+from hex_ai.dataset import create_sample_data, create_dataloader
+from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+
+
+class TestIntegration(unittest.TestCase):
+    """Integration tests for the complete pipeline."""
+    
+    def setUp(self):
+        """Set up test data and model."""
+        # Create sample data
+        self.boards, self.policies, self.values = create_sample_data(batch_size=8)
+        
+        # Create model
+        self.model = create_model("resnet18")
+        
+        # Create optimizer
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        
+        # Create loss functions
+        self.policy_loss_fn = nn.CrossEntropyLoss()
+        self.value_loss_fn = nn.BCEWithLogitsLoss()
+    
+    def test_data_dimensions(self):
+        """Test that data has correct dimensions."""
+        self.assertEqual(self.boards.shape, (8, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE))
+        self.assertEqual(self.policies.shape, (8, POLICY_OUTPUT_SIZE))
+        self.assertEqual(self.values.shape, (8, VALUE_OUTPUT_SIZE))
+    
+    def test_model_forward_pass(self):
+        """Test that model can process data and output correct dimensions."""
+        # Forward pass
+        policy_logits, value_logit = self.model(self.boards)
+        
+        # Check output dimensions
+        self.assertEqual(policy_logits.shape, (8, POLICY_OUTPUT_SIZE))
+        self.assertEqual(value_logit.shape, (8, VALUE_OUTPUT_SIZE))
+        
+        # Check that outputs are reasonable
+        self.assertTrue(torch.isfinite(policy_logits).all())
+        self.assertTrue(torch.isfinite(value_logit).all())
+    
+    def test_loss_computation(self):
+        """Test that loss functions work with model outputs."""
+        # Forward pass
+        policy_logits, value_logit = self.model(self.boards)
+        
+        # Compute losses
+        policy_loss = self.policy_loss_fn(policy_logits, self.policies.argmax(dim=1))
+        value_loss = self.value_loss_fn(value_logit, self.values)
+        
+        # Check that losses are finite and positive
+        self.assertTrue(torch.isfinite(policy_loss))
+        self.assertTrue(torch.isfinite(value_loss))
+        self.assertGreater(policy_loss.item(), 0)
+        self.assertGreater(value_loss.item(), 0)
+    
+    def test_gradient_flow(self):
+        """Test that gradients flow through the model."""
+        # Forward pass
+        policy_logits, value_logit = self.model(self.boards)
+        
+        # Compute total loss
+        policy_loss = self.policy_loss_fn(policy_logits, self.policies.argmax(dim=1))
+        value_loss = self.value_loss_fn(value_logit, self.values)
+        total_loss = policy_loss + value_loss
+        
+        # Backward pass
+        total_loss.backward()
+        
+        # Check that gradients exist
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.assertIsNotNone(param.grad)
+                self.assertTrue(torch.isfinite(param.grad).all())
+    
+    def test_optimizer_step(self):
+        """Test that optimizer can update model parameters."""
+        # Get initial parameters
+        initial_params = {}
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                initial_params[name] = param.data.clone()
+        
+        # Forward pass
+        policy_logits, value_logit = self.model(self.boards)
+        policy_loss = self.policy_loss_fn(policy_logits, self.policies.argmax(dim=1))
+        value_loss = self.value_loss_fn(value_logit, self.values)
+        total_loss = policy_loss + value_loss
+        
+        # Backward pass and optimizer step
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Check that parameters changed
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.assertFalse(torch.allclose(initial_params[name], param.data))
+    
+    def test_model_save_load(self):
+        """Test that model can be saved and loaded."""
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            temp_path = f.name
+        
+        try:
+            # Save model
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+            }, temp_path)
+            
+            # Create new model and optimizer
+            new_model = create_model("resnet18")
+            new_optimizer = optim.Adam(new_model.parameters(), lr=0.001)
+            
+            # Load saved state
+            checkpoint = torch.load(temp_path)
+            new_model.load_state_dict(checkpoint['model_state_dict'])
+            new_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            
+            # Test that loaded model produces same output
+            with torch.no_grad():
+                original_policy, original_value = self.model(self.boards)
+                loaded_policy, loaded_value = new_model(self.boards)
+                
+                torch.testing.assert_close(original_policy, loaded_policy)
+                torch.testing.assert_close(original_value, loaded_value)
+                
+        finally:
+            # Clean up
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    
+    def test_dataloader_integration(self):
+        """Test that DataLoader works with the model."""
+        # Create temporary directory with dummy data
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create dummy .trmph files
+            for i in range(3):
+                dummy_file = os.path.join(temp_dir, f"game_{i}.trmph")
+                with open(dummy_file, 'w') as f:
+                    f.write(f"#13,a{i+1}b{i+2}c{i+3}")
+            
+            # Create DataLoader
+            dataloader = create_dataloader(temp_dir, batch_size=2, num_workers=0)
+            
+            # Test that we can iterate through the dataloader
+            batch_count = 0
+            for batch_idx, (boards, policies, values) in enumerate(dataloader):
+                batch_count += 1
+                
+                # Check batch dimensions (last batch might be smaller)
+                expected_batch_size = min(2, 3 - batch_idx * 2)  # 3 files, batch_size=2
+                self.assertEqual(boards.shape[0], expected_batch_size)
+                self.assertEqual(boards.shape[1:], (NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE))
+                self.assertEqual(policies.shape[1], POLICY_OUTPUT_SIZE)
+                self.assertEqual(values.shape[1], VALUE_OUTPUT_SIZE)
+                
+                # Test that model can process this batch
+                policy_logits, value_logit = self.model(boards)
+                self.assertEqual(policy_logits.shape, (expected_batch_size, POLICY_OUTPUT_SIZE))
+                self.assertEqual(value_logit.shape, (expected_batch_size, VALUE_OUTPUT_SIZE))
+                
+                if batch_count >= 2:  # Limit to avoid infinite loop
+                    break
+    
+    def test_device_transfer(self):
+        """Test that model works on different devices."""
+        # Test CPU (should always work)
+        model_cpu = self.model.cpu()
+        boards_cpu = self.boards.cpu()
+        policy_logits, value_logit = model_cpu(boards_cpu)
+        self.assertEqual(policy_logits.device, torch.device('cpu'))
+        self.assertEqual(value_logit.device, torch.device('cpu'))
+        
+        # Test CUDA if available
+        if torch.cuda.is_available():
+            model_cuda = self.model.cuda()
+            boards_cuda = self.boards.cuda()
+            policy_logits, value_logit = model_cuda(boards_cuda)
+            self.assertEqual(policy_logits.device, torch.device('cuda'))
+            self.assertEqual(value_logit.device, torch.device('cuda'))
+    
+    def test_model_summary(self):
+        """Test that model summary functions work."""
+        # Test parameter counting
+        num_params = count_parameters(self.model)
+        self.assertGreater(num_params, 10_000_000)  # ResNet-18 should have >10M params
+        self.assertLess(num_params, 15_000_000)     # But less than 15M
+    
+    def test_training_step(self):
+        """Test a complete training step."""
+        # Set model to training mode
+        self.model.train()
+        
+        # Forward pass
+        policy_logits, value_logit = self.model(self.boards)
+        
+        # Compute losses
+        policy_loss = self.policy_loss_fn(policy_logits, self.policies.argmax(dim=1))
+        value_loss = self.value_loss_fn(value_logit, self.values)
+        total_loss = policy_loss + value_loss
+        
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Check that loss decreased (or at least didn't explode)
+        self.assertTrue(torch.isfinite(total_loss))
+        self.assertGreater(total_loss.item(), 0)
+    
+    def test_evaluation_mode(self):
+        """Test that model works in evaluation mode."""
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        with torch.no_grad():
+            policy_logits, value_logit = self.model(self.boards)
+            
+            # Check outputs
+            self.assertEqual(policy_logits.shape, (8, POLICY_OUTPUT_SIZE))
+            self.assertEqual(value_logit.shape, (8, VALUE_OUTPUT_SIZE))
+            
+            # Check that gradients are not computed
+            self.assertFalse(policy_logits.requires_grad)
+            self.assertFalse(value_logit.requires_grad)
+
+
+if __name__ == '__main__':
+    unittest.main() 

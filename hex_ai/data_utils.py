@@ -73,21 +73,137 @@ def convert_to_matrix_format(game_data: str) -> Tuple[np.ndarray, np.ndarray, fl
         - policy_target: Shape (169,) - move probabilities
         - value_target: Shape (1,) - win probability (0.0 or 1.0)
     """
-    # For now, create placeholder data
-    # TODO: Implement actual conversion from trmph to matrix format
+    # Parse the trmph string to get the board state
+    board_matrix = parse_trmph_to_board(game_data)
     
-    # Create a random board state (2 channels for 2 players)
-    board_state = np.random.randint(0, 2, size=(2, BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-    board_state = board_state.astype(np.float32)
+    # Convert to 2-channel format for the model
+    board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
+    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
     
-    # Create random policy target (169 possible moves)
+    # For now, create placeholder policy and value
+    # TODO: Extract actual policy from game (last move played)
     policy_target = np.random.rand(POLICY_OUTPUT_SIZE).astype(np.float32)
     policy_target = policy_target / policy_target.sum()  # Normalize to probabilities
     
-    # Create random value target (0.0 or 1.0 for win/loss)
-    value_target = float(np.random.choice([0.0, 1.0]))
+    # Determine winner and set value target
+    winner = detect_winner(game_data)
+    if winner == "blue":
+        value_target = 1.0
+    elif winner == "red":
+        value_target = 0.0
+    else:
+        # No winner yet - could be 0.5 or based on position evaluation
+        value_target = 0.5
     
     return board_state, policy_target, value_target
+
+
+def detect_winner(trmph_text: str) -> str:
+    """
+    Detect the winner of a game using legacy BoardUtils logic.
+    
+    Args:
+        trmph_text: Complete trmph string
+        
+    Returns:
+        "blue", "red", or "no winner"
+    """
+    try:
+        # Import legacy modules
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'legacy_code'))
+        
+        import BoardUtils as bu
+        import FileConversion as fc
+        
+        # Detect board size from trmph string
+        if "#11," in trmph_text:
+            board_size = 7
+        elif "#13," in trmph_text:
+            board_size = 13
+        else:
+            logger.warning(f"Unknown board size in trmph: {trmph_text[:50]}...")
+            return "no winner"
+        
+        # Initialize connections for the board
+        connections = bu.InitBoardConns(trmph_text, playBoardSize=board_size, modelBoardSize=board_size)
+        
+        # Find winner
+        winner = bu.FindWinner(connections)
+        
+        return winner
+        
+    except Exception as e:
+        logger.warning(f"Could not detect winner for {trmph_text[:50]}...: {e}")
+        return "no winner"
+
+
+def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
+    """
+    Display a board in a human-readable format.
+    
+    Args:
+        board: Board array (either 2-channel or single-channel)
+        format_type: "matrix" or "visual"
+        
+    Returns:
+        String representation of the board
+    """
+    if board.ndim == 3:
+        # 2-channel format: convert to single channel
+        board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+        board_2d[board[0] == 1] = 1  # Blue pieces
+        board_2d[board[1] == 1] = 2  # Red pieces
+    else:
+        board_2d = board
+    
+    if format_type == "matrix":
+        return str(board_2d)
+    
+    elif format_type == "visual":
+        # Create a visual representation
+        symbols = {0: ".", 1: "B", 2: "R"}
+        lines = []
+        for row in range(BOARD_SIZE):
+            line = " " * row  # Indent for hex shape
+            for col in range(BOARD_SIZE):
+                line += symbols[board_2d[row, col]] + " "
+            lines.append(line)
+        return "\n".join(lines)
+    
+    else:
+        raise ValueError(f"Unknown format_type: {format_type}")
+
+
+def board_to_trmph(board: np.ndarray) -> str:
+    """
+    Convert a board matrix back to trmph format.
+    
+    Args:
+        board: Board array (either 2-channel or single-channel)
+        
+    Returns:
+        Trmph string representation
+    """
+    if board.ndim == 3:
+        # 2-channel format: convert to single channel
+        board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+        board_2d[board[0] == 1] = 1  # Blue pieces
+        board_2d[board[1] == 1] = 2  # Red pieces
+    else:
+        board_2d = board
+    
+    # Convert to trmph format
+    moves = []
+    for row in range(BOARD_SIZE):
+        for col in range(BOARD_SIZE):
+            if board_2d[row, col] in [1, 2]:
+                move = rowcol_to_trmph(row, col)
+                moves.append(move)
+    
+    return "#13," + "".join(moves)
 
 
 def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -267,13 +383,14 @@ def trmph_to_rowcol(trmph_move: str) -> Tuple[int, int]:
     pass
 
 
-def rowcol_to_trmph(row: int, col: int) -> str:
+def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
     """
     Convert (row, col) coordinates to trmph move.
     
     Args:
         row: Row index (0-12)
         col: Column index (0-12)
+        board_size: Size of the board
         
     Returns:
         Trmph move string
@@ -282,9 +399,12 @@ def rowcol_to_trmph(row: int, col: int) -> str:
         (0, 0) → "a1"
         (12, 12) → "m13"
     """
-    # TODO: Implement conversion
-    # Should use legacy RowColToTrmph() logic
-    pass
+    if not (0 <= row < board_size) or not (0 <= col < board_size):
+        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {board_size}")
+    
+    letter = LETTERS[col]
+    number = str(row + 1)
+    return letter + number
 
 
 def tensor_to_rowcol(tensor_pos: int) -> Tuple[int, int]:
