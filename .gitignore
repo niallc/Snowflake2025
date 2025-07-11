@@ -1,6 +1,7 @@
 # Niall's files to ignore
 legacy_code/
 data/
+test_checkpoints/
 
 
 # Byte-compiled / optimized / DLL files
