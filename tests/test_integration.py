@@ -152,11 +152,11 @@ class TestIntegration(unittest.TestCase):
         """Test that DataLoader works with the model."""
         # Create temporary directory with dummy data
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Create dummy .trmph files
+            # Create dummy .trmph files with proper format
             for i in range(3):
                 dummy_file = os.path.join(temp_dir, f"game_{i}.trmph")
                 with open(dummy_file, 'w') as f:
-                    f.write(f"#13,a{i+1}b{i+2}c{i+3}")
+                    f.write(f"http://www.trmph.com/hex/board#13,a{i+1}b{i+2}c{i+3} {i % 2}\n")
             
             # Create DataLoader
             dataloader = create_dataloader(temp_dir, batch_size=2, num_workers=0)

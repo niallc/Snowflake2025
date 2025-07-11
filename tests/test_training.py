@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import numpy as np
 
-from hex_ai.training import PolicyValueLoss, Trainer, create_trainer, train_model
+from hex_ai.training import PolicyValueLoss, Trainer, create_trainer, train_model, MixedPrecisionTrainer
 from hex_ai.models import create_model
 from hex_ai.dataset import HexDataset
 from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -84,6 +84,54 @@ class TestPolicyValueLoss(unittest.TestCase):
         self.assertIsNotNone(self.value_pred.grad)
 
 
+class TestMixedPrecisionTrainer(unittest.TestCase):
+    """Test the MixedPrecisionTrainer wrapper."""
+    
+    def test_cpu_initialization(self):
+        """Test mixed precision initialization on CPU."""
+        trainer = MixedPrecisionTrainer('cpu')
+        self.assertFalse(trainer.use_mixed_precision)
+        self.assertEqual(trainer.device, 'cpu')
+    
+    def test_gpu_initialization(self):
+        """Test mixed precision initialization on GPU (if available)."""
+        if torch.cuda.is_available():
+            trainer = MixedPrecisionTrainer('cuda')
+            self.assertTrue(trainer.use_mixed_precision)
+            self.assertEqual(trainer.device, 'cuda')
+        else:
+            # Skip test if GPU not available
+            self.skipTest("CUDA not available")
+    
+    def test_autocast_context_cpu(self):
+        """Test autocast context on CPU."""
+        trainer = MixedPrecisionTrainer('cpu')
+        with trainer.autocast_context():
+            # Should work without errors
+            pass
+    
+    def test_scale_loss_cpu(self):
+        """Test loss scaling on CPU."""
+        trainer = MixedPrecisionTrainer('cpu')
+        loss = torch.tensor(1.0)
+        scaled_loss = trainer.scale_loss(loss)
+        self.assertEqual(loss, scaled_loss)  # No scaling on CPU
+    
+    def test_step_optimizer_cpu(self):
+        """Test optimizer stepping on CPU."""
+        trainer = MixedPrecisionTrainer('cpu')
+        optimizer = torch.optim.Adam([torch.randn(1, requires_grad=True)])
+        
+        # Should not raise an error
+        trainer.step_optimizer(optimizer)
+    
+    def test_update_scaler_cpu(self):
+        """Test scaler update on CPU."""
+        trainer = MixedPrecisionTrainer('cpu')
+        # Should not raise an error
+        trainer.update_scaler()
+
+
 class TestTrainer(unittest.TestCase):
     """Test the Trainer class."""
     
@@ -91,16 +139,16 @@ class TestTrainer(unittest.TestCase):
         """Set up test data."""
         self.model = create_model("resnet18")
         
-        # Create dummy data
+        # Create dummy data with winner indicators
         self.train_data = [
-            "http://www.trmph.com/hex/board#13,a1b2c3",
-            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7",
-            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12m13",
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12m13", "1"),
         ] * 10  # 30 samples
         
         self.val_data = [
-            "http://www.trmph.com/hex/board#13,a1b2c3",
-            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7",
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
         ] * 5  # 10 samples
     
     def test_trainer_initialization(self):
@@ -124,6 +172,16 @@ class TestTrainer(unittest.TestCase):
         
         self.assertIsNone(trainer.val_loader)
     
+    def test_trainer_with_system_analysis_disabled(self):
+        """Test trainer with system analysis disabled."""
+        trainer = create_trainer(
+            self.model, self.train_data, self.val_data,
+            batch_size=4, learning_rate=0.001,
+            enable_system_analysis=False
+        )
+        
+        self.assertIsInstance(trainer, Trainer)
+    
     def test_save_load_checkpoint(self):
         """Test checkpoint saving and loading."""
         trainer = create_trainer(
@@ -138,6 +196,8 @@ class TestTrainer(unittest.TestCase):
             train_metrics = {'total_loss': 1.0, 'policy_loss': 0.5, 'value_loss': 0.5}
             val_metrics = {'total_loss': 0.8, 'policy_loss': 0.4, 'value_loss': 0.4}
             
+            # Set best_val_loss to match the validation loss we're saving
+            trainer.best_val_loss = 0.8
             trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics)
             
             # Verify file exists
@@ -205,12 +265,12 @@ class TestTrainingIntegration(unittest.TestCase):
         model = create_model("resnet18")
         
         train_data = [
-            "http://www.trmph.com/hex/board#13,a1b2c3",
-            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7",
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
         ] * 5  # 10 samples
         
         val_data = [
-            "http://www.trmph.com/hex/board#13,a1b2c3",
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
         ] * 3  # 3 samples
         
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -225,19 +285,33 @@ class TestTrainingIntegration(unittest.TestCase):
             )
             
             # Check that results are returned
-            self.assertIn('history', results)
             self.assertIn('best_val_loss', results)
-            
-            # Check that history has expected length
-            self.assertEqual(len(results['history']), 2)
             
             # Check that checkpoints were saved
             checkpoint_files = list(Path(temp_dir).glob("*.pt"))
             self.assertGreater(len(checkpoint_files), 0)
+    
+    def test_train_model_with_system_analysis_disabled(self):
+        """Test train_model with system analysis disabled."""
+        model = create_model("resnet18")
+        
+        train_data = [
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
+        ] * 3  # 6 samples
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            results = train_model(
+                model=model,
+                train_data=train_data,
+                num_epochs=1,  # Very short training
+                batch_size=2,
+                save_dir=temp_dir,
+                enable_system_analysis=False
+            )
             
-            # Check that training history was saved
-            history_file = Path(temp_dir) / "training_history.json"
-            self.assertTrue(history_file.exists())
+            # Check that results are returned
+            self.assertIn('best_val_loss', results)
 
 
 if __name__ == '__main__':

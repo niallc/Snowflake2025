@@ -40,16 +40,25 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
 class HexDataset(Dataset):
     """Dataset for Hex game data."""
     
-    def __init__(self, data_source, board_size: int = BOARD_SIZE):
+    def __init__(self, data_source=None, data_dir=None, board_size: int = BOARD_SIZE, augment: bool = True):
         """
         Initialize dataset.
         
         Args:
             data_source: Either a directory path (str/Path) containing .trmph files,
                         a single .trmph file path, or a list of trmph strings
+            data_dir: Alternative to data_source for directory paths (for API compatibility)
             board_size: Size of the board
+            augment: Whether to apply data augmentation
         """
         self.board_size = board_size
+        self.augment = augment
+        
+        # Handle both data_source and data_dir parameters for API compatibility
+        if data_source is None and data_dir is not None:
+            data_source = data_dir
+        elif data_source is None and data_dir is None:
+            raise ValueError("Either data_source or data_dir must be provided")
         
         if isinstance(data_source, (str, Path)):
             data_path = Path(data_source)
@@ -158,6 +167,10 @@ class HexDataset(Dataset):
         else:
             # Unknown winner - keep the default from convert_to_matrix_format
             pass
+        
+        # Apply data augmentation if enabled
+        if self.augment:
+            board_state, policy_target = augment_board(board_state, policy_target)
         
         # Convert to tensors
         board_tensor = torch.FloatTensor(board_state)

@@ -38,47 +38,70 @@ class TestHexDataset(unittest.TestCase):
     def test_dataset_initialization(self):
         """Test that HexDataset can be initialized."""
         # Create a temporary directory with a dummy .trmph file
-        import tempfile
-        import os
-        
         temp_dir = tempfile.mkdtemp()
         dummy_file = os.path.join(temp_dir, "dummy.trmph")
         with open(dummy_file, 'w') as f:
-            f.write("#13,a1b2c3")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7 0\n")
         
-        dataset = HexDataset(data_dir=temp_dir)
-        self.assertIsInstance(dataset, HexDataset)
+        try:
+            dataset = HexDataset(data_dir=temp_dir)
+            self.assertIsInstance(dataset, HexDataset)
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir)
     
     def test_dataset_length(self):
         """Test that dataset returns correct length."""
         # Create a temporary directory with a dummy .trmph file
-        import tempfile
-        import os
-        
         temp_dir = tempfile.mkdtemp()
         dummy_file = os.path.join(temp_dir, "dummy.trmph")
         with open(dummy_file, 'w') as f:
-            f.write("#13,a1b2c3")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7 0\n")
         
-        dataset = HexDataset(data_dir=temp_dir)
-        self.assertEqual(len(dataset), 1)
+        try:
+            dataset = HexDataset(data_dir=temp_dir)
+            self.assertEqual(len(dataset), 2)
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir)
     
     def test_dataset_getitem(self):
         """Test that dataset returns correct tensor shapes."""
         # Create a temporary directory with a dummy .trmph file
-        import tempfile
-        import os
-        
         temp_dir = tempfile.mkdtemp()
         dummy_file = os.path.join(temp_dir, "dummy.trmph")
         with open(dummy_file, 'w') as f:
-            f.write("#13,a1b2c3")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
         
-        dataset = HexDataset(data_dir=temp_dir)
-        board, policy, value = dataset[0]
-        self.assertEqual(board.shape, (2, 13, 13))
-        self.assertEqual(policy.shape, (169,))
-        self.assertEqual(value.shape, (1,))
+        try:
+            dataset = HexDataset(data_dir=temp_dir, augment=False)  # Disable augmentation for testing
+            board, policy, value = dataset[0]
+            self.assertEqual(board.shape, (2, 13, 13))
+            self.assertEqual(policy.shape, (169,))
+            self.assertEqual(value.shape, (1,))
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir)
+    
+    def test_dataset_with_augmentation(self):
+        """Test that dataset works with augmentation enabled."""
+        # Create a temporary directory with a dummy .trmph file
+        temp_dir = tempfile.mkdtemp()
+        dummy_file = os.path.join(temp_dir, "dummy.trmph")
+        with open(dummy_file, 'w') as f:
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
+        
+        try:
+            dataset = HexDataset(data_dir=temp_dir, augment=True)
+            board, policy, value = dataset[0]
+            self.assertEqual(board.shape, (2, 13, 13))
+            self.assertEqual(policy.shape, (169,))
+            self.assertEqual(value.shape, (1,))
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir)
     
     def test_validate_board_shape(self):
         """Test board shape validation."""
@@ -119,16 +142,18 @@ class TestDataLoader(unittest.TestCase):
     def test_create_dataloader(self):
         """Test that DataLoader can be created."""
         # Create a temporary directory with a dummy .trmph file
-        import tempfile
-        import os
-        
         temp_dir = tempfile.mkdtemp()
         dummy_file = os.path.join(temp_dir, "dummy.trmph")
         with open(dummy_file, 'w') as f:
-            f.write("#13,a1b2c3")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7 0\n")
         
-        dataloader = create_dataloader(data_dir=temp_dir)
-        self.assertIsInstance(dataloader, DataLoader)
+        try:
+            dataloader = create_dataloader(data_dir=temp_dir)
+            self.assertIsInstance(dataloader, DataLoader)
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir)
 
 
 if __name__ == '__main__':
