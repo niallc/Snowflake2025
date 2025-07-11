@@ -13,7 +13,12 @@ import tempfile
 import os
 import numpy as np
 from pathlib import Path
+import gzip
+import pickle
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from smart_shard_processing import process_all_data_global_shards
 from hex_ai.models import TwoHeadedResNet, create_model, count_parameters
 from hex_ai.dataset import create_sample_data, create_dataloader
 from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -242,6 +247,76 @@ class TestIntegration(unittest.TestCase):
             # Check that gradients are not computed
             self.assertFalse(policy_logits.requires_grad)
             self.assertFalse(value_logit.requires_grad)
+
+
+class TestGlobalSharding(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.source_dir = Path(self.temp_dir.name) / "source"
+        self.processed_dir = Path(self.temp_dir.name) / "processed"
+        self.source_dir.mkdir(parents=True, exist_ok=True)
+        self.processed_dir.mkdir(parents=True, exist_ok=True)
+        # Create 3 dummy .trmph files with 7 unique games total
+        games = [
+            "http://www.trmph.com/hex/board#13,a1b2c3 1\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7 0\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12m13 1\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8 0\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4e5 1\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4e5f6 0\n",
+            "http://www.trmph.com/hex/board#13,a1b2c3d4 1\n",
+        ]
+        # Write unique games to each file
+        with open(self.source_dir / "file_0.trmph", "w") as f:
+            f.write(games[0])
+            f.write(games[1])
+        with open(self.source_dir / "file_1.trmph", "w") as f:
+            f.write(games[2])
+            f.write(games[3])
+            f.write(games[4])
+        with open(self.source_dir / "file_2.trmph", "w") as f:
+            f.write(games[5])
+            f.write(games[6])
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_global_sharding(self):
+        # Use a small shard size to force multiple shards
+        shard_files = process_all_data_global_shards(
+            source_dir=str(self.source_dir),
+            processed_dir=str(self.processed_dir),
+            games_per_shard=3,
+            num_workers=2
+        )
+        # 7 games, 3 per shard => 3 shards (3, 3, 1)
+        self.assertEqual(len(shard_files), 3)
+        # Check for unique shard names
+        shard_names = [f.name for f in shard_files]
+        self.assertEqual(len(shard_names), len(set(shard_names)), "Shard names are not unique!")
+        # Check for no clobbering (all files exist)
+        for f in shard_files:
+            self.assertTrue(f.exists(), f"Shard file {f} does not exist!")
+        # Check all games are present, no duplicates or missing
+        all_games = set()
+        total_games = 0
+        for f in shard_files:
+            with gzip.open(f, 'rb') as g:
+                data = pickle.load(g)
+                total_games += data['num_games']
+                for board in data['boards']:
+                    all_games.add(board.numpy().tobytes())
+        self.assertEqual(total_games, 7)
+        self.assertEqual(len(all_games), 7, "Duplicate or missing games in shards!")
+        # Check shard sizes (except last)
+        for f in shard_files[:-1]:
+            with gzip.open(f, 'rb') as g:
+                data = pickle.load(g)
+                self.assertEqual(data['num_games'], 3)
+        # Last shard can be smaller
+        with gzip.open(shard_files[-1], 'rb') as g:
+            data = pickle.load(g)
+            self.assertGreaterEqual(data['num_games'], 1)
 
 
 if __name__ == '__main__':
