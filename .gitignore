@@ -1,3 +1,33 @@
+# Niall's directories to ignore
+legacy_code/
+data/
+test_checkpoints/
+checkpoints/
+exploratory_results/
+hyperparameter_results/
+
+
+# Niall's files to ignore
+terminal_output_guidance_for_cursor_agent.md
+resumable_shard_processing.py
+safe_shard_processing_fixed.py
+safe_shard_processing_single_worker.py
+stateless_safe_processing.py
+test_child_process_cleanup.py
+test_memory_pattern.py
+truly_single_process.py
+
+# Mac specific files
+.DS_Store
+
+# Windows specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux specific files
+.directory
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -77,6 +107,10 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Python environment
+.python-version
+hex_ai_env/
 
 # IPython
 profile_default/
