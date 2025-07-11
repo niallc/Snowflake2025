@@ -371,7 +371,7 @@ class Trainer:
     
     def load_checkpoint(self, path: Path):
         """Load model checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.current_epoch = checkpoint['epoch']
@@ -500,7 +500,7 @@ def resume_training(checkpoint_path: str,
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
     # Load checkpoint to get model and training state
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     # Extract model and training info
     model_state = checkpoint['model_state_dict']

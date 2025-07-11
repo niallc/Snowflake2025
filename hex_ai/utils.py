@@ -81,7 +81,7 @@ def load_checkpoint(model: torch.nn.Module,
     Returns:
         Tuple of (epoch, loss)
     """
-    checkpoint = torch.load(filepath)
+    checkpoint = torch.load(filepath, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return checkpoint['epoch'], checkpoint['loss']

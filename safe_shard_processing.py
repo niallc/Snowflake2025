@@ -27,9 +27,35 @@ logger = logging.getLogger(__name__)
 
 # Safety configuration
 MAX_MEMORY_PERCENT = 80  # Exit if memory usage exceeds 80%
-MEMORY_CHECK_INTERVAL = 5000  # Check memory every 10 games processed
+MEMORY_CHECK_INTERVAL = 5000  # Check memory every 5000 games processed
 MAX_WORKERS = 4  # Reduced from 8 to 4
 EMERGENCY_SHUTDOWN = False  # Global flag for emergency shutdown
+
+def log_memory_usage(context: str = ""):
+    """Log memory usage for main process and all children."""
+    try:
+        process = psutil.Process(os.getpid())
+        mem = process.memory_info().rss / (1024 * 1024)
+        logger.info(f"[{context}] Main process memory: {mem:.2f} MB")
+        
+        # Log all children
+        children = process.children(recursive=True)
+        if children:
+            total_child_mem = 0
+            for child in children:
+                cmem = child.memory_info().rss / (1024 * 1024)
+                total_child_mem += cmem
+                logger.info(f"[{context}] Child PID {child.pid} memory: {cmem:.2f} MB")
+            logger.info(f"[{context}] Total child memory: {total_child_mem:.2f} MB")
+        else:
+            logger.info(f"[{context}] No child processes")
+            
+        # Log system memory
+        system_mem = psutil.virtual_memory()
+        logger.info(f"[{context}] System memory: {system_mem.percent:.1f}% used ({system_mem.available / (1024**3):.1f} GB available)")
+        
+    except Exception as e:
+        logger.warning(f"Could not log memory usage: {e}")
 
 def signal_handler(signum, frame):
     """Handle interrupt signals gracefully."""
@@ -131,6 +157,7 @@ def process_shard_safely(games: List[Tuple[str, str]], shard_idx: int, processed
         return None
     
     logger.info(f"Processing shard {shard_idx:04d} with {len(games)} games")
+    log_memory_usage(f"Before shard {shard_idx:04d}")
     
     # Process games in parallel with reduced workers
     processed_games = []
@@ -185,8 +212,10 @@ def process_shard_safely(games: List[Tuple[str, str]], shard_idx: int, processed
     logger.info(f"Created shard {shard_file} with {len(processed_games)} games")
     
     # Explicitly free memory
+    logger.info(f"Freeing memory for shard {shard_idx:04d}")
     del processed_games, boards, policies, values, shard_data
     gc.collect()
+    log_memory_usage(f"After shard {shard_idx:04d} cleanup")
     
     return shard_file
 
@@ -226,6 +255,8 @@ def process_all_data_safely(
     total_games = 0
     files_processed = 0
 
+    log_memory_usage("Start of processing")
+
     # Process files one at a time until we have enough games for a shard
     for trmph_file in trmph_files:
         if EMERGENCY_SHUTDOWN:
@@ -250,6 +281,7 @@ def process_all_data_safely(
         total_games += len(games)
         
         logger.info(f"Buffer now contains {len(global_game_buffer)} games")
+        log_memory_usage(f"After loading file {files_processed}")
 
         # Process shards while we have enough games
         while len(global_game_buffer) >= games_per_shard and not EMERGENCY_SHUTDOWN:
@@ -266,6 +298,9 @@ def process_all_data_safely(
             
             all_shard_files.append(shard_file)
             global_shard_idx += 1
+            
+            # Log memory after each shard
+            log_memory_usage(f"After shard {global_shard_idx-1:04d} complete")
 
     # Process any remaining games (final shard)
     if global_game_buffer and not EMERGENCY_SHUTDOWN:

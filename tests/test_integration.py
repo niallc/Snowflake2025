@@ -136,7 +136,7 @@ class TestIntegration(unittest.TestCase):
             new_optimizer = optim.Adam(new_model.parameters(), lr=0.001)
             
             # Load saved state
-            checkpoint = torch.load(temp_path)
+            checkpoint = torch.load(temp_path, weights_only=False)
             new_model.load_state_dict(checkpoint['model_state_dict'])
             new_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             
