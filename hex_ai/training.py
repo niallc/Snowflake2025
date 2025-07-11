@@ -119,6 +119,58 @@ class MixedPrecisionTrainer:
             self.scaler.update()
 
 
+class EarlyStopping:
+    """Early stopping to prevent overfitting."""
+    
+    def __init__(self, patience: int = 10, min_delta: float = 0.001, restore_best_weights: bool = True):
+        """
+        Initialize early stopping.
+        
+        Args:
+            patience: Number of epochs to wait before stopping
+            min_delta: Minimum change in validation loss to be considered an improvement
+            restore_best_weights: Whether to restore best weights when stopping
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best_weights = restore_best_weights
+        self.best_val_loss = float('inf')
+        self.counter = 0
+        self.best_weights = None
+        self.stopped_epoch = 0
+        
+    def __call__(self, val_loss: float, model: torch.nn.Module) -> bool:
+        """
+        Check if training should stop.
+        
+        Args:
+            val_loss: Current validation loss
+            model: Model to save weights from
+            
+        Returns:
+            True if training should stop, False otherwise
+        """
+        if val_loss < self.best_val_loss - self.min_delta:
+            self.best_val_loss = val_loss
+            self.counter = 0
+            if self.restore_best_weights:
+                self.best_weights = model.state_dict().copy()
+        else:
+            self.counter += 1
+            
+        if self.counter >= self.patience:
+            logger.info(f"Early stopping triggered after {self.counter} epochs without improvement")
+            if self.restore_best_weights and self.best_weights is not None:
+                model.load_state_dict(self.best_weights)
+                logger.info("Restored best model weights")
+            return True
+        return False
+    
+    def get_best_val_loss(self) -> float:
+        """Get the best validation loss achieved."""
+        return self.best_val_loss
+
+
 class Trainer:
     """Training manager for Hex AI models."""
     
@@ -261,13 +313,16 @@ class Trainer:
         return val_avg
     
     def train(self, num_epochs: int, save_dir: str = "checkpoints", 
-              max_checkpoints: int = 5, compress_checkpoints: bool = True) -> Dict:
+              max_checkpoints: int = 5, compress_checkpoints: bool = True,
+              early_stopping: Optional[EarlyStopping] = None) -> Dict:
         """Train the model for specified number of epochs."""
         save_path = Path(save_dir)
         save_path.mkdir(exist_ok=True)
         
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
+        if early_stopping:
+            logger.info(f"Early stopping enabled with patience {early_stopping.patience}")
         
         for epoch in range(num_epochs):
             self.current_epoch = epoch
@@ -292,6 +347,12 @@ class Trainer:
                 self.best_val_loss = val_metrics['total_loss']
                 self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
                 logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
+            
+            # Check early stopping
+            if early_stopping and val_metrics:
+                if early_stopping(val_metrics['total_loss'], self.model):
+                    logger.info(f"Early stopping triggered at epoch {epoch}")
+                    break
         
         logger.info("Training completed!")
         return {"best_val_loss": self.best_val_loss}
@@ -402,8 +463,67 @@ def train_model(model: TwoHeadedResNet,
                 learning_rate: float = LEARNING_RATE,
                 save_dir: str = "checkpoints",
                 device: str = DEVICE,
-                enable_system_analysis: bool = True) -> Dict:
+                enable_system_analysis: bool = True,
+                early_stopping_patience: Optional[int] = None) -> Dict:
     """Convenience function to train a model."""
     
     trainer = create_trainer(model, train_data, val_data, batch_size, learning_rate, device, enable_system_analysis)
-    return trainer.train(num_epochs, save_dir) 
+    
+    # Set up early stopping if requested
+    early_stopping = None
+    if early_stopping_patience is not None:
+        early_stopping = EarlyStopping(patience=early_stopping_patience)
+    
+    return trainer.train(num_epochs, save_dir, early_stopping=early_stopping) 
+
+
+def resume_training(checkpoint_path: str, 
+                   num_epochs: int = 10,
+                   save_dir: str = "checkpoints",
+                   max_checkpoints: int = 5,
+                   compress_checkpoints: bool = True) -> Dict:
+    """
+    Resume training from a checkpoint.
+    
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        num_epochs: Number of additional epochs to train
+        save_dir: Directory to save new checkpoints
+        max_checkpoints: Maximum number of checkpoints to keep
+        compress_checkpoints: Whether to compress checkpoints
+        
+    Returns:
+        Training results dictionary
+    """
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    
+    # Load checkpoint to get model and training state
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    
+    # Extract model and training info
+    model_state = checkpoint['model_state_dict']
+    optimizer_state = checkpoint['optimizer_state_dict']
+    start_epoch = checkpoint['epoch']
+    best_val_loss = checkpoint['best_val_loss']
+    
+    # Create model (we need to know the architecture)
+    from .models import TwoHeadedResNet
+    model = TwoHeadedResNet()  # Default architecture
+    
+    # Create trainer with dummy data (will be overridden)
+    dummy_data = [("http://www.trmph.com/hex/board#13,a1b2c3", "1")]
+    trainer = create_trainer(model, dummy_data, enable_system_analysis=False)
+    
+    # Load the checkpoint state
+    trainer.model.load_state_dict(model_state)
+    trainer.optimizer.load_state_dict(optimizer_state)
+    trainer.current_epoch = start_epoch
+    trainer.best_val_loss = best_val_loss
+    
+    logger.info(f"Resuming training from epoch {start_epoch}")
+    logger.info(f"Best validation loss so far: {best_val_loss:.4f}")
+    
+    # Continue training
+    return trainer.train(num_epochs, save_dir, max_checkpoints, compress_checkpoints) 

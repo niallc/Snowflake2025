@@ -1,8 +1,11 @@
-# Niall's files to ignore
+# Niall's directories to ignore
 legacy_code/
 data/
 test_checkpoints/
 checkpoints/
+
+# Niall's files to ignore
+terminal_output_guidance_for_cursor_agent.md
 
 # Mac specific files
 .DS_Store

@@ -12,7 +12,10 @@ import os
 from pathlib import Path
 import numpy as np
 
-from hex_ai.training import PolicyValueLoss, Trainer, create_trainer, train_model, MixedPrecisionTrainer
+from hex_ai.training import (
+    PolicyValueLoss, Trainer, create_trainer, train_model, 
+    MixedPrecisionTrainer, resume_training, EarlyStopping
+)
 from hex_ai.models import create_model
 from hex_ai.dataset import HexDataset
 from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -82,6 +85,53 @@ class TestPolicyValueLoss(unittest.TestCase):
         
         self.assertIsNotNone(self.policy_pred.grad)
         self.assertIsNotNone(self.value_pred.grad)
+
+
+class TestEarlyStopping(unittest.TestCase):
+    """Test the EarlyStopping class."""
+    
+    def test_early_stopping_improvement(self):
+        """Test early stopping when loss improves."""
+        model = create_model("resnet18")
+        early_stopping = EarlyStopping(patience=3, min_delta=0.001)
+        # Simulate improving validation loss
+        val_losses = [1.0, 0.9, 0.8, 0.7]
+        for i, val_loss in enumerate(val_losses):
+            should_stop = early_stopping(val_loss, model)
+            self.assertFalse(should_stop)
+        self.assertEqual(early_stopping.counter, 0)
+        self.assertEqual(early_stopping.best_val_loss, 0.7)
+
+    def test_early_stopping_no_improvement(self):
+        """Test early stopping when loss doesn't improve."""
+        model = create_model("resnet18")
+        early_stopping = EarlyStopping(patience=2, min_delta=0.001)
+        # Simulate no improvement in validation loss
+        val_losses = [1.0, 1.1, 1.2, 1.3]
+        should_stop = False
+        for i, val_loss in enumerate(val_losses):
+            should_stop = early_stopping(val_loss, model)
+        self.assertTrue(should_stop)
+
+    def test_early_stopping_min_delta(self):
+        """Test early stopping with minimum delta."""
+        model = create_model("resnet18")
+        early_stopping = EarlyStopping(patience=2, min_delta=0.1)
+        # Small improvement (less than min_delta)
+        val_losses = [1.0, 0.95, 0.93, 0.92]
+        should_stop = False
+        for i, val_loss in enumerate(val_losses):
+            should_stop = early_stopping(val_loss, model)
+        self.assertTrue(should_stop)
+
+    def test_get_best_val_loss(self):
+        """Test getting the best validation loss."""
+        model = create_model("resnet18")
+        early_stopping = EarlyStopping(patience=3, min_delta=0.001)
+        val_losses = [1.0, 0.8, 0.9, 0.7]
+        for val_loss in val_losses:
+            early_stopping(val_loss, model)
+        self.assertEqual(early_stopping.get_best_val_loss(), 0.7)
 
 
 class TestMixedPrecisionTrainer(unittest.TestCase):
@@ -257,6 +307,48 @@ class TestTrainer(unittest.TestCase):
         self.assertEqual(metrics, {})
 
 
+class TestResumeTraining(unittest.TestCase):
+    """Test resume training functionality."""
+    
+    def test_resume_training_invalid_checkpoint(self):
+        """Test resume training with invalid checkpoint path."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            invalid_path = Path(temp_dir) / "nonexistent.pt"
+            
+            with self.assertRaises(FileNotFoundError):
+                resume_training(str(invalid_path))
+    
+    def test_resume_training_valid_checkpoint(self):
+        """Test resume training with valid checkpoint."""
+        # Create a trainer and save a checkpoint
+        model = create_model("resnet18")
+        train_data = [
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
+        ] * 3  # 6 samples
+        
+        trainer = create_trainer(model, train_data, batch_size=2, learning_rate=0.001)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "test_checkpoint.pt"
+            
+            # Save a checkpoint
+            train_metrics = {'total_loss': 1.0, 'policy_loss': 0.5, 'value_loss': 0.5}
+            val_metrics = {'total_loss': 0.8, 'policy_loss': 0.4, 'value_loss': 0.4}
+            trainer.best_val_loss = 0.8
+            trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics)
+            
+            # Resume training
+            results = resume_training(
+                str(checkpoint_path),
+                num_epochs=1,  # Very short training
+                save_dir=temp_dir
+            )
+            
+            # Check that results are returned
+            self.assertIn('best_val_loss', results)
+
+
 class TestTrainingIntegration(unittest.TestCase):
     """Test training integration."""
     
@@ -308,6 +400,28 @@ class TestTrainingIntegration(unittest.TestCase):
                 batch_size=2,
                 save_dir=temp_dir,
                 enable_system_analysis=False
+            )
+            
+            # Check that results are returned
+            self.assertIn('best_val_loss', results)
+    
+    def test_train_model_with_early_stopping(self):
+        """Test train_model with early stopping."""
+        model = create_model("resnet18")
+        
+        train_data = [
+            ("http://www.trmph.com/hex/board#13,a1b2c3", "1"),
+            ("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7", "0"),
+        ] * 3  # 6 samples
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            results = train_model(
+                model=model,
+                train_data=train_data,
+                num_epochs=5,  # Short training
+                batch_size=2,
+                save_dir=temp_dir,
+                early_stopping_patience=2  # Early stopping with patience 2
             )
             
             # Check that results are returned
