@@ -7,6 +7,7 @@ including model parameters, data paths, and training settings.
 
 import os
 from pathlib import Path
+import torch
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -26,9 +27,8 @@ INITIAL_CHANNELS = 64
 CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 
 # Training configuration
+LEARNING_RATE = 0.001
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4
 NUM_EPOCHS = 100
 VALIDATION_SPLIT = 0.2
 
@@ -45,7 +45,7 @@ WANDB_PROJECT_NAME = "hex-ai-2025"
 LOG_INTERVAL = 100  # Log every N batches
 
 # Device configuration
-DEVICE = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # File extensions
 TRMPH_EXTENSION = ".trmph"

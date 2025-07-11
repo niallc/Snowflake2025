@@ -10,60 +10,55 @@ from torch.utils.data import Dataset, DataLoader
 from typing import Tuple, Optional, List
 import numpy as np
 from pathlib import Path
+import logging
+logger = logging.getLogger(__name__)
 
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from .data_utils import load_trmph_file, convert_to_matrix_format, augment_board
 
 
 class HexDataset(Dataset):
-    """
-    PyTorch Dataset for Hex game data.
+    """Dataset for Hex game data."""
     
-    This dataset loads .trmph files and converts them to the format
-    expected by the neural network model.
-    """
-    
-    def __init__(self, data_dir: str, augment: bool = True):
+    def __init__(self, data_source, board_size: int = BOARD_SIZE):
         """
-        Initialize the dataset.
+        Initialize dataset.
         
         Args:
-            data_dir: Directory containing .trmph files
-            augment: Whether to apply data augmentation
+            data_source: Either a directory path (str/Path) containing .trmph files,
+                        or a list of trmph strings
+            board_size: Size of the board
         """
-        self.data_dir = Path(data_dir)
-        self.augment = augment
+        self.board_size = board_size
         
-        # Find all .trmph files
-        self.files = list(self.data_dir.glob("*.trmph"))
-        
-        if not self.files:
-            raise ValueError(f"No .trmph files found in {data_dir}")
-    
-    def __len__(self) -> int:
-        """Return the number of samples in the dataset."""
-        return len(self.files)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Get a single sample from the dataset.
-        
-        Args:
-            idx: Index of the sample
+        if isinstance(data_source, (str, Path)):
+            # Load from directory
+            self.data_dir = Path(data_source)
+            self.game_files = list(self.data_dir.glob("*.trmph"))
+            self.game_data = []
             
-        Returns:
-            Tuple of (board_state, policy_target, value_target)
-        """
-        # Load the .trmph file
-        file_path = self.files[idx]
-        game_data = load_trmph_file(str(file_path))
+            for file_path in self.game_files:
+                with open(file_path, 'r') as f:
+                    content = f.read().strip()
+                    if content:
+                        self.game_data.append(content)
+        else:
+            # Direct list of trmph strings
+            self.data_dir = None
+            self.game_files = []
+            self.game_data = data_source
+        
+        logger.info(f"Loaded {len(self.game_data)} games")
+    
+    def __len__(self):
+        return len(self.game_data)
+    
+    def __getitem__(self, idx):
+        """Get a single training example."""
+        game_data = self.game_data[idx]
         
         # Convert to matrix format
         board_state, policy_target, value_target = convert_to_matrix_format(game_data)
-        
-        # Apply augmentation if enabled
-        if self.augment:
-            board_state, policy_target = augment_board(board_state, policy_target)
         
         # Convert to tensors
         board_tensor = torch.FloatTensor(board_state)
