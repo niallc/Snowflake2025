@@ -226,10 +226,14 @@ def create_processed_dataloader(shard_files: List[Path], batch_size: int = 32,
     """Create a DataLoader from processed shard files."""
     dataset = ProcessedDataset(shard_files, shuffle_shards=shuffle)
     
+    # Disable pin_memory for MPS (not supported)
+    import torch
+    pin_memory = torch.backends.mps.is_available() == False  # Only enable for non-MPS devices
+    
     return torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=pin_memory
     ) 

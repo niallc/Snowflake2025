@@ -79,6 +79,7 @@ class TwoHeadedResNet(nn.Module):
     
     def __init__(self, resnet_depth: int = RESNET_DEPTH, dropout_prob: float = 0.1):
         super().__init__()
+        self.resnet_depth = resnet_depth
         
         # Input layer: Convert board representation to initial features
         # Input shape: (batch_size, 2, 13, 13) for two players

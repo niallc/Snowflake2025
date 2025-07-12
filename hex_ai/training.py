@@ -78,14 +78,21 @@ class MixedPrecisionTrainer:
     
     def __init__(self, device: str):
         self.device = device
-        self.use_mixed_precision = device == 'cuda'
+        self.use_mixed_precision = device in ['cuda', 'mps']
         
         if self.use_mixed_precision:
             try:
-                from torch.cuda.amp import autocast, GradScaler
-                self.autocast = autocast
-                self.scaler = GradScaler()
-                logger.info("Mixed precision training enabled for GPU")
+                if device == 'cuda':
+                    from torch.cuda.amp import autocast, GradScaler
+                    self.autocast = autocast
+                    self.scaler = GradScaler()
+                    logger.info("Mixed precision training enabled for CUDA GPU")
+                elif device == 'mps':
+                    # MPS uses torch.autocast with device_type="mps"
+                    self.autocast = lambda: torch.autocast(device_type="mps")
+                    # MPS doesn't need GradScaler, but we'll keep the interface
+                    self.scaler = None
+                    logger.info("Mixed precision training enabled for MPS GPU")
             except ImportError:
                 logger.warning("PyTorch AMP not available, falling back to full precision")
                 self.use_mixed_precision = False
@@ -104,20 +111,20 @@ class MixedPrecisionTrainer:
     
     def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         """Scale loss for mixed precision training."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             return self.scaler.scale(loss)
         return loss
     
     def step_optimizer(self, optimizer: optim.Optimizer):
         """Step optimizer with proper scaling."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             self.scaler.step(optimizer)
         else:
             optimizer.step()
     
     def update_scaler(self):
         """Update gradient scaler."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             self.scaler.update()
 
 
@@ -239,8 +246,8 @@ class Trainer:
                 logger.warning(f"Consider increasing batch size to {batch_analysis['optimal_batch_size']} for better efficiency")
             
             # Warn about GPU usage
-            if not system_info['gpu_available'] and self.device == 'cuda':
-                logger.warning("CUDA device requested but no GPU available, falling back to CPU")
+            if not system_info['gpu_available'] and self.device in ['cuda', 'mps']:
+                logger.warning(f"{self.device.upper()} device requested but no GPU available, falling back to CPU")
             
         except ImportError as e:
             logger.warning(f"System analysis unavailable: {e}")
@@ -336,6 +343,10 @@ class Trainer:
         # Start timing
         self.start_time = datetime.now()
         
+        # Initialize loss tracking
+        train_losses = []
+        val_losses = []
+        
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
         if early_stopping:
@@ -351,6 +362,13 @@ class Trainer:
             
             # Validation
             val_metrics = self.validate()
+            
+            # Track losses
+            train_losses.append(train_metrics['total_loss'])
+            if val_metrics:
+                val_losses.append(val_metrics['total_loss'])
+            else:
+                val_losses.append(float('inf'))  # No validation data
             
             # Calculate timing and performance metrics
             epoch_time = (datetime.now() - epoch_start_time).total_seconds()
@@ -431,7 +449,16 @@ class Trainer:
             )
         
         logger.info("Training completed!")
-        return {"best_val_loss": self.best_val_loss}
+        
+        # Return comprehensive results
+        return {
+            "best_val_loss": self.best_val_loss,
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "epochs_trained": len(train_losses),
+            "early_stopped": early_stopped,
+            "total_training_time": total_training_time
+        }
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
         """Save model checkpoint."""

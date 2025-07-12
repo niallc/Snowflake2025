@@ -46,7 +46,7 @@ WANDB_PROJECT_NAME = "hex-ai-2025"
 LOG_INTERVAL = 100  # Log every N batches
 
 # Device configuration
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
 # File extensions
 TRMPH_EXTENSION = ".trmph"
