@@ -26,11 +26,14 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
+POLICY_LOSS_WEIGHT = 0.15
+VALUE_LOSS_WEIGHT = 0.85
 
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads."""
     
-    def __init__(self, policy_weight: float = 1.0, value_weight: float = 1.0):
+    def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
@@ -58,7 +61,6 @@ class PolicyValueLoss(nn.Module):
         # Value loss (MSE)
         value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
         
-        # Combined loss
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss)
         
@@ -179,7 +181,9 @@ class Trainer:
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
                  device: str = DEVICE,
-                 enable_system_analysis: bool = True):
+                 enable_system_analysis: bool = True,
+                 enable_csv_logging: bool = True,
+                 experiment_name: Optional[str] = None):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -196,6 +200,13 @@ class Trainer:
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.training_history = []
+        self.start_time = None
+        
+        # CSV logging
+        self.csv_logger = None
+        if enable_csv_logging:
+            from .training_logger import TrainingLogger
+            self.csv_logger = TrainingLogger(experiment_name=experiment_name)
         
         # System analysis
         if enable_system_analysis:
@@ -319,12 +330,17 @@ class Trainer:
         save_path = Path(save_dir)
         save_path.mkdir(exist_ok=True)
         
+        # Start timing
+        self.start_time = datetime.now()
+        
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
         if early_stopping:
             logger.info(f"Early stopping enabled with patience {early_stopping.patience}")
         
+        early_stopped = False
         for epoch in range(num_epochs):
+            epoch_start_time = datetime.now()
             self.current_epoch = epoch
             
             # Training
@@ -332,6 +348,49 @@ class Trainer:
             
             # Validation
             val_metrics = self.validate()
+            
+            # Calculate timing and performance metrics
+            epoch_time = (datetime.now() - epoch_start_time).total_seconds()
+            total_training_time = (datetime.now() - self.start_time).total_seconds()
+            
+            # Calculate samples per second
+            total_samples = len(self.train_loader.dataset)
+            samples_per_second = total_samples / epoch_time if epoch_time > 0 else 0
+            
+            # Get memory usage
+            from .training_logger import get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
+            memory_usage_mb = get_memory_usage()
+            gpu_memory_mb = get_gpu_memory_usage()
+            weight_stats = get_weight_statistics(self.model)
+            gradient_norm = get_gradient_norm(self.model)
+            
+            # Prepare hyperparameters for logging
+            hyperparams = {
+                'learning_rate': self.optimizer.param_groups[0]['lr'],
+                'batch_size': self.train_loader.batch_size,
+                'dataset_size': len(self.train_loader.dataset),
+                'network_structure': f"ResNet{self.model.resnet_depth}",
+                'policy_weight': self.criterion.policy_weight,
+                'value_weight': self.criterion.value_weight,
+                'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight
+            }
+            
+            # Log to CSV if enabled
+            if self.csv_logger:
+                self.csv_logger.log_epoch(
+                    epoch=epoch,
+                    train_metrics=train_metrics,
+                    val_metrics=val_metrics,
+                    hyperparams=hyperparams,
+                    training_time=total_training_time,
+                    epoch_time=epoch_time,
+                    samples_per_second=samples_per_second,
+                    memory_usage_mb=memory_usage_mb,
+                    gpu_memory_mb=gpu_memory_mb,
+                    gradient_norm=gradient_norm,
+                    weight_stats=weight_stats,
+                    notes=f"Epoch {epoch} completed"
+                )
             
             # Log results
             logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f}")
@@ -352,7 +411,19 @@ class Trainer:
             if early_stopping and val_metrics:
                 if early_stopping(val_metrics['total_loss'], self.model):
                     logger.info(f"Early stopping triggered at epoch {epoch}")
+                    early_stopped = True
                     break
+        
+        # Log experiment summary
+        total_training_time = (datetime.now() - self.start_time).total_seconds()
+        if self.csv_logger:
+            self.csv_logger.log_experiment_summary(
+                best_val_loss=self.best_val_loss,
+                total_epochs=epoch + 1,
+                total_training_time=total_training_time,
+                early_stopped=early_stopped,
+                notes=f"Training completed with {epoch + 1} epochs"
+            )
         
         logger.info("Training completed!")
         return {"best_val_loss": self.best_val_loss}
