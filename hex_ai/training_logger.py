@@ -41,6 +41,7 @@ class TrainingLogger:
             # Hyperparameters
             'learning_rate', 'batch_size', 'dataset_size', 'network_structure',
             'policy_weight', 'value_weight', 'total_loss_weight',
+            'dropout_prob', 'weight_decay',
             
             # Training metrics
             'policy_loss', 'value_loss', 'total_loss',
@@ -119,6 +120,8 @@ class TrainingLogger:
             'policy_weight': hyperparams.get('policy_weight', ''),
             'value_weight': hyperparams.get('value_weight', ''),
             'total_loss_weight': hyperparams.get('total_loss_weight', ''),
+            'dropout_prob': hyperparams.get('dropout_prob', ''),
+            'weight_decay': hyperparams.get('weight_decay', ''),
             
             # Training metrics
             'policy_loss': train_metrics.get('policy_loss', ''),
@@ -187,6 +190,8 @@ class TrainingLogger:
             'policy_weight': '',
             'value_weight': '',
             'total_loss_weight': '',
+            'dropout_prob': '',
+            'weight_decay': '',
             
             # Training metrics (empty for summary)
             'policy_loss': '',

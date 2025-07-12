@@ -77,7 +77,7 @@ class TwoHeadedResNet(nn.Module):
     - Mixed precision support
     """
     
-    def __init__(self, resnet_depth: int = RESNET_DEPTH):
+    def __init__(self, resnet_depth: int = RESNET_DEPTH, dropout_prob: float = 0.1):
         super().__init__()
         
         # Input layer: Convert board representation to initial features
@@ -98,6 +98,9 @@ class TwoHeadedResNet(nn.Module):
         
         # Global average pooling
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        # Dropout layer
+        self.dropout = nn.Dropout(p=dropout_prob)
         
         # Policy head: Predict move probabilities
         self.policy_head = nn.Linear(CHANNEL_PROGRESSION[3], POLICY_OUTPUT_SIZE)
@@ -161,13 +164,12 @@ class TwoHeadedResNet(nn.Module):
         # Global average pooling
         x = self.global_pool(x)  # (batch_size, 512, 1, 1)
         x = x.view(x.size(0), -1)  # (batch_size, 512)
-        
+        # Dropout
+        x = self.dropout(x)
         # Policy head
         policy_logits = self.policy_head(x)  # (batch_size, 169)
-        
         # Value head
         value_logit = self.value_head(x)  # (batch_size, 1)
-        
         return policy_logits, value_logit
 
 

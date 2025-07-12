@@ -193,7 +193,7 @@ class Trainer:
         self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Optimizer and loss
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
         self.criterion = PolicyValueLoss()
         
         # Training state
@@ -372,7 +372,9 @@ class Trainer:
                 'network_structure': f"ResNet{self.model.resnet_depth}",
                 'policy_weight': self.criterion.policy_weight,
                 'value_weight': self.criterion.value_weight,
-                'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight
+                'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight,
+                'dropout_prob': self.model.dropout.p,
+                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0)
             }
             
             # Log to CSV if enabled
