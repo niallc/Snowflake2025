@@ -183,7 +183,10 @@ class Trainer:
                  device: str = DEVICE,
                  enable_system_analysis: bool = True,
                  enable_csv_logging: bool = True,
-                 experiment_name: Optional[str] = None):
+                 experiment_name: Optional[str] = None,
+                 policy_weight: float = POLICY_LOSS_WEIGHT,
+                 value_weight: float = VALUE_LOSS_WEIGHT,
+                 weight_decay: float = 1e-4):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -193,8 +196,8 @@ class Trainer:
         self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Optimizer and loss
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-        self.criterion = PolicyValueLoss()
+        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
         
         # Training state
         self.current_epoch = 0

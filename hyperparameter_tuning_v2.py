@@ -47,7 +47,6 @@ class EnhancedHyperparameterTuner:
             'improvements': [
                 'Dropout testing (0.0, 0.1, 0.2)',
                 'Weight decay testing (0, 1e-4, 1e-3)',
-                'Loss weight balancing (value_weight: 0.86, policy_weight: 0.14)',
                 'CSV logging for all metrics',
                 'Smart checkpoint retention'
             ]
@@ -125,10 +124,8 @@ class EnhancedHyperparameterTuner:
             learning_rate=hyperparams.get('learning_rate', 0.001),
             device=None,
             enable_system_analysis=True,
-            # Enhanced loss weights
             policy_weight=hyperparams.get('policy_weight', 0.14),
             value_weight=hyperparams.get('value_weight', 0.86),
-            # Enhanced optimizer settings
             weight_decay=hyperparams.get('weight_decay', 1e-4)
         )
         

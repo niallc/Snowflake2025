@@ -5,6 +5,7 @@ test_checkpoints/
 checkpoints/
 exploratory_results/
 hyperparameter_results/
+hyperparameter_results_v2/
 
 
 # Niall's files to ignore
@@ -20,6 +21,7 @@ WINDOWS_SETUP.md
 windows_setup_verification.py
 dev_plan_jul12th.md
 requirements.txt.backup
+training_metrics.csv
 
 
 # Mac specific files
