@@ -26,11 +26,14 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
+POLICY_LOSS_WEIGHT = 0.15
+VALUE_LOSS_WEIGHT = 0.85
 
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads."""
     
-    def __init__(self, policy_weight: float = 1.0, value_weight: float = 1.0):
+    def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
@@ -58,7 +61,6 @@ class PolicyValueLoss(nn.Module):
         # Value loss (MSE)
         value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
         
-        # Combined loss
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss)
         
@@ -179,7 +181,9 @@ class Trainer:
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
                  device: str = DEVICE,
-                 enable_system_analysis: bool = True):
+                 enable_system_analysis: bool = True,
+                 enable_csv_logging: bool = True,
+                 experiment_name: Optional[str] = None):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -189,13 +193,20 @@ class Trainer:
         self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Optimizer and loss
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
         self.criterion = PolicyValueLoss()
         
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.training_history = []
+        self.start_time = None
+        
+        # CSV logging
+        self.csv_logger = None
+        if enable_csv_logging:
+            from .training_logger import TrainingLogger
+            self.csv_logger = TrainingLogger(experiment_name=experiment_name)
         
         # System analysis
         if enable_system_analysis:
@@ -319,12 +330,17 @@ class Trainer:
         save_path = Path(save_dir)
         save_path.mkdir(exist_ok=True)
         
+        # Start timing
+        self.start_time = datetime.now()
+        
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
         if early_stopping:
             logger.info(f"Early stopping enabled with patience {early_stopping.patience}")
         
+        early_stopped = False
         for epoch in range(num_epochs):
+            epoch_start_time = datetime.now()
             self.current_epoch = epoch
             
             # Training
@@ -332,6 +348,51 @@ class Trainer:
             
             # Validation
             val_metrics = self.validate()
+            
+            # Calculate timing and performance metrics
+            epoch_time = (datetime.now() - epoch_start_time).total_seconds()
+            total_training_time = (datetime.now() - self.start_time).total_seconds()
+            
+            # Calculate samples per second
+            total_samples = len(self.train_loader.dataset)
+            samples_per_second = total_samples / epoch_time if epoch_time > 0 else 0
+            
+            # Get memory usage
+            from .training_logger import get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
+            memory_usage_mb = get_memory_usage()
+            gpu_memory_mb = get_gpu_memory_usage()
+            weight_stats = get_weight_statistics(self.model)
+            gradient_norm = get_gradient_norm(self.model)
+            
+            # Prepare hyperparameters for logging
+            hyperparams = {
+                'learning_rate': self.optimizer.param_groups[0]['lr'],
+                'batch_size': self.train_loader.batch_size,
+                'dataset_size': len(self.train_loader.dataset),
+                'network_structure': f"ResNet{self.model.resnet_depth}",
+                'policy_weight': self.criterion.policy_weight,
+                'value_weight': self.criterion.value_weight,
+                'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight,
+                'dropout_prob': self.model.dropout.p,
+                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0)
+            }
+            
+            # Log to CSV if enabled
+            if self.csv_logger:
+                self.csv_logger.log_epoch(
+                    epoch=epoch,
+                    train_metrics=train_metrics,
+                    val_metrics=val_metrics,
+                    hyperparams=hyperparams,
+                    training_time=total_training_time,
+                    epoch_time=epoch_time,
+                    samples_per_second=samples_per_second,
+                    memory_usage_mb=memory_usage_mb,
+                    gpu_memory_mb=gpu_memory_mb,
+                    gradient_norm=gradient_norm,
+                    weight_stats=weight_stats,
+                    notes=f"Epoch {epoch} completed"
+                )
             
             # Log results
             logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f}")
@@ -352,7 +413,19 @@ class Trainer:
             if early_stopping and val_metrics:
                 if early_stopping(val_metrics['total_loss'], self.model):
                     logger.info(f"Early stopping triggered at epoch {epoch}")
+                    early_stopped = True
                     break
+        
+        # Log experiment summary
+        total_training_time = (datetime.now() - self.start_time).total_seconds()
+        if self.csv_logger:
+            self.csv_logger.log_experiment_summary(
+                best_val_loss=self.best_val_loss,
+                total_epochs=epoch + 1,
+                total_training_time=total_training_time,
+                early_stopped=early_stopped,
+                notes=f"Training completed with {epoch + 1} epochs"
+            )
         
         logger.info("Training completed!")
         return {"best_val_loss": self.best_val_loss}
@@ -409,7 +482,7 @@ class Trainer:
         self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
     
     def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        """Remove old checkpoints to keep storage under control."""
+        """Remove old checkpoints using smart retention strategy."""
         # Get all checkpoint files
         if compress_checkpoints:
             checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
@@ -419,17 +492,68 @@ class Trainer:
         # Sort by epoch number
         checkpoint_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
         
-        # Keep only the most recent max_checkpoints
-        if len(checkpoint_files) > max_checkpoints:
-            files_to_delete = checkpoint_files[:-max_checkpoints]
-            for file_path in files_to_delete:
-                try:
-                    file_path.unlink()
-                    logger.debug(f"Deleted old checkpoint: {file_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete {file_path}: {e}")
-            
-            logger.info(f"Cleaned up {len(files_to_delete)} old checkpoints, keeping {max_checkpoints} most recent")
+        if len(checkpoint_files) <= max_checkpoints:
+            return  # No cleanup needed
+        
+        # Get epochs from checkpoint filenames
+        epochs = [int(f.stem.split('_')[-1]) for f in checkpoint_files]
+        max_epoch = max(epochs)
+        
+        # Determine which checkpoints to keep based on smart strategy
+        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
+        
+        # Find checkpoints to delete
+        files_to_delete = []
+        for checkpoint_file in checkpoint_files:
+            epoch = int(checkpoint_file.stem.split('_')[-1])
+            if epoch not in keep_epochs:
+                files_to_delete.append(checkpoint_file)
+        
+        # Delete old checkpoints
+        for file_path in files_to_delete:
+            try:
+                file_path.unlink()
+                logger.debug(f"Deleted checkpoint: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_path}: {e}")
+        
+        logger.info(f"Smart cleanup: deleted {len(files_to_delete)} checkpoints, keeping epochs {keep_epochs}")
+    
+    def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
+        """Get the epochs to keep based on smart retention strategy."""
+        if max_checkpoints <= 5:
+            # For small numbers, keep all recent checkpoints
+            return set(range(max(0, max_epoch - max_checkpoints + 1), max_epoch + 1))
+        
+        # Smart strategy for larger numbers
+        keep_epochs = set()
+        
+        # Always keep the latest few
+        keep_epochs.update([max_epoch, max_epoch - 1, max_epoch - 2])
+        
+        # Add strategic samples from earlier epochs
+        if max_epoch >= 20:
+            # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
+            if max_epoch == 20:
+                keep_epochs.update([16, 13, 9, 4])
+            else:
+                # Generalize the pattern: recent + strategic samples
+                keep_epochs.update([max_epoch - 4, max_epoch - 7, max_epoch - 11, max_epoch - 16])
+        else:
+            # For smaller numbers, sample more densely
+            step = max(1, max_epoch // max_checkpoints)
+            for i in range(0, max_epoch - 2, step):
+                if len(keep_epochs) < max_checkpoints:
+                    keep_epochs.add(i)
+        
+        # Always keep epoch 0 (baseline)
+        if 0 <= max_epoch:
+            keep_epochs.add(0)
+        
+        # Ensure we don't exceed max_checkpoints
+        keep_epochs = set(sorted(keep_epochs)[-max_checkpoints:])
+        
+        return keep_epochs
 
 
 def create_trainer(model: TwoHeadedResNet, 

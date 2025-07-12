@@ -16,6 +16,10 @@ stateless_safe_processing.py
 test_child_process_cleanup.py
 test_memory_pattern.py
 truly_single_process.py
+WINDOWS_SETUP.md
+windows_setup_verification.py
+dev_plan_jul12th.md
+
 
 # Mac specific files
 .DS_Store
