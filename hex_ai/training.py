@@ -482,7 +482,7 @@ class Trainer:
         self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
     
     def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        """Remove old checkpoints to keep storage under control."""
+        """Remove old checkpoints using smart retention strategy."""
         # Get all checkpoint files
         if compress_checkpoints:
             checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
@@ -492,17 +492,68 @@ class Trainer:
         # Sort by epoch number
         checkpoint_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
         
-        # Keep only the most recent max_checkpoints
-        if len(checkpoint_files) > max_checkpoints:
-            files_to_delete = checkpoint_files[:-max_checkpoints]
-            for file_path in files_to_delete:
-                try:
-                    file_path.unlink()
-                    logger.debug(f"Deleted old checkpoint: {file_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete {file_path}: {e}")
-            
-            logger.info(f"Cleaned up {len(files_to_delete)} old checkpoints, keeping {max_checkpoints} most recent")
+        if len(checkpoint_files) <= max_checkpoints:
+            return  # No cleanup needed
+        
+        # Get epochs from checkpoint filenames
+        epochs = [int(f.stem.split('_')[-1]) for f in checkpoint_files]
+        max_epoch = max(epochs)
+        
+        # Determine which checkpoints to keep based on smart strategy
+        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
+        
+        # Find checkpoints to delete
+        files_to_delete = []
+        for checkpoint_file in checkpoint_files:
+            epoch = int(checkpoint_file.stem.split('_')[-1])
+            if epoch not in keep_epochs:
+                files_to_delete.append(checkpoint_file)
+        
+        # Delete old checkpoints
+        for file_path in files_to_delete:
+            try:
+                file_path.unlink()
+                logger.debug(f"Deleted checkpoint: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_path}: {e}")
+        
+        logger.info(f"Smart cleanup: deleted {len(files_to_delete)} checkpoints, keeping epochs {keep_epochs}")
+    
+    def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
+        """Get the epochs to keep based on smart retention strategy."""
+        if max_checkpoints <= 5:
+            # For small numbers, keep all recent checkpoints
+            return set(range(max(0, max_epoch - max_checkpoints + 1), max_epoch + 1))
+        
+        # Smart strategy for larger numbers
+        keep_epochs = set()
+        
+        # Always keep the latest few
+        keep_epochs.update([max_epoch, max_epoch - 1, max_epoch - 2])
+        
+        # Add strategic samples from earlier epochs
+        if max_epoch >= 20:
+            # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
+            if max_epoch == 20:
+                keep_epochs.update([16, 13, 9, 4])
+            else:
+                # Generalize the pattern: recent + strategic samples
+                keep_epochs.update([max_epoch - 4, max_epoch - 7, max_epoch - 11, max_epoch - 16])
+        else:
+            # For smaller numbers, sample more densely
+            step = max(1, max_epoch // max_checkpoints)
+            for i in range(0, max_epoch - 2, step):
+                if len(keep_epochs) < max_checkpoints:
+                    keep_epochs.add(i)
+        
+        # Always keep epoch 0 (baseline)
+        if 0 <= max_epoch:
+            keep_epochs.add(0)
+        
+        # Ensure we don't exceed max_checkpoints
+        keep_epochs = set(sorted(keep_epochs)[-max_checkpoints:])
+        
+        return keep_epochs
 
 
 def create_trainer(model: TwoHeadedResNet, 
