@@ -18,8 +18,7 @@ import numpy as np
 from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
-from .data_utils import convert_to_matrix_format
-from .dataset import validate_game
+from .data_utils import validate_game
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,7 @@ class DataProcessor:
                 elif winner_indicator == "2":
                     value_override = 0.0  # Red wins
                 else:
-                    value_override = None  # Use computed value
+                    assert False, "Error (2nd) in data_processing.py, _convert_games_to_tensors: Unknown winner - cannot use game without a winner."
                 
                 for board_state, policy_target, value_target in training_examples:
                     # Override value if we have explicit winner info
@@ -120,7 +119,11 @@ class DataProcessor:
                     
                     # Convert to tensors
                     board_tensor = torch.FloatTensor(board_state)
-                    policy_tensor = torch.FloatTensor(policy_target)
+                    if policy_target is not None:
+                        policy_tensor = torch.FloatTensor(policy_target)
+                    else:
+                        # Final positions have no next move to predict
+                        policy_tensor = torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
                     value_tensor = torch.FloatTensor([value_target])
                     
                     processed_games.append((board_tensor, policy_tensor, value_tensor))

@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import TwoHeadedResNet
-from .dataset import HexDataset
+from .data_processing import ProcessedDataset, create_processed_dataloader
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
@@ -602,22 +602,20 @@ class Trainer:
 
 
 def create_trainer(model: TwoHeadedResNet, 
-                  train_data: List[str],
-                  val_data: Optional[List[str]] = None,
+                  train_shard_files: List[Path],
+                  val_shard_files: Optional[List[Path]] = None,
                   batch_size: int = BATCH_SIZE,
                   learning_rate: float = LEARNING_RATE,
                   device: str = DEVICE,
                   enable_system_analysis: bool = True) -> Trainer:
-    """Create a trainer with data loaders."""
+    """Create a trainer with data loaders from processed shard files."""
     
-    # Create datasets
-    train_dataset = HexDataset(train_data)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # Create data loaders from processed shard files
+    train_loader = create_processed_dataloader(train_shard_files, batch_size=batch_size, shuffle=True)
     
     val_loader = None
-    if val_data:
-        val_dataset = HexDataset(val_data)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    if val_shard_files:
+        val_loader = create_processed_dataloader(val_shard_files, batch_size=batch_size, shuffle=False)
     
     # Create trainer
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
@@ -625,8 +623,8 @@ def create_trainer(model: TwoHeadedResNet,
 
 
 def train_model(model: TwoHeadedResNet,
-                train_data: List[str],
-                val_data: Optional[List[str]] = None,
+                train_shard_files: List[Path],
+                val_shard_files: Optional[List[Path]] = None,
                 num_epochs: int = NUM_EPOCHS,
                 batch_size: int = BATCH_SIZE,
                 learning_rate: float = LEARNING_RATE,
@@ -634,9 +632,9 @@ def train_model(model: TwoHeadedResNet,
                 device: str = DEVICE,
                 enable_system_analysis: bool = True,
                 early_stopping_patience: Optional[int] = None) -> Dict:
-    """Convenience function to train a model."""
+    """Convenience function to train a model with processed shard files."""
     
-    trainer = create_trainer(model, train_data, val_data, batch_size, learning_rate, device, enable_system_analysis)
+    trainer = create_trainer(model, train_shard_files, val_shard_files, batch_size, learning_rate, device, enable_system_analysis)
     
     # Set up early stopping if requested
     early_stopping = None
@@ -682,8 +680,8 @@ def resume_training(checkpoint_path: str,
     model = TwoHeadedResNet()  # Default architecture
     
     # Create trainer with dummy data (will be overridden)
-    dummy_data = [("http://www.trmph.com/hex/board#13,a1b2c3", "1")]
-    trainer = create_trainer(model, dummy_data, enable_system_analysis=False)
+    dummy_shard_files = [Path("dummy_shard.pkl.gz")]
+    trainer = create_trainer(model, dummy_shard_files, enable_system_analysis=False)
     
     # Load the checkpoint state
     trainer.model.load_state_dict(model_state)

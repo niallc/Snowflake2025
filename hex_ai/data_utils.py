@@ -60,133 +60,6 @@ def load_trmph_file(file_path: str) -> str:
         raise ValueError(f"Error reading file {file_path}: {e}")
 
 
-def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Convert game data to matrix format for training.
-    
-    Args:
-        game_data: Trmph string representing a game
-        debug_info: Optional debug information (e.g., line number)
-        
-    Returns:
-        Tuple of (board_state, policy_target, value_target):
-        - board_state: Shape (2, 13, 13) - current board state
-        - policy_target: Shape (169,) - move probabilities (one-hot for actual move)
-        - value_target: Shape (1,) - win probability (0.0 or 1.0)
-    """
-    # Parse the trmph string to get the board state and moves
-    board_matrix = parse_trmph_to_board(game_data, debug_info=debug_info)
-    
-    # Convert to 2-channel format for the model
-    board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
-    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
-    
-    # Extract actual policy from game (next move to be played)
-    policy_target = extract_policy_from_game(game_data, debug_info)
-    
-    # Determine winner and set value target
-    winner = detect_winner(game_data)
-    if winner == "blue":
-        value_target = 1.0
-    elif winner == "red":
-        value_target = 0.0
-    else:
-        # No winner yet - could be 0.5 or based on position evaluation
-        value_target = 0.5
-    
-    return board_state, policy_target, value_target
-
-
-def extract_policy_from_game(trmph_text: str, debug_info: str = "") -> np.ndarray:
-    """
-    Extract the actual next move from a game to create a proper policy target.
-    
-    For training, we want to predict the next move given the current board state.
-    Since we have the complete game, we'll use the last move as the target.
-    
-    Args:
-        trmph_text: Complete trmph string
-        debug_info: Optional debug information
-        
-    Returns:
-        Policy target of shape (169,) with 1.0 for the actual move, 0.0 elsewhere
-    """
-    try:
-        # Strip preamble and get all moves
-        bare_moves = strip_trmph_preamble(trmph_text)
-        moves = split_trmph_moves(bare_moves)
-        
-        if not moves:
-            logger.warning(f"No moves found in game: {trmph_text[:50]}...")
-            # Return uniform policy if no moves
-            policy = np.ones(POLICY_OUTPUT_SIZE, dtype=np.float32) / POLICY_OUTPUT_SIZE
-            return policy
-        
-        # For now, use the last move as the target (simplest approach)
-        # This teaches the model to predict the final move given the final board state
-        target_move = moves[-1]
-        
-        # Convert move to tensor position
-        row, col = trmph_move_to_rowcol(target_move)
-        tensor_pos = rowcol_to_tensor(row, col)
-        
-        # Create one-hot policy target
-        policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
-        policy[tensor_pos] = 1.0
-        
-        return policy
-        
-    except Exception as e:
-        logger.warning(f"Failed to extract policy from game {trmph_text[:50]}...: {e}")
-        if debug_info:
-            logger.warning(f"Debug info: {debug_info}")
-        # Return uniform policy as fallback
-        policy = np.ones(POLICY_OUTPUT_SIZE, dtype=np.float32) / POLICY_OUTPUT_SIZE
-        return policy
-
-
-def detect_winner(trmph_text: str) -> str:
-    """
-    Detect the winner of a game using legacy BoardUtils logic.
-    
-    Args:
-        trmph_text: Complete trmph string
-        
-    Returns:
-        "blue", "red", or "no winner"
-    """
-    try:
-        # Import legacy modules
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'legacy_code'))
-        
-        import BoardUtils as bu
-        import FileConversion as fc
-        
-        # Detect board size from trmph string
-        if "#11," in trmph_text:
-            board_size = 7
-        elif "#13," in trmph_text:
-            board_size = 13
-        else:
-            logger.warning(f"Unknown board size in trmph: {trmph_text[:50]}...")
-            return "no winner"
-        
-        # Initialize connections for the board
-        connections = bu.InitBoardConns(trmph_text, playBoardSize=board_size, modelBoardSize=board_size)
-        
-        # Find winner
-        winner = bu.FindWinner(connections)
-        
-        return winner
-        
-    except Exception as e:
-        logger.warning(f"Could not detect winner for {trmph_text[:50]}...: {e}")
-        return "no winner"
-
-
 def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     """
     Display a board in a human-readable format.
@@ -572,9 +445,6 @@ def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np
 # ============================================================================
 
 
-
-
-
 def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None, debug_info: str = "") -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
     """
     Extract training examples from a game using correct logic for two-headed networks.
@@ -704,3 +574,22 @@ def create_policy_target(move: str) -> np.ndarray:
     policy[tensor_pos] = 1.0
     
     return policy
+
+def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
+    """
+    Validate a single game for corruption.
+    
+    Args:
+        trmph_url: The trmph URL string
+        winner_indicator: The winner indicator string
+        line_info: Optional line information for debugging
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Test if we can parse the game without errors
+        board_state, policy_target, value_target = convert_to_matrix_format(trmph_url, debug_info=line_info)
+        return True, ""
+    except Exception as e:
+        return False, str(e)

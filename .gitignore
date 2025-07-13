@@ -7,10 +7,8 @@ exploratory_results/
 hyperparameter_results/
 hyperparameter_results_v2/
 
-
 # Niall's files to ignore
 terminal_output_guidance_for_cursor_agent.md
-resumable_shard_processing.py
 safe_shard_processing_fixed.py
 safe_shard_processing_single_worker.py
 stateless_safe_processing.py
