@@ -71,10 +71,10 @@ def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.n
     Returns:
         Tuple of (board_state, policy_target, value_target):
         - board_state: Shape (2, 13, 13) - current board state
-        - policy_target: Shape (169,) - move probabilities
+        - policy_target: Shape (169,) - move probabilities (one-hot for actual move)
         - value_target: Shape (1,) - win probability (0.0 or 1.0)
     """
-    # Parse the trmph string to get the board state
+    # Parse the trmph string to get the board state and moves
     board_matrix = parse_trmph_to_board(game_data, debug_info=debug_info)
     
     # Convert to 2-channel format for the model
@@ -82,10 +82,8 @@ def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.n
     board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
     board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
     
-    # For now, create placeholder policy and value
-    # TODO: Extract actual policy from game (last move played)
-    policy_target = np.random.rand(POLICY_OUTPUT_SIZE).astype(np.float32)
-    policy_target = policy_target / policy_target.sum()  # Normalize to probabilities
+    # Extract actual policy from game (next move to be played)
+    policy_target = extract_policy_from_game(game_data, debug_info)
     
     # Determine winner and set value target
     winner = detect_winner(game_data)
@@ -98,6 +96,54 @@ def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.n
         value_target = 0.5
     
     return board_state, policy_target, value_target
+
+
+def extract_policy_from_game(trmph_text: str, debug_info: str = "") -> np.ndarray:
+    """
+    Extract the actual next move from a game to create a proper policy target.
+    
+    For training, we want to predict the next move given the current board state.
+    Since we have the complete game, we'll use the last move as the target.
+    
+    Args:
+        trmph_text: Complete trmph string
+        debug_info: Optional debug information
+        
+    Returns:
+        Policy target of shape (169,) with 1.0 for the actual move, 0.0 elsewhere
+    """
+    try:
+        # Strip preamble and get all moves
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = split_trmph_moves(bare_moves)
+        
+        if not moves:
+            logger.warning(f"No moves found in game: {trmph_text[:50]}...")
+            # Return uniform policy if no moves
+            policy = np.ones(POLICY_OUTPUT_SIZE, dtype=np.float32) / POLICY_OUTPUT_SIZE
+            return policy
+        
+        # For now, use the last move as the target (simplest approach)
+        # This teaches the model to predict the final move given the final board state
+        target_move = moves[-1]
+        
+        # Convert move to tensor position
+        row, col = trmph_move_to_rowcol(target_move)
+        tensor_pos = rowcol_to_tensor(row, col)
+        
+        # Create one-hot policy target
+        policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
+        policy[tensor_pos] = 1.0
+        
+        return policy
+        
+    except Exception as e:
+        logger.warning(f"Failed to extract policy from game {trmph_text[:50]}...: {e}")
+        if debug_info:
+            logger.warning(f"Debug info: {debug_info}")
+        # Return uniform policy as fallback
+        policy = np.ones(POLICY_OUTPUT_SIZE, dtype=np.float32) / POLICY_OUTPUT_SIZE
+        return policy
 
 
 def detect_winner(trmph_text: str) -> str:
@@ -315,21 +361,26 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
         
         # Check for duplicate moves
         if board[row, col] != 0:
-            # Enhanced debugging output
-            import traceback
-            frame = traceback.extract_stack()[-2]  # Get calling frame
-            logger.error(f"DUPLICATE MOVE DETECTED:")
-            if debug_info:
-                logger.error(f"  {debug_info}")
-            logger.error(f"  File: {frame.filename}")
-            logger.error(f"  Line: {frame.lineno}")
-            logger.error(f"  Function: {frame.name}")
-            logger.error(f"  Move: '{move}' at position ({row}, {col})")
-            logger.error(f"  Move index: {i}")
-            logger.error(f"  Board value at position: {board[row, col]}")
-            logger.error(f"  Full trmph string: {trmph_text}")
-            logger.error(f"  All moves: {moves}")
-            raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
+            # For training data, skip duplicate moves instead of failing
+            if "training" in debug_info.lower() or "game" in debug_info.lower():
+                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in training data")
+                continue  # Skip this move and continue with the next
+            else:
+                # Enhanced debugging output for non-training contexts
+                import traceback
+                frame = traceback.extract_stack()[-2]  # Get calling frame
+                logger.error(f"DUPLICATE MOVE DETECTED:")
+                if debug_info:
+                    logger.error(f"  {debug_info}")
+                logger.error(f"  File: {frame.filename}")
+                logger.error(f"  Line: {frame.lineno}")
+                logger.error(f"  Function: {frame.name}")
+                logger.error(f"  Move: '{move}' at position ({row}, {col})")
+                logger.error(f"  Move index: {i}")
+                logger.error(f"  Board value at position: {board[row, col]}")
+                logger.error(f"  Full trmph string: {trmph_text}")
+                logger.error(f"  All moves: {moves}")
+                raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
         
         # Place move (alternating players: blue=1, red=2)
         player = (i % 2) + 1
@@ -450,9 +501,12 @@ def tensor_to_rowcol(tensor_pos: int) -> Tuple[int, int]:
     Returns:
         (row, col) coordinates
     """
-    # TODO: Implement conversion
-    # Should convert linear index to 2D coordinates
-    pass
+    if not (0 <= tensor_pos < BOARD_SIZE * BOARD_SIZE):
+        raise ValueError(f"Invalid tensor position: {tensor_pos}")
+    
+    row = tensor_pos // BOARD_SIZE
+    col = tensor_pos % BOARD_SIZE
+    return row, col
 
 
 def rowcol_to_tensor(row: int, col: int) -> int:
@@ -466,9 +520,10 @@ def rowcol_to_tensor(row: int, col: int) -> int:
     Returns:
         Position in flattened tensor (0-168)
     """
-    # TODO: Implement conversion
-    # Should convert 2D coordinates to linear index
-    pass
+    if not (0 <= row < BOARD_SIZE) or not (0 <= col < BOARD_SIZE):
+        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
+    
+    return row * BOARD_SIZE + col
 
 
 # ============================================================================
@@ -667,6 +722,121 @@ def prepare_training_data(games: List[str],
     # - Generate policy/value targets
     # - Return training tuples
     pass
+
+
+def extract_training_examples_from_game(trmph_text: str, debug_info: str = "") -> List[Tuple[np.ndarray, np.ndarray, float]]:
+    """
+    Extract multiple training examples from a single game.
+    
+    Creates training examples from intermediate positions in the game:
+    - Board state after N moves
+    - Policy target for the (N+1)th move
+    - Value target based on game outcome
+    
+    Args:
+        trmph_text: Complete trmph string
+        debug_info: Optional debug information
+        
+    Returns:
+        List of (board_state, policy_target, value_target) tuples
+    """
+    try:
+        # Strip preamble and get all moves
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = split_trmph_moves(bare_moves)
+        
+        if not moves:
+            logger.warning(f"No moves found in game: {trmph_text[:50]}...")
+            return []
+        
+        # Determine winner for value target
+        winner = detect_winner(trmph_text)
+        if winner == "blue":
+            value_target = 1.0
+        elif winner == "red":
+            value_target = 0.0
+        else:
+            value_target = 0.5
+        
+        training_examples = []
+        
+        # Create training examples from intermediate positions
+        # Start from position with at least 2 moves, end before the last move
+        for i in range(2, len(moves) - 1):
+            # Create board state after i moves
+            partial_moves = moves[:i]
+            board_state = create_board_from_moves(partial_moves)
+            
+            # Get the next move (i+1) as the policy target
+            next_move = moves[i]
+            policy_target = create_policy_target(next_move)
+            
+            training_examples.append((board_state, policy_target, value_target))
+        
+        # Also add the final position (all moves except last)
+        if len(moves) >= 3:
+            partial_moves = moves[:-1]
+            board_state = create_board_from_moves(partial_moves)
+            next_move = moves[-1]
+            policy_target = create_policy_target(next_move)
+            training_examples.append((board_state, policy_target, value_target))
+        
+        return training_examples
+        
+    except Exception as e:
+        logger.warning(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        if debug_info:
+            logger.warning(f"Debug info: {debug_info}")
+        return []
+
+
+def create_board_from_moves(moves: List[str]) -> np.ndarray:
+    """
+    Create a board state from a list of moves.
+    
+    Args:
+        moves: List of trmph moves (e.g., ['a1', 'b2', 'c3'])
+        
+    Returns:
+        Board state of shape (2, 13, 13)
+    """
+    # Initialize board
+    board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    
+    # Place moves on board
+    for i, move in enumerate(moves):
+        row, col = trmph_move_to_rowcol(move)
+        # Alternating players: blue=1, red=2
+        player = (i % 2) + 1
+        board_matrix[row, col] = player
+    
+    # Convert to 2-channel format
+    board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
+    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
+    
+    return board_state
+
+
+def create_policy_target(move: str) -> np.ndarray:
+    """
+    Create a policy target from a single move.
+    
+    Args:
+        move: Trmph move (e.g., 'a1')
+        
+    Returns:
+        Policy target of shape (169,) with 1.0 for the move, 0.0 elsewhere
+    """
+    # Convert move to tensor position
+    row, col = trmph_move_to_rowcol(move)
+    tensor_pos = rowcol_to_tensor(row, col)
+    
+    # Create one-hot policy target
+    policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
+    policy[tensor_pos] = 1.0
+    
+    return policy
 
 
 # ============================================================================

@@ -101,21 +101,29 @@ class DataProcessor:
         
         for trmph_url, winner_indicator in tqdm(games, desc="Converting games to tensors"):
             try:
-                # Convert to matrix format
-                board_state, policy_target, value_target = convert_to_matrix_format(trmph_url)
+                # Extract multiple training examples from each game
+                from .data_utils import extract_training_examples_from_game
+                training_examples = extract_training_examples_from_game(trmph_url, f"Training data - Game from {winner_indicator}")
                 
-                # Override value target based on actual winner
+                # Override value targets based on actual winner
                 if winner_indicator == "1":
-                    value_target = 1.0  # Blue wins
-                elif winner_indicator == "0":
-                    value_target = 0.0  # Red wins
+                    value_override = 1.0  # Blue wins
+                elif winner_indicator == "2":
+                    value_override = 0.0  # Red wins
+                else:
+                    value_override = None  # Use computed value
                 
-                # Convert to tensors
-                board_tensor = torch.FloatTensor(board_state)
-                policy_tensor = torch.FloatTensor(policy_target)
-                value_tensor = torch.FloatTensor([value_target])
-                
-                processed_games.append((board_tensor, policy_tensor, value_tensor))
+                for board_state, policy_target, value_target in training_examples:
+                    # Override value if we have explicit winner info
+                    if value_override is not None:
+                        value_target = value_override
+                    
+                    # Convert to tensors
+                    board_tensor = torch.FloatTensor(board_state)
+                    policy_tensor = torch.FloatTensor(policy_target)
+                    value_tensor = torch.FloatTensor([value_target])
+                    
+                    processed_games.append((board_tensor, policy_tensor, value_tensor))
                 
             except Exception as e:
                 logger.warning(f"Failed to process game {trmph_url[:50]}...: {e}")
@@ -140,7 +148,7 @@ class DataProcessor:
                 'boards': boards,
                 'policies': policies,
                 'values': values,
-                'num_games': len(shard_games)
+                'num_games': len(shard_games)  # Now represents training examples, not games
             }
             
             # Save shard

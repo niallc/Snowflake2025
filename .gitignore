@@ -22,6 +22,20 @@ windows_setup_verification.py
 dev_plan_jul12th.md
 requirements.txt.backup
 training_metrics.csv
+DataProcessingCodeReview.md
+code_review_report.md
+comprehensive_data_validation.py
+corrected_function_analysis.md
+data_processing_report.md
+detailed_game_analysis.py
+function_call_analysis.md
+monitor_reprocessing.py
+reprocess_data.py
+single_game_analysis.py
+single_game_report.md
+test_data_validation.py
+tests/test_data_validation.py
+validate_new_data.py
 
 
 # Mac specific files
