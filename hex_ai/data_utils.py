@@ -32,7 +32,7 @@ LETTERS = string.ascii_lowercase
 # File Format Conversion Functions
 # ============================================================================
 
-def load_trmph_file(file_path: str) -> str:
+def load_trmph_file(file_path: str) -> List[str]:
     """
     Load a single .trmph file.
     
@@ -40,7 +40,7 @@ def load_trmph_file(file_path: str) -> str:
         file_path: Path to the .trmph file
         
     Returns:
-        Trmph string content
+        List of trmph game strings (one per line)
         
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -48,12 +48,15 @@ def load_trmph_file(file_path: str) -> str:
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
+            lines = f.readlines()
         
-        if not content:
+        # Strip whitespace and filter out empty lines
+        games = [line.strip() for line in lines if line.strip()]
+        
+        if not games:
             raise ValueError(f"Empty file: {file_path}")
         
-        return content
+        return games
     except FileNotFoundError:
         raise FileNotFoundError(f"File not found: {file_path}")
     except Exception as e:
@@ -282,6 +285,40 @@ def rowcol_to_tensor(row: int, col: int) -> int:
         raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
     
     return row * BOARD_SIZE + col
+
+
+def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
+    """
+    Convert tensor position index to trmph move.
+    
+    Args:
+        tensor_pos: Position in flattened tensor (0-168)
+        board_size: Size of the board
+        
+    Returns:
+        Trmph move string
+        
+    Example:
+        0 → "a1"
+        168 → "m13"
+    """
+    row, col = tensor_to_rowcol(tensor_pos)
+    return rowcol_to_trmph(row, col, board_size)
+
+
+def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
+    """
+    Convert trmph move to tensor position index.
+    
+    Args:
+        move: Trmph move (e.g., 'a1')
+        board_size: Size of the board
+        
+    Returns:
+        Position in flattened tensor (0-168)
+    """
+    row, col = trmph_move_to_rowcol(move, board_size)
+    return rowcol_to_tensor(row, col)
 
 
 # ============================================================================
@@ -588,8 +625,8 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
         Tuple of (is_valid, error_message)
     """
     try:
-        # Test if we can parse the game without errors
-        board_state, policy_target, value_target = convert_to_matrix_format(trmph_url, debug_info=line_info)
+        # Test if we can extract training examples from the game without errors
+        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, line_info)
         return True, ""
     except Exception as e:
         return False, str(e)

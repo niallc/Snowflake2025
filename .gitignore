@@ -42,6 +42,17 @@ training_data_design.md
 sample_game_to_markdown.py
 sample_game_training_output.md
 test_policy_value_loss.py
+diagnostic_training_run.py
+resumable_shard_processing.py
+train_with_processed_data.py
+debug_trmph_processing.py
+inspect_game_data.py
+test_processed_data/
+test_single_game.py
+test_trmph_processing.py
+validate_processed_data.py
+validation_report.md
+
 
 # Mac specific files
 .DS_Store
