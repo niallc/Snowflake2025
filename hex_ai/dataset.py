@@ -165,16 +165,16 @@ class HexDataset(Dataset):
         elif winner_indicator == "0":
             value_target = 0.0  # Red wins
         else:
-            # Unknown winner - keep the default from convert_to_matrix_format
+            assert(False, "Error in dataset.py: Unknown winner - cannot use game without a winner.")
             pass
         
         # Apply data augmentation if enabled
         if self.augment:
             board_state, policy_target = augment_board(board_state, policy_target)
         
-        # Convert to tensors
-        board_tensor = torch.FloatTensor(board_state)
-        policy_tensor = torch.FloatTensor(policy_target)
+        # Convert to tensors - ensure arrays are contiguous to avoid stride issues
+        board_tensor = torch.FloatTensor(board_state.copy())
+        policy_tensor = torch.FloatTensor(policy_target.copy())
         value_tensor = torch.FloatTensor([value_target])
         
         return board_tensor, policy_tensor, value_tensor

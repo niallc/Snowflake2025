@@ -41,7 +41,9 @@ implementation_design.md
 test_training_data.py
 tmp_designing_data_processing.md
 training_data_design.md
-
+sample_game_to_markdown.py
+sample_game_training_output.md
+test_policy_value_loss.py
 
 # Mac specific files
 .DS_Store

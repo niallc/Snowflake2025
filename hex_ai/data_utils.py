@@ -597,42 +597,46 @@ def extract_training_examples_from_game(trmph_text: str, winner_from_file: str =
         - board_state: Current board state (2, 13, 13)
         - policy_target: Next move as one-hot (169,) or None if no next move
         - value_target: Final game outcome (0.0 or 1.0)
-    
+
     Limitations:
-    - Uses winner from file data (assumes file data is correct)
     - No data augmentation (will be added later)
-    - No validation of winner calculation (can be added for debugging)
+    Raises:
+        ValueError: If game has no moves (empty game) or missing winner data
     """
     try:
         # Parse moves from trmph string
         bare_moves = strip_trmph_preamble(trmph_text)
         moves = split_trmph_moves(bare_moves)
 
-        # Determine value target from file data
+        # Reject empty games - they provide no useful training signal
+        if not moves:
+            logger.error(f"Empty game found - no moves to learn from: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError("Empty game - no moves to learn from")
+
+        # Require winner data from file - no automatic calculation
         if winner_from_file is None:
-            # Fallback: try to detect winner from trmph string
-            calculated_winner = detect_winner(trmph_text)
-            if calculated_winner == "blue":
-                value_target = 1.0
-            elif calculated_winner == "red":
-                value_target = 0.0
-            else:
-                value_target = 0.5
-            logger.warning(f"No winner from file, using calculated: {calculated_winner}")
-        else:
-            # Use winner from file data (primary source)
-            value_target = 1.0 if winner_from_file == "1" else 0.0
+            logger.error(f"Missing winner data for game: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError("Missing winner data - cannot determine training target")
+
+        # Validate winner format
+        if winner_from_file not in ["1", "2"]:
+            logger.error(f"Invalid winner format '{winner_from_file}' for game: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+
+        # Set value target from validated file data
+        value_target = 1.0 if winner_from_file == "1" else 0.0
 
         training_examples = []
 
-        # Special case: empty game (no moves)
-        if not moves:
-            board_state = create_board_from_moves([])
-            policy_target = None
-            training_examples.append((board_state, policy_target, value_target))
-            return training_examples
-
         # Iterate through all positions (0 to M) to create training examples
+        # Position 0 is the empty board
+        # Positions 1 to M are board states after each move
         for position in range(len(moves) + 1):
             board_state = create_board_from_moves(moves[:position])
             policy_target = None
@@ -644,10 +648,13 @@ def extract_training_examples_from_game(trmph_text: str, winner_from_file: str =
         return training_examples
 
     except Exception as e:
-        logger.warning(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        # Re-raise ValueError (our validation errors) but catch other exceptions
+        if isinstance(e, ValueError):
+            raise
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         if debug_info:
-            logger.warning(f"Debug info: {debug_info}")
-        return []
+            logger.error(f"Debug info: {debug_info}")
+        raise ValueError(f"Failed to process game: {e}")
 
 
 def create_board_from_moves(moves: List[str]) -> np.ndarray:

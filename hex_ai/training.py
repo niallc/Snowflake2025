@@ -31,7 +31,7 @@ POLICY_LOSS_WEIGHT = 0.15
 VALUE_LOSS_WEIGHT = 0.85
 
 class PolicyValueLoss(nn.Module):
-    """Combined loss for policy and value heads."""
+    """Combined loss for policy and value heads with support for missing policy targets."""
     
     def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT):
         super().__init__()
@@ -45,22 +45,37 @@ class PolicyValueLoss(nn.Module):
         """
         Compute combined policy and value loss.
         
+        This function handles the case where policy_target might be None (indicating
+        no valid policy target, such as for final game positions). When policy_target
+        is None, the policy loss is set to a constant (zero) tensor, which results
+        in zero gradients for the policy head while still allowing gradients to flow
+        through the value head and shared features.
+        
         Args:
             policy_pred: Predicted policy logits (batch_size, policy_output_size)
             value_pred: Predicted value (batch_size, 1)
-            policy_target: Target policy probabilities (batch_size, policy_output_size)
+            policy_target: Target policy probabilities (batch_size, policy_output_size) or None
             value_target: Target value (batch_size, 1)
             
         Returns:
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Policy loss (cross-entropy)
-        policy_loss = self.policy_loss(policy_pred, policy_target)
-        
-        # Value loss (MSE)
+        # Value loss is always computed (MSE)
         value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
         
+        # Policy loss: handle None targets by using constant loss (zero gradient)
+        if policy_target is None:
+            # Create a constant tensor with zero gradient for policy loss
+            # This ensures no gradients flow to the policy head when there's no target
+            policy_loss = torch.tensor(0.0, device=policy_pred.device, requires_grad=True)
+        else:
+            # Convert one-hot policy targets to class indices for CrossEntropyLoss
+            # CrossEntropyLoss expects class indices, not one-hot vectors
+            policy_class_target = policy_target.argmax(dim=1)
+            policy_loss = self.policy_loss(policy_pred, policy_class_target)
+        
+        # Combine losses with weights
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss)
         

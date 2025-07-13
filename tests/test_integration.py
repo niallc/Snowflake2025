@@ -18,7 +18,7 @@ import pickle
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from smart_shard_processing import process_all_data_global_shards
+from resumable_shard_processing import process_all_data_resumable
 from hex_ai.models import TwoHeadedResNet, create_model, count_parameters
 from hex_ai.dataset import create_sample_data, create_dataloader
 from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -141,6 +141,10 @@ class TestIntegration(unittest.TestCase):
             new_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             
             # Test that loaded model produces same output
+            # Set both models to eval mode to ensure deterministic behavior
+            self.model.eval()
+            new_model.eval()
+            
             with torch.no_grad():
                 original_policy, original_value = self.model(self.boards)
                 loaded_policy, loaded_value = new_model(self.boards)
@@ -283,11 +287,10 @@ class TestGlobalSharding(unittest.TestCase):
 
     def test_global_sharding(self):
         # Use a small shard size to force multiple shards
-        shard_files = process_all_data_global_shards(
+        shard_files = process_all_data_resumable(
             source_dir=str(self.source_dir),
             processed_dir=str(self.processed_dir),
-            games_per_shard=3,
-            num_workers=2
+            games_per_shard=3
         )
         # 7 games, 3 per shard => 3 shards (3, 3, 1)
         self.assertEqual(len(shard_files), 3)
