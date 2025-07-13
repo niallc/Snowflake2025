@@ -123,6 +123,12 @@ class DataProcessor:
                         policy_tensor = torch.FloatTensor(policy_target)
                     else:
                         # Final positions have no next move to predict
+                        # TODO(semi-urgent): Though we need to have some tensor here to make
+                        #  training work, we should check whether all zeroes could lead to 
+                        # infinite or NaN loss, which might confuse training.
+                        # Hopefully not an issue as total_loss is to to value_loss only
+                        # for final moves (the only time the policy label should be None), but
+                        # given that any vector here should work, maybe a uniform label, 1/N^2 is safer.
                         policy_tensor = torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
                     value_tensor = torch.FloatTensor([value_target])
                     

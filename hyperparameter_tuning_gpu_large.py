@@ -13,6 +13,14 @@ from typing import Dict, List
 import torch
 import numpy as np
 from datetime import datetime
+import multiprocessing
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Fix multiprocessing on macOS
+if __name__ == '__main__':
+    multiprocessing.set_start_method('spawn', force=True)
 
 from hex_ai.models import TwoHeadedResNet
 from hex_ai.training_utils import (
@@ -42,8 +50,8 @@ TARGET_EXAMPLES = 2000  # Use ~2000 positions for quick exploration
 # Define experiments
 experiments = [
     {
-        'name': 'gpu_baseline',
-        'hyperparams': {
+        'experiment_name': 'gpu_baseline',
+        'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
@@ -53,8 +61,8 @@ experiments = [
         }
     },
     {
-        'name': 'gpu_no_dropout',
-        'hyperparams': {
+        'experiment_name': 'gpu_no_dropout',
+        'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.0,
@@ -64,8 +72,8 @@ experiments = [
         }
     },
     {
-        'name': 'gpu_high_dropout',
-        'hyperparams': {
+        'experiment_name': 'gpu_high_dropout',
+        'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.2,
@@ -75,8 +83,8 @@ experiments = [
         }
     },
     {
-        'name': 'gpu_high_weight_decay',
-        'hyperparams': {
+        'experiment_name': 'gpu_high_weight_decay',
+        'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
@@ -86,8 +94,8 @@ experiments = [
         }
     },
     {
-        'name': 'gpu_lower_lr',
-        'hyperparams': {
+        'experiment_name': 'gpu_lower_lr',
+        'hyperparameters': {
             'learning_rate': 0.0005,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
@@ -97,8 +105,8 @@ experiments = [
         }
     },
     {
-        'name': 'gpu_higher_lr',
-        'hyperparams': {
+        'experiment_name': 'gpu_higher_lr',
+        'hyperparameters': {
             'learning_rate': 0.002,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
