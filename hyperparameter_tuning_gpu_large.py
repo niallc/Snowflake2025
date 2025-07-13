@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 GPU-based hyperparameter tuning for Hex AI - Large Scale Version.
-Uses processed .pkl.gz shards with GPU acceleration and mixed precision.
+Uses processed .pkl.gz files with GPU acceleration and mixed precision.
+Updated to work with the new data format and training utilities.
 """
 
 import os
@@ -14,8 +15,12 @@ import numpy as np
 from datetime import datetime
 
 from hex_ai.models import TwoHeadedResNet
-from hex_ai.training import Trainer
-from hex_ai.data_processing import create_processed_dataloader
+from hex_ai.training_utils import (
+    run_hyperparameter_tuning,
+    discover_processed_files,
+    estimate_dataset_size,
+    create_experiment_config
+)
 
 # Device selection
 if torch.cuda.is_available():
@@ -29,44 +34,10 @@ else:
     device = torch.device("cpu")
     print("Using CPU (no GPU detected)")
 
-# Large test config
-DATASET_SIZE = 10000  # 10k games
+# Quick hyperparameter exploration config
 NUM_EPOCHS = 10
 BATCH_SIZE = 64  # Larger batch size for GPU efficiency
-
-# Find available processed shard files
-processed_dir = Path("data/processed")
-shard_files = list(processed_dir.glob("*.pkl.gz")) + list(processed_dir.glob("*.pkl"))
-if not shard_files:
-    raise FileNotFoundError("No processed shard files found in data/processed/")
-print(f"Found {len(shard_files)} processed shard files")
-
-# Take enough shards to get ~DATASET_SIZE games
-num_shards_needed = max(1, DATASET_SIZE // 1000)
-np.random.shuffle(shard_files)
-shard_files = shard_files[:num_shards_needed]
-print(f"Using {len(shard_files)} shards for {DATASET_SIZE} games")
-
-# Split into train/validation
-np.random.shuffle(shard_files)
-split_idx = int(0.8 * len(shard_files))
-train_files = [Path(f) for f in shard_files[:split_idx]]
-val_files = [Path(f) for f in shard_files[split_idx:]]
-print(f"Dataset split: {len(train_files)} train shards, {len(val_files)} validation shards")
-
-# Create dataloaders
-train_loader = create_processed_dataloader(
-    train_files,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    num_workers=0
-)
-val_loader = create_processed_dataloader(
-    val_files,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=0
-) if val_files else None
+TARGET_EXAMPLES = 2000  # Use ~2000 positions for quick exploration
 
 # Define experiments
 experiments = [
@@ -113,6 +84,28 @@ experiments = [
             'policy_weight': 0.14,
             'value_weight': 0.86
         }
+    },
+    {
+        'name': 'gpu_lower_lr',
+        'hyperparams': {
+            'learning_rate': 0.0005,
+            'batch_size': BATCH_SIZE,
+            'dropout_prob': 0.1,
+            'weight_decay': 1e-4,
+            'policy_weight': 0.14,
+            'value_weight': 0.86
+        }
+    },
+    {
+        'name': 'gpu_higher_lr',
+        'hyperparams': {
+            'learning_rate': 0.002,
+            'batch_size': BATCH_SIZE,
+            'dropout_prob': 0.1,
+            'weight_decay': 1e-4,
+            'policy_weight': 0.14,
+            'value_weight': 0.86
+        }
     }
 ]
 
@@ -122,7 +115,6 @@ results_dir.mkdir(parents=True, exist_ok=True)
 
 # Save experiment configuration
 config = {
-    'dataset_size': DATASET_SIZE,
     'num_epochs': NUM_EPOCHS,
     'batch_size': BATCH_SIZE,
     'device': str(device),
@@ -135,112 +127,46 @@ with open(results_dir / "config.json", "w") as f:
 print(f"\n{'='*60}")
 print(f"Starting GPU Hyperparameter Tuning")
 print(f"Device: {device}")
-print(f"Dataset: {DATASET_SIZE} games")
 print(f"Epochs per experiment: {NUM_EPOCHS}")
 print(f"Number of experiments: {len(experiments)}")
 print(f"Results directory: {results_dir}")
 print(f"{'='*60}")
 
-all_results = []
-total_start_time = time.time()
+# Discover and analyze data
+print("\nDiscovering processed data files...")
+data_files = discover_processed_files("data/processed")
+# Use sampling for faster estimation (check first 10 files)
+total_examples = estimate_dataset_size(data_files, max_files=10)
+print(f"Found {len(data_files)} data files with approximately {total_examples:,} training examples")
 
-for i, exp in enumerate(experiments):
-    print(f"\n{'='*60}")
-    print(f"Experiment {i+1}/{len(experiments)}: {exp['name']}")
-    print(f"Hyperparameters: {exp['hyperparams']}")
-    print(f"{'='*60}")
-    
-    exp_start_time = time.time()
-    
-    # Create experiment directory
-    exp_dir = results_dir / exp['name']
-    exp_dir.mkdir(exist_ok=True)
-    
-    # Save experiment config
-    with open(exp_dir / "config.json", "w") as f:
-        json.dump(exp['hyperparams'], f, indent=2)
-    
-    # Create model
-    model = TwoHeadedResNet(dropout_prob=exp['hyperparams']['dropout_prob'])
-    model = model.to(device)
-    
-    # Create trainer
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        learning_rate=exp['hyperparams']['learning_rate'],
-        device=device,
-        enable_system_analysis=True,
-        policy_weight=exp['hyperparams']['policy_weight'],
-        value_weight=exp['hyperparams']['value_weight'],
-        weight_decay=exp['hyperparams']['weight_decay']
-    )
-    
-    # Train
-    results = trainer.train(
-        num_epochs=NUM_EPOCHS,
-        save_dir=str(exp_dir),
-        early_stopping=None
-    )
-    
-    exp_time = time.time() - exp_start_time
-    
-    # Extract metrics
-    best_val_loss = min(results['val_losses']) if results['val_losses'] else float('inf')
-    best_train_loss = min(results['train_losses']) if results['train_losses'] else float('inf')
-    final_val_loss = results['val_losses'][-1] if results['val_losses'] else float('inf')
-    final_train_loss = results['train_losses'][-1] if results['train_losses'] else float('inf')
-    
-    experiment_results = {
-        'experiment_name': exp['name'],
-        'hyperparameters': exp['hyperparams'],
-        'best_val_loss': best_val_loss,
-        'best_train_loss': best_train_loss,
-        'final_val_loss': final_val_loss,
-        'final_train_loss': final_train_loss,
-        'training_time': exp_time,
-        'epochs_trained': len(results['train_losses']),
-        'early_stopped': results['early_stopped'],
-        'all_metrics': results
-    }
-    
-    all_results.append(experiment_results)
-    
-    print(f"Results for {exp['name']}:")
-    print(f"  Best val loss: {best_val_loss:.6f}")
-    print(f"  Final val loss: {final_val_loss:.6f}")
-    print(f"  Training time: {exp_time:.1f}s")
-    print(f"  Epochs trained: {len(results['train_losses'])}")
-    
-    # Save experiment results
-    with open(exp_dir / "experiment_results.json", "w") as f:
-        json.dump(experiment_results, f, indent=2, default=str)
+# For quick exploration, use a subset of data
+print(f"Using ~{TARGET_EXAMPLES:,} examples for quick hyperparameter exploration")
+print("(This allows for fast iteration to find promising hyperparameters)")
 
-# Save overall results
-total_time = time.time() - total_start_time
-overall_results = {
-    'total_training_time': total_time,
-    'num_experiments': len(experiments),
-    'device': str(device),
-    'experiments': all_results
-}
+# Run hyperparameter tuning with limited data for quick exploration
+overall_results = run_hyperparameter_tuning(
+    experiments=experiments,
+    data_dir="data/processed",
+    results_dir=str(results_dir),
+    train_ratio=0.8,
+    num_epochs=NUM_EPOCHS,
+    early_stopping_patience=5,
+    random_seed=42,
+    max_examples_per_split=TARGET_EXAMPLES  # Limit data for quick exploration
+)
 
-with open(results_dir / "overall_results.json", "w") as f:
-    json.dump(overall_results, f, indent=2, default=str)
-
-# Print summary
 print(f"\n{'='*60}")
 print("GPU HYPERPARAMETER TUNING COMPLETE")
 print(f"{'='*60}")
-print(f"Total training time: {total_time:.1f}s")
-print(f"Average time per experiment: {total_time/len(experiments):.1f}s")
+print(f"Total training time: {overall_results['total_training_time']:.1f}s")
+print(f"Successful experiments: {overall_results['successful_experiments']}/{overall_results['num_experiments']}")
 
 # Find best experiment
-best_exp = min(all_results, key=lambda x: x['best_val_loss'])
-print(f"\nBest experiment: {best_exp['experiment_name']}")
-print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
-print(f"Hyperparameters: {best_exp['hyperparameters']}")
+if overall_results['experiments']:
+    best_exp = min(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+    print(f"\nBest experiment: {best_exp['experiment_name']}")
+    print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+    print(f"Hyperparameters: {best_exp['hyperparameters']}")
 
 print(f"\nAll results saved to: {results_dir}")
 print("Check individual experiment directories for detailed results and checkpoints.") 

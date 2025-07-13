@@ -6,6 +6,7 @@ checkpoints/
 exploratory_results/
 hyperparameter_results/
 hyperparameter_results_v2/
+NonRepoFiles/
 
 # Niall's files to ignore
 terminal_output_guidance_for_cursor_agent.md
@@ -52,6 +53,14 @@ test_single_game.py
 test_trmph_processing.py
 validate_processed_data.py
 validation_report.md
+compare_game_to_examples.py
+debug_training_examples.py
+validate_training_examples.py
+check_processing_completeness.py
+test_training_utils.py
+check_corrupted_files.py
+hex_ai/training_utils.py
+monitor_tuning.py
 
 
 # Mac specific files
