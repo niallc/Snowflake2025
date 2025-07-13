@@ -253,44 +253,6 @@ def board_to_trmph(board: np.ndarray) -> str:
     return "#13," + "".join(moves)
 
 
-def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Apply data augmentation to board and policy.
-    
-    Args:
-        board: Board state of shape (2, 13, 13)
-        policy: Policy target of shape (169,)
-        
-    Returns:
-        Tuple of (augmented_board, augmented_policy)
-    """
-    # For now, return the original data
-    # TODO: Implement actual augmentation (rotation, reflection)
-    return board, policy
-
-
-def load_trmph_files(data_dir: str) -> List[str]:
-    """
-    Load all .trmph files from a directory.
-    
-    Args:
-        data_dir: Path to directory containing .trmph files
-        
-    Returns:
-        List of trmph strings (with preamble)
-        
-    Raises:
-        FileNotFoundError: If directory doesn't exist
-        ValueError: If no .trmph files found
-    """
-    # TODO: Implement file loading
-    # Should:
-    # - Scan directory for .trmph files
-    # - Read file contents
-    # - Handle encoding issues
-    # - Return list of trmph strings
-    pass
-
 
 def strip_trmph_preamble(trmph_text: str) -> str:
     """
@@ -388,83 +350,6 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
     
     return board
 
-
-def trmph_to_dothex(trmph_text: str) -> np.ndarray:
-    """
-    Convert trmph format to DotHex matrix format.
-    
-    Args:
-        trmph_text: Trmph string (without preamble)
-        
-    Returns:
-        DotHex matrix: shape (13, 13), values 0/1/2
-        
-    Example:
-        "a1b2c3" → [[1, 0, 0, ...], [0, 2, 0, ...], ...]
-    """
-    # TODO: Implement conversion
-    # Should use legacy trmphToDotHex() logic
-    pass
-
-
-def dothex_to_tensor(dothex_board: np.ndarray) -> torch.Tensor:
-    """
-    Convert DotHex matrix to PyTorch tensor format.
-    
-    Args:
-        dothex_board: DotHex matrix (13, 13)
-        
-    Returns:
-        Tensor: shape (2, 13, 13)
-        - Channel 0: Blue player positions
-        - Channel 1: Red player positions
-        
-    Example:
-        [[1, 0, 0], [0, 2, 0], ...] → 
-        [[[1, 0, 0], [0, 0, 0], ...],  # Blue channel
-         [[0, 0, 0], [0, 1, 0], ...]]  # Red channel
-    """
-    # TODO: Implement conversion
-    # Should convert 0/1/2 matrix to 2-channel tensor
-    pass
-
-
-def trmph_to_tensor(trmph_text: str) -> torch.Tensor:
-    """
-    Convert trmph format directly to PyTorch tensor.
-    
-    Args:
-        trmph_text: Trmph string (with or without preamble)
-        
-    Returns:
-        Tensor: shape (2, 13, 13)
-    """
-    # TODO: Implement direct conversion
-    # Should combine trmph_to_dothex() + dothex_to_tensor()
-    pass
-
-
-# ============================================================================
-# Coordinate System Conversions
-# ============================================================================
-
-def trmph_to_rowcol(trmph_move: str) -> Tuple[int, int]:
-    """
-    Convert trmph move to (row, col) coordinates.
-    
-    Args:
-        trmph_move: Single move (e.g., "a1", "m13")
-        
-    Returns:
-        (row, col) coordinates (0-indexed)
-        
-    Example:
-        "a1" → (0, 0)
-        "m13" → (12, 12)
-    """
-    # TODO: Implement conversion
-    # Should use legacy LookUpRowCol() logic
-    pass
 
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
@@ -610,26 +495,6 @@ def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
         reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
         return reflected
 
-
-def augment_board(board: np.ndarray, policy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Apply data augmentation to board and policy.
-    
-    Creates 4 augmented versions: original, 180° rotation, long diagonal reflection,
-    and short diagonal reflection. All preserve the logical game state under the swap rule.
-    
-    Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
-        policy: Policy array of shape (169,)
-        
-    Returns:
-        Tuple of (augmented_board, augmented_policy)
-    """
-    # For now, return the original data
-    # TODO: Implement random selection of one of the 4 augmentations
-    return board, policy
-
-
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
     """
     Create all 4 augmented versions of a board.
@@ -674,115 +539,110 @@ def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
     ]
 
 
+def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply random data augmentation to a board and its corresponding policy.
+    
+    This function randomly selects one of 4 possible augmentations:
+    - Original board
+    - 180° rotation with color swap
+    - Long diagonal reflection with color swap
+    - Short diagonal reflection with color swap
+    
+    Args:
+        board: Board array of shape (2, 13, 13)
+        policy: Policy array of shape (169,)
+        
+    Returns:
+        Tuple of (augmented_board, augmented_policy)
+    """
+    # Create all 4 augmented versions
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    
+    # Randomly select one augmentation
+    import random
+    idx = random.randint(0, 3)
+    
+    return augmented_boards[idx], augmented_policies[idx]
+
+
 # ============================================================================
 # Training Data Preparation
 # ============================================================================
 
-def extract_game_positions(trmph_text: str, 
-                          positions: str = "all",
-                          sample_size: int = 4) -> List[torch.Tensor]:
+
+
+
+
+def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None, debug_info: str = "") -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
     """
-    Extract board positions from a game.
+    Extract training examples from a game using correct logic for two-headed networks.
     
-    Args:
-        trmph_text: Complete game in trmph format
-        positions: Which positions to extract ("all", "last", "sampled")
-        sample_size: Number of positions to sample (if "sampled")
-        
-    Returns:
-        List of board tensors
-    """
-    # TODO: Implement position extraction
-    # Should:
-    # - Parse game moves
-    # - Build board state after each move
-    # - Extract requested positions
-    # - Convert to tensors
-    pass
-
-
-def prepare_training_data(games: List[str],
-                         augment: bool = True,
-                         positions: str = "all") -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """
-    Prepare training data from games.
+    This function creates training examples from all positions in a game:
+    - Position i (0 to M): Board state after i moves
+    - Policy target: Next move (position i+1) if available, None for final position
+    - Value target: Final game outcome for all positions
     
-    Args:
-        games: List of trmph game strings
-        augment: Whether to apply data augmentation
-        positions: Which positions to extract
-        
-    Returns:
-        List of (board, policy_target, value_target) tuples
-    """
-    # TODO: Implement training data preparation
-    # Should:
-    # - Extract positions from games
-    # - Apply augmentation if requested
-    # - Generate policy/value targets
-    # - Return training tuples
-    pass
-
-
-def extract_training_examples_from_game(trmph_text: str, debug_info: str = "") -> List[Tuple[np.ndarray, np.ndarray, float]]:
-    """
-    Extract multiple training examples from a single game.
-    
-    Creates training examples from intermediate positions in the game:
-    - Board state after N moves
-    - Policy target for the (N+1)th move
-    - Value target based on game outcome
+    For two-headed networks, we include all positions and handle missing policy targets
+    in the loss function. This ensures both heads get trained on the same board states.
     
     Args:
         trmph_text: Complete trmph string
+        winner_from_file: Winner from file data ("1" for blue, "2" for red)
         debug_info: Optional debug information
         
     Returns:
         List of (board_state, policy_target, value_target) tuples
+        - board_state: Current board state (2, 13, 13)
+        - policy_target: Next move as one-hot (169,) or None if no next move
+        - value_target: Final game outcome (0.0 or 1.0)
+    
+    Limitations:
+    - Uses winner from file data (assumes file data is correct)
+    - No data augmentation (will be added later)
+    - No validation of winner calculation (can be added for debugging)
     """
     try:
-        # Strip preamble and get all moves
+        # Parse moves from trmph string
         bare_moves = strip_trmph_preamble(trmph_text)
         moves = split_trmph_moves(bare_moves)
-        
-        if not moves:
-            logger.warning(f"No moves found in game: {trmph_text[:50]}...")
-            return []
-        
-        # Determine winner for value target
-        winner = detect_winner(trmph_text)
-        if winner == "blue":
-            value_target = 1.0
-        elif winner == "red":
-            value_target = 0.0
+
+        # Determine value target from file data
+        if winner_from_file is None:
+            # Fallback: try to detect winner from trmph string
+            calculated_winner = detect_winner(trmph_text)
+            if calculated_winner == "blue":
+                value_target = 1.0
+            elif calculated_winner == "red":
+                value_target = 0.0
+            else:
+                value_target = 0.5
+            logger.warning(f"No winner from file, using calculated: {calculated_winner}")
         else:
-            value_target = 0.5
-        
+            # Use winner from file data (primary source)
+            value_target = 1.0 if winner_from_file == "1" else 0.0
+
         training_examples = []
-        
-        # Create training examples from intermediate positions
-        # Start from position with at least 2 moves, end before the last move
-        for i in range(2, len(moves) - 1):
-            # Create board state after i moves
-            partial_moves = moves[:i]
-            board_state = create_board_from_moves(partial_moves)
-            
-            # Get the next move (i+1) as the policy target
-            next_move = moves[i]
-            policy_target = create_policy_target(next_move)
-            
+
+        # Special case: empty game (no moves)
+        if not moves:
+            board_state = create_board_from_moves([])
+            policy_target = None
             training_examples.append((board_state, policy_target, value_target))
-        
-        # Also add the final position (all moves except last)
-        if len(moves) >= 3:
-            partial_moves = moves[:-1]
-            board_state = create_board_from_moves(partial_moves)
-            next_move = moves[-1]
-            policy_target = create_policy_target(next_move)
+            return training_examples
+
+        # Iterate through all positions (0 to M) to create training examples
+        for position in range(len(moves) + 1):
+            board_state = create_board_from_moves(moves[:position])
+            policy_target = None
+            if position < len(moves):
+                next_move = moves[position]
+                policy_target = create_policy_target(next_move)
             training_examples.append((board_state, policy_target, value_target))
-        
+
         return training_examples
-        
+
     except Exception as e:
         logger.warning(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         if debug_info:
@@ -837,100 +697,3 @@ def create_policy_target(move: str) -> np.ndarray:
     policy[tensor_pos] = 1.0
     
     return policy
-
-
-# ============================================================================
-# Validation and Testing Functions
-# ============================================================================
-
-def validate_trmph_format(trmph_text: str) -> bool:
-    """
-    Validate that a trmph string is properly formatted.
-    
-    Args:
-        trmph_text: Trmph string to validate
-        
-    Returns:
-        True if valid, False otherwise
-    """
-    # TODO: Implement validation
-    # Should check:
-    # - Proper preamble
-    # - Valid move format
-    # - Consistent board size
-    pass
-
-
-def validate_board_tensor(board: torch.Tensor) -> bool:
-    """
-    Validate that a board tensor has correct format.
-    
-    Args:
-        board: Tensor to validate
-        
-    Returns:
-        True if valid, False otherwise
-    """
-    # TODO: Implement validation
-    # Should check:
-    # - Correct shape (2, 13, 13)
-    # - Binary values (0 or 1)
-    # - No overlapping pieces
-    pass
-
-
-def test_conversion_roundtrip() -> bool:
-    """
-    Test that conversions work correctly in both directions.
-    
-    Returns:
-        True if all tests pass
-    """
-    # TODO: Implement roundtrip tests
-    # Should test:
-    # - trmph ↔ tensor
-    # - tensor ↔ rowcol
-    # - augmentation reversibility
-    pass
-
-
-# ============================================================================
-# Performance Optimization Functions
-# ============================================================================
-
-def batch_convert_trmph(trmph_strings: List[str]) -> torch.Tensor:
-    """
-    Convert multiple trmph strings efficiently.
-    
-    Args:
-        trmph_strings: List of trmph strings
-        
-    Returns:
-        Batch tensor: shape (batch_size, 2, 13, 13)
-    """
-    # TODO: Implement batch conversion
-    # Should be more efficient than individual conversions
-    pass
-
-
-def preprocess_and_cache(data_dir: str, 
-                        cache_dir: str,
-                        force_reprocess: bool = False) -> str:
-    """
-    Preprocess all data and cache for faster loading.
-    
-    Args:
-        data_dir: Directory with .trmph files
-        cache_dir: Directory to store processed data
-        force_reprocess: Whether to reprocess existing cache
-        
-    Returns:
-        Path to cached data
-    """
-    # TODO: Implement preprocessing and caching
-    # Should:
-    # - Convert all games to tensors
-    # - Apply augmentations
-    # - Save in efficient format (e.g., .npy)
-    # - Return path to cached data
-    pass 

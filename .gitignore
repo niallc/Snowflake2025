@@ -36,6 +36,11 @@ single_game_report.md
 test_data_validation.py
 tests/test_data_validation.py
 validate_new_data.py
+DataProcessingCodeReview_Reasoning.md
+implementation_design.md
+test_training_data.py
+tmp_designing_data_processing.md
+training_data_design.md
 
 
 # Mac specific files
