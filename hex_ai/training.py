@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from datetime import datetime
 from pathlib import Path
+import time
 
 from .models import TwoHeadedResNet
 from .data_processing import ProcessedDataset, create_processed_dataloader
@@ -261,7 +262,7 @@ class Trainer:
             logger.info(f"Platform: {system_info['platform']}")
             logger.info(f"Memory: {system_info['memory_available_gb']:.1f} GB available")
             logger.info(f"GPU: {'Available' if system_info['gpu_available'] else 'Not available'}")
-            logger.info(f"Optimal batch size: {batch_analysis['optimal_batch_size']}")
+            logger.info(f"Old notion of optimal batch size, from calculate_optimal_batch_size: {batch_analysis['optimal_batch_size']}")
             logger.info(f"Current batch size: {self.train_loader.batch_size}")
             
             # Warn if batch size is suboptimal
@@ -278,7 +279,7 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
-        """Train for one epoch."""
+        """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
         epoch_metrics = {
@@ -286,44 +287,58 @@ class Trainer:
             'value_loss': [],
             'total_loss': []
         }
-        
+        batch_times = []
+        batch_data_times = []
+        epoch_start_time = time.time()
+        data_load_start = time.time()
         for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
+            # Time data loading
+            data_load_end = time.time()
+            batch_data_time = data_load_end - data_load_start
+            batch_data_times.append(batch_data_time)
+            batch_start_time = time.time()
             # Move to device
             boards = boards.to(self.device)
             policies = policies.to(self.device)
             values = values.to(self.device)
-            
             # Forward pass with mixed precision
             self.optimizer.zero_grad()
-            
             with self.mixed_precision.autocast_context():
                 policy_pred, value_pred = self.model(boards)
                 total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-            
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
-            
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
-            
             # Track metrics
             epoch_losses.append(loss_dict['total_loss'])
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
-            
             # Log progress - adjust frequency based on dataset size and verbosity
             from .config import VERBOSE_LEVEL
             if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
-                # With larger batch sizes, log more frequently (every 100 batches)
                 log_interval = 20 if len(self.train_loader) > 500 else 50 if len(self.train_loader) > 100 else 10
                 if batch_idx % log_interval == 0:
                     logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                              f"Loss: {loss_dict['total_loss']:.4f}")
-        
+                              f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
+            # Prepare for next batch data timing
+            data_load_start = time.time()
+            batch_end_time = time.time()
+            batch_times.append(batch_end_time - batch_start_time)
+        epoch_end_time = time.time()
+        epoch_time = epoch_end_time - epoch_start_time
         # Compute epoch averages
         epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
+        # Add timing info to epoch_avg
+        epoch_avg['epoch_time'] = epoch_time
+        epoch_avg['batch_time_mean'] = np.mean(batch_times) if batch_times else 0
+        epoch_avg['batch_time_min'] = np.min(batch_times) if batch_times else 0
+        epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
+        epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
+        # Log timing summary
+        logger.info(f"Epoch {self.current_epoch} timing: epoch_time={epoch_time:.2f}s, batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, batch_time_min={epoch_avg['batch_time_min']:.3f}s, batch_time_max={epoch_avg['batch_time_max']:.3f}s, data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s")
         return epoch_avg
     
     def validate(self) -> Dict[str, float]:
@@ -377,6 +392,7 @@ class Trainer:
         train_value_losses = []
         val_policy_losses = []
         val_value_losses = []
+        epoch_times = []  # Store epoch times for later analysis
         
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
@@ -385,7 +401,7 @@ class Trainer:
         
         early_stopped = False
         for epoch in range(num_epochs):
-            epoch_start_time = datetime.now()
+            epoch_start_time = time.time()
             self.current_epoch = epoch
             
             # Training
@@ -409,7 +425,8 @@ class Trainer:
                 val_value_losses.append(float('inf'))
             
             # Calculate timing and performance metrics
-            epoch_time = (datetime.now() - epoch_start_time).total_seconds()
+            epoch_time = time.time() - epoch_start_time
+            epoch_times.append(epoch_time)
             total_training_time = (datetime.now() - self.start_time).total_seconds()
             
             # Calculate samples per second
@@ -504,7 +521,8 @@ class Trainer:
             "val_value_losses": val_value_losses,
             "epochs_trained": len(train_losses),
             "early_stopped": early_stopped,
-            "total_training_time": total_training_time
+            "total_training_time": total_training_time,
+            "epoch_times": epoch_times # Return epoch times for analysis
         }
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
