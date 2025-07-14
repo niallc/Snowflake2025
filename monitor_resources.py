@@ -36,13 +36,22 @@ def get_current_utilization():
             gpu_info = {
                 'gpu_memory_used_mb': torch.cuda.memory_allocated() / (1024**2),
                 'gpu_memory_total_mb': torch.cuda.get_device_properties(0).total_memory / (1024**2),
-                'gpu_memory_percent': (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100
+                'gpu_memory_percent': (torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory) * 100,
+                'gpu_memory_cached_mb': torch.cuda.memory_reserved() / (1024**2)
             }
         except Exception as e:
             gpu_info = {'error': str(e)}
     elif torch.backends.mps.is_available():
-        # MPS doesn't provide detailed memory info, but we can check if it's being used
-        gpu_info = {'device': 'mps', 'note': 'MPS memory info not available'}
+        # For MPS, we can try to get some memory info
+        try:
+            # MPS doesn't provide detailed memory info, but we can check if it's being used
+            gpu_info = {
+                'device': 'mps',
+                'note': 'MPS memory info limited',
+                'mps_available': torch.backends.mps.is_available()
+            }
+        except Exception as e:
+            gpu_info = {'device': 'mps', 'error': str(e)}
     
     return {
         'timestamp': datetime.now().isoformat(),
@@ -50,6 +59,7 @@ def get_current_utilization():
         'memory_percent': memory.percent,
         'memory_used_gb': memory.used / (1024**3),
         'memory_available_gb': memory.available / (1024**3),
+        'memory_total_gb': memory.total / (1024**3),
         'gpu_info': gpu_info
     }
 
@@ -118,11 +128,13 @@ def monitor_continuously(duration_minutes=5, interval_seconds=10):
         bottlenecks = analyze_training_bottlenecks()
         
         print(f"[{utilization['timestamp']}]")
-        print(f"CPU: {utilization['cpu_percent']:.1f}% | Memory: {utilization['memory_percent']:.1f}% ({utilization['memory_used_gb']:.1f}GB)")
+        print(f"CPU: {utilization['cpu_percent']:.1f}% | Memory: {utilization['memory_percent']:.1f}% ({utilization['memory_used_gb']:.1f}GB / {utilization['memory_total_gb']:.1f}GB)")
         
         if utilization['gpu_info']:
             if 'gpu_memory_percent' in utilization['gpu_info']:
-                print(f"GPU Memory: {utilization['gpu_info']['gpu_memory_percent']:.1f}% ({utilization['gpu_info']['gpu_memory_used_mb']:.1f}MB)")
+                print(f"GPU Memory: {utilization['gpu_info']['gpu_memory_percent']:.1f}% ({utilization['gpu_info']['gpu_memory_used_mb']:.1f}MB / {utilization['gpu_info']['gpu_memory_total_mb']:.1f}MB)")
+                if 'gpu_memory_cached_mb' in utilization['gpu_info']:
+                    print(f"GPU Cached: {utilization['gpu_info']['gpu_memory_cached_mb']:.1f}MB")
             else:
                 print(f"GPU: {utilization['gpu_info']}")
         

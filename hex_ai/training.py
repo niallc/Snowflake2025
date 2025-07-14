@@ -316,7 +316,8 @@ class Trainer:
             # Log progress - adjust frequency based on dataset size and verbosity
             from .config import VERBOSE_LEVEL
             if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
-                log_interval = 1000 if len(self.train_loader) > 2000 else 500 if len(self.train_loader) > 1000 else 100 if len(self.train_loader) > 100 else 10
+                # With larger batch sizes, log more frequently (every 100 batches)
+                log_interval = 20 if len(self.train_loader) > 500 else 50 if len(self.train_loader) > 100 else 10
                 if batch_idx % log_interval == 0:
                     logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                               f"Loss: {loss_dict['total_loss']:.4f}")
@@ -452,10 +453,15 @@ class Trainer:
                     notes=f"Epoch {epoch} completed"
                 )
             
-            # Log results
-            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f}")
+            # Log results with memory info
+            memory_usage_mb = get_memory_usage()
+            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f} | Memory: {memory_usage_mb:.1f}MB")
             if val_metrics:
                 logger.info(f"Epoch {epoch}: Val Loss: {val_metrics['total_loss']:.4f}")
+            
+            # Log memory warning if usage is high
+            if memory_usage_mb > 8000:  # 8GB threshold
+                logger.warning(f"High memory usage: {memory_usage_mb:.1f}MB - consider reducing batch size")
             
             # Save checkpoint with smart management
             self._save_checkpoint_smart(save_path, epoch, train_metrics, val_metrics, 
