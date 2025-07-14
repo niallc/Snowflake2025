@@ -74,6 +74,10 @@ experiment_registry.json
 experiment_registry.py
 hyperparameter_tuning_scaled_50k.py
 tuning_results_analysis.md
+debug_union_find_simple.py
+debug_winner.py
+debug_winner_detection.py
+convert_test_cases.py
 
 # Mac specific files
 .DS_Store

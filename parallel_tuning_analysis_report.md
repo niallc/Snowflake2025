@@ -5,8 +5,8 @@
 ### **What We Have:**
 - **Main script**: `hyperparameter_tuning_gpu_large.py` - runs 6 experiments sequentially
 - **Batch size**: Recently increased from 64 → 512 (8x improvement)
-- **Resource utilization**: ~20% CPU, ~60% memory (16GB/32GB)
-- **Training speed**: ~15 seconds per batch update, epochs complete in minutes
+- **Resource utilization**: ~20% CPU, ~60% memory (16GB/32GB), though this may be dominated by other processes.
+- **Training speed**: ~15 seconds per batch update (100 batches of size 512), epochs complete in minutes
 - **System**: 10-core Mac with 32GB RAM, Apple MPS GPU
 
 ### **Key Files:**
@@ -17,16 +17,9 @@
 - `analyze_tuning_results.py` - results analysis
 
 ### **Recent Optimizations Made:**
-1. **Batch size increased** from 64 to 512 (8x improvement)
-2. **Logging frequency** changed from every 1000 to every 100 batches
-3. **Memory monitoring** added to training loop
-4. **Resource monitoring script** created for real-time tracking
-
-### **Current Performance:**
-- **Training speed**: ~15 seconds per batch update
-- **Epoch completion**: Several minutes per epoch
-- **Resource usage**: 20% CPU, 60% memory (16GB/32GB)
-- **GPU**: Apple MPS active but underutilized
+1. **Batch size increased** from 64 to 512
+2. **Memory monitoring** added to training loop
+3. **Resource monitoring script** created for real-time tracking
 
 ## **Parallel Experiment Complexity Analysis**
 

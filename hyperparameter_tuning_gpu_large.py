@@ -69,7 +69,7 @@ else:
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10
-BATCH_SIZE = 4096  # Much larger batch size for better GPU utilization
+BATCH_SIZE = 1024  # larger batches for better GPU utilization
 TARGET_EXAMPLES = 500000  # 500k positions for comprehensive training
 
 # Experiment naming
