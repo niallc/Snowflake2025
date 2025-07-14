@@ -22,6 +22,8 @@ import argparse
 parser = argparse.ArgumentParser(description='Large-scale hyperparameter tuning for Hex AI')
 parser.add_argument('--verbose', '-v', type=int, default=2, 
                    help='Verbose level: 0=critical only, 1=important, 2=detailed (default), 3=debug, 4=very debug')
+parser.add_argument('--auto-analyze', action='store_true',
+                   help='Automatically run analysis when tuning completes')
 args = parser.parse_args()
 
 # Set up logging based on verbose level
@@ -225,4 +227,37 @@ else:
     print("\nNo successful experiments!")
 
 print(f"\nAll results saved to: {results_dir}")
-print("Run 'python analyze_tuning_results.py' to analyze the results.") 
+print("Run 'python analyze_tuning_results.py' to analyze the results.")
+print("\nPROGRESS MONITORING:")
+print(f"- Check progress: tail -f {results_dir}/overall_results.json")
+print(f"- Monitor system: htop or Activity Monitor")
+print(f"- Check GPU usage: nvidia-smi (if CUDA) or system_profiler SPDisplaysDataType (if MPS)")
+
+# Auto-analysis if requested
+if args.auto_analyze:
+    print(f"\n{'='*60}")
+    print("AUTO-ANALYSIS ENABLED")
+    print(f"{'='*60}")
+    print("Running analysis automatically...")
+    
+    try:
+        import subprocess
+        import sys
+        
+        # Run the analysis script
+        analysis_cmd = [sys.executable, "analyze_tuning_results.py", str(results_dir)]
+        print(f"Running: {' '.join(analysis_cmd)}")
+        
+        result = subprocess.run(analysis_cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ Analysis completed successfully!")
+            print("Generated plots and summary reports.")
+        else:
+            print("❌ Analysis failed with errors:")
+            print(result.stderr)
+            
+    except Exception as e:
+        print(f"❌ Failed to run auto-analysis: {e}")
+        print("You can run analysis manually with:")
+        print(f"python analyze_tuning_results.py {results_dir}") 

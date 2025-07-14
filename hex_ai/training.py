@@ -313,11 +313,13 @@ class Trainer:
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
             
-            # Log progress - adjust frequency based on dataset size
-            log_interval = 500 if len(self.train_loader) > 1000 else 100 if len(self.train_loader) > 100 else 10
-            if batch_idx % log_interval == 0:
-                logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                          f"Loss: {loss_dict['total_loss']:.4f}")
+            # Log progress - adjust frequency based on dataset size and verbosity
+            from .config import VERBOSE_LEVEL
+            if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
+                log_interval = 1000 if len(self.train_loader) > 2000 else 500 if len(self.train_loader) > 1000 else 100 if len(self.train_loader) > 100 else 10
+                if batch_idx % log_interval == 0:
+                    logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
+                              f"Loss: {loss_dict['total_loss']:.4f}")
         
         # Compute epoch averages
         epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
