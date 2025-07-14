@@ -27,6 +27,14 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 # Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
+# Note about analysis of training runs that use different loss weights:
+# The analysis script *should* use fixed values for the policy and value weights.
+# The point is to produce a standardized loss calculation to make the loss that we see comparable across different training loss functions.
+# The policy loss will always be higher than the value loss so it's not fair to compare the balanced run against the others with the loss that *it trained with* because that is higher by *construction*.
+# Even with both better policy loss AND better value loss, if we weight the value loss higher we'll get a greater total loss.
+
+# So we need to make sure that the loss calculate for the PNG *does* use this fixed weight of the separate policy and training loss.
+# summarizing briefly: 
 POLICY_LOSS_WEIGHT = 0.15
 VALUE_LOSS_WEIGHT = 0.85
 
@@ -361,6 +369,10 @@ class Trainer:
         # Initialize loss tracking
         train_losses = []
         val_losses = []
+        train_policy_losses = []
+        train_value_losses = []
+        val_policy_losses = []
+        val_value_losses = []
         
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
@@ -380,10 +392,17 @@ class Trainer:
             
             # Track losses
             train_losses.append(train_metrics['total_loss'])
+            train_policy_losses.append(train_metrics['policy_loss'])
+            train_value_losses.append(train_metrics['value_loss'])
+            
             if val_metrics:
                 val_losses.append(val_metrics['total_loss'])
+                val_policy_losses.append(val_metrics['policy_loss'])
+                val_value_losses.append(val_metrics['value_loss'])
             else:
                 val_losses.append(float('inf'))  # No validation data
+                val_policy_losses.append(float('inf'))
+                val_value_losses.append(float('inf'))
             
             # Calculate timing and performance metrics
             epoch_time = (datetime.now() - epoch_start_time).total_seconds()
@@ -470,6 +489,10 @@ class Trainer:
             "best_val_loss": self.best_val_loss,
             "train_losses": train_losses,
             "val_losses": val_losses,
+            "train_policy_losses": train_policy_losses,
+            "train_value_losses": train_value_losses,
+            "val_policy_losses": val_policy_losses,
+            "val_value_losses": val_value_losses,
             "epochs_trained": len(train_losses),
             "early_stopped": early_stopped,
             "total_training_time": total_training_time
