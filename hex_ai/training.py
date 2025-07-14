@@ -313,8 +313,9 @@ class Trainer:
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
             
-            # Log progress
-            if batch_idx % 10 == 0:
+            # Log progress - adjust frequency based on dataset size
+            log_interval = 500 if len(self.train_loader) > 1000 else 100 if len(self.train_loader) > 100 else 10
+            if batch_idx % log_interval == 0:
                 logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                           f"Loss: {loss_dict['total_loss']:.4f}")
         

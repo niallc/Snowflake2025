@@ -16,7 +16,30 @@ from datetime import datetime
 import multiprocessing
 
 import logging
-logging.basicConfig(level=logging.DEBUG)
+import argparse
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Large-scale hyperparameter tuning for Hex AI')
+parser.add_argument('--verbose', '-v', type=int, default=2, 
+                   help='Verbose level: 0=critical only, 1=important, 2=detailed (default), 3=debug, 4=very debug')
+args = parser.parse_args()
+
+# Set up logging based on verbose level
+if args.verbose == 0:
+    logging.basicConfig(level=logging.CRITICAL)
+elif args.verbose == 1:
+    logging.basicConfig(level=logging.WARNING)
+elif args.verbose == 2:
+    logging.basicConfig(level=logging.INFO)
+elif args.verbose == 3:
+    logging.basicConfig(level=logging.DEBUG)
+else:  # args.verbose >= 4
+    logging.basicConfig(level=logging.DEBUG)
+
+# Update the global verbose level
+from hex_ai.config import VERBOSE_LEVEL
+import hex_ai.config
+hex_ai.config.VERBOSE_LEVEL = args.verbose
 
 # Fix multiprocessing on macOS
 if __name__ == '__main__':
@@ -42,131 +65,148 @@ else:
     device = torch.device("cpu")
     print("Using CPU (no GPU detected)")
 
-# Quick hyperparameter exploration config
+# Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10
 BATCH_SIZE = 64  # Larger batch size for GPU efficiency
-TARGET_EXAMPLES = 2000  # Use ~2000 positions for quick exploration
+TARGET_EXAMPLES = 500000  # 500k positions for comprehensive training
 
-# Define experiments
+# Experiment naming
+from datetime import datetime
+EXPERIMENT_NAME = f"hex_ai_hyperparam_tuning_v3_500k_samples_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+# Define experiments - focusing on balanced loss variants based on previous results
 experiments = [
     {
-        'experiment_name': 'gpu_baseline',
+        'experiment_name': 'balanced_weights',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
             'weight_decay': 1e-4,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
+            'policy_weight': 0.5,
+            'value_weight': 0.5
         }
     },
     {
-        'experiment_name': 'gpu_no_dropout',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.0,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
-        }
-    },
-    {
-        'experiment_name': 'gpu_high_dropout',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.2,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
-        }
-    },
-    {
-        'experiment_name': 'gpu_high_weight_decay',
+        'experiment_name': 'balanced_high_weight_decay',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
             'weight_decay': 1e-3,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
+            'policy_weight': 0.5,
+            'value_weight': 0.5
         }
     },
     {
-        'experiment_name': 'gpu_lower_lr',
+        'experiment_name': 'policy_heavy',
         'hyperparameters': {
-            'learning_rate': 0.0005,
+            'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
             'weight_decay': 1e-4,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
+            'policy_weight': 0.7,
+            'value_weight': 0.3
         }
     },
     {
-        'experiment_name': 'gpu_higher_lr',
+        'experiment_name': 'policy_intermediate',
         'hyperparameters': {
-            'learning_rate': 0.002,
+            'learning_rate': 0.001,
             'batch_size': BATCH_SIZE,
             'dropout_prob': 0.1,
             'weight_decay': 1e-4,
-            'policy_weight': 0.14,
-            'value_weight': 0.86
+            'policy_weight': 0.33,
+            'value_weight': 0.67
+        }
+    },
+    {
+        'experiment_name': 'balanced_no_dropout',
+        'hyperparameters': {
+            'learning_rate': 0.001,
+            'batch_size': BATCH_SIZE,
+            'dropout_prob': 0.0,
+            'weight_decay': 1e-4,
+            'policy_weight': 0.5,
+            'value_weight': 0.5
+        }
+    },
+    {
+        'experiment_name': 'balanced_high_lr',
+        'hyperparameters': {
+            'learning_rate': 0.003,
+            'batch_size': BATCH_SIZE,
+            'dropout_prob': 0.1,
+            'weight_decay': 1e-4,
+            'policy_weight': 0.5,
+            'value_weight': 0.5
         }
     }
 ]
 
 # Create results directory
-results_dir = Path("checkpoints/gpu_large_tuning")
+results_dir = Path("checkpoints") / EXPERIMENT_NAME
 results_dir.mkdir(parents=True, exist_ok=True)
 
-# Save experiment configuration
+# Save configuration
 config = {
+    'experiment_name': EXPERIMENT_NAME,
+    'description': 'Large-scale hyperparameter tuning with 500k samples per experiment, focusing on balanced loss variants',
     'num_epochs': NUM_EPOCHS,
     'batch_size': BATCH_SIZE,
+    'target_examples': TARGET_EXAMPLES,
     'device': str(device),
     'num_experiments': len(experiments),
-    'timestamp': datetime.now().isoformat()
+    'timestamp': datetime.now().isoformat(),
+    'parameters': {
+        'early_stopping_patience': 3,
+        'train_ratio': 0.8,
+        'random_seed': 42
+    }
 }
 with open(results_dir / "config.json", "w") as f:
     json.dump(config, f, indent=2)
 
 print(f"\n{'='*60}")
-print(f"Starting GPU Hyperparameter Tuning")
+print(f"LARGE-SCALE HYPERPARAMETER TUNING (500K)")
+print(f"Experiment Name: {EXPERIMENT_NAME}")
 print(f"Device: {device}")
 print(f"Epochs per experiment: {NUM_EPOCHS}")
+print(f"Target examples: {TARGET_EXAMPLES}")
 print(f"Number of experiments: {len(experiments)}")
 print(f"Results directory: {results_dir}")
+print(f"Verbose level: {args.verbose} (0=critical, 1=important, 2=detailed, 3=debug, 4=very debug)")
 print(f"{'='*60}")
 
 # Discover and analyze data
 print("\nDiscovering processed data files...")
 data_files = discover_processed_files("data/processed")
-# Use sampling for faster estimation (check first 10 files)
-total_examples = estimate_dataset_size(data_files, max_files=10)
+total_examples = estimate_dataset_size(data_files, max_files=10)  # Sample more files for better estimate
 print(f"Found {len(data_files)} data files with approximately {total_examples:,} training examples")
 
-# For quick exploration, use a subset of data
-print(f"Using ~{TARGET_EXAMPLES:,} examples for quick hyperparameter exploration")
-print("(This allows for fast iteration to find promising hyperparameters)")
+print(f"Using {TARGET_EXAMPLES} examples for training")
+print("(This provides comprehensive training for meaningful results)")
 
-# Run hyperparameter tuning with limited data for quick exploration
+# Run large-scale hyperparameter tuning
+start_time = time.time()
 overall_results = run_hyperparameter_tuning(
     experiments=experiments,
     data_dir="data/processed",
     results_dir=str(results_dir),
     train_ratio=0.8,
     num_epochs=NUM_EPOCHS,
-    early_stopping_patience=5,
+    early_stopping_patience=3,  # Early stopping after 3 epochs without improvement
     random_seed=42,
-    max_examples_per_split=TARGET_EXAMPLES  # Limit data for quick exploration
+    max_examples_per_split=TARGET_EXAMPLES,
+    experiment_name=EXPERIMENT_NAME  # Pass experiment name through
 )
 
+total_time = time.time() - start_time
+
 print(f"\n{'='*60}")
-print("GPU HYPERPARAMETER TUNING COMPLETE")
+print("LARGE-SCALE TUNING (500K) COMPLETE")
 print(f"{'='*60}")
-print(f"Total training time: {overall_results['total_training_time']:.1f}s")
+print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
 print(f"Successful experiments: {overall_results['successful_experiments']}/{overall_results['num_experiments']}")
 
 # Find best experiment
@@ -175,6 +215,14 @@ if overall_results['experiments']:
     print(f"\nBest experiment: {best_exp['experiment_name']}")
     print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
     print(f"Hyperparameters: {best_exp['hyperparameters']}")
+    
+    # Show all results sorted by validation loss
+    print(f"\nAll experiments ranked by validation loss:")
+    sorted_experiments = sorted(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+    for i, exp in enumerate(sorted_experiments):
+        print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+else:
+    print("\nNo successful experiments!")
 
 print(f"\nAll results saved to: {results_dir}")
-print("Check individual experiment directories for detailed results and checkpoints.") 
+print("Run 'python analyze_tuning_results.py' to analyze the results.") 
