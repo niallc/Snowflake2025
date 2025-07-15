@@ -115,6 +115,9 @@ class HexGameState:
             winner=None
         )
         # Winner detection
+        # TODO: Improve Efficiency: We currently find the winner from scratch after
+        # every move. UnionFind is an efficient incremental algorithm and we should
+        # update an existing UnionFind object instead of creating a new one.
         winner = new_state._find_winner()
         if winner:
             new_state.game_over = True

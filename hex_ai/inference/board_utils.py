@@ -13,6 +13,9 @@ import numpy as np
 from typing import Tuple
 
 from ..config import BOARD_SIZE
+from hex_ai.utils.format_conversion import (
+    board_2nxn_to_nxn, board_nxn_to_2nxn
+)
 
 # Board value constants for N×N format
 EMPTY = 0
@@ -22,56 +25,6 @@ RED = 2
 # Player constants
 BLUE_PLAYER = 0
 RED_PLAYER = 1
-
-
-def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
-    """
-    Convert 2×N×N tensor to N×N array.
-    
-    Args:
-        board_2nxn: Tensor of shape (2, BOARD_SIZE, BOARD_SIZE) where
-                   board_2nxn[0] is blue pieces and board_2nxn[1] is red pieces
-                   
-    Returns:
-        N×N array with values: 0=empty, 1=blue, 2=red
-    """
-    if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
-    
-    board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-    
-    # Convert blue channel (index 0)
-    board_nxn[board_2nxn[0] == 1.0] = BLUE
-    
-    # Convert red channel (index 1)
-    board_nxn[board_2nxn[1] == 1.0] = RED
-    
-    return board_nxn
-
-
-def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
-    """
-    Convert N×N array to 2×N×N tensor.
-    
-    Args:
-        board_nxn: Array of shape (BOARD_SIZE, BOARD_SIZE) with values:
-                  0=empty, 1=blue, 2=red
-                  
-    Returns:
-        2×N×N tensor where board_2nxn[0] is blue pieces and board_2nxn[1] is red pieces
-    """
-    if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
-    
-    board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-    
-    # Convert to blue channel (index 0)
-    board_2nxn[0] = torch.from_numpy((board_nxn == BLUE).astype(np.float32))
-    
-    # Convert to red channel (index 1)
-    board_2nxn[1] = torch.from_numpy((board_nxn == RED).astype(np.float32))
-    
-    return board_2nxn
 
 
 def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> int:

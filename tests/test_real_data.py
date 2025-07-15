@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 from hex_ai.data_utils import (
     parse_trmph_to_board, display_board, 
-    board_to_trmph, rowcol_to_trmph, trmph_move_to_rowcol
+    rowcol_to_trmph, trmph_move_to_rowcol
 )
 from hex_ai.config import BOARD_SIZE
 
@@ -88,23 +88,6 @@ class TestRealDataIntegration(unittest.TestCase):
         self.assertIn("B", visual_display)  # Blue piece
         self.assertIn("R", visual_display)  # Red piece
         self.assertIn(".", visual_display)  # Empty spaces
-    
-    def test_board_to_trmph_conversion(self):
-        """Test converting board back to trmph format."""
-        # Create a board with known pieces
-        board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board[0, 0] = 1  # Blue at a1
-        board[1, 1] = 2  # Red at b2
-        board[2, 2] = 1  # Blue at c3
-        
-        # Convert back to trmph
-        trmph = board_to_trmph(board)
-        
-        # Should contain the moves in some order
-        self.assertIn("a1", trmph)
-        self.assertIn("b2", trmph)
-        self.assertIn("c3", trmph)
-        self.assertTrue(trmph.startswith("#13,"))
     
     def test_2channel_board_display(self):
         """Test display functions with 2-channel board format."""

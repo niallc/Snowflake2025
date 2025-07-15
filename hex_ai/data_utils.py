@@ -21,6 +21,10 @@ import re
 import string
 
 from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
+from hex_ai.utils.format_conversion import (
+    strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
+    rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
+)
 
 logger = logging.getLogger(__name__)
 
