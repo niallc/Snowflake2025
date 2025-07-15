@@ -604,3 +604,30 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
         return True, ""
     except Exception as e:
         return False, str(e)
+
+
+# =========================================================================
+# Player-to-move Channel Utility
+# =========================================================================
+
+from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+
+def get_player_to_move_from_board(board_2ch: np.ndarray) -> int:
+    """
+    Given a (2, N, N) board, return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
+    Raises ValueError if the board state is invalid (e.g., illegal move counts).
+    Args:
+        board_2ch: np.ndarray of shape (2, N, N), blue and red channels
+    Returns:
+        int: BLUE_PLAYER or RED_PLAYER
+    """
+    if board_2ch.shape[0] != 2:
+        raise ValueError(f"Expected board with 2 channels, got shape {board_2ch.shape}")
+    blue_count = int(np.sum(board_2ch[0]))
+    red_count = int(np.sum(board_2ch[1]))
+    if blue_count == red_count:
+        return BLUE_PLAYER
+    elif blue_count == red_count + 1:
+        return RED_PLAYER
+    else:
+        raise ValueError(f"Invalid board state: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red.")
