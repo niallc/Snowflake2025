@@ -87,21 +87,23 @@ def validate_board_shape(tensor: torch.Tensor) -> bool:
     return tensor.shape == expected_shape
 
 
-def get_device() -> torch.device:
+def get_device() -> str:
     """
     Get the appropriate device for training or inference.
     Returns:
-        torch.device: 'cuda' if available, else 'mps' (Apple Silicon GPU) if available, else 'cpu'.
+        str: 'cuda' if available, else 'mps' (Apple Silicon GPU) if available, else 'cpu'.
     Note:
         This function should be used everywhere device selection is needed for consistency.
         All scripts and modules should import and use this function instead of direct torch.cuda/mps/cpu checks.
     """
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        device = 'cuda'
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
+        device = 'mps'
     else:
-        return torch.device("cpu")
+        device = 'cpu'
+    logging.getLogger(__name__).debug(f"[get_device] Selected device: {device}")
+    return device
 
 
 def set_seed(seed: int = 42):

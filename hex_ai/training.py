@@ -104,17 +104,20 @@ class MixedPrecisionTrainer:
     """Wrapper for mixed precision training capabilities."""
     
     def __init__(self, device: str):
+        logger.debug(f"[MixedPrecisionTrainer.__init__] device argument = {device} (type: {type(device)})")
+        device_str = str(device)
+        logger.debug(f"[MixedPrecisionTrainer.__init__] device_str = {device_str}")
         self.device = device
-        self.use_mixed_precision = device in ['cuda', 'mps']
+        self.use_mixed_precision = device_str in ['cuda', 'mps']
         
         if self.use_mixed_precision:
             try:
-                if device == 'cuda':
+                if device_str == 'cuda':
                     from torch.cuda.amp import autocast, GradScaler
                     self.autocast = autocast
                     self.scaler = GradScaler()
                     logger.info("Mixed precision training enabled for CUDA GPU")
-                elif device == 'mps':
+                elif device_str == 'mps':
                     # MPS uses torch.autocast with device_type="mps"
                     self.autocast = lambda: torch.autocast(device_type="mps")
                     # MPS doesn't need GradScaler, but we'll keep the interface
@@ -221,6 +224,7 @@ class Trainer:
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
                  weight_decay: float = 1e-4):
+        logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -235,7 +239,7 @@ class Trainer:
         
         # Learning rate scheduler (ReduceLROnPlateau)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5, verbose=True
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
         )
         
         # Training state

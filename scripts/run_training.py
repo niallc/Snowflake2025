@@ -14,9 +14,13 @@ import torch
 import json
 
 from hex_ai.training_utils import get_device
-from hex_ai.training_utils import discover_processed_files, create_train_val_split, StreamingProcessedDataset
+from hex_ai.data_pipeline import discover_processed_files, create_train_val_split, StreamingProcessedDataset
 from hex_ai.models import TwoHeadedResNet
 from hex_ai.training import Trainer
+from hex_ai.training import EarlyStopping
+from hex_ai.training_logger import TrainingLogger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Argument parsing for flexibility
 parser = argparse.ArgumentParser(description="Train Hex AI model with modern pipeline.")
@@ -49,6 +53,7 @@ elif args.verbose >= 3:
 # Device and experiment setup
 start_time = time.time()
 device = get_device()
+logger.debug(f"[scripts.run_training] device from get_device(): {device}")
 print(f"Using device: {device}")
 
 # Discover data files
@@ -100,13 +105,19 @@ config['timestamp'] = datetime.now().isoformat()
 with open(results_dir / "config.json", "w") as f:
     json.dump(config, f, indent=2)
 
+# Early stopping setup
+if args.early_stopping:
+    early_stopping = EarlyStopping(patience=args.early_stopping)
+else:
+    early_stopping = None
+
 # Training
 print(f"\n{'='*60}\nStarting training for {args.epochs} epochs\n{'='*60}")
 train_start = time.time()
 training_results = trainer.train(
     num_epochs=args.epochs,
     save_dir=str(results_dir),
-    early_stopping=args.early_stopping
+    early_stopping=early_stopping
 )
 train_time = time.time() - train_start
 
