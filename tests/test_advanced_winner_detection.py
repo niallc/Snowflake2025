@@ -108,8 +108,6 @@ class TestTrmphAdvancedCases:
         state = HexGameState()
         for move in moves:
             row, col = trmph_move_to_rowcol(move)
-            # if row == 6 and col == 7:
-            #     print(f"Adding trmph move {move} to state, row {row}, col {col}")
             state = state.make_move(row, col)
         self.assert_winner(state, None, context="real_game red win")
         state.current_player = RED_PLAYER
