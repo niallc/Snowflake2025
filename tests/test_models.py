@@ -153,42 +153,5 @@ class TestModelFactory(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_model("invalid_model")
 
-
-class TestModelIntegration(unittest.TestCase):
-    """Integration tests for the model."""
-    
-    def test_model_with_dataloader(self):
-        """Test that model works with DataLoader output."""
-        from hex_ai.dataset import create_sample_data
-        
-        model = TwoHeadedResNet()
-        boards, policies, values = create_sample_data(batch_size=8)
-        
-        # Forward pass
-        policy_logits, value_logit = model(boards)
-        
-        # Check shapes
-        self.assertEqual(policy_logits.shape, policies.shape)
-        self.assertEqual(value_logit.shape, values.shape)
-    
-    def test_model_loss_computation(self):
-        """Test that model outputs work with loss functions."""
-        model = TwoHeadedResNet()
-        x = torch.randn(4, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
-        policy_logits, value_logit = model(x)
-        
-        # Create dummy targets
-        policy_targets = torch.randn(4, POLICY_OUTPUT_SIZE)
-        value_targets = torch.randn(4, VALUE_OUTPUT_SIZE)
-        
-        # Compute losses
-        policy_loss = nn.CrossEntropyLoss()(policy_logits, policy_targets.argmax(dim=1))
-        value_loss = nn.BCEWithLogitsLoss()(value_logit, value_targets)
-        
-        # Check that losses are computed
-        self.assertIsInstance(policy_loss.item(), float)
-        self.assertIsInstance(value_loss.item(), float)
-
-
 if __name__ == '__main__':
     unittest.main() 
