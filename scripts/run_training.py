@@ -13,7 +13,7 @@ from datetime import datetime
 import torch
 import json
 
-from hex_ai.utils import get_device
+from hex_ai.training_utils import get_device
 from hex_ai.training_utils import discover_processed_files, create_train_val_split, StreamingProcessedDataset
 from hex_ai.models import TwoHeadedResNet
 from hex_ai.training import Trainer

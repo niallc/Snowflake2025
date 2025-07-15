@@ -21,9 +21,12 @@ import time
 from .models import TwoHeadedResNet
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
+    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
 from hex_ai.training_utils import StreamingProcessedDataset, discover_processed_files
+
+from hex_ai.training_utils import get_device
+DEVICE = get_device()
 
 logger = logging.getLogger(__name__)
 

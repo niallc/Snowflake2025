@@ -64,7 +64,6 @@ validate_training_examples.py
 check_processing_completeness.py
 test_training_utils.py
 check_corrupted_files.py
-hex_ai/training_utils.py
 monitor_tuning.py
 HYPERPARAMETER_TUNING_DOCUMENTATION.md
 analyze_policy_value_separately.py

@@ -1,7 +1,7 @@
 import torch
 from hex_ai.models import create_model
 from typing import Optional, Tuple, List, Union
-from hex_ai.utils import get_device
+from hex_ai.training_utils import get_device
 
 # NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
 # TODO: Update all inference logic to construct and use 3-channel input, matching the training pipeline.
