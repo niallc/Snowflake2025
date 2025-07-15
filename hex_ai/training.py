@@ -319,7 +319,10 @@ class Trainer:
             # Log progress - adjust frequency based on dataset size and verbosity
             from .config import VERBOSE_LEVEL
             if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
-                log_interval = 20 if len(self.train_loader) > 500 else 50 if len(self.train_loader) > 100 else 10
+                # With only 100 or fewer batches, log every 5 batches
+                # Between 101 and 2000 batches, log every 50 batches
+                # Above 2000 batches, log every 200 batches
+                log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
                 if batch_idx % log_interval == 0:
                     logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                               f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")

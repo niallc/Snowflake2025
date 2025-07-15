@@ -99,7 +99,11 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     else:
         raise ValueError(f"Unknown format_type: {format_type}")
 
-
+# Error found:
+# This function goes through rows and columns, adding a moves it finds regardless of colour
+# Trmph format files have alternating colours, starting with blue.
+# So the moves in the resulting trmph will alternative while the input moves may have had completely different colours
+# The resulting game state will not match the input board
 def board_to_trmph(board: np.ndarray) -> str:
     """
     Convert a board matrix back to trmph format.
@@ -120,13 +124,23 @@ def board_to_trmph(board: np.ndarray) -> str:
     
     # Convert to trmph format
     moves = []
+    num_blue_moves = 0
+    num_red_moves = 0
     for row in range(BOARD_SIZE):
         for col in range(BOARD_SIZE):
             if board_2d[row, col] in [1, 2]:
                 move = rowcol_to_trmph(row, col)
                 moves.append(move)
+                if board_2d[row, col] == 1:
+                    num_blue_moves += 1
+                else:
+                    num_red_moves += 1
     
-    return "#13," + "".join(moves)
+    expected_blue_minus_red = len(moves) // 2
+    if num_blue_moves - num_red_moves != expected_blue_minus_red:
+        if (VERBOSE_LEVEL >= 2):
+            logger.warning(f"Blue minus red moves mismatch: actual: {num_blue_moves} - {num_red_moves} != expected: {expected_blue_minus_red}")
+    return f"#{BOARD_SIZE},{num_blue_moves},{num_red_moves}," + "".join(moves)
 
 
 

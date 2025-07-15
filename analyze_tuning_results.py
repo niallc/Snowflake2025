@@ -349,7 +349,7 @@ if __name__ == "__main__":
         # Try to find the experiment directory
         possible_dirs = [
             f"checkpoints/{experiment_name}",
-            f"checkpoints/scaled_tuning_{experiment_name}",
+            f"checkpoints/hex_ai_hyperparam_tuning_{experiment_name}",
             f"checkpoints/{experiment_name}_samples"
         ]
         
@@ -367,19 +367,12 @@ if __name__ == "__main__":
                     print(f"  - {path}")
             sys.exit(1)
     else:
-        # Default to large-scale experiment
-        results_dir = "checkpoints/scaled_tuning_50k"
-        
-        if not Path(results_dir).exists():
-            # Fall back to original experiment
-            results_dir = "checkpoints/scaled_tuning"
-            if not Path(results_dir).exists():
-                print(f"Results directory {results_dir} not found!")
-                print("Available results directories:")
-                for path in Path("checkpoints").glob("*"):
-                    if path.is_dir():
-                        print(f"  - {path}")
-                sys.exit(1)
+        print("No experiment name provided")
+        print("Available experiments:")
+        for path in Path("checkpoints").glob("*"):
+            if path.is_dir():
+                print(f"  - {path}")
+        sys.exit(1)
     
     print(f"Analyzing experiment: {results_dir}")
     create_summary_report(results_dir) 

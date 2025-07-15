@@ -19,12 +19,12 @@ CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 # Global configuration settings
 
 # Verbose logging levels:
-# 0: Only critical errors
+# 0: Critical issues and errors
 # 1: Important info and warnings
 # 2: Detailed info (default for development)
 # 3: Very detailed debug info
 # 4: Extremely verbose debug info
-VERBOSE_LEVEL = 2
+VERBOSE_LEVEL = 0
 
 # Training configuration
 BOARD_SIZE = 13 

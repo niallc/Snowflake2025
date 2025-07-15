@@ -69,82 +69,40 @@ else:
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10
-BATCH_SIZE = 1024  # larger batches for better GPU utilization
-TARGET_EXAMPLES = 500000  # 500k positions for comprehensive training
+BATCH_SIZE = 512  # larger batches for better GPU utilization
+TARGET_EXAMPLES = 15000000  # 15M positions for comprehensive training
 
 # Experiment naming
 from datetime import datetime
-EXPERIMENT_NAME = f"hex_ai_hyperparam_tuning_v3_500k_samples_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+EXPERIMENT_NAME = f"hex_ai_MainTraining_15M_samples_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 # Define experiments - focusing on balanced loss variants based on previous results
 experiments = [
     {
-        'experiment_name': 'balanced_weights',
+        'experiment_name': 'bs_512_wd_5e-4_policy_0.2_value_0.8',
         'hyperparameters': {
             'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
+            'batch_size': 512,
             'dropout_prob': 0.1,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.5,
-            'value_weight': 0.5
+            'weight_decay': 5e-4,
+            'policy_weight': 0.2,
+            'value_weight': 0.8
         }
     },
     {
-        'experiment_name': 'balanced_high_weight_decay',
+        'experiment_name': 'bs_512_wd_1e-3_policy_0.2_value_0.8',
         'hyperparameters': {
             'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
+            'batch_size': 512,
             'dropout_prob': 0.1,
             'weight_decay': 1e-3,
-            'policy_weight': 0.5,
-            'value_weight': 0.5
+            'policy_weight': 0.2,
+            'value_weight': 0.8
         }
     },
-    {
-        'experiment_name': 'policy_heavy',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.1,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.7,
-            'value_weight': 0.3
-        }
-    },
-    {
-        'experiment_name': 'policy_intermediate',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.1,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.33,
-            'value_weight': 0.67
-        }
-    },
-    {
-        'experiment_name': 'balanced_no_dropout',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.0,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.5,
-            'value_weight': 0.5
-        }
-    },
-    {
-        'experiment_name': 'balanced_high_lr',
-        'hyperparameters': {
-            'learning_rate': 0.003,
-            'batch_size': BATCH_SIZE,
-            'dropout_prob': 0.1,
-            'weight_decay': 1e-4,
-            'policy_weight': 0.5,
-            'value_weight': 0.5
-        }
-    }
 ]
+
+
 
 # Create results directory
 results_dir = Path("checkpoints") / EXPERIMENT_NAME
@@ -153,7 +111,7 @@ results_dir.mkdir(parents=True, exist_ok=True)
 # Save configuration
 config = {
     'experiment_name': EXPERIMENT_NAME,
-    'description': 'Large-scale hyperparameter tuning with 500k samples per experiment, focusing on balanced loss variants',
+    'description': 'Large-scale hyperparameter tuning with ' + str(TARGET_EXAMPLES) + ' samples per experiment, focusing on balanced loss variants',
     'num_epochs': NUM_EPOCHS,
     'batch_size': BATCH_SIZE,
     'target_examples': TARGET_EXAMPLES,
@@ -206,7 +164,7 @@ overall_results = run_hyperparameter_tuning(
 total_time = time.time() - start_time
 
 print(f"\n{'='*60}")
-print("LARGE-SCALE TUNING (500K) COMPLETE")
+print("LARGE-SCALE TUNING (" + str(TARGET_EXAMPLES) + " samples) COMPLETE")
 print(f"{'='*60}")
 print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
 print(f"Successful experiments: {overall_results['successful_experiments']}/{overall_results['num_experiments']}")

@@ -79,6 +79,9 @@ debug_winner.py
 debug_winner_detection.py
 convert_test_cases.py
 
+# VSCode
+.vscode/
+
 # Mac specific files
 .DS_Store
 
