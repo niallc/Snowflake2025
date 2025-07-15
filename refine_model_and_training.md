@@ -119,6 +119,17 @@
 
 ---
 
+## TODOs / Open Issues
+
+- **StreamingProcessedDataset improvements:**
+    - `__len__` currently returns a rough estimate, not the true number of loaded examples. This should be fixed to return the actual count.
+    - Chunking logic is not robust for multi-chunk iteration or random access.
+    - `total_examples_loaded` is not used for length or tracking.
+    - Consider refactoring to support true streaming, random access, and accurate length reporting.
+    - When this is fixed, update tests and any downstream code that relies on the current behavior.
+
+---
+
 ## Discussion Points / Unresolved Questions
 - **Dropout:** Should we remove it entirely, or keep a very small value for regularization? (Low impact, low complexity)
 - **Mixed Precision:** Is your hardware (GPU/driver/PyTorch version) fully compatible? (Medium complexity, medium impact)

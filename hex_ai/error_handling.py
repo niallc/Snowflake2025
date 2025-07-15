@@ -15,6 +15,7 @@ def check_data_loading_errors(files_attempted: int, files_with_errors: int, erro
         log_path = os.path.join(error_log_dir, "error.log")
         with open(log_path, "w") as f:
             f.write(f"Data loading error summary:\n")
+            f.write(f"Too many data loading errors\n")
             f.write(f"Files attempted: {files_attempted}\n")
             f.write(f"Files with errors: {files_with_errors}\n")
             f.write(f"Error rate: {files_with_errors / files_attempted:.2%}\n\n")
