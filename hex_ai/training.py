@@ -548,7 +548,8 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss
+            'best_val_loss': self.best_val_loss,
+            'mixed_precision': self.mixed_precision.use_mixed_precision
         }
         torch.save(checkpoint, path)
     
@@ -575,7 +576,8 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss
+            'best_val_loss': self.best_val_loss,
+            'mixed_precision': self.mixed_precision.use_mixed_precision
         }
         
         # Save current checkpoint

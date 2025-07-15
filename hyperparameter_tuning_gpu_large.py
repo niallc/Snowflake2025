@@ -61,9 +61,9 @@ device = get_device()
 print(f"Using device: {device}")
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
-NUM_EPOCHS = 10
+NUM_EPOCHS = 2
 BATCH_SIZE = 512  # larger batches for better GPU utilization
-TARGET_EXAMPLES = 15000000  # 15M positions for comprehensive training
+TARGET_EXAMPLES = 1024  # 1k samples for a quick test
 
 # Experiment naming
 from datetime import datetime
@@ -72,30 +72,18 @@ EXPERIMENT_NAME = f"hex_ai_MainTraining_15M_samples_{datetime.now().strftime('%Y
 # Define experiments - focusing on balanced loss variants based on previous results
 experiments = [
     {
-        'experiment_name': 'bs_512_wd_5e-4_policy_0.2_value_0.8',
+        'experiment_name': 'bs_512_wd_5e-4_policy_0.2_value_0.8_dropout_0.01_lr_0.01',
         'hyperparameters': {
-            'learning_rate': 0.001,
+            'learning_rate': 0.01,
             'batch_size': 512,
-            'dropout_prob': 0.1,
+            'dropout_prob': 0.01,
             'weight_decay': 5e-4,
             'policy_weight': 0.2,
             'value_weight': 0.8
         }
     },
-    {
-        'experiment_name': 'bs_512_wd_1e-3_policy_0.2_value_0.8',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': 512,
-            'dropout_prob': 0.1,
-            'weight_decay': 1e-3,
-            'policy_weight': 0.2,
-            'value_weight': 0.8
-        }
-    },
+
 ]
-
-
 
 # Create results directory
 results_dir = Path("checkpoints") / EXPERIMENT_NAME
