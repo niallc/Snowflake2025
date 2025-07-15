@@ -19,7 +19,6 @@ from pathlib import Path
 import time
 
 from .models import TwoHeadedResNet
-from .data_processing import ProcessedDataset, create_processed_dataloader
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE

@@ -79,6 +79,8 @@ debug_winner.py
 debug_winner_detection.py
 convert_test_cases.py
 python_code_organization_2025-07-15.txt
+scripts/run_hyperparameter_experiment.py
+scripts/run_hyperparameter_tuning.py
 
 # VSCode
 .vscode/

@@ -48,8 +48,8 @@ if __name__ == '__main__':
     multiprocessing.set_start_method('spawn', force=True)
 
 from hex_ai.models import TwoHeadedResNet
+from scripts.run_hyperparameter_experiment import run_hyperparameter_experiment
 from hex_ai.training_utils import (
-    run_hyperparameter_tuning,
     discover_processed_files,
     estimate_dataset_size,
     create_experiment_config
@@ -149,7 +149,7 @@ print("(This provides comprehensive training for meaningful results)")
 
 # Run large-scale hyperparameter tuning
 start_time = time.time()
-overall_results = run_hyperparameter_tuning(
+overall_results = run_hyperparameter_experiment(
     experiments=experiments,
     data_dir="data/processed",
     results_dir=str(results_dir),

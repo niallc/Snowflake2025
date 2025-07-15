@@ -48,9 +48,10 @@ from hex_ai.training_utils import (
     discover_processed_files,
     estimate_dataset_size,
     create_experiment_config,
-    run_hyperparameter_experiment,
+    create_train_val_split,
     StreamingProcessedDataset
 )
+from scripts.run_hyperparameter_experiment import run_hyperparameter_experiment
 
 # Device selection
 if torch.cuda.is_available():
