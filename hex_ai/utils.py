@@ -111,6 +111,7 @@ def get_device() -> torch.device:
         torch.device: 'cuda' if available, else 'mps' (Apple Silicon GPU) if available, else 'cpu'.
     Note:
         This function should be used everywhere device selection is needed for consistency.
+        All scripts and modules should import and use this function instead of direct torch.cuda/mps/cpu checks.
     """
     if torch.cuda.is_available():
         return torch.device("cuda")

@@ -18,6 +18,8 @@ import multiprocessing
 import logging
 import argparse
 
+from hex_ai.utils import get_device
+
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Large-scale hyperparameter tuning for Hex AI')
 parser.add_argument('--verbose', '-v', type=int, default=2, 
@@ -55,17 +57,8 @@ from hex_ai.training_utils import (
     create_experiment_config
 )
 
-# Device selection
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    device_name = torch.cuda.get_device_name(0)
-    print(f"Using CUDA GPU: {device_name}")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-    print("Using Apple MPS GPU")
-else:
-    device = torch.device("cpu")
-    print("Using CPU (no GPU detected)")
+device = get_device()
+print(f"Using device: {device}")
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10

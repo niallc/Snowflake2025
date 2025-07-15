@@ -1,6 +1,7 @@
 import torch
 from hex_ai.models import create_model
 from typing import Optional, Tuple, List, Union
+from hex_ai.utils import get_device
 
 # NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
 # TODO: Update all inference logic to construct and use 3-channel input, matching the training pipeline.
@@ -25,12 +26,7 @@ class ModelWrapper:
     def _detect_device(self, device: Optional[str]) -> torch.device:
         if device is not None:
             return torch.device(device)
-        if torch.cuda.is_available():
-            return torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            return torch.device('mps')
-        else:
-            return torch.device('cpu')
+        return get_device()
 
     def _load_model(self, checkpoint_path: str, model_type: str):
         model = create_model(model_type)

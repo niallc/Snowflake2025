@@ -8,6 +8,7 @@ including model parameters, data paths, and training settings.
 import os
 from pathlib import Path
 import torch
+from hex_ai.utils import get_device
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -55,7 +56,7 @@ WANDB_PROJECT_NAME = "hex-ai-2025"
 LOG_INTERVAL = 100  # Log every N batches
 
 # Device configuration
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+DEVICE = get_device()
 
 # File extensions
 TRMPH_EXTENSION = ".trmph"
