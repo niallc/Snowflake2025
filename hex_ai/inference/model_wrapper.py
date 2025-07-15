@@ -32,7 +32,7 @@ class ModelWrapper:
 
     def _load_model(self, checkpoint_path: str, model_type: str):
         model = create_model(model_type)
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         if 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
