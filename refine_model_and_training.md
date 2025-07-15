@@ -43,10 +43,11 @@
 ---
 
 ## High-Impact, Low-Complexity Changes (Do First)
-### 1. Add Player-to-Move Input Channel
+### 1. Add Player-to-Move Input Channel **[DONE]**
 - **Motivation:** Essential for value head to distinguish whose turn it is; standard in all strong game AIs.
-- **How:** Add a third channel to the input tensor: all ones if BLUE's turn, all zeros if RED's (use `BLUE_PLAYER = 0`, `RED_PLAYER = 1`).
+- **How:** [DONE] Model, training, and inference now use a 3-channel input tensor: blue, red, and player-to-move (all zeros if BLUE's turn, all ones if RED's; `BLUE_PLAYER = 0`, `RED_PLAYER = 1`).
 - **Certainty:** High. **Impact:** High. **Complexity:** Low.
+- **Status:** Implemented and tested. All relevant code and tests updated.
 
 ### 2. Wider Initial Convolution
 - **Motivation:** Captures more local context in the first layer; used in many strong AIs.

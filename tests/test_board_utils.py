@@ -1,3 +1,6 @@
+# NOTE: This test file covers 2-channel board conversion utilities. 
+# The 3-channel format (with player-to-move) is now used for inference/model input.
+# TODO: Add/expand tests for 3-channel conversion utilities if/when needed.
 """
 Tests for board format conversion utilities.
 """

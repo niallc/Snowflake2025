@@ -81,6 +81,8 @@ convert_test_cases.py
 python_code_organization_2025-07-15.txt
 scripts/run_hyperparameter_experiment.py
 scripts/run_hyperparameter_tuning.py
+gemini
+gpu_finding_summary_Jul15th.md
 
 # VSCode
 .vscode/

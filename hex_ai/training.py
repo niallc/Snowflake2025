@@ -230,6 +230,11 @@ class Trainer:
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
         
+        # Learning rate scheduler (ReduceLROnPlateau)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5, verbose=True
+        )
+        
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
@@ -309,6 +314,8 @@ class Trainer:
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
@@ -426,6 +433,11 @@ class Trainer:
                 val_losses.append(float('inf'))  # No validation data
                 val_policy_losses.append(float('inf'))
                 val_value_losses.append(float('inf'))
+            
+            # Learning rate scheduler step (use validation loss if available, else training loss)
+            val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
+            self.scheduler.step(val_loss_for_scheduler)
+            logger.info(f"Current learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
             
             # Calculate timing and performance metrics
             epoch_time = time.time() - epoch_start_time

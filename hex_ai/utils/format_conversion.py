@@ -1,6 +1,11 @@
 """
 Format conversion utilities for Hex AI.
 
+NOTE: Data augmentation and .pkl.gz file processing is performed using the 
+      2-channel (blue/red) format. The player-to-move (3rd) channel is added 
+      at load time for training and inference, ensuring consistency with the 
+      model input format.
+
 This module centralizes all board, trmph, and tensor conversion functions.
 
 Migrated from:
@@ -116,3 +121,34 @@ def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
     board_2nxn[0] = torch.from_numpy((board_nxn == BLUE).astype(np.float32))
     board_2nxn[1] = torch.from_numpy((board_nxn == RED).astype(np.float32))
     return board_2nxn 
+
+def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
+    """
+    Convert a (2, N, N) board tensor to a (3, N, N) tensor by adding a player-to-move channel.
+    The player-to-move channel is filled with BLUE_PLAYER (0.0) or RED_PLAYER (1.0) as float.
+    Args:
+        board_2nxn: torch.Tensor of shape (2, N, N)
+    Returns:
+        torch.Tensor of shape (3, N, N)
+    """
+    import numpy as np
+    from hex_ai.data_utils import get_player_to_move_from_board
+    if isinstance(board_2nxn, torch.Tensor):
+        board_np = board_2nxn.detach().cpu().numpy()
+    else:
+        board_np = board_2nxn
+    player_to_move = get_player_to_move_from_board(board_np)
+    player_channel = np.full((BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=np.float32)
+    board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
+    return torch.from_numpy(board_3ch) 
+
+def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
+    """
+    Convert a (N, N) board to a (3, N, N) tensor with player-to-move channel.
+    Args:
+        board_nxn: np.ndarray of shape (N, N)
+    Returns:
+        torch.Tensor of shape (3, N, N)
+    """
+    board_2nxn = board_nxn_to_2nxn(board_nxn)
+    return board_2nxn_to_3nxn(board_2nxn) 

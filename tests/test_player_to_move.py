@@ -1,3 +1,6 @@
+# NOTE: This test is for the player-to-move utility, which expects 
+# 2-channel (blue/red) input. The 3-channel format is only required for 
+# model inference/training.
 import unittest
 import numpy as np
 from hex_ai.data_utils import get_player_to_move_from_board

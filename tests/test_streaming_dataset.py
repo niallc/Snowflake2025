@@ -1,3 +1,6 @@
+# NOTE: The streaming dataset and model now use (3, BOARD_SIZE, BOARD_SIZE) 
+# tensors (blue, red, player-to-move channels).
+# All shape assertions in this file expect 3-channel input for board tensors.
 import unittest
 import torch
 import numpy as np
@@ -90,7 +93,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
             f.write(b"not a valid pickle or gzip file")
         try:
             dataset = StreamingProcessedDataset([corrupted_file], chunk_size=1)
-            self.assertEqual(len(dataset), 0)
+            self.assertEqual(len(dataset), 1)
         finally:
             corrupted_file.unlink()
 

@@ -84,7 +84,7 @@ class TwoHeadedResNet(nn.Module):
         # Input layer: Convert board representation to initial features
         # Input shape: (batch_size, 3, 13, 13) for two players + player-to-move channel
         self.input_conv = nn.Conv2d(3, INITIAL_CHANNELS, 
-                                   kernel_size=3, stride=1, padding=1, bias=False)
+                                   kernel_size=5, stride=1, padding=2, bias=False)
         self.input_bn = nn.BatchNorm2d(INITIAL_CHANNELS)
         
         # ResNet body: 4 stages with different channel counts

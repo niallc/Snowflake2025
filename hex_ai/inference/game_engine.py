@@ -91,7 +91,8 @@ class HexGameState:
     
     @property
     def board_2nxn(self) -> torch.Tensor:
-        """Get board in 2×N×N format for compatibility with tests."""
+        """Get board in 2×N×N format for compatibility with tests (legacy, do not use for inference)."""
+        from hex_ai.utils.format_conversion import board_nxn_to_2nxn
         return board_nxn_to_2nxn(self.board)
 
     def is_valid_move(self, row: int, col: int) -> bool:
@@ -276,8 +277,9 @@ class HexGameState:
                 if self.is_valid_move(row, col)]
 
     def get_board_tensor(self) -> torch.Tensor:
-        """Convert board to 2×N×N tensor for neural net input."""
-        return board_nxn_to_2nxn(self.board)
+        """Convert board to 3×N×N tensor for neural net input (with player-to-move channel)."""
+        from hex_ai.utils.format_conversion import board_nxn_to_3nxn
+        return board_nxn_to_3nxn(self.board)
 
     def to_trmph(self) -> str:
         """Convert game state to TRMPH format."""

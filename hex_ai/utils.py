@@ -87,35 +87,6 @@ def load_checkpoint(model: torch.nn.Module,
     return checkpoint['epoch'], checkpoint['loss']
 
 
-def board_to_tensor(board: np.ndarray) -> torch.Tensor:
-    """
-    Convert a board array to a PyTorch tensor.
-    
-    Args:
-        board: Numpy array representing the board
-        
-    Returns:
-        PyTorch tensor of shape (2, 13, 13)
-    """
-    # TODO: Implement board conversion
-    # Should handle different input formats and convert to standard tensor format
-    pass
-
-
-def tensor_to_board(tensor: torch.Tensor) -> np.ndarray:
-    """
-    Convert a PyTorch tensor back to a board array.
-    
-    Args:
-        tensor: PyTorch tensor of shape (2, 13, 13)
-        
-    Returns:
-        Numpy array representing the board
-    """
-    # TODO: Implement tensor to board conversion
-    pass
-
-
 def validate_board_shape(tensor: torch.Tensor) -> bool:
     """
     Validate that a tensor has the correct board shape.
@@ -135,12 +106,18 @@ def validate_board_shape(tensor: torch.Tensor) -> bool:
 
 def get_device() -> torch.device:
     """
-    Get the appropriate device for training.
-    
+    Get the appropriate device for training or inference.
     Returns:
-        torch.device (cuda if available, else cpu)
+        torch.device: 'cuda' if available, else 'mps' (Apple Silicon GPU) if available, else 'cpu'.
+    Note:
+        This function should be used everywhere device selection is needed for consistency.
     """
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
 
 
 def set_seed(seed: int = 42):
