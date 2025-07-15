@@ -119,14 +119,11 @@
 
 ---
 
-## TODOs / Open Issues
+## Data Pipeline (Updated June 2024)
+- **Processed data format:** All processed .pkl.gz files use the 'examples' key, which contains a list of tuples: (board: np.ndarray (2, 13, 13), policy: np.ndarray (169,), value: float). There are no longer any files using the 'boards', 'policies', 'values' format.
+- **Player-to-move channel:** The loader adds the player-to-move channel on-the-fly when loading each sample, so the model always receives a (3, 13, 13) input.
+- **Data loading strategy:** The loader uses file and within-file shuffling at the start of each epoch for efficient, robust training. True global random access is not implemented, as file/chunk shuffling is sufficient for our needs and much simpler.
 
-- **StreamingProcessedDataset improvements:**
-    - `__len__` currently returns a rough estimate, not the true number of loaded examples. This should be fixed to return the actual count.
-    - Chunking logic is not robust for multi-chunk iteration or random access.
-    - `total_examples_loaded` is not used for length or tracking.
-    - Consider refactoring to support true streaming, random access, and accurate length reporting.
-    - When this is fixed, update tests and any downstream code that relies on the current behavior.
 
 ---
 

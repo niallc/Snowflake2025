@@ -142,37 +142,8 @@ class DataProcessor:
     
     def _create_shards(self, processed_games: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]], 
                        games_per_shard: int, compress: bool) -> List[Path]:
-        """Create sharded files from processed games."""
-        shard_files = []
-        
-        for shard_idx in range(0, len(processed_games), games_per_shard):
-            shard_games = processed_games[shard_idx:shard_idx + games_per_shard]
-            
-            # Create shard data
-            boards = torch.stack([game[0] for game in shard_games])
-            policies = torch.stack([game[1] for game in shard_games])
-            values = torch.stack([game[2] for game in shard_games])
-            
-            shard_data = {
-                'boards': boards,
-                'policies': policies,
-                'values': values,
-                'num_games': len(shard_games)  # Now represents training examples, not games
-            }
-            
-            # Save shard
-            shard_file = self.processed_dir / f"shard_{shard_idx//games_per_shard:04d}.pkl"
-            if compress:
-                shard_file = shard_file.with_suffix('.pkl.gz')
-                with gzip.open(shard_file, 'wb') as f:
-                    pickle.dump(shard_data, f)
-            else:
-                with open(shard_file, 'wb') as f:
-                    pickle.dump(shard_data, f)
-            
-            shard_files.append(shard_file)
-        
-        return shard_files
+        """[REMOVED: This method is obsolete. All code now uses 'training_samples' format.]"""
+        raise NotImplementedError("_create_shards is obsolete and should not be used.")
     
     def process_directory(self, trmph_dir: str, games_per_shard: int = 1000, 
                          compress: bool = True) -> List[Path]:
