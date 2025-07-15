@@ -5,7 +5,7 @@ import unittest
 import torch
 import numpy as np
 from pathlib import Path
-from hex_ai.training_utils import StreamingProcessedDataset
+from hex_ai.data_pipeline import StreamingProcessedDataset
 from hex_ai.models import TwoHeadedResNet
 from hex_ai.config import BOARD_SIZE
 import gzip
@@ -75,7 +75,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
         """
         Test that loading a missing .pkl.gz file logs a warning and results in an empty dataset.
         """
-        from hex_ai.training_utils import StreamingProcessedDataset
+        from hex_ai.data_pipeline import StreamingProcessedDataset
         from pathlib import Path
         missing_file = Path("tests/this_file_does_not_exist.pkl.gz")
         dataset = StreamingProcessedDataset([missing_file], chunk_size=1)
@@ -86,7 +86,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
         Test that loading a corrupted .pkl.gz file logs a warning and results in an empty dataset.
         """
         import gzip
-        from hex_ai.training_utils import StreamingProcessedDataset
+        from hex_ai.data_pipeline import StreamingProcessedDataset
         from pathlib import Path
         corrupted_file = Path("tests/corrupted_example.pkl.gz")
         with open(corrupted_file, "wb") as f:
@@ -102,7 +102,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
         Test that if enough files are missing/corrupted, a RuntimeError is raised and an error log is written.
         """
         import gzip
-        from hex_ai.training_utils import StreamingProcessedDataset
+        from hex_ai.data_pipeline import StreamingProcessedDataset
         from pathlib import Path
         import os
         # Create 10 corrupted files

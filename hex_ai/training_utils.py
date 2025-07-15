@@ -30,20 +30,6 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     )
     return logging.getLogger(__name__)
 
-
-def count_parameters(model: torch.nn.Module) -> int:
-    """
-    Count the number of trainable parameters in a model.
-    
-    Args:
-        model: PyTorch model
-        
-    Returns:
-        Number of trainable parameters
-    """
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
 def save_checkpoint(model: torch.nn.Module, 
                    optimizer: torch.optim.Optimizer,
                    epoch: int,
@@ -99,9 +85,6 @@ def validate_board_shape(tensor: torch.Tensor) -> bool:
     """
     expected_shape = (NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
     return tensor.shape == expected_shape
-
-
-
 
 
 def get_device() -> torch.device:
