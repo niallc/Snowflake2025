@@ -25,7 +25,7 @@ from datetime import datetime
 sys.path.append('hex_ai')
 
 from hex_ai.data_utils import load_trmph_file, extract_training_examples_from_game
-from hex_ai.data_processing import ProcessedDataset
+# TODO: ProcessedDataset is deprecated/removed. Update this script to use StreamingProcessedDataset from hex_ai.training_utils, or remove if redundant.
 
 # Configure logging
 logging.basicConfig(

@@ -17,7 +17,8 @@ class SimpleModelInference:
 
     def infer(self, board: Union[str, np.ndarray, torch.Tensor]) -> Tuple[np.ndarray, float]:
         """
-        Accepts a board in trmph string, (N,N) np.ndarray, or (2,N,N) torch.Tensor format.
+        Accepts a board in trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor format.
+        TODO: Update to always use (3,N,N) input, constructing player-to-move channel as in training.
         Returns (policy_probs, value_estimate)
         """
         if isinstance(board, str):
@@ -27,11 +28,13 @@ class SimpleModelInference:
         elif isinstance(board, torch.Tensor):
             if board.shape == (2, self.board_size, self.board_size):
                 board_2nxn = board
+            elif board.shape == (3, self.board_size, self.board_size):
+                board_2nxn = board
             else:
-                raise ValueError(f"Tensor must have shape (2, {self.board_size}, {self.board_size})")
+                raise ValueError(f"Tensor must have shape (2, {self.board_size}, {self.board_size}) or (3, {self.board_size}, {self.board_size})")
         else:
-            raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) torch.Tensor")
-
+            raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
+        # TODO: Add player-to-move channel for inference, as in training pipeline.
         policy_logits, value_logit = self.model.predict(board_2nxn)
         policy_probs = torch.softmax(policy_logits, dim=0).numpy()
         value = torch.sigmoid(value_logit).item()  # Probability blue wins

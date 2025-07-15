@@ -68,7 +68,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     def test_model_forward(self):
         """Test that model forward pass works."""
         model = TwoHeadedResNet()
-        x = torch.randn(4, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+        x = torch.randn(4, 3, BOARD_SIZE, BOARD_SIZE)
         policy_logits, value_logit = model(x)
         
         # Check output shapes
@@ -101,7 +101,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
         
         # Test CPU
         model_cpu = model.cpu()
-        x = torch.randn(2, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+        x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE)
         policy, value = model_cpu(x)
         self.assertEqual(policy.device, torch.device('cpu'))
         self.assertEqual(value.device, torch.device('cpu'))
@@ -117,7 +117,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     def test_model_gradients(self):
         """Test that model can compute gradients."""
         model = TwoHeadedResNet()
-        x = torch.randn(2, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
+        x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
         policy_logits, value_logit = model(x)
         
         # Compute loss and backward pass
@@ -133,7 +133,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
         
         batch_sizes = [1, 4, 8, 16]
         for batch_size in batch_sizes:
-            x = torch.randn(batch_size, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+            x = torch.randn(batch_size, 3, BOARD_SIZE, BOARD_SIZE)
             policy_logits, value_logit = model(x)
             
             self.assertEqual(policy_logits.shape, (batch_size, POLICY_OUTPUT_SIZE))

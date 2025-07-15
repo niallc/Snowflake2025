@@ -82,8 +82,8 @@ class TwoHeadedResNet(nn.Module):
         self.resnet_depth = resnet_depth
         
         # Input layer: Convert board representation to initial features
-        # Input shape: (batch_size, 2, 13, 13) for two players
-        self.input_conv = nn.Conv2d(NUM_PLAYERS, INITIAL_CHANNELS, 
+        # Input shape: (batch_size, 3, 13, 13) for two players + player-to-move channel
+        self.input_conv = nn.Conv2d(3, INITIAL_CHANNELS, 
                                    kernel_size=3, stride=1, padding=1, bias=False)
         self.input_bn = nn.BatchNorm2d(INITIAL_CHANNELS)
         
@@ -146,7 +146,7 @@ class TwoHeadedResNet(nn.Module):
         Forward pass through the two-headed ResNet.
         
         Args:
-            x: Input tensor of shape (batch_size, 2, 13, 13)
+            x: Input tensor of shape (batch_size, 3, 13, 13)
             
         Returns:
             Tuple of (policy_logits, value_logit):
@@ -222,7 +222,7 @@ Total Parameters: {total_params:,}
 Model Type: {model.__class__.__name__}
 
 Architecture:
-- Input: (batch_size, 2, 13, 13)
+- Input: (batch_size, 3, 13, 13)
 - ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels
 - Global Average Pooling
 - Policy Head: {POLICY_OUTPUT_SIZE} outputs

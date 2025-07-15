@@ -47,7 +47,9 @@ from hex_ai.models import TwoHeadedResNet
 from hex_ai.training_utils import (
     discover_processed_files,
     estimate_dataset_size,
-    create_experiment_config
+    create_experiment_config,
+    run_hyperparameter_experiment,
+    StreamingProcessedDataset
 )
 
 # Device selection
@@ -168,7 +170,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hex_ai.training_utils import run_hyperparameter_experiment, NewProcessedDataset
+from hex_ai.training_utils import run_hyperparameter_experiment, StreamingProcessedDataset
 from hex_ai.models import TwoHeadedResNet
 from hex_ai.training import Trainer, EarlyStopping
 import torch
@@ -180,8 +182,8 @@ data_files = {discover_processed_files("data/processed")}
 train_files, val_files = create_train_val_split(data_files, train_ratio=0.8, random_seed=42)
 
 # Create datasets
-train_dataset = NewProcessedDataset(train_files, max_examples={TARGET_EXAMPLES})
-val_dataset = NewProcessedDataset(val_files, max_examples={TARGET_EXAMPLES//4})
+train_dataset = StreamingProcessedDataset(train_files, chunk_size=100000)
+val_dataset = StreamingProcessedDataset(val_files, chunk_size=100000)
 
 # Run experiment
 results = run_hyperparameter_experiment(

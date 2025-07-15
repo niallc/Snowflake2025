@@ -2,6 +2,8 @@ import torch
 from hex_ai.models import create_model
 from typing import Optional, Tuple, List, Union
 
+# NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
+# TODO: Update all inference logic to construct and use 3-channel input, matching the training pipeline.
 class ModelWrapper:
     """
     Wrapper for loading a trained Hex AI model and running inference.
@@ -43,7 +45,7 @@ class ModelWrapper:
         """
         Run inference on a single board tensor.
         Args:
-            board_tensor: torch.Tensor of shape (2, N, N) or (batch_size=1, 2, N, N)
+            board_tensor: torch.Tensor of shape (3, N, N) or (batch_size=1, 3, N, N)
         Returns:
             policy_logits: torch.Tensor of shape (169,) or (N*N,)
             value_logit: torch.Tensor of shape (1,)
@@ -61,7 +63,7 @@ class ModelWrapper:
         """
         Run inference on a batch of board tensors.
         Args:
-            board_tensors: torch.Tensor of shape (batch_size, 2, N, N)
+            board_tensors: torch.Tensor of shape (batch_size, 3, N, N)
         Returns:
             policy_logits: torch.Tensor of shape (batch_size, N*N)
             value_logits: torch.Tensor of shape (batch_size, 1)
