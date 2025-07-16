@@ -4,19 +4,11 @@ Extract and display a record from a .pkl.gz file, given the file path and (optio
 """
 
 import argparse
-import gzip
-import pickle
 import numpy as np
-from pathlib import Path
-import sys
+from scripts.lib.data_loading_utils import load_examples_from_pkl
+from scripts.lib.board_viz_utils import visualize_board_with_policy
+from scripts.lib.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
 
-def load_examples_from_pkl(file_path):
-    with gzip.open(file_path, 'rb') as f:
-        data = pickle.load(f)
-    if 'examples' in data:
-        return data['examples']
-    else:
-        raise ValueError(f"No 'examples' key found in {file_path}")
 
 def print_example(example, idx=None):
     board, policy, value = example
@@ -26,10 +18,18 @@ def print_example(example, idx=None):
     print(f"Board shape: {board.shape}")
     print(f"Policy shape: {policy.shape if policy is not None else None}")
     print(f"Value: {value}")
-    print(f"Board array (first 2 channels):\n{board[:2]}")
-    if board.shape[0] > 2:
-        print(f"Player-to-move channel:\n{board[2]}")
-    print(f"Policy (nonzero indices): {np.nonzero(policy)[0] if policy is not None else None}")
+    highlight_move, trmph_move = visualize_board_with_policy(board, policy)
+    if highlight_move is not None:
+        print(f"Policy target move: (row, col)={highlight_move}, trmph={trmph_move}")
+        if not policy_on_empty_cell(board, highlight_move):
+            print(f"[WARNING] Policy target move is on a non-empty cell!")
+    else:
+        print("Policy target move: None or not one-hot")
+    if board.shape[0] == 3:
+        valid, unique_vals = player_to_move_channel_valid(board[2])
+        print(f"Player-to-move channel unique values: {unique_vals}")
+        if not valid:
+            print(f"[WARNING] Player-to-move channel has unexpected values!")
     print(f"{'='*40}")
 
 def main():

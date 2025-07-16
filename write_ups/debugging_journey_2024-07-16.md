@@ -103,3 +103,47 @@ We have confirmed that color-swapped or otherwise corrupted games in a minority 
 
 - Investigate the new training pipeline for possible bugs or misconfigurations that could explain the poor performance, independent of data quality.
 - Document any further findings and update this write-up as the investigation progresses. 
+
+---
+
+## 9. Next Debugging Steps: Data and Training Sanity Checks (2024-07-17)
+
+Based on the current investigation, the model and training code appear structurally sound, and the player-to-move logic is correct. The most likely sources of the poor policy head performance are subtle data/label mismatches, issues in the data pipeline, or loss weighting. To systematically debug this, we propose the following steps:
+
+### A. Sanity-Check the Data Pipeline
+- **Goal:** Ensure that the data passed to the network (board, player-to-move channel, policy target) matches expectations.
+- **Actions:**
+    - Develop a script/tool to visualize random training samples:
+        - Print or plot the board state, player-to-move channel, and the move encoded by the policy target.
+        - Confirm by hand that the player-to-move and policy target are correct for the given board state.
+    - Use this tool to inspect a variety of samples, especially from files previously identified as problematic.
+
+### B. Overfit a Tiny Subset
+- **Goal:** Test whether the model can learn the policy on a very small dataset, which should be trivial if the data and loss are correct.
+- **Actions:**
+    - Train the model on a single batch or a tiny dataset (e.g., 100 samples).
+    - The model should be able to drive the policy loss near zero (overfit).
+    - If not, this strongly suggests a data or loss calculation bug.
+
+### C. Check Policy Loss Calculation
+- **Goal:** Ensure that the policy loss is being computed as expected and is not always zero, NaN, or dominated by invalid targets.
+- **Actions:**
+    - Add logging or assertions to confirm that the policy loss receives valid targets and gradients.
+    - Check the distribution of valid/invalid policy targets in a typical batch.
+
+### D. Compare with Old Pipeline
+- **Goal:** Identify any differences in board/target pairs between the old and new data pipelines.
+- **Actions:**
+    - Run the old pipeline on the same data and compare a few samples to the new pipeline's output.
+    - Look for systematic differences in the player-to-move channel or policy targets.
+
+### E. Develop and Use Visualization/Inspection Tools
+- **Goal:** Build reusable scripts to automate the above checks and make debugging easier in the future.
+- **Actions:**
+    - Extend the suite of scripts in `scripts/` to include data visualization and batch inspection tools.
+    - Minimize code duplication by leveraging existing utilities and following the summary in `scripts/all_scripts_summary.md`.
+
+---
+
+**Summary:**
+- The next phase of debugging will focus on verifying the integrity and correctness of the data pipeline and loss computation, using both visualization tools and controlled overfitting experiments. This should help isolate whether the policy head's poor learning is due to data/label mismatches, subtle bugs, or other issues not yet identified. 
