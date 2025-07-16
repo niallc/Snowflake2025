@@ -106,6 +106,25 @@ We have confirmed that color-swapped or otherwise corrupted games in a minority 
 
 ---
 
+## 10. Validation of Data Loader Consistency (2024-07-17)
+
+To rule out bugs in the data loading pipeline, we compared the output of the `StreamingProcessedDataset` (used in training) to the raw records in the processed `.pkl.gz` files. This was done using the script `scripts/compare_loader_vs_raw.py`, which:
+- Loads records from a `.pkl.gz` file both directly (raw) and via the loader.
+- Compares the board state, policy target, and value for each record.
+- Highlights any discrepancies, including mismatches in the board (first two channels), policy, or value.
+- Can be run in a non-verbose mode to efficiently scan tens or hundreds of thousands of records.
+
+**Result:**
+- We examined over 200,000 records from multiple files and found **no discrepancies** between the raw records and the loader output.
+- This strongly suggests that the data pipeline, including the logic for determining the next move and player-to-move channel, is functioning as intended and is not introducing bugs at this stage.
+
+**Scripts and methodology:**
+- Used `scripts/compare_loader_vs_raw.py` with the `--verbose` flag for spot checks and without it for large-scale automated comparison.
+- The script automatically compared the board state (first two channels), policy target, and value between the raw and loader-processed records, reporting any mismatches.
+
+**Next step:**
+- Attempt to train the model on a very small dataset (e.g., one complete game from `twoNetGames_13x13_mk1_1_processed.pkl.gz`) to see if the network can overfit and drive the policy loss near zero. This will help determine if the model and loss function are working as expected in the absence of data pipeline issues.
+
 ## 9. Next Debugging Steps: Data and Training Sanity Checks (2024-07-17)
 
 Based on the current investigation, the model and training code appear structurally sound, and the player-to-move logic is correct. The most likely sources of the poor policy head performance are subtle data/label mismatches, issues in the data pipeline, or loss weighting. To systematically debug this, we propose the following steps:
