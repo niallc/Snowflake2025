@@ -16,22 +16,34 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from datetime import datetime
 from pathlib import Path
+import time
 
 from .models import TwoHeadedResNet
-from .dataset import HexDataset
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
+    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
+from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files
+
+from hex_ai.training_utils import get_device
+DEVICE = get_device()
 
 logger = logging.getLogger(__name__)
 
 # Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
+# Note about analysis of training runs that use different loss weights:
+# The analysis script *should* use fixed values for the policy and value weights.
+# The point is to produce a standardized loss calculation to make the loss that we see comparable across different training loss functions.
+# The policy loss will always be higher than the value loss so it's not fair to compare the balanced run against the others with the loss that *it trained with* because that is higher by *construction*.
+# Even with both better policy loss AND better value loss, if we weight the value loss higher we'll get a greater total loss.
+
+# So we need to make sure that the loss calculate for the PNG *does* use this fixed weight of the separate policy and training loss.
+# summarizing briefly: 
 POLICY_LOSS_WEIGHT = 0.15
 VALUE_LOSS_WEIGHT = 0.85
 
 class PolicyValueLoss(nn.Module):
-    """Combined loss for policy and value heads."""
+    """Combined loss for policy and value heads with support for missing policy targets."""
     
     def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT):
         super().__init__()
@@ -45,22 +57,37 @@ class PolicyValueLoss(nn.Module):
         """
         Compute combined policy and value loss.
         
+        This function handles the case where policy_target might be None (indicating
+        no valid policy target, such as for final game positions). When policy_target
+        is None, the policy loss is set to a constant (zero) tensor, which results
+        in zero gradients for the policy head while still allowing gradients to flow
+        through the value head and shared features.
+        
         Args:
             policy_pred: Predicted policy logits (batch_size, policy_output_size)
             value_pred: Predicted value (batch_size, 1)
-            policy_target: Target policy probabilities (batch_size, policy_output_size)
+            policy_target: Target policy probabilities (batch_size, policy_output_size) or None
             value_target: Target value (batch_size, 1)
             
         Returns:
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Policy loss (cross-entropy)
-        policy_loss = self.policy_loss(policy_pred, policy_target)
-        
-        # Value loss (MSE)
+        # Value loss is always computed (MSE)
         value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
         
+        # Policy loss: handle None targets by using constant loss (zero gradient)
+        if policy_target is None:
+            # Create a constant tensor with zero gradient for policy loss
+            # This ensures no gradients flow to the policy head when there's no target
+            policy_loss = torch.tensor(0.0, device=policy_pred.device, requires_grad=True)
+        else:
+            # Convert one-hot policy targets to class indices for CrossEntropyLoss
+            # CrossEntropyLoss expects class indices, not one-hot vectors
+            policy_class_target = policy_target.argmax(dim=1)
+            policy_loss = self.policy_loss(policy_pred, policy_class_target)
+        
+        # Combine losses with weights
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss)
         
@@ -77,15 +104,25 @@ class MixedPrecisionTrainer:
     """Wrapper for mixed precision training capabilities."""
     
     def __init__(self, device: str):
+        logger.debug(f"[MixedPrecisionTrainer.__init__] device argument = {device} (type: {type(device)})")
+        device_str = str(device)
+        logger.debug(f"[MixedPrecisionTrainer.__init__] device_str = {device_str}")
         self.device = device
-        self.use_mixed_precision = device == 'cuda'
+        self.use_mixed_precision = device_str in ['cuda', 'mps']
         
         if self.use_mixed_precision:
             try:
-                from torch.cuda.amp import autocast, GradScaler
-                self.autocast = autocast
-                self.scaler = GradScaler()
-                logger.info("Mixed precision training enabled for GPU")
+                if device_str == 'cuda':
+                    from torch.cuda.amp import autocast, GradScaler
+                    self.autocast = autocast
+                    self.scaler = GradScaler()
+                    logger.info("Mixed precision training enabled for CUDA GPU")
+                elif device_str == 'mps':
+                    # MPS uses torch.autocast with device_type="mps"
+                    self.autocast = lambda: torch.autocast(device_type="mps")
+                    # MPS doesn't need GradScaler, but we'll keep the interface
+                    self.scaler = None
+                    logger.info("Mixed precision training enabled for MPS GPU")
             except ImportError:
                 logger.warning("PyTorch AMP not available, falling back to full precision")
                 self.use_mixed_precision = False
@@ -104,20 +141,20 @@ class MixedPrecisionTrainer:
     
     def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         """Scale loss for mixed precision training."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             return self.scaler.scale(loss)
         return loss
     
     def step_optimizer(self, optimizer: optim.Optimizer):
         """Step optimizer with proper scaling."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             self.scaler.step(optimizer)
         else:
             optimizer.step()
     
     def update_scaler(self):
         """Update gradient scaler."""
-        if self.use_mixed_precision:
+        if self.use_mixed_precision and self.scaler is not None:
             self.scaler.update()
 
 
@@ -183,7 +220,11 @@ class Trainer:
                  device: str = DEVICE,
                  enable_system_analysis: bool = True,
                  enable_csv_logging: bool = True,
-                 experiment_name: Optional[str] = None):
+                 experiment_name: Optional[str] = None,
+                 policy_weight: float = POLICY_LOSS_WEIGHT,
+                 value_weight: float = VALUE_LOSS_WEIGHT,
+                 weight_decay: float = 1e-4):
+        logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -193,8 +234,13 @@ class Trainer:
         self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Optimizer and loss
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-        self.criterion = PolicyValueLoss()
+        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
+        
+        # Learning rate scheduler (ReduceLROnPlateau)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
+        )
         
         # Training state
         self.current_epoch = 0
@@ -228,7 +274,7 @@ class Trainer:
             logger.info(f"Platform: {system_info['platform']}")
             logger.info(f"Memory: {system_info['memory_available_gb']:.1f} GB available")
             logger.info(f"GPU: {'Available' if system_info['gpu_available'] else 'Not available'}")
-            logger.info(f"Optimal batch size: {batch_analysis['optimal_batch_size']}")
+            logger.info(f"Old notion of optimal batch size, from calculate_optimal_batch_size: {batch_analysis['optimal_batch_size']}")
             logger.info(f"Current batch size: {self.train_loader.batch_size}")
             
             # Warn if batch size is suboptimal
@@ -236,8 +282,8 @@ class Trainer:
                 logger.warning(f"Consider increasing batch size to {batch_analysis['optimal_batch_size']} for better efficiency")
             
             # Warn about GPU usage
-            if not system_info['gpu_available'] and self.device == 'cuda':
-                logger.warning("CUDA device requested but no GPU available, falling back to CPU")
+            if not system_info['gpu_available'] and self.device in ['cuda', 'mps']:
+                logger.warning(f"{self.device.upper()} device requested but no GPU available, falling back to CPU")
             
         except ImportError as e:
             logger.warning(f"System analysis unavailable: {e}")
@@ -245,7 +291,7 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
-        """Train for one epoch."""
+        """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
         epoch_metrics = {
@@ -253,40 +299,63 @@ class Trainer:
             'value_loss': [],
             'total_loss': []
         }
-        
+        batch_times = []
+        batch_data_times = []
+        epoch_start_time = time.time()
+        data_load_start = time.time()
         for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
+            # Time data loading
+            data_load_end = time.time()
+            batch_data_time = data_load_end - data_load_start
+            batch_data_times.append(batch_data_time)
+            batch_start_time = time.time()
             # Move to device
             boards = boards.to(self.device)
             policies = policies.to(self.device)
             values = values.to(self.device)
-            
             # Forward pass with mixed precision
             self.optimizer.zero_grad()
-            
             with self.mixed_precision.autocast_context():
                 policy_pred, value_pred = self.model(boards)
                 total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-            
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
-            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
-            
             # Track metrics
             epoch_losses.append(loss_dict['total_loss'])
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
-            
-            # Log progress
-            if batch_idx % 10 == 0:
-                logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                          f"Loss: {loss_dict['total_loss']:.4f}")
-        
+            # Log progress - adjust frequency based on dataset size and verbosity
+            from .config import VERBOSE_LEVEL
+            if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
+                # With only 100 or fewer batches, log every 5 batches
+                # Between 101 and 2000 batches, log every 50 batches
+                # Above 2000 batches, log every 200 batches
+                log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
+                if batch_idx % log_interval == 0:
+                    logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
+                              f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
+            # Prepare for next batch data timing
+            data_load_start = time.time()
+            batch_end_time = time.time()
+            batch_times.append(batch_end_time - batch_start_time)
+        epoch_end_time = time.time()
+        epoch_time = epoch_end_time - epoch_start_time
         # Compute epoch averages
         epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
+        # Add timing info to epoch_avg
+        epoch_avg['epoch_time'] = epoch_time
+        epoch_avg['batch_time_mean'] = np.mean(batch_times) if batch_times else 0
+        epoch_avg['batch_time_min'] = np.min(batch_times) if batch_times else 0
+        epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
+        epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
+        # Log timing summary
+        logger.info(f"Epoch {self.current_epoch} timing: epoch_time={epoch_time:.2f}s, batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, batch_time_min={epoch_avg['batch_time_min']:.3f}s, batch_time_max={epoch_avg['batch_time_max']:.3f}s, data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s")
         return epoch_avg
     
     def validate(self) -> Dict[str, float]:
@@ -333,6 +402,15 @@ class Trainer:
         # Start timing
         self.start_time = datetime.now()
         
+        # Initialize loss tracking
+        train_losses = []
+        val_losses = []
+        train_policy_losses = []
+        train_value_losses = []
+        val_policy_losses = []
+        val_value_losses = []
+        epoch_times = []  # Store epoch times for later analysis
+        
         logger.info(f"Starting training for {num_epochs} epochs")
         logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
         if early_stopping:
@@ -340,7 +418,7 @@ class Trainer:
         
         early_stopped = False
         for epoch in range(num_epochs):
-            epoch_start_time = datetime.now()
+            epoch_start_time = time.time()
             self.current_epoch = epoch
             
             # Training
@@ -349,8 +427,28 @@ class Trainer:
             # Validation
             val_metrics = self.validate()
             
+            # Track losses
+            train_losses.append(train_metrics['total_loss'])
+            train_policy_losses.append(train_metrics['policy_loss'])
+            train_value_losses.append(train_metrics['value_loss'])
+            
+            if val_metrics:
+                val_losses.append(val_metrics['total_loss'])
+                val_policy_losses.append(val_metrics['policy_loss'])
+                val_value_losses.append(val_metrics['value_loss'])
+            else:
+                val_losses.append(float('inf'))  # No validation data
+                val_policy_losses.append(float('inf'))
+                val_value_losses.append(float('inf'))
+            
+            # Learning rate scheduler step (use validation loss if available, else training loss)
+            val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
+            self.scheduler.step(val_loss_for_scheduler)
+            logger.info(f"Current learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            
             # Calculate timing and performance metrics
-            epoch_time = (datetime.now() - epoch_start_time).total_seconds()
+            epoch_time = time.time() - epoch_start_time
+            epoch_times.append(epoch_time)
             total_training_time = (datetime.now() - self.start_time).total_seconds()
             
             # Calculate samples per second
@@ -394,10 +492,15 @@ class Trainer:
                     notes=f"Epoch {epoch} completed"
                 )
             
-            # Log results
-            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f}")
+            # Log results with memory info
+            memory_usage_mb = get_memory_usage()
+            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f} | Memory: {memory_usage_mb:.1f}MB")
             if val_metrics:
                 logger.info(f"Epoch {epoch}: Val Loss: {val_metrics['total_loss']:.4f}")
+            
+            # Log memory warning if usage is high
+            if memory_usage_mb > 8000:  # 8GB threshold
+                logger.warning(f"High memory usage: {memory_usage_mb:.1f}MB - consider reducing batch size")
             
             # Save checkpoint with smart management
             self._save_checkpoint_smart(save_path, epoch, train_metrics, val_metrics, 
@@ -428,7 +531,29 @@ class Trainer:
             )
         
         logger.info("Training completed!")
-        return {"best_val_loss": self.best_val_loss}
+        
+        # Print compact summary if we used compact logging
+        from hex_ai.error_handling import get_board_state_error_tracker
+        error_tracker = get_board_state_error_tracker()
+        stats = error_tracker.get_stats()
+        if stats['total_samples'] > 0:
+            print(f"\nData loading summary: {stats['total_samples']} samples, {stats['error_count']} errors ({stats['error_rate']:.2%})")
+        
+        # Return comprehensive results
+        return {
+            "best_val_loss": self.best_val_loss,
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "train_policy_losses": train_policy_losses,
+            "train_value_losses": train_value_losses,
+            "val_policy_losses": val_policy_losses,
+            "val_value_losses": val_value_losses,
+            "epochs_trained": len(train_losses),
+            "early_stopped": early_stopped,
+            "total_training_time": total_training_time,
+            "epoch_times": epoch_times, # Return epoch times for analysis
+            "data_stats": stats
+        }
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
         """Save model checkpoint."""
@@ -438,7 +563,8 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss
+            'best_val_loss': self.best_val_loss,
+            'mixed_precision': self.mixed_precision.use_mixed_precision
         }
         torch.save(checkpoint, path)
     
@@ -465,7 +591,8 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss
+            'best_val_loss': self.best_val_loss,
+            'mixed_precision': self.mixed_precision.use_mixed_precision
         }
         
         # Save current checkpoint
@@ -534,6 +661,8 @@ class Trainer:
         # Add strategic samples from earlier epochs
         if max_epoch >= 20:
             # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
+            if 4 <= max_epoch:
+                keep_epochs.add(4)
             if max_epoch == 20:
                 keep_epochs.update([16, 13, 9, 4])
             else:
@@ -557,31 +686,27 @@ class Trainer:
 
 
 def create_trainer(model: TwoHeadedResNet, 
-                  train_data: List[str],
-                  val_data: Optional[List[str]] = None,
+                  train_shard_files: List[Path],
+                  val_shard_files: Optional[List[Path]] = None,
                   batch_size: int = BATCH_SIZE,
                   learning_rate: float = LEARNING_RATE,
                   device: str = DEVICE,
                   enable_system_analysis: bool = True) -> Trainer:
-    """Create a trainer with data loaders."""
-    
-    # Create datasets
-    train_dataset = HexDataset(train_data)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    
+    """Create a trainer with data loaders from processed shard files."""
+    # Use StreamingProcessedDataset for all data loading
+    train_dataset = StreamingProcessedDataset(train_shard_files)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = None
-    if val_data:
-        val_dataset = HexDataset(val_data)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    
-    # Create trainer
+    if val_shard_files:
+        val_dataset = StreamingProcessedDataset(val_shard_files)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
 
 def train_model(model: TwoHeadedResNet,
-                train_data: List[str],
-                val_data: Optional[List[str]] = None,
+                train_shard_files: List[Path],
+                val_shard_files: Optional[List[Path]] = None,
                 num_epochs: int = NUM_EPOCHS,
                 batch_size: int = BATCH_SIZE,
                 learning_rate: float = LEARNING_RATE,
@@ -589,9 +714,9 @@ def train_model(model: TwoHeadedResNet,
                 device: str = DEVICE,
                 enable_system_analysis: bool = True,
                 early_stopping_patience: Optional[int] = None) -> Dict:
-    """Convenience function to train a model."""
+    """Convenience function to train a model with processed shard files."""
     
-    trainer = create_trainer(model, train_data, val_data, batch_size, learning_rate, device, enable_system_analysis)
+    trainer = create_trainer(model, train_shard_files, val_shard_files, batch_size, learning_rate, device, enable_system_analysis)
     
     # Set up early stopping if requested
     early_stopping = None
@@ -637,8 +762,8 @@ def resume_training(checkpoint_path: str,
     model = TwoHeadedResNet()  # Default architecture
     
     # Create trainer with dummy data (will be overridden)
-    dummy_data = [("http://www.trmph.com/hex/board#13,a1b2c3", "1")]
-    trainer = create_trainer(model, dummy_data, enable_system_analysis=False)
+    dummy_shard_files = [Path("dummy_shard.pkl.gz")]
+    trainer = create_trainer(model, dummy_shard_files, enable_system_analysis=False)
     
     # Load the checkpoint state
     trainer.model.load_state_dict(model_state)

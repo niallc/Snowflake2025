@@ -12,11 +12,10 @@ __author__ = "Snowflake2025 Team"
 
 # Core imports
 from .models import TwoHeadedResNet, ResNetBlock
-from .dataset import HexDataset
+
 from .config import *
 
 __all__ = [
     "TwoHeadedResNet",
-    "ResNetBlock", 
-    "HexDataset",
+    "ResNetBlock",
 ] 

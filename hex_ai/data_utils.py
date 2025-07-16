@@ -21,9 +21,16 @@ import re
 import string
 
 from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
+from hex_ai.utils.format_conversion import (
+    strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
+    rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
+)
 
 logger = logging.getLogger(__name__)
 
+# The trmph URL is:
+# https://trmph.com/hex/board#13,a1b2c3
+# We match up to the number (13) and then the comma.
 TRMPH_BOARD_PATTERN = re.compile(r"#(\d+),")
 LETTERS = string.ascii_lowercase
 
@@ -32,7 +39,7 @@ LETTERS = string.ascii_lowercase
 # File Format Conversion Functions
 # ============================================================================
 
-def load_trmph_file(file_path: str) -> str:
+def load_trmph_file(file_path: str) -> List[str]:
     """
     Load a single .trmph file.
     
@@ -40,7 +47,7 @@ def load_trmph_file(file_path: str) -> str:
         file_path: Path to the .trmph file
         
     Returns:
-        Trmph string content
+        List of trmph game strings (one per line)
         
     Raises:
         FileNotFoundError: If file doesn't exist
@@ -48,97 +55,19 @@ def load_trmph_file(file_path: str) -> str:
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
+            lines = f.readlines()
         
-        if not content:
+        # Strip whitespace and filter out empty lines
+        games = [line.strip() for line in lines if line.strip()]
+        
+        if not games:
             raise ValueError(f"Empty file: {file_path}")
         
-        return content
+        return games
     except FileNotFoundError:
         raise FileNotFoundError(f"File not found: {file_path}")
     except Exception as e:
         raise ValueError(f"Error reading file {file_path}: {e}")
-
-
-def convert_to_matrix_format(game_data: str, debug_info: str = "") -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Convert game data to matrix format for training.
-    
-    Args:
-        game_data: Trmph string representing a game
-        debug_info: Optional debug information (e.g., line number)
-        
-    Returns:
-        Tuple of (board_state, policy_target, value_target):
-        - board_state: Shape (2, 13, 13) - current board state
-        - policy_target: Shape (169,) - move probabilities
-        - value_target: Shape (1,) - win probability (0.0 or 1.0)
-    """
-    # Parse the trmph string to get the board state
-    board_matrix = parse_trmph_to_board(game_data, debug_info=debug_info)
-    
-    # Convert to 2-channel format for the model
-    board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
-    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
-    
-    # For now, create placeholder policy and value
-    # TODO: Extract actual policy from game (last move played)
-    policy_target = np.random.rand(POLICY_OUTPUT_SIZE).astype(np.float32)
-    policy_target = policy_target / policy_target.sum()  # Normalize to probabilities
-    
-    # Determine winner and set value target
-    winner = detect_winner(game_data)
-    if winner == "blue":
-        value_target = 1.0
-    elif winner == "red":
-        value_target = 0.0
-    else:
-        # No winner yet - could be 0.5 or based on position evaluation
-        value_target = 0.5
-    
-    return board_state, policy_target, value_target
-
-
-def detect_winner(trmph_text: str) -> str:
-    """
-    Detect the winner of a game using legacy BoardUtils logic.
-    
-    Args:
-        trmph_text: Complete trmph string
-        
-    Returns:
-        "blue", "red", or "no winner"
-    """
-    try:
-        # Import legacy modules
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'legacy_code'))
-        
-        import BoardUtils as bu
-        import FileConversion as fc
-        
-        # Detect board size from trmph string
-        if "#11," in trmph_text:
-            board_size = 7
-        elif "#13," in trmph_text:
-            board_size = 13
-        else:
-            logger.warning(f"Unknown board size in trmph: {trmph_text[:50]}...")
-            return "no winner"
-        
-        # Initialize connections for the board
-        connections = bu.InitBoardConns(trmph_text, playBoardSize=board_size, modelBoardSize=board_size)
-        
-        # Find winner
-        winner = bu.FindWinner(connections)
-        
-        return winner
-        
-    except Exception as e:
-        logger.warning(f"Could not detect winner for {trmph_text[:50]}...: {e}")
-        return "no winner"
 
 
 def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
@@ -178,78 +107,18 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
         raise ValueError(f"Unknown format_type: {format_type}")
 
 
-def board_to_trmph(board: np.ndarray) -> str:
-    """
-    Convert a board matrix back to trmph format.
-    
-    Args:
-        board: Board array (either 2-channel or single-channel)
-        
-    Returns:
-        Trmph string representation
-    """
-    if board.ndim == 3:
-        # 2-channel format: convert to single channel
-        board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_2d[board[0] == 1] = 1  # Blue pieces
-        board_2d[board[1] == 1] = 2  # Red pieces
-    else:
-        board_2d = board
-    
-    # Convert to trmph format
-    moves = []
-    for row in range(BOARD_SIZE):
-        for col in range(BOARD_SIZE):
-            if board_2d[row, col] in [1, 2]:
-                move = rowcol_to_trmph(row, col)
-                moves.append(move)
-    
-    return "#13," + "".join(moves)
-
-
-def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Apply data augmentation to board and policy.
-    
-    Args:
-        board: Board state of shape (2, 13, 13)
-        policy: Policy target of shape (169,)
-        
-    Returns:
-        Tuple of (augmented_board, augmented_policy)
-    """
-    # For now, return the original data
-    # TODO: Implement actual augmentation (rotation, reflection)
-    return board, policy
-
-
-def load_trmph_files(data_dir: str) -> List[str]:
-    """
-    Load all .trmph files from a directory.
-    
-    Args:
-        data_dir: Path to directory containing .trmph files
-        
-    Returns:
-        List of trmph strings (with preamble)
-        
-    Raises:
-        FileNotFoundError: If directory doesn't exist
-        ValueError: If no .trmph files found
-    """
-    # TODO: Implement file loading
-    # Should:
-    # - Scan directory for .trmph files
-    # - Read file contents
-    # - Handle encoding issues
-    # - Return list of trmph strings
-    pass
-
-
 def strip_trmph_preamble(trmph_text: str) -> str:
     """
     Remove the preamble from a trmph string (e.g., 'http://...#13,a1b2c3' -> 'a1b2c3').
     """
+    # Warning, though a trmph URL contains just the preamble and then moves
+    # our data files also contain a space and then an integer 1 or 2, to indicate the winner.
+    # This function strips the preamble to start with the move sequence and .search returns
+    # the index of the comma after the board size.
+    # When we return trmph_text[match.end():] we get the move sequence.
+    # if called on a full line of input data, this would then include the space 
+    # and the winner annotation.
+    # More typically we will call this function on a single move sequence.
     match = TRMPH_BOARD_PATTERN.search(trmph_text)
     if not match:
         raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
@@ -315,21 +184,26 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
         
         # Check for duplicate moves
         if board[row, col] != 0:
-            # Enhanced debugging output
-            import traceback
-            frame = traceback.extract_stack()[-2]  # Get calling frame
-            logger.error(f"DUPLICATE MOVE DETECTED:")
-            if debug_info:
-                logger.error(f"  {debug_info}")
-            logger.error(f"  File: {frame.filename}")
-            logger.error(f"  Line: {frame.lineno}")
-            logger.error(f"  Function: {frame.name}")
-            logger.error(f"  Move: '{move}' at position ({row}, {col})")
-            logger.error(f"  Move index: {i}")
-            logger.error(f"  Board value at position: {board[row, col]}")
-            logger.error(f"  Full trmph string: {trmph_text}")
-            logger.error(f"  All moves: {moves}")
-            raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
+            # For training data, skip duplicate moves instead of failing
+            if "training" in debug_info.lower() or "game" in debug_info.lower():
+                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in training data")
+                continue  # Skip this move and continue with the next
+            else:
+                # Enhanced debugging output for non-training contexts
+                import traceback
+                frame = traceback.extract_stack()[-2]  # Get calling frame
+                logger.error(f"DUPLICATE MOVE DETECTED:")
+                if debug_info:
+                    logger.error(f"  {debug_info}")
+                logger.error(f"  File: {frame.filename}")
+                logger.error(f"  Line: {frame.lineno}")
+                logger.error(f"  Function: {frame.name}")
+                logger.error(f"  Move: '{move}' at position ({row}, {col})")
+                logger.error(f"  Move index: {i}")
+                logger.error(f"  Board value at position: {board[row, col]}")
+                logger.error(f"  Full trmph string: {trmph_text}")
+                logger.error(f"  All moves: {moves}")
+                raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
         
         # Place move (alternating players: blue=1, red=2)
         player = (i % 2) + 1
@@ -337,83 +211,6 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
     
     return board
 
-
-def trmph_to_dothex(trmph_text: str) -> np.ndarray:
-    """
-    Convert trmph format to DotHex matrix format.
-    
-    Args:
-        trmph_text: Trmph string (without preamble)
-        
-    Returns:
-        DotHex matrix: shape (13, 13), values 0/1/2
-        
-    Example:
-        "a1b2c3" → [[1, 0, 0, ...], [0, 2, 0, ...], ...]
-    """
-    # TODO: Implement conversion
-    # Should use legacy trmphToDotHex() logic
-    pass
-
-
-def dothex_to_tensor(dothex_board: np.ndarray) -> torch.Tensor:
-    """
-    Convert DotHex matrix to PyTorch tensor format.
-    
-    Args:
-        dothex_board: DotHex matrix (13, 13)
-        
-    Returns:
-        Tensor: shape (2, 13, 13)
-        - Channel 0: Blue player positions
-        - Channel 1: Red player positions
-        
-    Example:
-        [[1, 0, 0], [0, 2, 0], ...] → 
-        [[[1, 0, 0], [0, 0, 0], ...],  # Blue channel
-         [[0, 0, 0], [0, 1, 0], ...]]  # Red channel
-    """
-    # TODO: Implement conversion
-    # Should convert 0/1/2 matrix to 2-channel tensor
-    pass
-
-
-def trmph_to_tensor(trmph_text: str) -> torch.Tensor:
-    """
-    Convert trmph format directly to PyTorch tensor.
-    
-    Args:
-        trmph_text: Trmph string (with or without preamble)
-        
-    Returns:
-        Tensor: shape (2, 13, 13)
-    """
-    # TODO: Implement direct conversion
-    # Should combine trmph_to_dothex() + dothex_to_tensor()
-    pass
-
-
-# ============================================================================
-# Coordinate System Conversions
-# ============================================================================
-
-def trmph_to_rowcol(trmph_move: str) -> Tuple[int, int]:
-    """
-    Convert trmph move to (row, col) coordinates.
-    
-    Args:
-        trmph_move: Single move (e.g., "a1", "m13")
-        
-    Returns:
-        (row, col) coordinates (0-indexed)
-        
-    Example:
-        "a1" → (0, 0)
-        "m13" → (12, 12)
-    """
-    # TODO: Implement conversion
-    # Should use legacy LookUpRowCol() logic
-    pass
 
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
@@ -450,9 +247,12 @@ def tensor_to_rowcol(tensor_pos: int) -> Tuple[int, int]:
     Returns:
         (row, col) coordinates
     """
-    # TODO: Implement conversion
-    # Should convert linear index to 2D coordinates
-    pass
+    if not (0 <= tensor_pos < BOARD_SIZE * BOARD_SIZE):
+        raise ValueError(f"Invalid tensor position: {tensor_pos}")
+    
+    row = tensor_pos // BOARD_SIZE
+    col = tensor_pos % BOARD_SIZE
+    return row, col
 
 
 def rowcol_to_tensor(row: int, col: int) -> int:
@@ -466,9 +266,44 @@ def rowcol_to_tensor(row: int, col: int) -> int:
     Returns:
         Position in flattened tensor (0-168)
     """
-    # TODO: Implement conversion
-    # Should convert 2D coordinates to linear index
-    pass
+    if not (0 <= row < BOARD_SIZE) or not (0 <= col < BOARD_SIZE):
+        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
+    
+    return row * BOARD_SIZE + col
+
+
+def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
+    """
+    Convert tensor position index to trmph move.
+    
+    Args:
+        tensor_pos: Position in flattened tensor (0-168)
+        board_size: Size of the board
+        
+    Returns:
+        Trmph move string
+        
+    Example:
+        0 → "a1"
+        168 → "m13"
+    """
+    row, col = tensor_to_rowcol(tensor_pos)
+    return rowcol_to_trmph(row, col, board_size)
+
+
+def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
+    """
+    Convert trmph move to tensor position index.
+    
+    Args:
+        move: Trmph move (e.g., 'a1')
+        board_size: Size of the board
+        
+    Returns:
+        Position in flattened tensor (0-168)
+    """
+    row, col = trmph_move_to_rowcol(move, board_size)
+    return rowcol_to_tensor(row, col)
 
 
 # ============================================================================
@@ -555,26 +390,6 @@ def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
         reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
         return reflected
 
-
-def augment_board(board: np.ndarray, policy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Apply data augmentation to board and policy.
-    
-    Creates 4 augmented versions: original, 180° rotation, long diagonal reflection,
-    and short diagonal reflection. All preserve the logical game state under the swap rule.
-    
-    Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
-        policy: Policy array of shape (169,)
-        
-    Returns:
-        Tuple of (augmented_board, augmented_policy)
-    """
-    # For now, return the original data
-    # TODO: Implement random selection of one of the 4 augmentations
-    return board, policy
-
-
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
     """
     Create all 4 augmented versions of a board.
@@ -619,148 +434,229 @@ def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
     ]
 
 
+def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply random data augmentation to a board and its corresponding policy.
+    
+    This function randomly selects one of 4 possible augmentations:
+    - Original board
+    - 180° rotation with color swap
+    - Long diagonal reflection with color swap
+    - Short diagonal reflection with color swap
+    
+    Args:
+        board: Board array of shape (2, 13, 13)
+        policy: Policy array of shape (169,)
+        
+    Returns:
+        Tuple of (augmented_board, augmented_policy)
+    """
+    # Create all 4 augmented versions
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    
+    # Randomly select one augmentation
+    import random
+    idx = random.randint(0, 3)
+    
+    return augmented_boards[idx], augmented_policies[idx]
+
+
 # ============================================================================
 # Training Data Preparation
 # ============================================================================
 
-def extract_game_positions(trmph_text: str, 
-                          positions: str = "all",
-                          sample_size: int = 4) -> List[torch.Tensor]:
+
+def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None, debug_info: str = "") -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
     """
-    Extract board positions from a game.
+    Extract training examples from a game using correct logic for two-headed networks.
+    
+    This function creates training examples from all positions in a game:
+    - Position i (0 to M): Board state after i moves
+    - Policy target: Next move (position i+1) if available, None for final position
+    - Value target: Final game outcome for all positions
+    
+    For two-headed networks, we include all positions and handle missing policy targets
+    in the loss function. This ensures both heads get trained on the same board states.
     
     Args:
-        trmph_text: Complete game in trmph format
-        positions: Which positions to extract ("all", "last", "sampled")
-        sample_size: Number of positions to sample (if "sampled")
+        trmph_text: Complete trmph string
+        winner_from_file: Winner from file data ("1" for blue, "2" for red)
+        debug_info: Optional debug information
         
     Returns:
-        List of board tensors
+        List of (board_state, policy_target, value_target) tuples
+        - board_state: Current board state (2, 13, 13)
+        - policy_target: Next move as one-hot (169,) or None if no next move
+        - value_target: Final game outcome (0.0 or 1.0)
+
+    Limitations:
+    - No data augmentation (will be added later)
+    Raises:
+        ValueError: If game has no moves (empty game) or missing winner data
     """
-    # TODO: Implement position extraction
-    # Should:
-    # - Parse game moves
-    # - Build board state after each move
-    # - Extract requested positions
-    # - Convert to tensors
-    pass
+    try:
+        # Parse moves from trmph string
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = split_trmph_moves(bare_moves)
+
+        # Reject empty games - they provide no useful training signal
+        if not moves:
+            logger.error(f"Empty game found - no moves to learn from: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError("Empty game - no moves to learn from")
+
+        # Require winner data from file - no automatic calculation
+        if winner_from_file is None:
+            logger.error(f"Missing winner data for game: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError("Missing winner data - cannot determine training target")
+
+        # Validate winner format
+        if winner_from_file not in ["1", "2"]:
+            logger.error(f"Invalid winner format '{winner_from_file}' for game: {trmph_text[:50]}...")
+            if debug_info:
+                logger.error(f"Debug info: {debug_info}")
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+
+        # Set value target from validated file data
+        value_target = 1.0 if winner_from_file == "1" else 0.0
+
+        training_examples = []
+
+        # Iterate through all positions (0 to M) to create training examples
+        # Position 0 is the empty board
+        # Positions 1 to M are board states after each move
+        for position in range(len(moves) + 1):
+            board_state = create_board_from_moves(moves[:position])
+            policy_target = None
+            if position < len(moves):
+                next_move = moves[position]
+                policy_target = create_policy_target(next_move)
+            training_examples.append((board_state, policy_target, value_target))
+
+        return training_examples
+
+    except Exception as e:
+        # Re-raise ValueError (our validation errors) but catch other exceptions
+        if isinstance(e, ValueError):
+            raise
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        if debug_info:
+            logger.error(f"Debug info: {debug_info}")
+        raise ValueError(f"Failed to process game: {e}")
 
 
-def prepare_training_data(games: List[str],
-                         augment: bool = True,
-                         positions: str = "all") -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+def create_board_from_moves(moves: List[str]) -> np.ndarray:
     """
-    Prepare training data from games.
+    Create a board state from a list of moves.
     
     Args:
-        games: List of trmph game strings
-        augment: Whether to apply data augmentation
-        positions: Which positions to extract
+        moves: List of trmph moves (e.g., ['a1', 'b2', 'c3'])
         
     Returns:
-        List of (board, policy_target, value_target) tuples
+        Board state of shape (2, 13, 13)
     """
-    # TODO: Implement training data preparation
-    # Should:
-    # - Extract positions from games
-    # - Apply augmentation if requested
-    # - Generate policy/value targets
-    # - Return training tuples
-    pass
+    # Initialize board
+    board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    
+    # Place moves on board
+    for i, move in enumerate(moves):
+        row, col = trmph_move_to_rowcol(move)
+        # Alternating players: blue=1, red=2
+        player = (i % 2) + 1
+        board_matrix[row, col] = player
+    
+    # Convert to 2-channel format
+    board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
+    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
+    
+    return board_state
 
 
-# ============================================================================
-# Validation and Testing Functions
-# ============================================================================
-
-def validate_trmph_format(trmph_text: str) -> bool:
+def create_policy_target(move: str) -> np.ndarray:
     """
-    Validate that a trmph string is properly formatted.
+    Create a policy target from a single move.
     
     Args:
-        trmph_text: Trmph string to validate
+        move: Trmph move (e.g., 'a1')
         
     Returns:
-        True if valid, False otherwise
+        Policy target of shape (169,) with 1.0 for the move, 0.0 elsewhere
     """
-    # TODO: Implement validation
-    # Should check:
-    # - Proper preamble
-    # - Valid move format
-    # - Consistent board size
-    pass
+    # Convert move to tensor position
+    row, col = trmph_move_to_rowcol(move)
+    tensor_pos = rowcol_to_tensor(row, col)
+    
+    # Create one-hot policy target
+    policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
+    policy[tensor_pos] = 1.0
+    
+    return policy
 
-
-def validate_board_tensor(board: torch.Tensor) -> bool:
+def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
     """
-    Validate that a board tensor has correct format.
+    Validate a single game for corruption.
     
     Args:
-        board: Tensor to validate
+        trmph_url: The trmph URL string
+        winner_indicator: The winner indicator string
+        line_info: Optional line information for debugging
         
     Returns:
-        True if valid, False otherwise
+        Tuple of (is_valid, error_message)
     """
-    # TODO: Implement validation
-    # Should check:
-    # - Correct shape (2, 13, 13)
-    # - Binary values (0 or 1)
-    # - No overlapping pieces
-    pass
+    try:
+        # Test if we can extract training examples from the game without errors
+        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, line_info)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
-def test_conversion_roundtrip() -> bool:
+# =========================================================================
+# Player-to-move Channel Utility
+# =========================================================================
+
+from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+
+def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> int:
     """
-    Test that conversions work correctly in both directions.
-    
-    Returns:
-        True if all tests pass
-    """
-    # TODO: Implement roundtrip tests
-    # Should test:
-    # - trmph ↔ tensor
-    # - tensor ↔ rowcol
-    # - augmentation reversibility
-    pass
-
-
-# ============================================================================
-# Performance Optimization Functions
-# ============================================================================
-
-def batch_convert_trmph(trmph_strings: List[str]) -> torch.Tensor:
-    """
-    Convert multiple trmph strings efficiently.
-    
+    Given a (2, N, N) board, return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
+    Uses error tracking to handle invalid board states gracefully.
     Args:
-        trmph_strings: List of trmph strings
-        
+        board_2ch: np.ndarray of shape (2, N, N), blue and red channels
+        error_tracker: Optional BoardStateErrorTracker instance
     Returns:
-        Batch tensor: shape (batch_size, 2, 13, 13)
+        int: BLUE_PLAYER or RED_PLAYER
     """
-    # TODO: Implement batch conversion
-    # Should be more efficient than individual conversions
-    pass
-
-
-def preprocess_and_cache(data_dir: str, 
-                        cache_dir: str,
-                        force_reprocess: bool = False) -> str:
-    """
-    Preprocess all data and cache for faster loading.
+    if board_2ch.shape[0] != 2:
+        raise ValueError(f"Expected board with 2 channels, got shape {board_2ch.shape}")
     
-    Args:
-        data_dir: Directory with .trmph files
-        cache_dir: Directory to store processed data
-        force_reprocess: Whether to reprocess existing cache
+    blue_count = int(np.sum(board_2ch[0]))
+    red_count = int(np.sum(board_2ch[1]))
+    
+    if blue_count == red_count:
+        return BLUE_PLAYER
+    elif blue_count == red_count + 1:
+        return RED_PLAYER
+    else:
+        # Invalid board state - use error tracking if available
+        error_msg = f"Invalid board state: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red."
         
-    Returns:
-        Path to cached data
-    """
-    # TODO: Implement preprocessing and caching
-    # Should:
-    # - Convert all games to tensors
-    # - Apply augmentations
-    # - Save in efficient format (e.g., .npy)
-    # - Return path to cached data
-    pass 
+        if error_tracker is not None:
+            error_tracker.record_error(
+                board_state=board_2ch,
+                error_msg=error_msg,
+                file_info=getattr(error_tracker, '_current_file', "Unknown"),
+                sample_info=getattr(error_tracker, '_current_sample', "Unknown")
+            )
+            # Return a default value to continue processing
+            # Assume it's blue's turn if we can't determine
+            return BLUE_PLAYER
+        else:
+            # Fall back to original behavior if no error tracker
+            raise ValueError(error_msg)

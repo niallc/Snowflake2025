@@ -28,14 +28,20 @@ def get_system_info() -> Dict:
         'memory_total_gb': psutil.virtual_memory().total / (1024**3),
         'memory_available_gb': psutil.virtual_memory().available / (1024**3),
         'memory_percent_used': psutil.virtual_memory().percent,
-        'gpu_available': torch.cuda.is_available(),
+        'gpu_available': torch.cuda.is_available() or torch.backends.mps.is_available(),
     }
     
     if info['gpu_available']:
-        info['gpu_count'] = torch.cuda.device_count()
-        info['gpu_memory_total'] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        info['gpu_memory_allocated'] = torch.cuda.memory_allocated(0) / (1024**3)
-        info['gpu_memory_cached'] = torch.cuda.memory_reserved(0) / (1024**3)
+        if torch.cuda.is_available():
+            info['gpu_count'] = torch.cuda.device_count()
+            info['gpu_memory_total'] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            info['gpu_memory_allocated'] = torch.cuda.memory_allocated(0) / (1024**3)
+            info['gpu_memory_cached'] = torch.cuda.memory_reserved(0) / (1024**3)
+        elif torch.backends.mps.is_available():
+            info['gpu_count'] = 1  # MPS typically has 1 GPU
+            info['gpu_memory_total'] = None  # MPS doesn't expose memory info
+            info['gpu_memory_allocated'] = None
+            info['gpu_memory_cached'] = None
     
     return info
 
@@ -169,7 +175,10 @@ def print_system_analysis():
     
     if system_info['gpu_available']:
         print(f"  GPU Count: {system_info['gpu_count']}")
-        print(f"  GPU Memory: {system_info['gpu_memory_total']:.1f} GB")
+        if system_info['gpu_memory_total'] is not None:
+            print(f"  GPU Memory: {system_info['gpu_memory_total']:.1f} GB")
+        else:
+            print(f"  GPU Type: Apple MPS (memory info not available)")
     
     # Memory compression (macOS)
     compression_info = get_memory_compression_info()

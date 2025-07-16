@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 import logging
 
-from .config import BOARD_SIZE, NUM_PLAYERS
+from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
@@ -29,20 +29,6 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     return logging.getLogger(__name__)
-
-
-def count_parameters(model: torch.nn.Module) -> int:
-    """
-    Count the number of trainable parameters in a model.
-    
-    Args:
-        model: PyTorch model
-        
-    Returns:
-        Number of trainable parameters
-    """
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 
 def save_checkpoint(model: torch.nn.Module, 
                    optimizer: torch.optim.Optimizer,
@@ -87,35 +73,6 @@ def load_checkpoint(model: torch.nn.Module,
     return checkpoint['epoch'], checkpoint['loss']
 
 
-def board_to_tensor(board: np.ndarray) -> torch.Tensor:
-    """
-    Convert a board array to a PyTorch tensor.
-    
-    Args:
-        board: Numpy array representing the board
-        
-    Returns:
-        PyTorch tensor of shape (2, 13, 13)
-    """
-    # TODO: Implement board conversion
-    # Should handle different input formats and convert to standard tensor format
-    pass
-
-
-def tensor_to_board(tensor: torch.Tensor) -> np.ndarray:
-    """
-    Convert a PyTorch tensor back to a board array.
-    
-    Args:
-        tensor: PyTorch tensor of shape (2, 13, 13)
-        
-    Returns:
-        Numpy array representing the board
-    """
-    # TODO: Implement tensor to board conversion
-    pass
-
-
 def validate_board_shape(tensor: torch.Tensor) -> bool:
     """
     Validate that a tensor has the correct board shape.
@@ -130,31 +87,23 @@ def validate_board_shape(tensor: torch.Tensor) -> bool:
     return tensor.shape == expected_shape
 
 
-def create_sample_data(num_samples: int = 100) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_device() -> str:
     """
-    Create sample data for testing.
-    
-    Args:
-        num_samples: Number of samples to create
-        
+    Get the appropriate device for training or inference.
     Returns:
-        Tuple of (boards, policies, values) for testing
+        str: 'cuda' if available, else 'mps' (Apple Silicon GPU) if available, else 'cpu'.
+    Note:
+        This function should be used everywhere device selection is needed for consistency.
+        All scripts and modules should import and use this function instead of direct torch.cuda/mps/cpu checks.
     """
-    boards = torch.randn(num_samples, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
-    policies = torch.randn(num_samples, BOARD_SIZE * BOARD_SIZE)
-    values = torch.randn(num_samples, 1)
-    
-    return boards, policies, values
-
-
-def get_device() -> torch.device:
-    """
-    Get the appropriate device for training.
-    
-    Returns:
-        torch.device (cuda if available, else cpu)
-    """
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = 'mps'
+    else:
+        device = 'cpu'
+    logging.getLogger(__name__).debug(f"[get_device] Selected device: {device}")
+    return device
 
 
 def set_seed(seed: int = 42):
@@ -167,3 +116,27 @@ def set_seed(seed: int = 42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed) 
+
+
+def create_sample_data(batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Create sample data for testing purposes.
+    
+    Args:
+        batch_size: Number of samples to create
+        
+    Returns:
+        Tuple of (boards, policies, values) tensors
+    """
+    # Create random board states (2 channels for 2 players)
+    boards = torch.randn(batch_size, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+    
+    # Create random policy targets (169 possible moves)
+    policies = torch.randn(batch_size, POLICY_OUTPUT_SIZE)
+    policies = torch.softmax(policies, dim=1)  # Convert to probabilities
+    
+    # Create random value targets (single value per board)
+    values = torch.randn(batch_size, VALUE_OUTPUT_SIZE)
+    values = torch.sigmoid(values)  # Convert to [0, 1] range
+    
+    return boards, policies, values

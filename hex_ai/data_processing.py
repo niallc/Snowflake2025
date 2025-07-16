@@ -18,8 +18,8 @@ import numpy as np
 from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
-from .data_utils import convert_to_matrix_format
-from .dataset import validate_game
+from .data_utils import validate_game
+from hex_ai.utils.format_conversion import parse_trmph_game_record
 
 logger = logging.getLogger(__name__)
 
@@ -72,20 +72,15 @@ class DataProcessor:
                 line = line.strip()
                 if not line:
                     continue
-                
-                # Parse line format: "trmph_url winner_indicator"
-                parts = line.split(' ', 1)
-                if len(parts) != 2:
-                    corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}"))
+                try:
+                    trmph_url, winner_indicator = parse_trmph_game_record(line)
+                except ValueError as e:
+                    corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}: {e}"))
                     continue
-                
-                trmph_url, winner_indicator = parts
-                
                 # Validate trmph URL format
                 if not trmph_url.startswith("http://www.trmph.com/hex/board#"):
                     corrupted_games.append((trmph_url, winner_indicator, f"Invalid trmph URL format at line {line_num}"))
                     continue
-                
                 # Validate game integrity
                 is_valid, error_msg = validate_game(trmph_url, winner_indicator, f"Line {line_num}")
                 if is_valid:
@@ -101,21 +96,39 @@ class DataProcessor:
         
         for trmph_url, winner_indicator in tqdm(games, desc="Converting games to tensors"):
             try:
-                # Convert to matrix format
-                board_state, policy_target, value_target = convert_to_matrix_format(trmph_url)
+                # Extract multiple training examples from each game
+                from .data_utils import extract_training_examples_from_game
+                training_examples = extract_training_examples_from_game(trmph_url, f"Training data - Game from {winner_indicator}")
                 
-                # Override value target based on actual winner
+                # Override value targets based on actual winner
                 if winner_indicator == "1":
-                    value_target = 1.0  # Blue wins
-                elif winner_indicator == "0":
-                    value_target = 0.0  # Red wins
+                    value_override = 1.0  # Blue wins
+                elif winner_indicator == "2":
+                    value_override = 0.0  # Red wins
+                else:
+                    assert False, "Error (2nd) in data_processing.py, _convert_games_to_tensors: Unknown winner - cannot use game without a winner."
                 
-                # Convert to tensors
-                board_tensor = torch.FloatTensor(board_state)
-                policy_tensor = torch.FloatTensor(policy_target)
-                value_tensor = torch.FloatTensor([value_target])
-                
-                processed_games.append((board_tensor, policy_tensor, value_tensor))
+                for board_state, policy_target, value_target in training_examples:
+                    # Override value if we have explicit winner info
+                    if value_override is not None:
+                        value_target = value_override
+                    
+                    # Convert to tensors
+                    board_tensor = torch.FloatTensor(board_state)
+                    if policy_target is not None:
+                        policy_tensor = torch.FloatTensor(policy_target)
+                    else:
+                        # Final positions have no next move to predict
+                        # TODO(semi-urgent): Though we need to have some tensor here to make
+                        #  training work, we should check whether all zeroes could lead to 
+                        # infinite or NaN loss, which might confuse training.
+                        # Hopefully not an issue as total_loss is to to value_loss only
+                        # for final moves (the only time the policy label should be None), but
+                        # given that any vector here should work, maybe a uniform label, 1/N^2 is safer.
+                        policy_tensor = torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
+                    value_tensor = torch.FloatTensor([value_target])
+                    
+                    processed_games.append((board_tensor, policy_tensor, value_tensor))
                 
             except Exception as e:
                 logger.warning(f"Failed to process game {trmph_url[:50]}...: {e}")
@@ -125,37 +138,8 @@ class DataProcessor:
     
     def _create_shards(self, processed_games: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]], 
                        games_per_shard: int, compress: bool) -> List[Path]:
-        """Create sharded files from processed games."""
-        shard_files = []
-        
-        for shard_idx in range(0, len(processed_games), games_per_shard):
-            shard_games = processed_games[shard_idx:shard_idx + games_per_shard]
-            
-            # Create shard data
-            boards = torch.stack([game[0] for game in shard_games])
-            policies = torch.stack([game[1] for game in shard_games])
-            values = torch.stack([game[2] for game in shard_games])
-            
-            shard_data = {
-                'boards': boards,
-                'policies': policies,
-                'values': values,
-                'num_games': len(shard_games)
-            }
-            
-            # Save shard
-            shard_file = self.processed_dir / f"shard_{shard_idx//games_per_shard:04d}.pkl"
-            if compress:
-                shard_file = shard_file.with_suffix('.pkl.gz')
-                with gzip.open(shard_file, 'wb') as f:
-                    pickle.dump(shard_data, f)
-            else:
-                with open(shard_file, 'wb') as f:
-                    pickle.dump(shard_data, f)
-            
-            shard_files.append(shard_file)
-        
-        return shard_files
+        """[REMOVED: This method is obsolete. All code now uses 'training_samples' format.]"""
+        raise NotImplementedError("_create_shards is obsolete and should not be used.")
     
     def process_directory(self, trmph_dir: str, games_per_shard: int = 1000, 
                          compress: bool = True) -> List[Path]:
@@ -173,63 +157,4 @@ class DataProcessor:
         return all_shard_files
 
 
-class ProcessedDataset(torch.utils.data.Dataset):
-    """Dataset for loading processed shard files."""
-    
-    def __init__(self, shard_files: List[Path], shuffle_shards: bool = True):
-        self.shard_files = shard_files
-        if shuffle_shards:
-            np.random.shuffle(self.shard_files)
-        
-        # Calculate total number of games
-        self.total_games = 0
-        for shard_file in self.shard_files:
-            if shard_file.suffix == '.gz':
-                with gzip.open(shard_file, 'rb') as f:
-                    shard_data = pickle.load(f)
-            else:
-                with open(shard_file, 'rb') as f:
-                    shard_data = pickle.load(f)
-            self.total_games += shard_data['num_games']
-        
-        logger.info(f"Loaded {len(self.shard_files)} shards with {self.total_games} total games")
-    
-    def __len__(self):
-        return self.total_games
-    
-    def __getitem__(self, idx):
-        # Find which shard contains this index
-        current_idx = 0
-        for shard_file in self.shard_files:
-            if shard_file.suffix == '.gz':
-                with gzip.open(shard_file, 'rb') as f:
-                    shard_data = pickle.load(f)
-            else:
-                with open(shard_file, 'rb') as f:
-                    shard_data = pickle.load(f)
-            
-            shard_size = shard_data['num_games']
-            if current_idx <= idx < current_idx + shard_size:
-                # Found the right shard
-                local_idx = idx - current_idx
-                return (shard_data['boards'][local_idx], 
-                       shard_data['policies'][local_idx], 
-                       shard_data['values'][local_idx])
-            
-            current_idx += shard_size
-        
-        raise IndexError(f"Index {idx} out of range")
-
-
-def create_processed_dataloader(shard_files: List[Path], batch_size: int = 32,
-                               shuffle: bool = True, num_workers: int = 4) -> torch.utils.data.DataLoader:
-    """Create a DataLoader from processed shard files."""
-    dataset = ProcessedDataset(shard_files, shuffle_shards=shuffle)
-    
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=True
-    ) 
+# All code should use StreamingProcessedDataset from hex_ai.training_utils instead. 

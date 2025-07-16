@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class TrainingLogger:
     """Comprehensive CSV logger for training metrics and hyperparameters."""
     
-    def __init__(self, log_file: str = "training_metrics.csv", 
+    def __init__(self, log_file: str = "checkpoints/bookkeeping/training_metrics.csv", 
                  experiment_name: Optional[str] = None):
         """
         Initialize the training logger.
@@ -155,6 +155,9 @@ class TrainingLogger:
         # Write to CSV
         with open(self.log_file, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.headers)
+            # Write headers if file is empty (first write)
+            if self.log_file.stat().st_size == 0:
+                writer.writeheader()
             writer.writerow(row)
         
         logger.debug(f"Logged epoch {epoch} metrics")
@@ -225,6 +228,9 @@ class TrainingLogger:
         # Write to CSV
         with open(self.log_file, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.headers)
+            # Write headers if file is empty (first write)
+            if self.log_file.stat().st_size == 0:
+                writer.writeheader()
             writer.writerow(row)
         
         logger.info(f"Logged experiment summary: best_val_loss={best_val_loss:.6f}, epochs={total_epochs}")

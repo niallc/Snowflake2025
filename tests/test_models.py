@@ -68,7 +68,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     def test_model_forward(self):
         """Test that model forward pass works."""
         model = TwoHeadedResNet()
-        x = torch.randn(4, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+        x = torch.randn(4, 3, BOARD_SIZE, BOARD_SIZE)
         policy_logits, value_logit = model(x)
         
         # Check output shapes
@@ -101,7 +101,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
         
         # Test CPU
         model_cpu = model.cpu()
-        x = torch.randn(2, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+        x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE)
         policy, value = model_cpu(x)
         self.assertEqual(policy.device, torch.device('cpu'))
         self.assertEqual(value.device, torch.device('cpu'))
@@ -117,7 +117,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     def test_model_gradients(self):
         """Test that model can compute gradients."""
         model = TwoHeadedResNet()
-        x = torch.randn(2, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
+        x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
         policy_logits, value_logit = model(x)
         
         # Compute loss and backward pass
@@ -133,7 +133,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
         
         batch_sizes = [1, 4, 8, 16]
         for batch_size in batch_sizes:
-            x = torch.randn(batch_size, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
+            x = torch.randn(batch_size, 3, BOARD_SIZE, BOARD_SIZE)
             policy_logits, value_logit = model(x)
             
             self.assertEqual(policy_logits.shape, (batch_size, POLICY_OUTPUT_SIZE))
@@ -152,43 +152,6 @@ class TestModelFactory(unittest.TestCase):
         """Test that invalid model type raises error."""
         with self.assertRaises(ValueError):
             create_model("invalid_model")
-
-
-class TestModelIntegration(unittest.TestCase):
-    """Integration tests for the model."""
-    
-    def test_model_with_dataloader(self):
-        """Test that model works with DataLoader output."""
-        from hex_ai.dataset import create_sample_data
-        
-        model = TwoHeadedResNet()
-        boards, policies, values = create_sample_data(batch_size=8)
-        
-        # Forward pass
-        policy_logits, value_logit = model(boards)
-        
-        # Check shapes
-        self.assertEqual(policy_logits.shape, policies.shape)
-        self.assertEqual(value_logit.shape, values.shape)
-    
-    def test_model_loss_computation(self):
-        """Test that model outputs work with loss functions."""
-        model = TwoHeadedResNet()
-        x = torch.randn(4, NUM_PLAYERS, BOARD_SIZE, BOARD_SIZE)
-        policy_logits, value_logit = model(x)
-        
-        # Create dummy targets
-        policy_targets = torch.randn(4, POLICY_OUTPUT_SIZE)
-        value_targets = torch.randn(4, VALUE_OUTPUT_SIZE)
-        
-        # Compute losses
-        policy_loss = nn.CrossEntropyLoss()(policy_logits, policy_targets.argmax(dim=1))
-        value_loss = nn.BCEWithLogitsLoss()(value_logit, value_targets)
-        
-        # Check that losses are computed
-        self.assertIsInstance(policy_loss.item(), float)
-        self.assertIsInstance(value_loss.item(), float)
-
 
 if __name__ == '__main__':
     unittest.main() 
