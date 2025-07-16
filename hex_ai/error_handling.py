@@ -50,7 +50,8 @@ class BoardStateErrorTracker:
         self.error_details = []
         
     def record_error(self, board_state: Optional[object] = None, error_msg: str = "", 
-                    file_info: str = "", sample_info: str = ""):
+                    file_info: str = "", sample_info: str = "", 
+                    raw_sample: Optional[object] = None, file_path: str = ""):
         """
         Record a board state validation error.
         
@@ -59,6 +60,8 @@ class BoardStateErrorTracker:
             error_msg: The error message
             file_info: Information about the file being processed
             sample_info: Information about the specific sample
+            raw_sample: The original training sample tuple (board, policy, value)
+            file_path: Path to the source file
         """
         self.error_count += 1
         self.total_samples += 1
@@ -69,7 +72,10 @@ class BoardStateErrorTracker:
             'error_msg': error_msg,
             'file_info': file_info,
             'sample_info': sample_info,
-            'board_state_info': str(board_state) if board_state is not None else "None"
+            'board_state_info': str(board_state) if board_state is not None else "None",
+            'file_path': file_path,
+            'raw_sample': raw_sample,
+            'board_state': board_state  # Store the actual board_state for saving
         }
         self.error_details.append(error_detail)
         
@@ -84,6 +90,9 @@ class BoardStateErrorTracker:
             logger.debug(f"File: {file_info}")
         if sample_info:
             logger.debug(f"Sample: {sample_info}")
+        
+        # Save error sample to file
+        self._save_error_sample(error_detail)
         
         # Check if we should fail
         self._check_error_thresholds()
@@ -155,6 +164,45 @@ class BoardStateErrorTracker:
             'total_samples': self.total_samples,
             'error_rate': self.error_count / self.total_samples
         }
+    
+    def _save_error_sample(self, error_detail: Dict):
+        """Save error sample to file for later analysis."""
+        try:
+            import pickle
+            import gzip
+            from pathlib import Path
+            
+            # Create errors directory in current checkpoint directory
+            # We'll try to find the current training directory
+            error_dir = Path("checkpoints/errors")
+            error_dir.mkdir(exist_ok=True)
+            
+            # Create filename with error number and timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"error_{error_detail['error_count']:04d}_{timestamp}.pkl.gz"
+            filepath = error_dir / filename
+            
+            # Save error details
+            error_data = {
+                'error_count': error_detail['error_count'],
+                'error_msg': error_detail['error_msg'],
+                'file_path': error_detail['file_path'],
+                'file_info': error_detail['file_info'],
+                'sample_info': error_detail['sample_info'],
+                'board_state': error_detail.get('board_state'),  # Use the actual board_state parameter
+                'policy_target': error_detail['raw_sample'][1] if error_detail['raw_sample'] else None,
+                'value_target': error_detail['raw_sample'][2] if error_detail['raw_sample'] else None,
+                'timestamp': timestamp
+            }
+            
+            with gzip.open(filepath, 'wb') as f:
+                pickle.dump(error_data, f)
+            
+            logger.debug(f"Error sample saved to {filepath}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save error sample: {e}")
 
 
 # Global error tracker instance

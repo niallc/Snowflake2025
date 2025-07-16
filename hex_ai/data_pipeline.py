@@ -172,7 +172,9 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
                 board_state=board_np,
                 error_msg=str(e),
                 file_info=str(current_file),
-                sample_info=sample_info
+                sample_info=sample_info,
+                raw_sample=sample,
+                file_path=str(current_file)
             )
             # Use default value
             player_to_move = BLUE_PLAYER
