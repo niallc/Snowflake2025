@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Find specific problematic samples in a file that have invalid board states, and attempt to reconstruct the move sequence for each.
+Find specific problematic samples in a file that have invalid board states, and attempt to reconstruct the move sequence for each. Also print the move sequences for the samples in between problematic ones.
 """
 
 import gzip
@@ -52,7 +52,7 @@ def reconstruct_move_sequence(examples):
 
 
 def find_problematic_samples(file_path: str, max_samples: int = 1000):
-    """Find samples with invalid board states and reconstruct their move sequences."""
+    """Find samples with invalid board states and reconstruct their move sequences. Also print in-between move sequences."""
     file_path = Path(file_path)
     with gzip.open(file_path, 'rb') as f:
         data = pickle.load(f)
@@ -61,6 +61,7 @@ def find_problematic_samples(file_path: str, max_samples: int = 1000):
     # Reconstruct move sequences for all samples up to max_samples
     move_sequences, issues = reconstruct_move_sequence(examples[:max_samples])
     problematic_samples = []
+    problematic_indices = []
     for i, example in enumerate(examples[:max_samples]):
         board_state, policy_target, value_target = example
         blue_count = int(np.sum(board_state[0]))
@@ -77,6 +78,7 @@ def find_problematic_samples(file_path: str, max_samples: int = 1000):
                 'red_positions': list(zip(*np.where(board_state[1] == 1.0))),
                 'move_sequence': move_sequences[i] if i < len(move_sequences) else None
             })
+            problematic_indices.append(i)
     print(f"Found {len(problematic_samples)} problematic samples")
     for i, sample in enumerate(problematic_samples[:10]):  # Show first 10
         print(f"\nProblematic sample {i+1}:")
@@ -91,6 +93,18 @@ def find_problematic_samples(file_path: str, max_samples: int = 1000):
         print("\nConsistency issues detected during move sequence reconstruction:")
         for idx, msg in issues:
             print(f"  At sample {idx}: {msg}")
+    # Print the jumping (problematic) move sequences and the in-between ones
+    print("\nSummary of problematic (jumping) move sequences:")
+    for idx in problematic_indices:
+        seq = move_sequences[idx] if idx < len(move_sequences) else None
+        print(f"  Problematic index {idx}: {''.join(seq) if seq else 'N/A'}")
+    print("\nMove sequences for in-between samples:")
+    for i in range(len(problematic_indices) - 1):
+        start = problematic_indices[i]
+        end = problematic_indices[i+1]
+        for j in range(start + 1, end):
+            seq = move_sequences[j] if j < len(move_sequences) else None
+            print(f"  In-between index {j}: {''.join(seq) if seq else 'N/A'}")
     return problematic_samples
 
 if __name__ == "__main__":

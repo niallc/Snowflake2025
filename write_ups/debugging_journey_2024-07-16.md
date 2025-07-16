@@ -62,14 +62,44 @@ This document summarizes our ongoing debugging and investigation into the recent
     - Manual and programmatic inspection of raw and processed data
     - Tracing of problematic samples through the data pipeline
 
-## 7. Next Steps
+## 7. Confirmed Cause of Color-Swapped Games
 
-- Continue efforts to match problematic processed samples to their original TRMPH records to diagnose the root cause of color-swapped games.
-- Consider reprocessing or excluding affected files to ensure clean training data.
-- Investigate the new training pipeline for possible bugs or misconfigurations that could explain the poor performance, independent of data quality.
-- Document any further findings and update this write-up as the investigation progresses.
+- **We have now confirmed that problematic games with color/channel errors are associated with repeated moves in the TRMPH records.**
+    - For example, the reconstructed move sequence for a problematic sample contains the substring `b12b12`, indicating a repeated move.
+    - This repeated move appears to trigger a bug in the pre-processing pipeline: the repeated move is skipped, but the color alternation logic is not properly reset, causing all subsequent moves to be assigned the wrong color.
+    - As a result, every second move in the affected game is invalid (e.g., the board state checker sees equal numbers of red and blue pieces in positions where this should not be possible).
+- **The exact mechanism by which the color swap occurs is not fully known, but the repeated move is a clear trigger for the error.**
+
+### Evidence and File Locations
+- Problematic processed data file: `data/processed/twoNetGames_13x13_mk2_d2b6_1963k_processed.pkl.gz`
+- Analysis outputs: 
+    - Problematic sample summary: `analysis/debugging/problematic_samples_twoNetGames_13x13_mk2_d2b6.txt`
+    - Verbose move sequence output: `analysis/debugging/problematic_samples_twoNetGames_13x13_mk2_d2b6_verbose.txt`
+- Exclusion list: `analysis/debugging/exclude_files.txt`
+
+### Reproducing the Data Trail
+To reproduce the analysis and confirm the issue, run the following steps:
+
+1. **Identify problematic files:**
+   ```sh
+   PYTHONPATH=. python scripts/identify_bad_files.py --data-dir data/processed --generate-exclusion-list --output-file analysis/debugging/exclude_files.txt
+   ```
+2. **Find problematic samples and reconstruct move sequences:**
+   ```sh
+   PYTHONPATH=. python scripts/find_problematic_samples.py data/processed/twoNetGames_13x13_mk2_d2b6_1963k_processed.pkl.gz > analysis/debugging/problematic_samples_twoNetGames_13x13_mk2_d2b6_verbose.txt
+   ```
+3. **Inspect the output:**
+   - Open `analysis/debugging/problematic_samples_twoNetGames_13x13_mk2_d2b6_verbose.txt` and look for repeated moves (e.g., `b12b12`) in the reconstructed move sequences for problematic samples.
+   - The presence of such repeated moves confirms the link between TRMPH file anomalies and color/channel errors in the processed data.
 
 ---
 
 **Summary:**
-We are investigating two intertwined issues: (1) poor training performance after a network redesign, and (2) the presence of color-swapped or otherwise corrupted games in a minority of the data. While the data errors are concerning, they do not fully explain the training issues, and further investigation is needed both on the data and training code fronts. Our growing suite of diagnostic tools is helping to systematically narrow down the possible causes. 
+We have confirmed that color-swapped or otherwise corrupted games in a minority of the data are associated with repeated moves in the original TRMPH records. This triggers a bug in the pre-processing pipeline, leading to systematic color/channel errors in the processed data. While the data errors are concerning, they do not fully explain the training issues, and further investigation is needed on the training code front. Our growing suite of diagnostic tools is helping to systematically narrow down the possible causes.
+
+---
+
+## 8. Next Steps
+
+- Investigate the new training pipeline for possible bugs or misconfigurations that could explain the poor performance, independent of data quality.
+- Document any further findings and update this write-up as the investigation progresses. 

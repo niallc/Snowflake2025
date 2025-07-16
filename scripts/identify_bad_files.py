@@ -121,7 +121,7 @@ def main():
                        help='Maximum samples per file to analyze')
     parser.add_argument('--generate-exclusion-list', action='store_true', 
                        help='Generate exclusion list file')
-    parser.add_argument('--output-file', type=str, default='exclude_files.txt', 
+    parser.add_argument('--output-file', type=str, default='analysis/debugging/exclude_files.txt', 
                        help='Output file for exclusion list')
     
     args = parser.parse_args()

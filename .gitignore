@@ -7,6 +7,7 @@ exploratory_results/
 hyperparameter_results/
 hyperparameter_results_v2/
 NonRepoFiles/
+analysis/
 
 # Niall's file patterns to ignore
 *.png
