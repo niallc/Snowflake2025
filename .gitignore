@@ -82,6 +82,8 @@ scripts/run_hyperparameter_experiment.py
 scripts/run_hyperparameter_tuning.py
 gemini
 gpu_finding_summary_Jul15th.md
+exclude_files.txt
+
 
 # VSCode
 .vscode/

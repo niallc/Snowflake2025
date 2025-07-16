@@ -28,6 +28,9 @@ from hex_ai.utils.format_conversion import (
 
 logger = logging.getLogger(__name__)
 
+# The trmph URL is:
+# https://trmph.com/hex/board#13,a1b2c3
+# We match up to the number (13) and then the comma.
 TRMPH_BOARD_PATTERN = re.compile(r"#(\d+),")
 LETTERS = string.ascii_lowercase
 
@@ -108,6 +111,14 @@ def strip_trmph_preamble(trmph_text: str) -> str:
     """
     Remove the preamble from a trmph string (e.g., 'http://...#13,a1b2c3' -> 'a1b2c3').
     """
+    # Warning, though a trmph URL contains just the preamble and then moves
+    # our data files also contain a space and then an integer 1 or 2, to indicate the winner.
+    # This function strips the preamble to start with the move sequence and .search returns
+    # the index of the comma after the board size.
+    # When we return trmph_text[match.end():] we get the move sequence.
+    # if called on a full line of input data, this would then include the space 
+    # and the winner annotation.
+    # More typically we will call this function on a single move sequence.
     match = TRMPH_BOARD_PATTERN.search(trmph_text)
     if not match:
         raise ValueError(f"No board preamble found in trmph string: {trmph_text}")

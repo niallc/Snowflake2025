@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from .data_utils import validate_game
+from hex_ai.utils.format_conversion import parse_trmph_game_record
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +72,15 @@ class DataProcessor:
                 line = line.strip()
                 if not line:
                     continue
-                
-                # Parse line format: "trmph_url winner_indicator"
-                parts = line.split(' ', 1)
-                if len(parts) != 2:
-                    corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}"))
+                try:
+                    trmph_url, winner_indicator = parse_trmph_game_record(line)
+                except ValueError as e:
+                    corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}: {e}"))
                     continue
-                
-                trmph_url, winner_indicator = parts
-                
                 # Validate trmph URL format
                 if not trmph_url.startswith("http://www.trmph.com/hex/board#"):
                     corrupted_games.append((trmph_url, winner_indicator, f"Invalid trmph URL format at line {line_num}"))
                     continue
-                
                 # Validate game integrity
                 is_valid, error_msg = validate_game(trmph_url, winner_indicator, f"Line {line_num}")
                 if is_valid:

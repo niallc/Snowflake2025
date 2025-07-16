@@ -25,6 +25,7 @@ from datetime import datetime
 sys.path.append('hex_ai')
 
 from hex_ai.data_utils import load_trmph_file, extract_training_examples_from_game
+from hex_ai.utils.format_conversion import parse_trmph_game_record
 # TODO: ProcessedDataset is deprecated/removed. Update this script to use StreamingProcessedDataset from hex_ai.training_utils, or remove if redundant.
 
 # Configure logging
@@ -82,14 +83,12 @@ class TrmphProcessor:
             for i, game_line in enumerate(games):
                 try:
                     # Split the line into trmph URL and winner
-                    parts = game_line.strip().split()
-                    if len(parts) != 2:
-                        logger.warning(f"    Game {i+1} has wrong format: {repr(game_line)}")
+                    try:
+                        trmph_url, winner = parse_trmph_game_record(game_line)
+                    except ValueError as e:
+                        logger.warning(f"    Game {i+1} has wrong format: {repr(game_line)}: {e}")
                         file_stats['corrupted_games'] += 1
                         continue
-                        
-                    trmph_url, winner = parts
-                    
                     examples = extract_training_examples_from_game(trmph_url, winner)
                     if examples:
                         all_examples.extend(examples)

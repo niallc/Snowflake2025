@@ -152,3 +152,20 @@ def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
     """
     board_2nxn = board_nxn_to_2nxn(board_nxn)
     return board_2nxn_to_3nxn(board_2nxn) 
+
+
+def parse_trmph_game_record(line: str) -> tuple[str, str]:
+    """
+    Parse a single line from a TRMPH file, returning (trmph_url, winner_indicator).
+    Raises ValueError if the format is invalid.
+    """
+    line = line.strip()
+    if not line:
+        raise ValueError("Empty line")
+    parts = line.split()
+    if len(parts) != 2:
+        raise ValueError(f"Invalid TRMPH game record format: {repr(line)}")
+    trmph_url, winner_indicator = parts
+    if not winner_indicator.isdigit() or winner_indicator not in {"1", "2"}:
+        raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
+    return trmph_url, winner_indicator 
