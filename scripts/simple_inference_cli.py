@@ -22,12 +22,15 @@ def main():
     infer.display_board(args.trmph)
 
     print("\n--- Model Predictions ---")
-    policy_probs, value = infer.infer(args.trmph)
+    policy_probs, value, raw_value = infer.infer(args.trmph)
     top_moves = infer.get_top_k_moves(policy_probs, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")
     print(f"\nValue estimate (Probability Blue Wins): {value*100:.1f}%\n")
+    print(f"Raw value logit: {raw_value}")
 
 if __name__ == "__main__":
+    # For command line execution, don't forget to run
+    # source hex_ai_env/bin/activate
     main() 

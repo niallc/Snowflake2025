@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# For command line execution, don't forget to run
+# source hex_ai_env/bin/activate
 """
 Modern training entry point for Hex AI.
 Uses StreamingProcessedDataset, Trainer, and robust device/mixed precision logic.

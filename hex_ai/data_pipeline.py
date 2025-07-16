@@ -113,7 +113,13 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         if files_attempted > 0:
             error_log_dir = str(self.data_files[0].parent) if self.data_files else "."
             check_data_loading_errors(files_attempted, files_with_errors, error_details, error_log_dir)
-        logger.info(f"Loaded chunk of {len(self.current_chunk)} examples (total loaded: {self.total_examples_loaded + len(self.current_chunk)})")
+        # Compact logging for verbose level 2
+        import logging
+        if logging.getLogger().getEffectiveLevel() <= logging.INFO:
+            print(".", end="", flush=True)
+            # Add newline every 50 chunks for readability
+            if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
+                print()  # Newline
     
     def __len__(self):
         """
@@ -140,11 +146,40 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         sample = self.current_chunk[self.current_example_idx]
         self.current_example_idx += 1
         self.total_examples_loaded += 1
+        
+        # Get error tracker for board state validation
+        from hex_ai.error_handling import get_board_state_error_tracker
+        error_tracker = get_board_state_error_tracker()
+        
         board_state = torch.FloatTensor(sample[0])
         # Add player-to-move channel
         board_np = board_state.numpy()
         from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
-        player_to_move = get_player_to_move_from_board(board_np)
+        
+        # Get current file info for error tracking
+        current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
+        sample_info = f"chunk_idx={self.current_example_idx-1}, total_loaded={self.total_examples_loaded}"
+        
+        # Set context for error tracking
+        error_tracker._current_file = str(current_file)
+        error_tracker._current_sample = sample_info
+        
+        try:
+            player_to_move = get_player_to_move_from_board(board_np, error_tracker)
+        except Exception as e:
+            # If get_player_to_move_from_board still raises an exception (shouldn't happen with error tracker)
+            error_tracker.record_error(
+                board_state=board_np,
+                error_msg=str(e),
+                file_info=str(current_file),
+                sample_info=sample_info
+            )
+            # Use default value
+            player_to_move = BLUE_PLAYER
+        
+        # Record successful processing
+        error_tracker.record_success()
+        
         player_channel = np.full((board_np.shape[1], board_np.shape[2]), float(player_to_move), dtype=np.float32)
         board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
         board_state = torch.from_numpy(board_3ch)

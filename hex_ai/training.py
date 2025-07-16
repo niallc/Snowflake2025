@@ -532,6 +532,13 @@ class Trainer:
         
         logger.info("Training completed!")
         
+        # Print compact summary if we used compact logging
+        from hex_ai.error_handling import get_board_state_error_tracker
+        error_tracker = get_board_state_error_tracker()
+        stats = error_tracker.get_stats()
+        if stats['total_samples'] > 0:
+            print(f"\nData loading summary: {stats['total_samples']} samples, {stats['error_count']} errors ({stats['error_rate']:.2%})")
+        
         # Return comprehensive results
         return {
             "best_val_loss": self.best_val_loss,
@@ -544,7 +551,8 @@ class Trainer:
             "epochs_trained": len(train_losses),
             "early_stopped": early_stopped,
             "total_training_time": total_training_time,
-            "epoch_times": epoch_times # Return epoch times for analysis
+            "epoch_times": epoch_times, # Return epoch times for analysis
+            "data_stats": stats
         }
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
@@ -653,6 +661,8 @@ class Trainer:
         # Add strategic samples from earlier epochs
         if max_epoch >= 20:
             # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
+            if 4 <= max_epoch:
+                keep_epochs.add(4)
             if max_epoch == 20:
                 keep_epochs.update([16, 13, 9, 4])
             else:

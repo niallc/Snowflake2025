@@ -45,8 +45,9 @@ class SimpleModelInference:
 
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_probs = torch.softmax(policy_logits, dim=0).numpy()
+        raw_value = value_logit.item()
         value = torch.sigmoid(value_logit).item()  # Probability blue wins
-        return policy_probs, value
+        return policy_probs, value, raw_value
 
     def get_top_k_moves(self, policy_probs: np.ndarray, k: int = 3) -> List[Tuple[str, float]]:
         """

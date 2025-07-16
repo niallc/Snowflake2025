@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class TrainingLogger:
     """Comprehensive CSV logger for training metrics and hyperparameters."""
     
-    def __init__(self, log_file: str = "training_metrics.csv", 
+    def __init__(self, log_file: str = "checkpoints/bookkeeping/training_metrics.csv", 
                  experiment_name: Optional[str] = None):
         """
         Initialize the training logger.

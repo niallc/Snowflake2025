@@ -30,11 +30,28 @@ class ModelWrapper:
 
     def _load_model(self, checkpoint_path: str, model_type: str):
         model = create_model(model_type)
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
+        
+        # Try loading as regular checkpoint first
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint)
+        except Exception as e:
+            # Try loading as compressed checkpoint
+            import gzip
+            import pickle
+            try:
+                with gzip.open(checkpoint_path, 'rb') as f:
+                    checkpoint = pickle.load(f)
+                if 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                else:
+                    model.load_state_dict(checkpoint)
+            except Exception as e2:
+                raise RuntimeError(f"Failed to load checkpoint {checkpoint_path}: {e} (uncompressed), {e2} (compressed)")
+        
         return model
 
     def predict(self, board_tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
