@@ -10,9 +10,9 @@ import os
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "learning-rate": [0.01, 0.001],
+    "learning-rate": [0.001, 0.01],
     "batch-size": [128, 256],
-    "max-grad-norm": [3.0, 15.0, 50.0],
+    "max-grad-norm": [30, 8, 100],
     "dropout": [0.0005],
     "weight-decay": [5e-4],
     # Add more as needed

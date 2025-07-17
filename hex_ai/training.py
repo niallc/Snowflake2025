@@ -308,6 +308,18 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
+        print(f"Trainer.train_epoch() called")
+        print(f"self.current_epoch = {self.current_epoch}")
+        if(self.current_epoch == 0):
+            print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
+            print(f"self.max_grad_norm = {self.max_grad_norm}")
+            print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
+            print(f"self.train_loader.dataset = {self.train_loader.dataset}")
+            print(f"self.train_loader.shuffle = {self.train_loader.shuffle}")
+            print(f"self.train_loader.num_workers = {self.train_loader.num_workers}")
+            print(f"self.train_loader.pin_memory = {self.train_loader.pin_memory}")
+            print(f"self.train_loader.drop_last = {self.train_loader.drop_last}")
+            print(f"self.train_loader.timeout = {self.train_loader.timeout}")
         """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
@@ -350,14 +362,25 @@ class Trainer:
                 epoch_metrics[key].append(loss_dict[key])
             # Log progress - adjust frequency based on dataset size and verbosity
             from .config import VERBOSE_LEVEL
-            if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
+            if VERBOSE_LEVEL >= 1:
                 # With only 100 or fewer batches, log every 5 batches
                 # Between 101 and 2000 batches, log every 50 batches
                 # Above 2000 batches, log every 200 batches
                 log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
+
                 if batch_idx % log_interval == 0:
+                    print(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
+                            f"Loss: {loss_dict['total_loss']:.4f}, "
+                            f"Policy: {loss_dict['policy_loss']:.4f}, "
+                            f"Value: {loss_dict['value_loss']:.4f}, "
+                            f"Batch time: {time.time() - batch_start_time:.3f}s, "
+                            f"Data load: {batch_data_time:.3f}s", flush=True)                    
                     logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                               f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
+            else:
+                if batch_idx == 0:
+                    print("*", end="", flush=True)
+
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()
