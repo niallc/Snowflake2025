@@ -732,7 +732,7 @@ def create_trainer(model: TwoHeadedResNet,
     """Create a trainer with data loaders from processed shard files."""
     # Use StreamingProcessedDataset for all data loading
     train_dataset = StreamingProcessedDataset(train_shard_files)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     val_loader = None
     if val_shard_files:
         val_dataset = StreamingProcessedDataset(val_shard_files)

@@ -109,6 +109,10 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
                 error_details.append((str(file_path), str(e)))
                 self.current_file_idx += 1
                 continue
+        # Shuffle the chunk for better randomization
+        if len(self.current_chunk) > 0:
+            random.shuffle(self.current_chunk)
+        
         # After loading, check error thresholds
         if files_attempted > 0:
             error_log_dir = str(self.data_files[0].parent) if self.data_files else "."

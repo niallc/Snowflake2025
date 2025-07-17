@@ -87,7 +87,7 @@ results_dir.mkdir(parents=True, exist_ok=True)
 # Trainer
 trainer = Trainer(
     model=model,
-    train_loader=torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True),
+            train_loader=torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False),
     val_loader=torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False),
     learning_rate=args.learning_rate,
     device=device,
