@@ -319,3 +319,147 @@ We have identified that the main training pipeline underperforms compared to a s
 - Further investigation is needed into the training loop, loss computation, and data/label alignment.
 
 --- 
+
+## 12. Legacy Code Restoration Success (2024-07-18)
+
+**BREAKTHROUGH:** We have successfully restored the legacy Hex AI code to a working state and confirmed that it performs significantly better than the current problematic version.
+
+### What Was Accomplished
+- **Restored legacy model architecture**: `TwoHeadedResNetLegacy` with 2-channel input (blue, red)
+- **Restored legacy training pipeline**: Using `ProcessedDatasetLegacy` and `create_processed_dataloader_legacy`
+- **Fixed channel mismatch**: Legacy training utilities now correctly use `TwoHeadedResNetLegacy` instead of the current 3-channel model
+- **Confirmed working performance**: Legacy code achieves much better policy loss reduction compared to current version
+
+### Key Findings
+- **Legacy model works**: 2-channel ResNet18 with 3x3 first convolution performs well
+- **Legacy training pipeline works**: Simple data loading without player-to-move channel works correctly
+- **Current version is broken**: The 3-channel model with 5x5 first convolution and player-to-move channel is performing poorly
+- **Data is not the issue**: Same data files work well with legacy code, confirming data quality is not the root cause
+
+### Legacy vs Current Performance
+- **Legacy**: Policy loss drops rapidly and achieves good performance
+- **Current**: Policy loss barely improves from random initialization
+- **Conclusion**: The architectural changes introduced in the "modern" version have broken the training
+
+---
+
+## 13. Incremental Migration Plan: Legacy → Modern (2024-07-18)
+
+Based on the successful restoration of the legacy code, we now have a solid foundation to incrementally build toward the modern design. The goal is to identify exactly which change(s) broke the training by testing each modification individually.
+
+### Phase 1: Baseline Validation (COMPLETED)
+- ✅ **Legacy code working**: 2-channel model with 3x3 first conv, no player-to-move channel
+- ✅ **Performance confirmed**: Good policy loss reduction on same data
+- ✅ **Data pipeline validated**: Legacy data loading works correctly
+
+### Phase 2: Individual Component Testing
+
+#### Step 2.1: Test Player-to-Move Channel Addition
+**Goal**: Add the player-to-move channel while keeping everything else legacy
+- **Changes to test**:
+  - Modify `TwoHeadedResNetLegacy` to accept 3-channel input (2 + player-to-move)
+  - Update legacy data loading to add player-to-move channel
+  - Keep 3x3 first convolution, legacy training pipeline
+- **Success criteria**: Policy loss should still drop rapidly
+- **If it fails**: Player-to-move channel addition is the problem
+- **If it succeeds**: Move to next step
+
+#### Step 2.2: Test Wider First Convolution
+**Goal**: Change from 3x3 to 5x5 first convolution
+- **Changes to test**:
+  - Modify first conv layer in `TwoHeadedResNetLegacy` from 3x3 to 5x5
+  - Keep 3-channel input, legacy training pipeline
+- **Success criteria**: Policy loss should still drop rapidly
+- **If it fails**: 5x5 first convolution is the problem
+- **If it succeeds**: Move to next step
+
+#### Step 2.3: Test Current Training Pipeline
+**Goal**: Switch to current training pipeline while keeping legacy model
+- **Changes to test**:
+  - Use current `Trainer` class instead of legacy training
+  - Keep legacy model (with 3 channels and 5x5 conv from previous steps)
+  - Test current loss weighting, gradient clipping, mixed precision
+- **Success criteria**: Policy loss should still drop rapidly
+- **If it fails**: Current training pipeline is the problem
+- **If it succeeds**: Move to final step
+
+#### Step 2.4: Test Current Data Pipeline
+**Goal**: Switch to current data loading while keeping legacy model
+- **Changes to test**:
+  - Use `StreamingProcessedDataset` instead of legacy data loading
+  - Keep legacy model (with all previous changes)
+  - Test current data format and loading strategy
+- **Success criteria**: Policy loss should still drop rapidly
+- **If it fails**: Current data pipeline is the problem
+
+### Phase 3: Root Cause Analysis and Fixes
+
+#### For Each Failed Step:
+1. **Isolate the specific change** that caused the regression
+2. **Analyze why it broke training**:
+   - Data format issues?
+   - Model architecture problems?
+   - Training dynamics changes?
+   - Loss computation issues?
+3. **Implement targeted fixes**:
+   - Fix data format if needed
+   - Adjust model architecture if needed
+   - Modify training parameters if needed
+4. **Re-test** to ensure the fix works
+
+### Phase 4: Integration and Validation
+
+#### Step 4.1: Full Modern Pipeline
+- **Goal**: Combine all working changes into a complete modern pipeline
+- **Test**: Full training run with all modern features
+- **Validate**: Performance should match or exceed legacy performance
+
+#### Step 4.2: Performance Comparison
+- **Compare**: Legacy vs modern performance on same data
+- **Document**: Any performance differences and their causes
+- **Optimize**: Further improvements if needed
+
+### Implementation Strategy
+
+#### Testing Framework
+- **Create test scripts** for each step that can run quickly (e.g., 10k samples, 5 epochs)
+- **Automated comparison**: Compare policy loss curves between legacy and modified versions
+- **Clear success criteria**: Define what constitutes "working" vs "broken" for each step
+
+#### Rollback Strategy
+- **Git branches**: Create separate branches for each testing step
+- **Checkpointing**: Save working states at each successful step
+- **Documentation**: Record exactly what works and what doesn't
+
+#### Tools Needed
+- **Quick test script**: `scripts/test_legacy_incremental.py` - test each modification individually
+- **Comparison script**: `scripts/compare_legacy_vs_modified.py` - compare performance curves
+- **Analysis tools**: Extend existing debugging scripts to work with both legacy and modern versions
+
+### Expected Timeline
+- **Step 2.1**: 1-2 hours (player-to-move channel)
+- **Step 2.2**: 1-2 hours (5x5 convolution)
+- **Step 2.3**: 2-3 hours (training pipeline)
+- **Step 2.4**: 2-3 hours (data pipeline)
+- **Phase 3**: 4-8 hours (fixes and re-testing)
+- **Phase 4**: 2-4 hours (integration and validation)
+
+**Total estimated time**: 12-22 hours to identify and fix the root cause
+
+### Success Metrics
+- **Policy loss reduction**: Should match or exceed legacy performance
+- **Training stability**: No NaN losses, consistent convergence
+- **Memory efficiency**: Should not be significantly worse than legacy
+- **Training speed**: Should not be significantly slower than legacy
+
+### Next Immediate Steps
+1. **Create test infrastructure**: Build the incremental testing framework
+2. **Start with Step 2.1**: Test player-to-move channel addition
+3. **Document results**: Record findings for each step
+4. **Iterate**: Fix issues as they arise and continue testing
+
+This systematic approach should allow us to identify exactly which change(s) broke the training and implement targeted fixes, ultimately resulting in a modern, working Hex AI that performs at least as well as the legacy version.
+
+---
+
+**Summary**: We now have a working baseline (legacy code) and a clear path forward to incrementally build toward the modern design while identifying and fixing the specific issues that caused the performance regression. 
