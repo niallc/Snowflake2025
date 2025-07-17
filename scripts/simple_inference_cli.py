@@ -4,6 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 def main():
@@ -16,6 +17,7 @@ def main():
     args = parser.parse_args()
 
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"
+    print(f"model_path = {model_path}")
     infer = SimpleModelInference(model_path, device=args.device)
 
     print("\n--- Board Position ---")
@@ -33,4 +35,16 @@ def main():
 if __name__ == "__main__":
     # For command line execution, don't forget to run
     # source hex_ai_env/bin/activate
+    # Symptom if you fail to do this, messages like:
+    # ModuleNotFoundError: No module named 'torch'
+
+    # To run this script from the command line, run:
+    """
+    python3 -m scripts.simple_inference_cli \
+        --trmph https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7 \
+        --model_dir checkpoints/sweep/sweep_run_0_learning-rate0.001_batch-size128_max-grad-norm100_dropout0.0005_weight-decay0.0001_20250717_121342/ \
+        --model_file best_model.pt \
+        --device mps
+
+    """
     main() 

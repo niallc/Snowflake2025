@@ -280,3 +280,42 @@ We have identified that the main training pipeline underperforms compared to a s
 - Identify critical differences between working and non-working pipelines
 - Fix the main training pipeline or adopt the working approach
 - Validate improvements on larger datasets 
+
+---
+
+## 13. Gradient Clipping, Pipeline Performance, and Simple Inference Test (2024-07-17)
+
+### Gradient Clipping and Pipeline Comparison
+
+- We systematically compared the main training pipeline and a simplified overfit pipeline using `scripts/compare_training_pipelines.py`.
+- The script allows running both pipelines on the same data and model, and systematically toggling features like weight decay, gradient clipping, and mixed precision.
+- **Key finding:** Gradient clipping (especially with a low max norm) and weight decay can significantly degrade policy head performance, but removing or adjusting them does not fully restore the old performance.
+- To replicate: run
+  ```sh
+  PYTHONPATH=. python scripts/compare_training_pipelines.py data/processed/your_data.pkl.gz --max-samples 5000 --epochs 10 --device auto --test-parameters
+  ```
+  and review the output for policy loss and accuracy differences between the pipelines.
+- See the script for details on how to add or modify parameter sweeps.
+
+### Ongoing Training Issues
+
+- Despite these findings, after 5 epochs of training on 100k samples with the new pipeline, the policy loss remains considerably higher than in previous runs with the old network design.
+- This suggests that the root cause of poor policy learning is not solely due to gradient clipping or weight decay settings.
+
+### Simple Inference Test
+
+- We tested the trained model using `scripts/simple_inference_cli.py` on a trivial game:
+  ```
+  g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7
+  ```
+  - In this position, the only reasonable move is g7 (the (6,6) point), which should be a win for either player.
+  - The model failed to rank g7 in the top 3 moves, indicating a fundamental issue with policy learning.
+
+### Summary
+
+- Gradient clipping and weight decay can impact performance, but are maybe not the sole cause of the poor policy head learning.
+- A new training run, even with 100k samples and 5 epochs, does not match the performance of the old network.
+- Simple inference tests confirm that the model is not learning even simple positions correctly.
+- Further investigation is needed into the training loop, loss computation, and data/label alignment.
+
+--- 

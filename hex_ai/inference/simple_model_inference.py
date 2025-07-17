@@ -7,6 +7,7 @@ from hex_ai.inference.board_display import display_hex_board
 
 class SimpleModelInference:
     def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18"):
+        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}")
         self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type)
         self.board_size = fc.BOARD_SIZE
 

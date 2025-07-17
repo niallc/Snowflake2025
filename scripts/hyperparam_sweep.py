@@ -12,16 +12,16 @@ import os
 SWEEP = {
     "learning-rate": [0.001, 0.01],
     "batch-size": [128, 256],
-    "max-grad-norm": [30, 8, 100],
-    "dropout": [0.0005],
-    "weight-decay": [5e-4],
+    "max-grad-norm": [100, 8, 20],
+    "dropout": [0.0005, 0],
+    "weight-decay": [1e-4, 1e-3],
     # Add more as needed
 }
 
 DATA_DIR = "data/processed"
 RESULTS_DIR = "checkpoints/sweep"
 EPOCHS = 10
-MAX_SAMPLES = 100_000 # Is an underscore ignored in a numberic literal in python? Answer: yes.
+MAX_SAMPLES = 200_000 # Is an underscore ignored in a numberic literal in python? Answer: yes.
 
 def all_param_combinations(sweep_dict):
     keys = list(sweep_dict.keys())

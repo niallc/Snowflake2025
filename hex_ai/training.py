@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 
+from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
@@ -314,12 +315,8 @@ class Trainer:
             print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
             print(f"self.max_grad_norm = {self.max_grad_norm}")
             print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
-            print(f"self.train_loader.dataset = {self.train_loader.dataset}")
-            print(f"self.train_loader.shuffle = {self.train_loader.shuffle}")
-            print(f"self.train_loader.num_workers = {self.train_loader.num_workers}")
-            print(f"self.train_loader.pin_memory = {self.train_loader.pin_memory}")
-            print(f"self.train_loader.drop_last = {self.train_loader.drop_last}")
-            print(f"self.train_loader.timeout = {self.train_loader.timeout}")
+            print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
+
         """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
@@ -361,7 +358,6 @@ class Trainer:
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
             # Log progress - adjust frequency based on dataset size and verbosity
-            from .config import VERBOSE_LEVEL
             if VERBOSE_LEVEL >= 1:
                 # With only 100 or fewer batches, log every 5 batches
                 # Between 101 and 2000 batches, log every 50 batches
