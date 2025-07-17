@@ -6,9 +6,9 @@ from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.board_display import display_hex_board
 
 class SimpleModelInference:
-    def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18"):
-        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}")
-        self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type)
+    def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18", model_instance=None):
+        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}, model_instance={type(model_instance) if model_instance is not None else None}")
+        self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type, model_instance=model_instance)
         self.board_size = fc.BOARD_SIZE
 
     def trmph_to_2nxn(self, trmph: str) -> torch.Tensor:

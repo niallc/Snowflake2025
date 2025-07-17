@@ -14,11 +14,22 @@ def main():
     parser.add_argument('--model_file', type=str, default="best_model.pt", help='Model checkpoint file name')
     parser.add_argument('--topk', type=int, default=3, help='Number of top policy moves to display')
     parser.add_argument('--device', type=str, default=None, help='Device to use (cpu, cuda, mps)')
+    parser.add_argument('--legacy-model', action='store_true', help='Use legacy 2-channel model for old checkpoints')
     args = parser.parse_args()
 
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"
     print(f"model_path = {model_path}")
-    infer = SimpleModelInference(model_path, device=args.device)
+    # --- LEGACY MODEL SUPPORT ---
+    if args.legacy_model:
+        print("Using legacy model")
+        from hex_ai.models_legacy import TwoHeadedResNetLegacy
+        model = TwoHeadedResNetLegacy()
+        infer = SimpleModelInference(model_path, device=args.device, model_instance=model)
+    else:
+        print("Using current model architecture")
+        from hex_ai.models import TwoHeadedResNet
+        # model = TwoHeadedResNet()  # Redundant, not used
+        infer = SimpleModelInference(model_path, device=args.device)
 
     print("\n--- Board Position ---")
     infer.display_board(args.trmph)
@@ -46,5 +57,13 @@ if __name__ == "__main__":
         --model_file best_model.pt \
         --device mps
 
+    Recreating performance from an older training run (pre refactor)
+    python3 -m scripts.simple_inference_cli \
+        --trmph https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7 \
+        --model_dir checkpoints/old_results/pre_player_turn_info/hex_ai_hyperparam_tuning_v3_500k_samples_20250714_140659/bs_1024_wd_5e-4_policy_0.1_value_0.9 \
+        --model_file checkpoint_epoch_0.pt \
+        --device mps \
+        --legacy-model
+        
     """
     main() 
