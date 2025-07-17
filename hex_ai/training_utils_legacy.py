@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
 
-from .models import TwoHeadedResNet
+from .models_legacy import TwoHeadedResNetLegacy
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
@@ -577,7 +577,7 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
         )
     
     # Create model
-    model = TwoHeadedResNet(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    model = TwoHeadedResNetLegacy(dropout_prob=hyperparams.get('dropout_prob', 0.1))
     device = torch.device(experiment_config['device'])
     model = model.to(device)
     
