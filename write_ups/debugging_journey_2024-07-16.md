@@ -166,3 +166,39 @@ Based on the current investigation, the model and training code appear structura
 
 **Summary:**
 - The next phase of debugging will focus on verifying the integrity and correctness of the data pipeline and loss computation, using both visualization tools and controlled overfitting experiments. This should help isolate whether the policy head's poor learning is due to data/label mismatches, subtle bugs, or other issues not yet identified. 
+
+## 11. Overfitting on a Single Game: Progress and Open Questions (2024-07-18)
+
+As part of our ongoing debugging, we set up an experiment to overfit the model on a single complete game (extracted as a small `.pkl.gz` file with 55 examples). The goal is to verify that the model and training loop can learn a trivial dataset, which would indicate that the core architecture and loss are functioning as expected.
+
+### Progress
+- We developed and iteratively refined a script (`scripts/overfit_tiny_dataset.py`) to:
+    - Load all samples from a single-game `.pkl.gz` file (handling both list-of-dicts and new tuple-in-dict formats).
+    - Convert the data to PyTorch tensors, with careful handling of numpy arrays and shapes.
+    - Train the model on this data as a single batch for many epochs, tracking policy accuracy and loss.
+    - Implement early stopping and provide move-by-move analysis at the end.
+    - Add detailed memory usage diagnostics (including tensor sizes and process memory) to investigate high memory usage.
+- The script now successfully loads the single-game file and prepares the data for training.
+
+### Current Observations
+- The model is able to learn and improve accuracy on the tiny dataset, confirming that learning is possible in principle.
+- However, the process is much slower than expected, and memory usage is extremely high (~12GB), even though the data and model are small.
+- Diagnostics show that the in-memory tensors and model parameters account for only a small fraction of this memory, suggesting possible memory fragmentation, PyTorch/MPS backend issues, or other inefficiencies.
+- The data format for single-game files is not fully standardized; we now handle both the legacy list-of-dicts and the new dict-with-'examples'-key format.
+
+### Next Steps and Open Questions
+- **Why is memory usage so high?**
+    - Continue investigating PyTorch/MPS memory allocation and possible leaks or inefficiencies.
+    - Try running the same script on CPU or CUDA (if available) to compare memory profiles.
+    - Profile the script with external tools (e.g., `memory_profiler`, `Activity Monitor`) to pinpoint where memory is being consumed.
+- **Why is training so slow?**
+    - Investigate whether the MPS backend is causing slowdowns or if there are inefficiencies in the training loop.
+    - Try running with different batch sizes, devices, or PyTorch versions.
+- **Standardize data formats:**
+    - Update data extraction and loading utilities to consistently use a single, well-documented format for all small/batch files.
+- **If overfitting succeeds, move to more complex sanity checks:**
+    - Try overfitting on a few games, or on a hand-crafted dataset with known solutions.
+    - Use visualization tools to confirm that the model's predictions match expectations at each step.
+
+**Summary:**
+We have made progress in verifying that the model can learn from a single game, but are currently blocked by unexpectedly high memory usage and slow training, especially on Apple MPS. The next phase will focus on profiling and resolving these performance issues, and on standardizing the data formats for future experiments. 
