@@ -75,7 +75,7 @@ def run_overfit_pipeline(data_files, max_samples=500, epochs=50, device='cpu'):
     
     print(f"  Overfit pipeline loss weights: policy={criterion.policy_weight}, value={criterion.value_weight}")
     print(f"  Overfit pipeline optimizer: {type(optimizer).__name__}, lr={optimizer.param_groups[0]['lr']}, weight_decay={optimizer.param_groups[0].get('weight_decay', 0)}")
-    
+
     # Training loop
     best_accuracy = 0.0
     training_history = []
@@ -206,16 +206,13 @@ def run_main_pipeline(data_files, max_samples=500, epochs=50, device='cpu'):
         learning_rate=0.001,
         device=device,
         enable_system_analysis=False,
-        enable_csv_logging=False,
-        weight_decay=0.0  # Disable weight decay for comparison
+        enable_csv_logging=False
     )
     
-    # Disable mixed precision and gradient clipping for this test
-    trainer.mixed_precision.use_mixed_precision = False
-    print("  Disabled mixed precision and gradient clipping for comparison")
+    # print("  Disabled mixed precision and gradient clipping for comparison")
     print(f"  Main pipeline loss weights: policy={trainer.criterion.policy_weight}, value={trainer.criterion.value_weight}")
     print(f"  Main pipeline optimizer: {type(trainer.optimizer).__name__}, lr={trainer.optimizer.param_groups[0]['lr']}, weight_decay={trainer.optimizer.param_groups[0].get('weight_decay', 0)}")
-    
+
     # Training loop (simplified to match overfit pipeline)
     best_accuracy = 0.0
     training_history = []
@@ -235,7 +232,7 @@ def run_main_pipeline(data_files, max_samples=500, epochs=50, device='cpu'):
             policy_targets = policy_targets.to(device)
             value_targets = value_targets.to(device)
             
-            # Forward pass (without mixed precision)
+            # Forward pass
             policy_output, value_output = model(boards_batch)
             
             # Compute loss
@@ -253,10 +250,10 @@ def run_main_pipeline(data_files, max_samples=500, epochs=50, device='cpu'):
             total_value_loss += loss_dict['value_loss']
             num_batches += 1
             
-            # Backward pass (without gradient clipping)
+            # Backward pass
             trainer.optimizer.zero_grad()
             total_loss.backward()
-            trainer.optimizer.step()  # Direct step, no scaling
+            trainer.optimizer.step()
             
             # Clear memory
             del policy_output, value_output, policy_probs, predicted_moves, target_moves
@@ -360,4 +357,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()

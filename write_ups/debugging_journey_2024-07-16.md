@@ -202,3 +202,81 @@ As part of our ongoing debugging, we set up an experiment to overfit the model o
 
 **Summary:**
 We have made progress in verifying that the model can learn from a single game, but are currently blocked by unexpectedly high memory usage and slow training, especially on Apple MPS. The next phase will focus on profiling and resolving these performance issues, and on standardizing the data formats for future experiments. 
+
+---
+
+## 12. Major Breakthrough: Training Pipeline Performance Differences (2024-07-18)
+
+We have made a significant breakthrough in understanding the poor policy loss performance. Through systematic comparison of different training approaches, we discovered that **the main training pipeline performs significantly worse than a simplified overfit pipeline, even when using identical data and model architecture**.
+
+### Key Findings
+
+**Performance Gap Identified:**
+- The main training pipeline (`run_trainer.py`) achieves much worse policy loss and accuracy than a simplified overfit pipeline
+- This gap persists even when using the same data, model architecture, and basic hyperparameters
+- The overfit pipeline can achieve policy loss ~0.5-1.0 and accuracy ~70-80% on small datasets, while the main pipeline struggles to improve beyond initial random performance
+
+**Overfit Pipeline Success:**
+- A simplified training script (`scripts/overfit_tiny_dataset.py`) can successfully overfit small datasets
+- This pipeline runs much faster with GPU acceleration (MPS on Mac)
+- Memory usage is reasonable (~0.6GB) when using appropriate batch sizes
+- The model can learn and improve policy accuracy significantly on controlled datasets
+
+**Systematic Comparison Framework:**
+- Created `scripts/compare_training_pipelines.py` to systematically compare different training configurations
+- This allows us to isolate which training settings cause the performance difference
+- Initial tests show that mixed precision, gradient clipping, and weight decay may contribute to the gap, but don't fully explain it
+
+### What We Know vs. What We Don't Know
+
+**What We Know:**
+1. **The model architecture is sound** - it can learn effectively in the overfit pipeline
+2. **The data pipeline is correct** - validation shows no discrepancies between raw and loader output
+3. **The performance gap is real** - systematic comparison confirms the main pipeline underperforms
+4. **GPU acceleration works well** - MPS provides significant speedup for the overfit pipeline
+5. **Memory usage can be controlled** - appropriate batch sizes and data loading prevent excessive memory use
+
+**What We Don't Know:**
+1. **Which specific training settings cause the performance gap** - mixed precision, gradient clipping, weight decay, data loading differences, or combinations thereof
+2. **Whether the main pipeline has bugs** - subtle issues in the training loop, loss computation, or optimization
+3. **How to fix the main pipeline** - whether to modify existing settings or adopt the overfit approach
+4. **The root cause of the difference** - whether it's a configuration issue, implementation bug, or fundamental design problem
+
+### Next Steps: Systematic Configuration Analysis
+
+We need to systematically test different training configurations to identify what causes the performance difference:
+
+1. **Create a comprehensive comparison framework** that can test various combinations of:
+   - Mixed precision (on/off)
+   - Gradient clipping (on/off, different thresholds)
+   - Weight decay (on/off, different values)
+   - Data loading approaches (LimitedDataset vs direct loading)
+   - Learning rate schedules
+   - Batch sizes and optimization settings
+
+2. **Document results systematically** in `analysis/debugging/` to track which settings matter most
+
+3. **Identify the critical differences** that explain the performance gap
+
+4. **Fix the main pipeline** or adopt the working approach as the new standard
+
+### Implications
+
+This discovery suggests that:
+- The poor training performance is likely due to training pipeline configuration, not fundamental model or data issues
+- We may be able to significantly improve results by adjusting training settings rather than redesigning the model
+- The overfit pipeline provides a working baseline that we can build upon
+- GPU acceleration (MPS) is viable and should be used consistently
+
+**Summary:**
+We have identified that the main training pipeline underperforms compared to a simplified approach, despite using the same model and data. This is a major breakthrough that shifts our focus from data/model issues to training configuration. The next phase involves systematic testing of different training settings to identify and fix the root cause of the performance gap.
+
+---
+
+## 13. Next Steps
+
+- Implement systematic configuration testing framework
+- Document and analyze results of different training settings
+- Identify critical differences between working and non-working pipelines
+- Fix the main training pipeline or adopt the working approach
+- Validate improvements on larger datasets 
