@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-from .models import TwoHeadedResNet
-from .data_processing import ProcessedDataset, create_processed_dataloader
+from .models_legacy import ResNetBlockLegacy, TwoHeadedResNetLegacy
+from .data_processing_legacy import ProcessedDatasetLegacy, create_processed_dataloader_legacy
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
@@ -208,7 +208,7 @@ class EarlyStopping:
 class Trainer:
     """Training manager for Hex AI models."""
     
-    def __init__(self, model: TwoHeadedResNet, 
+    def __init__(self, model: TwoHeadedResNetLegacy, 
                  train_loader: DataLoader,
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
@@ -655,7 +655,7 @@ class Trainer:
         return keep_epochs
 
 
-def create_trainer(model: TwoHeadedResNet, 
+def create_trainer(model: TwoHeadedResNetLegacy, 
                   train_shard_files: List[Path],
                   val_shard_files: Optional[List[Path]] = None,
                   batch_size: int = BATCH_SIZE,
@@ -665,18 +665,18 @@ def create_trainer(model: TwoHeadedResNet,
     """Create a trainer with data loaders from processed shard files."""
     
     # Create data loaders from processed shard files
-    train_loader = create_processed_dataloader(train_shard_files, batch_size=batch_size, shuffle=True)
+    train_loader = create_processed_dataloader_legacy(train_shard_files, batch_size=batch_size, shuffle=True)
     
     val_loader = None
     if val_shard_files:
-        val_loader = create_processed_dataloader(val_shard_files, batch_size=batch_size, shuffle=False)
+        val_loader = create_processed_dataloader_legacy(val_shard_files, batch_size=batch_size, shuffle=False)
     
     # Create trainer
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
 
-def train_model(model: TwoHeadedResNet,
+def train_model(model: TwoHeadedResNetLegacy,
                 train_shard_files: List[Path],
                 val_shard_files: Optional[List[Path]] = None,
                 num_epochs: int = NUM_EPOCHS,
@@ -730,8 +730,8 @@ def resume_training(checkpoint_path: str,
     best_val_loss = checkpoint['best_val_loss']
     
     # Create model (we need to know the architecture)
-    from .models import TwoHeadedResNet
-    model = TwoHeadedResNet()  # Default architecture
+    from .models_legacy import TwoHeadedResNetLegacy
+    model = TwoHeadedResNetLegacy()  # Default architecture
     
     # Create trainer with dummy data (will be overridden)
     dummy_shard_files = [Path("dummy_shard.pkl.gz")]

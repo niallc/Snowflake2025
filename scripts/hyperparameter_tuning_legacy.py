@@ -45,14 +45,19 @@ hex_ai.config.VERBOSE_LEVEL = args.verbose
 
 # Fix multiprocessing on macOS
 if __name__ == '__main__':
+    """
+    To run this script from the project root:
+    python -m scripts.hyperparameter_tuning_legacy
+    """
+
     multiprocessing.set_start_method('spawn', force=True)
 
-from hex_ai.models import TwoHeadedResNet
-from hex_ai.training_utils import (
-    run_hyperparameter_tuning,
-    discover_processed_files,
-    estimate_dataset_size,
-    create_experiment_config
+from hex_ai.models_legacy import TwoHeadedResNetLegacy
+from hex_ai.training_utils_legacy import (
+    run_hyperparameter_tuning_legacy,
+    discover_processed_files_legacy,
+    estimate_dataset_size_legacy,
+    create_experiment_config_legacy
 )
 
 # Device selection
@@ -69,12 +74,15 @@ else:
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10
-BATCH_SIZE = 512  # larger batches for better GPU utilization
-TARGET_EXAMPLES = 15000000  # 15M positions for comprehensive training
+BATCH_SIZE = 256  # larger batches for better GPU utilization
+TARGET_EXAMPLES = 100000  # 100K positions for comprehensive training
 
 # Experiment naming
 from datetime import datetime
-EXPERIMENT_NAME = f"hex_ai_MainTraining_15M_samples_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+EXPERIMENT_NAME = (
+    "hex_ai_legacy_100k_samples_"
+    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+)
 
 # Define experiments - focusing on balanced loss variants based on previous results
 experiments = [
@@ -140,8 +148,8 @@ print(f"{'='*60}")
 
 # Discover and analyze data
 print("\nDiscovering processed data files...")
-data_files = discover_processed_files("data/processed")
-total_examples = estimate_dataset_size(data_files, max_files=10)  # Sample more files for better estimate
+data_files = discover_processed_files_legacy("data/processed")
+total_examples = estimate_dataset_size_legacy(data_files, max_files=10)  # Sample more files for better estimate
 print(f"Found {len(data_files)} data files with approximately {total_examples:,} training examples")
 
 print(f"Using {TARGET_EXAMPLES} examples for training")
@@ -149,7 +157,7 @@ print("(This provides comprehensive training for meaningful results)")
 
 # Run large-scale hyperparameter tuning
 start_time = time.time()
-overall_results = run_hyperparameter_tuning(
+overall_results = run_hyperparameter_tuning_legacy(
     experiments=experiments,
     data_dir="data/processed",
     results_dir=str(results_dir),
