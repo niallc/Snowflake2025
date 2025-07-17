@@ -223,12 +223,29 @@ class Trainer:
                  experiment_name: Optional[str] = None,
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
-                 weight_decay: float = 1e-4):
+                 weight_decay: float = 1e-4,
+                 max_grad_norm: float = 20.0):
+        """
+        Args:
+            model: The neural network model to train.
+            train_loader: DataLoader for the training dataset.
+            val_loader: Optional DataLoader for the validation dataset.
+            learning_rate: Learning rate for the optimizer.
+            device: Device to use for training (e.g., 'cuda', 'cpu').
+            enable_system_analysis: Whether to run system analysis.
+            enable_csv_logging: Whether to enable CSV logging.
+            experiment_name: Optional name for the experiment.
+            policy_weight: Weight for the policy loss.
+            value_weight: Weight for the value loss.
+            weight_decay: Weight decay for the optimizer.
+            max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
+        """
         logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self.max_grad_norm = max_grad_norm
         
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
@@ -321,8 +338,9 @@ class Trainer:
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            # Gradient clipping (configurable)
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
@@ -684,7 +702,7 @@ class Trainer:
         
         return keep_epochs
 
-
+# See below Note about this code path not being used in run_training.py
 def create_trainer(model: TwoHeadedResNet, 
                   train_shard_files: List[Path],
                   val_shard_files: Optional[List[Path]] = None,
@@ -703,7 +721,10 @@ def create_trainer(model: TwoHeadedResNet,
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
-
+# Note: we call trainer = Trainer(...) directly in run_training.py
+# We want only one code path for training, so either delete this or 
+# update it to be sufficient for run_training.py.
+# TODO: Decide the canonical way to train a model.
 def train_model(model: TwoHeadedResNet,
                 train_shard_files: List[Path],
                 val_shard_files: Optional[List[Path]] = None,

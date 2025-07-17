@@ -40,6 +40,7 @@ parser.add_argument('--data-dir', type=str, default='data/processed', help='Dire
 parser.add_argument('--results-dir', type=str, default='checkpoints', help='Directory to save checkpoints/results')
 parser.add_argument('--experiment-name', type=str, default=None, help='Optional experiment name (default: timestamped)')
 parser.add_argument('--verbose', type=int, default=2, help='Verbosity: 0=critical, 1=warning, 2=info, 3=debug')
+parser.add_argument('--max-grad-norm', type=float, default=20.0, help='Max gradient norm for clipping (default: 20.0, set to 0 or negative to disable)')
 args = parser.parse_args()
 
 # Set up logging
@@ -81,6 +82,8 @@ experiment_name = args.experiment_name or f"hex_ai_train_{datetime.now().strftim
 results_dir = Path(args.results_dir) / experiment_name
 results_dir.mkdir(parents=True, exist_ok=True)
 
+# Note that we're not using create_trainer, so we should either clean that up
+# or update it to match what we want from here. Either way we want one code path.
 # Trainer
 trainer = Trainer(
     model=model,
@@ -93,7 +96,8 @@ trainer = Trainer(
     experiment_name=experiment_name,
     policy_weight=args.policy_weight,
     value_weight=args.value_weight,
-    weight_decay=args.weight_decay
+    weight_decay=args.weight_decay,
+    max_grad_norm=(args.max_grad_norm if args.max_grad_norm and args.max_grad_norm > 0 else None)  # Now configurable
 )
 
 # Print mixed precision status
