@@ -64,7 +64,7 @@ def main():
     parser.add_argument('pkl_path', help='Path to .pkl.gz file with training data')
     parser.add_argument('--epochs', type=int, default=500, help='Number of epochs to train')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=32, help='Batch size (default: 32)')
+    parser.add_argument('--batch-size', type=int, default=128, help='Batch size (default: 128)')
     parser.add_argument('--early-stopping-patience', type=int, default=50, help='Early stopping patience')
     parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout probability')
