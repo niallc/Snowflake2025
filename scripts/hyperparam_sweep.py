@@ -50,7 +50,7 @@ def run_one(config, run_idx):
     start = time.time()
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    proc = subprocess.run(cmd, capture_output=False, text=True, env=env)
     elapsed = time.time() - start
     print(f"Run {run_idx} finished in {elapsed/60:.1f} min")
     if proc.returncode != 0:

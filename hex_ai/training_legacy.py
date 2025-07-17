@@ -1,3 +1,4 @@
+
 """
 Training module for Hex AI models.
 
@@ -18,16 +19,12 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
+from .data_processing import ProcessedDataset, create_processed_dataloader
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
+    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
 )
-from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files
-
-from hex_ai.training_utils import get_device
-DEVICE = get_device()
 
 logger = logging.getLogger(__name__)
 
@@ -105,20 +102,17 @@ class MixedPrecisionTrainer:
     """Wrapper for mixed precision training capabilities."""
     
     def __init__(self, device: str):
-        logger.debug(f"[MixedPrecisionTrainer.__init__] device argument = {device} (type: {type(device)})")
-        device_str = str(device)
-        logger.debug(f"[MixedPrecisionTrainer.__init__] device_str = {device_str}")
         self.device = device
-        self.use_mixed_precision = device_str in ['cuda', 'mps']
+        self.use_mixed_precision = device in ['cuda', 'mps']
         
         if self.use_mixed_precision:
             try:
-                if device_str == 'cuda':
+                if device == 'cuda':
                     from torch.cuda.amp import autocast, GradScaler
                     self.autocast = autocast
                     self.scaler = GradScaler()
                     logger.info("Mixed precision training enabled for CUDA GPU")
-                elif device_str == 'mps':
+                elif device == 'mps':
                     # MPS uses torch.autocast with device_type="mps"
                     self.autocast = lambda: torch.autocast(device_type="mps")
                     # MPS doesn't need GradScaler, but we'll keep the interface
@@ -224,29 +218,11 @@ class Trainer:
                  experiment_name: Optional[str] = None,
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
-                 weight_decay: float = 1e-4,
-                 max_grad_norm: float = 20.0):
-        """
-        Args:
-            model: The neural network model to train.
-            train_loader: DataLoader for the training dataset.
-            val_loader: Optional DataLoader for the validation dataset.
-            learning_rate: Learning rate for the optimizer.
-            device: Device to use for training (e.g., 'cuda', 'cpu').
-            enable_system_analysis: Whether to run system analysis.
-            enable_csv_logging: Whether to enable CSV logging.
-            experiment_name: Optional name for the experiment.
-            policy_weight: Weight for the policy loss.
-            value_weight: Weight for the value loss.
-            weight_decay: Weight decay for the optimizer.
-            max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
-        """
-        logger.debug(f"[Trainer.__init__] device argument = {device}")
+                 weight_decay: float = 1e-4):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        self.max_grad_norm = max_grad_norm
         
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
@@ -254,11 +230,6 @@ class Trainer:
         # Optimizer and loss
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
-        
-        # Learning rate scheduler (ReduceLROnPlateau)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
-        )
         
         # Training state
         self.current_epoch = 0
@@ -309,14 +280,6 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
-        print(f"Trainer.train_epoch() called")
-        print(f"self.current_epoch = {self.current_epoch}")
-        if(self.current_epoch == 0):
-            print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
-            print(f"self.max_grad_norm = {self.max_grad_norm}")
-            print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
-            print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
-
         """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
@@ -347,9 +310,6 @@ class Trainer:
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
-            # Gradient clipping (configurable)
-            if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
@@ -358,25 +318,15 @@ class Trainer:
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
             # Log progress - adjust frequency based on dataset size and verbosity
-            if VERBOSE_LEVEL >= 1:
+            from .config import VERBOSE_LEVEL
+            if VERBOSE_LEVEL >= 2:  # Only log batches if verbose level is 2 or higher
                 # With only 100 or fewer batches, log every 5 batches
                 # Between 101 and 2000 batches, log every 50 batches
                 # Above 2000 batches, log every 200 batches
                 log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
-
                 if batch_idx % log_interval == 0:
-                    print(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                            f"Loss: {loss_dict['total_loss']:.4f}, "
-                            f"Policy: {loss_dict['policy_loss']:.4f}, "
-                            f"Value: {loss_dict['value_loss']:.4f}, "
-                            f"Batch time: {time.time() - batch_start_time:.3f}s, "
-                            f"Data load: {batch_data_time:.3f}s", flush=True)                    
                     logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
                               f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
-            else:
-                if batch_idx == 0:
-                    print("*", end="", flush=True)
-
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()
@@ -478,11 +428,6 @@ class Trainer:
                 val_policy_losses.append(float('inf'))
                 val_value_losses.append(float('inf'))
             
-            # Learning rate scheduler step (use validation loss if available, else training loss)
-            val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
-            self.scheduler.step(val_loss_for_scheduler)
-            logger.info(f"Current learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
-            
             # Calculate timing and performance metrics
             epoch_time = time.time() - epoch_start_time
             epoch_times.append(epoch_time)
@@ -569,18 +514,6 @@ class Trainer:
         
         logger.info("Training completed!")
         
-        # Print compact summary if we used compact logging
-        from hex_ai.error_handling import get_board_state_error_tracker
-        error_tracker = get_board_state_error_tracker()
-        stats = error_tracker.get_stats()
-        if stats['total_samples'] > 0:
-            print(
-                f"\nData loading summary:\n"
-                f"  {stats['total_samples']} samples, "
-                f"{stats['error_count']} errors "
-                f"({stats['error_rate']:.2%})"
-            )
-        
         # Return comprehensive results
         return {
             "best_val_loss": self.best_val_loss,
@@ -593,8 +526,7 @@ class Trainer:
             "epochs_trained": len(train_losses),
             "early_stopped": early_stopped,
             "total_training_time": total_training_time,
-            "epoch_times": epoch_times, # Return epoch times for analysis
-            "data_stats": stats
+            "epoch_times": epoch_times # Return epoch times for analysis
         }
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
@@ -605,8 +537,7 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss,
-            'mixed_precision': self.mixed_precision.use_mixed_precision
+            'best_val_loss': self.best_val_loss
         }
         torch.save(checkpoint, path)
     
@@ -633,8 +564,7 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss,
-            'mixed_precision': self.mixed_precision.use_mixed_precision
+            'best_val_loss': self.best_val_loss
         }
         
         # Save current checkpoint
@@ -703,8 +633,6 @@ class Trainer:
         # Add strategic samples from earlier epochs
         if max_epoch >= 20:
             # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
-            if 4 <= max_epoch:
-                keep_epochs.add(4)
             if max_epoch == 20:
                 keep_epochs.update([16, 13, 9, 4])
             else:
@@ -726,7 +654,7 @@ class Trainer:
         
         return keep_epochs
 
-# See below Note about this code path not being used in run_training.py
+
 def create_trainer(model: TwoHeadedResNet, 
                   train_shard_files: List[Path],
                   val_shard_files: Optional[List[Path]] = None,
@@ -735,20 +663,19 @@ def create_trainer(model: TwoHeadedResNet,
                   device: str = DEVICE,
                   enable_system_analysis: bool = True) -> Trainer:
     """Create a trainer with data loaders from processed shard files."""
-    # Use StreamingProcessedDataset for all data loading
-    train_dataset = StreamingProcessedDataset(train_shard_files)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    
+    # Create data loaders from processed shard files
+    train_loader = create_processed_dataloader(train_shard_files, batch_size=batch_size, shuffle=True)
+    
     val_loader = None
     if val_shard_files:
-        val_dataset = StreamingProcessedDataset(val_shard_files)
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        val_loader = create_processed_dataloader(val_shard_files, batch_size=batch_size, shuffle=False)
+    
+    # Create trainer
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
-# Note: we call trainer = Trainer(...) directly in run_training.py
-# We want only one code path for training, so either delete this or 
-# update it to be sufficient for run_training.py.
-# TODO: Decide the canonical way to train a model.
+
 def train_model(model: TwoHeadedResNet,
                 train_shard_files: List[Path],
                 val_shard_files: Optional[List[Path]] = None,

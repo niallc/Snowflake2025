@@ -24,7 +24,7 @@ CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 # 2: Detailed info (default for development)
 # 3: Very detailed debug info
 # 4: Extremely verbose debug info
-VERBOSE_LEVEL = 0
+VERBOSE_LEVEL = 2
 
 # Training configuration
 BOARD_SIZE = 13 
@@ -34,7 +34,7 @@ VALUE_OUTPUT_SIZE = 1
 
 # Default hyperparameters
 LEARNING_RATE = 0.001
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 NUM_EPOCHS = 10
 
 # Loss weights for standardized comparison
