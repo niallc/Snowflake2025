@@ -22,7 +22,7 @@ from datetime import datetime
 import random
 
 from .models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
-from .training import Trainer, EarlyStopping
+from .training_legacy import TrainerLegacy, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
 logger = logging.getLogger(__name__)
@@ -599,7 +599,7 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
     
     # Create trainer
     csv_log_file = exp_dir / "training_metrics.csv"
-    trainer = Trainer(
+    trainer = TrainerLegacy(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -610,7 +610,8 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
         experiment_name=experiment_name or exp_name,  # Use provided experiment_name or fall back to exp_name
         policy_weight=hyperparams.get('policy_weight', 0.15),
         value_weight=hyperparams.get('value_weight', 0.85),
-        weight_decay=hyperparams.get('weight_decay', 1e-4)
+        weight_decay=hyperparams.get('weight_decay', 1e-4),
+        max_grad_norm=hyperparams.get('max_grad_norm', 20.0)
     )
     
     # Update CSV logger to use experiment-specific file
@@ -952,7 +953,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
     
     # Create trainer
     csv_log_file = exp_dir / "training_metrics.csv"
-    trainer = Trainer(
+    trainer = TrainerLegacy(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -963,7 +964,8 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         experiment_name=experiment_name or exp_name,  # Use provided experiment_name or fall back to exp_name
         policy_weight=hyperparams.get('policy_weight', 0.15),
         value_weight=hyperparams.get('value_weight', 0.85),
-        weight_decay=hyperparams.get('weight_decay', 1e-4)
+        weight_decay=hyperparams.get('weight_decay', 1e-4),
+        max_grad_norm=hyperparams.get('max_grad_norm', 20.0)
     )
     
     # Update CSV logger to use experiment-specific file

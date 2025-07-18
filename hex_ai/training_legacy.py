@@ -206,7 +206,7 @@ class EarlyStopping:
         return self.best_val_loss
 
 
-class Trainer:
+class TrainerLegacy:
     """Training manager for Hex AI models."""
     
     def __init__(self, model: TwoHeadedResNetLegacy, 
@@ -219,11 +219,13 @@ class Trainer:
                  experiment_name: Optional[str] = None,
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
-                 weight_decay: float = 1e-4):
+                 weight_decay: float = 1e-4,
+                 max_grad_norm: float = 20.0):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self.max_grad_norm = max_grad_norm
         
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
@@ -311,6 +313,9 @@ class Trainer:
             # Backward pass with scaling
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
+            # Gradient clipping (configurable)
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
@@ -662,7 +667,7 @@ def create_trainer(model: TwoHeadedResNetLegacy,
                   batch_size: int = BATCH_SIZE,
                   learning_rate: float = LEARNING_RATE,
                   device: str = DEVICE,
-                  enable_system_analysis: bool = True) -> Trainer:
+                  enable_system_analysis: bool = True) -> TrainerLegacy:
     """Create a trainer with data loaders from processed shard files."""
     
     # Create data loaders from processed shard files
@@ -673,7 +678,7 @@ def create_trainer(model: TwoHeadedResNetLegacy,
         val_loader = create_processed_dataloader_legacy(val_shard_files, batch_size=batch_size, shuffle=False)
     
     # Create trainer
-    trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
+    trainer = TrainerLegacy(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
 

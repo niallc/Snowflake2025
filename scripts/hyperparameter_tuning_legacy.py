@@ -88,28 +88,30 @@ EXPERIMENT_NAME = (
     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 )
 
-# Define experiments - focusing on balanced loss variants based on previous results
+# Define experiments - focusing on gradient clipping
 experiments = [
     {
-        'experiment_name': 'bs_512_wd_5e-4_policy_0.2_value_0.8',
+        'experiment_name': 'clip_20',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': 512,
             'dropout_prob': 0.1,
             'weight_decay': 5e-4,
             'policy_weight': 0.2,
-            'value_weight': 0.8
+            'value_weight': 0.8,
+            'max_grad_norm': 20.0
         }
     },
     {
-        'experiment_name': 'bs_512_wd_1e-3_policy_0.2_value_0.8',
+        'experiment_name': 'clip_2',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': 512,
             'dropout_prob': 0.1,
-            'weight_decay': 1e-3,
+            'weight_decay': 5e-4,
             'policy_weight': 0.2,
-            'value_weight': 0.8
+            'value_weight': 0.8,
+            'max_grad_norm': 2.0
         }
     },
 ]
