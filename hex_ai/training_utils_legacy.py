@@ -196,7 +196,15 @@ class NewProcessedDataset(torch.utils.data.Dataset):
         from hex_ai.data_utils import get_player_to_move_from_board
         
         try:
-            player_to_move = get_player_to_move_from_board(board_np)
+            # Get error tracker for board state validation
+            from hex_ai.error_handling import get_board_state_error_tracker
+            error_tracker = get_board_state_error_tracker()
+            
+            # Set context for error tracking
+            error_tracker._current_file = f"legacy_dataset_idx_{idx}"
+            error_tracker._current_sample = f"legacy_sample_{idx}"
+            
+            player_to_move = get_player_to_move_from_board(board_np, error_tracker)
         except Exception as e:
             # Use default value if we can't determine
             from hex_ai.inference.board_utils import BLUE_PLAYER
@@ -307,7 +315,15 @@ class AugmentedProcessedDataset(NewProcessedDataset):
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
-            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value)
+            # Get error tracker for board state validation
+            from hex_ai.error_handling import get_board_state_error_tracker
+            error_tracker = get_board_state_error_tracker()
+            
+            # Set context for error tracking (legacy dataset doesn't have file info)
+            error_tracker._current_file = f"legacy_dataset_idx_{idx}"
+            error_tracker._current_sample = f"legacy_sample_{idx}"
+            
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise
@@ -876,7 +892,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         Dictionary containing all experiment results
     """
     import time
-    from hex_ai.data_pipeline import StreamingProcessedDataset, StreamingAugmentedProcessedDataset, discover_processed_files, estimate_dataset_size, create_train_val_split
+    from hex_ai.data_pipeline import StreamingProcessedDataset, StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
     
     # Use max_examples_per_split for validation if not specified
     if max_validation_examples is None:
@@ -893,21 +909,14 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     # Discover data files using current pipeline
     data_files = discover_processed_files(data_dir)
     
-    # Create train/val split (limit files for efficiency)
-    max_files_per_split = 5 if max_examples_per_split is not None else None  # Use only 5 files for quick exploration
-    logger.info(f"Creating train/val split with max_files_per_split={max_files_per_split}")
+    # Create train/val split (no file limit needed with streaming)
+    logger.info(f"Creating train/val split (no file limit with streaming)")
     train_files, val_files = create_train_val_split(
-        data_files, train_ratio, random_seed, max_files_per_split
+        data_files, train_ratio, random_seed, max_files_per_split=None
     )
     logger.info(f"Train files: {len(train_files)}, Val files: {len(val_files)}")
     logger.info(f"Sample train files: {[f.name for f in train_files[:3]]}")
     logger.info(f"Sample val files: {[f.name for f in val_files[:3]]}")
-    
-    # Estimate dataset size (use sampling for speed)
-    logger.info("Estimating dataset sizes...")
-    total_examples = estimate_dataset_size(data_files, max_files=10)  # Sample 10 files
-    train_examples = estimate_dataset_size(train_files, max_files=5)  # Sample 5 files
-    val_examples = estimate_dataset_size(val_files, max_files=5)     # Sample 5 files
     
     # If max_examples_per_split is specified, limit the data
     if max_examples_per_split is not None:
@@ -919,14 +928,15 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'total_files': len(data_files),
         'train_files': len(train_files),
         'val_files': len(val_files),
-        'total_examples': total_examples,
-        'train_examples': train_examples,
-        'val_examples': val_examples,
         'max_training_examples': max_examples_per_split,
         'max_validation_examples': max_validation_examples
     }
     
-    logger.info(f"Dataset info: {dataset_info}")
+    logger.info(f"Dataset summary: {len(data_files)} total files, {len(train_files)} train, {len(val_files)} validation")
+    if max_examples_per_split:
+        logger.info(f"Training will use streaming with chunk_size={max_examples_per_split}")
+    if max_validation_examples:
+        logger.info(f"Validation will use streaming with chunk_size={max_validation_examples}")
     
     # Device selection
     if torch.cuda.is_available():
@@ -1040,8 +1050,14 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     logger.info(f"Total training time: {total_time:.1f}s")
     logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
     logger.info(f"Data augmentation: {'Enabled' if enable_augmentation else 'Disabled'}")
-    logger.info(f"Training examples: {max_examples_per_split:,}" if max_examples_per_split else "Training examples: unlimited")
-    logger.info(f"Validation examples: {max_validation_examples:,}" if max_validation_examples else "Validation examples: unlimited")
+    if max_examples_per_split:
+        logger.info(f"Training: streaming with chunk_size={max_examples_per_split:,}")
+    else:
+        logger.info(f"Training: streaming with unlimited examples")
+    if max_validation_examples:
+        logger.info(f"Validation: streaming with chunk_size={max_validation_examples:,}")
+    else:
+        logger.info(f"Validation: streaming with unlimited examples")
     
     if all_results:
         best_exp = min(all_results, key=lambda x: x['best_val_loss'])

@@ -233,7 +233,19 @@ class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
-            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item())
+            # Get error tracker for board state validation
+            from hex_ai.error_handling import get_board_state_error_tracker
+            error_tracker = get_board_state_error_tracker()
+            
+            # Get current file info for error tracking
+            current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
+            sample_info = f"augmented_chunk_idx={self.current_example_idx-1}, total_loaded={self.total_examples_loaded}"
+            
+            # Set context for error tracking
+            error_tracker._current_file = str(current_file)
+            error_tracker._current_sample = sample_info
+            
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item(), error_tracker)
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise

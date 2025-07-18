@@ -137,7 +137,9 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
         board_np = board_2nxn.detach().cpu().numpy()
     else:
         board_np = board_2nxn
-    player_to_move = get_player_to_move_from_board(board_np)
+    # For format conversion, we don't have error tracking context, so pass None
+    # This will use the original behavior (raise exception for invalid boards)
+    player_to_move = get_player_to_move_from_board(board_np, error_tracker=None)
     player_channel = np.full((BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=np.float32)
     board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
     return torch.from_numpy(board_3ch) 

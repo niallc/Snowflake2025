@@ -44,7 +44,7 @@ SWEEP = {
 }
 
 # Configuration
-MAX_SAMPLES = 100_000  # Training samples (will be 4x larger with augmentation)
+MAX_SAMPLES = 200_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 50_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
 EPOCHS = 3

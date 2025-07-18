@@ -688,7 +688,7 @@ def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float
     return augmented_examples
 
 
-def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
+def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
     """
     Create 4 augmented examples from a single board position.
     
@@ -696,6 +696,7 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
         board: Board state as (2, 13, 13) array
         policy: Policy target as (169,) array or None for final moves
         value: Value target as float
+        error_tracker: Optional BoardStateErrorTracker for handling invalid board states
         
     Returns:
         List of 4 tuples: (augmented_board, augmented_policy, augmented_value, player_to_move)
@@ -710,7 +711,8 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     augmented_values = create_augmented_values(value)
     
     # Compute player-to-move from the board, then create augmented versions
-    player_to_move = get_player_to_move_from_board(board)
+    # Use error tracker to handle invalid board states gracefully
+    player_to_move = get_player_to_move_from_board(board, error_tracker)
     augmented_player_to_move = create_augmented_player_to_move(player_to_move)
     
     # Combine into examples
