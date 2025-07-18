@@ -1,5 +1,11 @@
 # Data Augmentation for Hex AI
 
+## Project Context
+
+This is a Hex AI project using a two-headed neural network (policy and value heads) in the style of AlphaZero. The project is experiencing overfitting in the value head while the policy head needs more training. Data augmentation is being implemented to increase effective dataset size and improve generalization.
+
+The training pipeline uses PyTorch with custom datasets that load from `.pkl.gz` files containing `(board_2ch, policy, value)` tuples. The model expects 3-channel input `(blue_channel, red_channel, player_to_move_channel)` where the player-to-move is computed on-the-fly from the board state.
+
 ## Goals
 
 Data augmentation aims to increase the effective training dataset size by exploiting the symmetries of the Hex board. By applying board transformations that preserve the logical game state, we can create additional training examples without collecting new data.
@@ -255,6 +261,79 @@ AUGMENTATION_CONFIG = {
 }
 ```
 
+## Next Steps for Implementation
+
+### Immediate Tasks
+
+1. **Integrate AugmentedProcessedDataset into Training Pipeline**
+   - Update `run_hyperparameter_tuning_current_data()` in `hex_ai/training_utils_legacy.py`
+   - Replace `NewProcessedDataset` with `AugmentedProcessedDataset`
+   - Add `collate_fn=augmented_collate_fn` to DataLoader creation
+   - Add configuration option to enable/disable augmentation
+
+2. **Update Training Scripts**
+   - Modify `scripts/hyperparam_sweep.py` to use augmented datasets
+   - Add augmentation configuration to experiment parameters
+   - Test with small datasets first
+
+3. **Performance Validation**
+   - Run training with and without augmentation to compare:
+     - Training speed (samples/second)
+     - Memory usage
+     - Convergence behavior
+   - Monitor for any issues with the augmentation pipeline
+
+### Integration Example
+
+```python
+# In run_hyperparameter_tuning_current_data()
+train_dataset = AugmentedProcessedDataset(
+    train_files, 
+    enable_augmentation=True,  # Add to experiment config
+    max_examples=max_examples_per_split
+)
+
+train_loader = torch.utils.data.DataLoader(
+    train_dataset,
+    batch_size=hyperparams['batch_size'],
+    shuffle=True,
+    collate_fn=augmented_collate_fn,  # Required for augmentation
+    num_workers=0
+)
+```
+
+### Configuration Options
+
+Add to experiment configuration:
+```python
+AUGMENTATION_CONFIG = {
+    'enable_augmentation': True,
+    'augmentation_probability': 1.0,  # Always augment
+    'skip_empty_boards': True,  # Don't augment empty boards
+}
+```
+
+### Testing Strategy
+
+1. **Small-scale testing**: Use `max_examples=1000` to verify augmentation works
+2. **Performance comparison**: Run identical experiments with/without augmentation
+3. **Validation**: Compare augmented outputs with `scripts/visualize_board_augmentations.py`
+4. **Memory monitoring**: Check for any memory issues with 4x data
+
+### Expected Benefits
+
+- **4x effective dataset size** without storage increase
+- **Better generalization** through board symmetries
+- **Reduced overfitting** in value head
+- **Improved policy training** with more diverse examples
+
+### Potential Issues to Monitor
+
+- **Training speed**: Runtime augmentation may slow training
+- **Memory usage**: 4x examples in memory during batching
+- **Batch size effects**: Effective batch size is 4x larger
+- **Learning rate**: May need adjustment with 4x more data
+
 ## TODO
 
 - [x] Implement board transformations
@@ -265,11 +344,11 @@ AUGMENTATION_CONFIG = {
 - [x] Implement `AugmentedProcessedDataset` class with `__getitem__` augmentation
 - [x] Create custom collate function for DataLoader compatibility
 - [x] Test augmentation pipeline with visualization and validation
-- [ ] Update training pipeline to use augmented data
-- [ ] Add validation to ensure all transformations are consistent
-- [ ] **Testing**: Temporarily save 4 augmented boards from production pipeline to verify consistency with visualization script
-- [ ] Performance testing: Measure impact of runtime augmentation on training speed
-- [ ] Memory testing: Verify memory usage with augmented datasets
+- [ ] **Integration**: Update training pipeline to use `AugmentedProcessedDataset`
+- [ ] **Configuration**: Add augmentation options to experiment configs
+- [ ] **Performance Testing**: Measure training speed and memory impact
+- [ ] **Validation**: Compare production pipeline output with visualization script
+- [ ] **Hyperparameter Tuning**: Adjust learning rates/batch sizes for augmented data
 
 ## Implementation Summary
 
