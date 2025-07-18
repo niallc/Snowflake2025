@@ -93,7 +93,7 @@ experiments = [
             'learning_rate': 0.001,
             'batch_size': 512,
             'dropout_prob': 0.1,
-            'weight_decay': 5e-4,
+            'weight_decay': 1e-3,
             'policy_weight': 0.2,
             'value_weight': 0.8,
             'max_grad_norm': 100.0
@@ -105,7 +105,7 @@ experiments = [
             'learning_rate': 0.001,
             'batch_size': 512,
             'dropout_prob': 0.1,
-            'weight_decay': 5e-4,
+            'weight_decay': 1e-3,
             'policy_weight': 0.2,
             'value_weight': 0.8,
             'max_grad_norm': 1.0
