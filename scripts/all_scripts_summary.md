@@ -12,6 +12,7 @@ scripts/
   hyperparameter_tuning_legacy.py        # Legacy hyperparameter tuning with 2-channel model
   test_legacy_incremental.py             # Test incremental changes from legacy to modern (PLANNED)
   compare_legacy_vs_modified.py          # Compare performance between legacy and modified versions (PLANNED)
+  test_legacy_with_player_channel.py     # Test legacy code with player-to-move channel added
   
   # Data Analysis and Debugging
   extract_error_sample_from_pkl.py       # Extract and inspect a single record from a .pkl.gz file
@@ -77,11 +78,21 @@ scripts/
 - **Usage**: `python -m scripts.test_legacy_incremental --step 2.1`
 - **Status**: 🔄 **PLANNED** - Part of incremental migration strategy
 
-### compare_legacy_vs_modified.py (PLANNED)
+### test_legacy_with_player_channel.py
+- **Purpose**: Test legacy code with player-to-move channel added
+- **Key features**: 
+  - Uses modified legacy model with 3-channel input
+  - Uses modified legacy dataset that adds player-to-move channel
+  - Uses legacy training pipeline (no gradient clipping, etc.)
+  - Compares performance to pure legacy (2-channel) version
+- **Usage**: `python -m scripts.test_legacy_with_player_channel --num-epochs 5 --batch-size 256`
+- **Status**: ✅ **READY** - Tests if player-to-move channel causes performance regression
+
+### compare_legacy_vs_modified.py
 - **Purpose**: Compare performance curves between legacy and modified versions
 - **Key features**: Automated comparison of policy loss, value loss, and training dynamics
-- **Usage**: `python -m scripts.compare_legacy_vs_modified --legacy-results path --modified-results path`
-- **Status**: 🔄 **PLANNED** - Part of incremental migration strategy
+- **Usage**: `python -m scripts.compare_legacy_vs_modified --legacy-dir path --modified-dir path`
+- **Status**: ✅ **READY** - Helps analyze which changes cause performance regressions
 
 ---
 
