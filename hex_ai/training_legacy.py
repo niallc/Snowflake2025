@@ -23,9 +23,10 @@ from .models_legacy import ResNetBlockLegacy, TwoHeadedResNetLegacy
 from .data_processing_legacy import ProcessedDatasetLegacy, create_processed_dataloader_legacy
 from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, DEVICE
+    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
-
+from .training_utils import get_device
+DEVICE = get_device()
 logger = logging.getLogger(__name__)
 
 # Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales

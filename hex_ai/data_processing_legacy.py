@@ -190,7 +190,7 @@ class DataProcessor:
         return all_shard_files
 
 
-class ProcessedDataset(torch.utils.data.Dataset):
+class ProcessedDatasetLegacy(torch.utils.data.Dataset):
     """Dataset for loading processed shard files."""
     
     def __init__(self, shard_files: List[Path], shuffle_shards: bool = True):
@@ -238,10 +238,10 @@ class ProcessedDataset(torch.utils.data.Dataset):
         raise IndexError(f"Index {idx} out of range")
 
 
-def create_processed_dataloader(shard_files: List[Path], batch_size: int = 32,
+def create_processed_dataloader_legacy(shard_files: List[Path], batch_size: int = 32,
                                shuffle: bool = True, num_workers: int = 4) -> torch.utils.data.DataLoader:
     """Create a DataLoader from processed shard files."""
-    dataset = ProcessedDataset(shard_files, shuffle_shards=shuffle)
+    dataset = ProcessedDatasetLegacy(shard_files, shuffle_shards=shuffle)
     
     # Disable pin_memory for MPS (not supported)
     import torch
