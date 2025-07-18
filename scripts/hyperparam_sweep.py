@@ -10,17 +10,17 @@ import os
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "learning-rate": [0.001, 0.01],
-    "batch-size": [128, 256],
-    "max-grad-norm": [100, 8, 20],
-    "dropout": [0.0005, 0],
-    "weight-decay": [1e-4, 1e-3],
+    "learning-rate": [0.001],
+    "batch-size": [256, 512],
+    "max-grad-norm": [20],
+    "dropout": [0, 0.001],
+    "weight-decay": [1e-3, 1e-4],
     # Add more as needed
 }
 
 DATA_DIR = "data/processed"
-RESULTS_DIR = "checkpoints/sweep"
-EPOCHS = 10
+RESULTS_DIR = "checkpoints"
+EPOCHS = 10 
 MAX_SAMPLES = 200_000 # Is an underscore ignored in a numberic literal in python? Answer: yes.
 
 def all_param_combinations(sweep_dict):
@@ -31,7 +31,7 @@ def all_param_combinations(sweep_dict):
 def run_one(config, run_idx):
     # Build command
     # Include the data and time (up to minutes) in the experiment name
-    exp_name = f"sweep_run_{run_idx}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    exp_name = f"PostLegacyRerun_{run_idx}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir = Path(RESULTS_DIR) / exp_name
     results_dir.mkdir(parents=True, exist_ok=True)
     cmd = [

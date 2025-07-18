@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
 
-from .models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel
+from .models import TwoHeadedResNet
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
@@ -577,7 +577,9 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=hyperparams['batch_size'],
-        shuffle=True,
+        # NOTE: Performance was good with shuffle=True but shuffling should not
+        # be necessary. Also want to align with the non-legacy training.
+        shuffle=False, 
         num_workers=0,  # Use 0 to avoid multiprocessing issues
         pin_memory=False  # Disable pin_memory for MPS
     )
@@ -593,7 +595,7 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
         )
     
     # Create model
-    model = TwoHeadedResNetLegacyWithPlayerChannel(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    model = TwoHeadedResNet(dropout_prob=hyperparams.get('dropout_prob', 0.1))
     device = torch.device(experiment_config['device'])
     model = model.to(device)
     
@@ -931,11 +933,10 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=hyperparams['batch_size'],
-        shuffle=True,
+        shuffle=True,  # NOTE: Consider setting to False if data is already shuffled
         num_workers=0,  # Use 0 to avoid multiprocessing issues
         pin_memory=False  # Disable pin_memory for MPS
     )
-    
     val_loader = None
     if val_dataset:
         val_loader = torch.utils.data.DataLoader(
@@ -945,9 +946,13 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
             num_workers=0,  # Use 0 to avoid multiprocessing issues
             pin_memory=False  # Disable pin_memory for MPS
         )
-    
+
+    # Log config/environment info
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f'hyperparam_tuning_config_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
     # Create model
-    model = TwoHeadedResNetLegacyWithPlayerChannel(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    model = TwoHeadedResNet(dropout_prob=hyperparams.get('dropout_prob', 0.1))
     device = torch.device(experiment_config['device'])
     model = model.to(device)
     
@@ -978,6 +983,39 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
     if early_stopping_patience is not None:
         early_stopping = EarlyStopping(patience=early_stopping_patience)
     
+    ### Extra config/environment logging to compare with non-legacy training
+    def log_and_print(msg):
+        print(msg)
+        with open(log_file, 'a') as f:
+            f.write(msg + '\n')
+
+    log_and_print(f"**************************************************")
+    log_and_print(f"==== Hex AI Hyperparam Tuning Experiment Config (legacy) ====")
+    log_and_print(f"**************************************************")
+    log_and_print(f"Timestamp: {datetime.now().isoformat()}")
+    log_and_print(f"Experiment: {exp_name}")
+    log_and_print(f"Model class: {model.__class__.__name__}")
+    log_and_print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    try:
+        log_and_print(f"Model input channels: {model.input_channels if hasattr(model, 'input_channels') else 'unknown'}")
+    except Exception as e:
+        log_and_print(f"Model input channels: unknown (error: {e})")
+    log_and_print(f"Train DataLoader: batch_size={hyperparams['batch_size']}, shuffle=True, num_workers=0, pin_memory=False")
+    log_and_print(f"Val DataLoader: batch_size={hyperparams['batch_size']}, shuffle=False, num_workers=0, pin_memory=False")
+    log_and_print(f"Train dataset size: {len(train_dataset)}")
+    log_and_print(f"Val dataset size: {len(val_dataset) if val_dataset else 0}")
+    log_and_print(f"Learning rate: {hyperparams['learning_rate']}")
+    log_and_print(f"Dropout: {hyperparams.get('dropout_prob', 'N/A')}")
+    log_and_print(f"Weight decay: {hyperparams.get('weight_decay', 'N/A')}")
+    log_and_print(f"Policy loss weight: {hyperparams.get('policy_weight', 'N/A')}")
+    log_and_print(f"Value loss weight: {hyperparams.get('value_weight', 'N/A')}")
+    log_and_print(f"Max grad norm: {hyperparams.get('max_grad_norm', 'N/A')}")
+    log_and_print(f"Device: {device}")
+    log_and_print(f"Mixed precision: {trainer.mixed_precision.use_mixed_precision}")
+    log_and_print(f"Results dir: {exp_dir}")
+    log_and_print(f"==========================================")
+    ### END: Extra config/environment logging to compare with non-legacy training
+
     # Train
     training_results = trainer.train(
         num_epochs=num_epochs,

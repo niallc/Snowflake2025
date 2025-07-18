@@ -548,7 +548,11 @@ class Trainer:
             if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
                 self.best_val_loss = val_metrics['total_loss']
                 self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
-                logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
+                logger.info(
+                    f"New best model saved with val loss: {self.best_val_loss:.4f} | "
+                    f"Val Policy Loss: {val_metrics.get('policy_loss', float('nan')):.4f} | "
+                    f"Val Value Loss: {val_metrics.get('value_loss', float('nan')):.4f}"
+                )
             
             # Check early stopping
             if early_stopping and val_metrics:

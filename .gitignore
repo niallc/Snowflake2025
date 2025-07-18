@@ -9,6 +9,7 @@ hyperparameter_results_v2/
 NonRepoFiles/
 analysis/
 scripts/temp
+logs/
 
 # Niall's file patterns to ignore
 *.png

@@ -52,7 +52,7 @@ if __name__ == '__main__':
 
     multiprocessing.set_start_method('spawn', force=True)
 
-from hex_ai.models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel
+from hex_ai.models import TwoHeadedResNet
 from hex_ai.data_pipeline import (
     StreamingProcessedDataset,
     discover_processed_files,
@@ -75,20 +75,20 @@ else:
 
 # Large-scale hyperparameter tuning config - focusing on balanced loss variants
 NUM_EPOCHS = 10
-BATCH_SIZE = 256  # larger batches for better GPU utilization
-TARGET_EXAMPLES = 100000  # 100K positions for comprehensive training
+BATCH_SIZE = 512  # larger batches for better GPU utilization
+TARGET_EXAMPLES = 100_000  # 100K positions for comprehensive training
 
 # Experiment naming
 from datetime import datetime
 EXPERIMENT_NAME = (
-    "hex_ai_legacy_3channel_100k_samples_"
+    "non-legacy-migrated-no-shuffle-"
     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 )
 
 # Define experiments - focusing on gradient clipping
 experiments = [
     {
-        'experiment_name': 'NewTrainer_clip_100',
+        'experiment_name': 'std_params',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': 512,
@@ -96,19 +96,7 @@ experiments = [
             'weight_decay': 1e-3,
             'policy_weight': 0.2,
             'value_weight': 0.8,
-            'max_grad_norm': 100.0
-        }
-    },
-    {
-        'experiment_name': 'NewTrainer_clip_1',
-        'hyperparameters': {
-            'learning_rate': 0.001,
-            'batch_size': 512,
-            'dropout_prob': 0.1,
-            'weight_decay': 1e-3,
-            'policy_weight': 0.2,
-            'value_weight': 0.8,
-            'max_grad_norm': 1.0
+            'max_grad_norm': 20.0
         }
     },
 ]

@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 import torch
 import json
+import sys
 
 from hex_ai.training_utils import get_device
 from hex_ai.data_pipeline import discover_processed_files, create_train_val_split, StreamingProcessedDataset
@@ -23,6 +24,12 @@ from hex_ai.training import EarlyStopping
 from hex_ai.training_logger import TrainingLogger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+# === BEGIN: Extra config/environment logging ===
+from datetime import datetime
+log_dir = Path('logs')
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / f'run_training_config_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
 
 # Argument parsing for flexibility
 parser = argparse.ArgumentParser(description="Train Hex AI model with modern pipeline.")
@@ -117,6 +124,37 @@ if args.early_stopping:
 else:
     early_stopping = None
 
+# === BEGIN: Extra config/environment logging ===
+def log_and_print(msg):
+    print(msg)
+    with open(log_file, 'a') as f:
+        f.write(msg + '\n')
+
+log_and_print(f"==== Hex AI Training Run Configuration ====")
+log_and_print(f"Timestamp: {datetime.now().isoformat()}")
+log_and_print(f"Model class: {model.__class__.__name__}")
+log_and_print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+try:
+    log_and_print(f"Model input channels: {model.input_channels if hasattr(model, 'input_channels') else 'unknown'}")
+except Exception as e:
+    log_and_print(f"Model input channels: unknown (error: {e})")
+log_and_print(f"Train DataLoader: batch_size={args.batch_size}, shuffle=False, num_workers=default, pin_memory=default")
+log_and_print(f"Val DataLoader: batch_size={args.batch_size}, shuffle=False, num_workers=default, pin_memory=default")
+log_and_print(f"Train files: {len(train_files)}, Val files: {len(val_files)}")
+log_and_print(f"Learning rate: {args.learning_rate}")
+log_and_print(f"Dropout: {args.dropout}")
+log_and_print(f"Weight decay: {args.weight_decay}")
+log_and_print(f"Policy loss weight: {args.policy_weight}")
+log_and_print(f"Value loss weight: {args.value_weight}")
+log_and_print(f"Max grad norm: {args.max_grad_norm}")
+log_and_print(f"Device: {device}")
+log_and_print(f"Mixed precision: {trainer.mixed_precision.use_mixed_precision}")
+log_and_print(f"Experiment name: {experiment_name}")
+log_and_print(f"Results dir: {results_dir}")
+log_and_print(f"==========================================")
+# === END: Extra config/environment logging ===
+
+
 # Training
 print(f"\n{'='*60}\nStarting training for {args.epochs} epochs\n{'='*60}")
 train_start = time.time()
@@ -140,4 +178,5 @@ print(f"Mixed precision was {'ENABLED' if trainer.mixed_precision.use_mixed_prec
 with open(results_dir / "training_results.json", "w") as f:
     json.dump(training_results, f, indent=2, default=str)
 
-print(f"\n{'='*60}\nRun complete\n{'='*60}") 
+print(f"\n{'='*60}\nRun complete\n{'='*60}")
+# Reminder: For quick info gathering, use --max-samples and --epochs to keep the run short. 

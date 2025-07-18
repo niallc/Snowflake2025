@@ -73,3 +73,10 @@ At each step, if performance regressed, the change would be isolated and debugge
 ---
 
 (Older, obsolete, or overly detailed debugging notes have been removed for clarity. See previous git history for full details if needed.) 
+
+## Legacy Usage and Migration Status (2024-07-18)
+
+- The current hyperparameter tuning flow (`scripts/hyperparameter_tuning_legacy.py`) now uses only modern model, data pipeline, and Trainer code. The only remaining legacy aspect is the orchestration function (`run_hyperparameter_tuning_current_data`), which lives in a legacy-named file but does not use any legacy model, dataset, or training logic.
+- DataLoader shuffling is now harmonized (`shuffle=False`), and performance remains good, confirming that upstream shuffling is sufficient.
+- There is no urgent need to migrate the orchestration code out of the legacy file, as it does not affect training or results. When the codebase is further consolidated, duplicated or obsolete legacy code can be deleted.
+- **Next step:** Run a full experiment via `scripts/hyperparam_sweep.py` (which now uses the fully modernized pipeline) and observe whether the performance issue persists. If it does, further comparison or migration decisions can be made; if not, the migration is effectively complete. 
