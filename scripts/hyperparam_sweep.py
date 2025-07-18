@@ -7,15 +7,8 @@ No subprocesses are launched; all experiments are run in-process for easier debu
 import itertools
 import logging
 import time
-import json
-import csv
 from pathlib import Path
 from datetime import datetime
-import os
-import sys
-
-# Removed for now as I'm concerned about brittleness, using PYTHONPATH=. instead.
-# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 
@@ -53,7 +46,7 @@ SWEEP = {
 DATA_DIR = "data/processed"
 RESULTS_DIR = "checkpoints/sweep"
 EPOCHS = 3
-MAX_SAMPLES = 200_000
+MAX_SAMPLES = 100_000
 
 # Data augmentation configuration
 AUGMENTATION_CONFIG = {

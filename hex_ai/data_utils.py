@@ -431,6 +431,12 @@ def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
     Create policy labels for the 4 board augmentations.
     - For color-swapping symmetries, policy is transformed accordingly.
     """
+    # Handle None policies (final moves with no next move)
+    if policy is None:
+        # Return 4 copies of zero policy for final moves
+        zero_policy = np.zeros(169, dtype=np.float32)
+        return [zero_policy.copy() for _ in range(4)]
+    
     # Ensure input is contiguous
     policy = np.ascontiguousarray(policy)
     
@@ -688,7 +694,7 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     
     Args:
         board: 2-channel board state (2, N, N)
-        policy: Policy target (169,)
+        policy: Policy target (169,) or None for final moves
         value: Value target (float)
         
     Returns:
@@ -698,6 +704,19 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
         - Long diagonal reflection + color swap
         - Short diagonal reflection + color swap
     """
+    # Debug: Check input shapes and types
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.debug(f"create_augmented_example_with_player_to_move:")
+    logger.debug(f"  board: type={type(board)}, shape={board.shape if hasattr(board, 'shape') else 'N/A'}")
+    logger.debug(f"  policy: type={type(policy)}, shape={policy.shape if hasattr(policy, 'shape') else 'N/A'}")
+    logger.debug(f"  value: type={type(value)}, value={value}")
+    
+    # Handle None policies (final moves with no next move)
+    if policy is None:
+        policy = np.zeros(169, dtype=np.float32)
+    
     # Skip empty boards (no pieces to augment)
     if np.sum(board) == 0:
         player_to_move = get_player_to_move_from_board(board)
@@ -707,20 +726,59 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     player_to_move = get_player_to_move_from_board(board)
     
     # Create augmented components
-    augmented_boards = create_augmented_boards(board)
-    augmented_policies = create_augmented_policies(policy)
-    augmented_values = create_augmented_values(value)
-    augmented_players = create_augmented_player_to_move(player_to_move)
+    try:
+        augmented_boards = create_augmented_boards(board)
+        logger.debug(f"  augmented_boards: {len(augmented_boards)} boards")
+        for i, aug_board in enumerate(augmented_boards):
+            logger.debug(f"    board {i}: shape={aug_board.shape}")
+    except Exception as e:
+        logger.error(f"Error in create_augmented_boards: {e}")
+        logger.error(f"  board shape: {board.shape if hasattr(board, 'shape') else 'N/A'}")
+        raise
+    
+    try:
+        augmented_policies = create_augmented_policies(policy)
+        logger.debug(f"  augmented_policies: {len(augmented_policies)} policies")
+        for i, aug_policy in enumerate(augmented_policies):
+            logger.debug(f"    policy {i}: shape={aug_policy.shape}")
+    except Exception as e:
+        logger.error(f"Error in create_augmented_policies: {e}")
+        logger.error(f"  policy shape: {policy.shape if hasattr(policy, 'shape') else 'N/A'}")
+        raise
+    
+    try:
+        augmented_values = create_augmented_values(value)
+        logger.debug(f"  augmented_values: {augmented_values}")
+    except Exception as e:
+        logger.error(f"Error in create_augmented_values: {e}")
+        logger.error(f"  value: {value}")
+        raise
+    
+    try:
+        augmented_players = create_augmented_player_to_move(player_to_move)
+        logger.debug(f"  augmented_players: {augmented_players}")
+    except Exception as e:
+        logger.error(f"Error in create_augmented_player_to_move: {e}")
+        logger.error(f"  player_to_move: {player_to_move}")
+        raise
     
     # Create augmented examples
     augmented_examples = []
     for i in range(4):
-        augmented_examples.append((
-            augmented_boards[i],
-            augmented_policies[i],
-            augmented_values[i],
-            augmented_players[i]
-        ))
+        try:
+            example = (
+                augmented_boards[i],
+                augmented_policies[i],
+                augmented_values[i],
+                augmented_players[i]
+            )
+            augmented_examples.append(example)
+            logger.debug(f"  Created example {i}: board_shape={example[0].shape}, policy_shape={example[1].shape}")
+        except Exception as e:
+            logger.error(f"Error creating example {i}: {e}")
+            logger.error(f"  augmented_boards[{i}]: {augmented_boards[i] if i < len(augmented_boards) else 'N/A'}")
+            logger.error(f"  augmented_policies[{i}]: {augmented_policies[i] if i < len(augmented_policies) else 'N/A'}")
+            raise
     
     return augmented_examples
 

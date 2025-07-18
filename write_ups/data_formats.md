@@ -40,8 +40,19 @@ Processed data files contain training examples extracted from raw TRMPH game fil
 
 ### Data Types
 - **board**: `numpy.ndarray` of shape `(2, 13, 13)` - 2-channel format (blue, red)
-- **policy**: `numpy.ndarray` of shape `(169,)` - one-hot policy target
+- **policy**: `numpy.ndarray` of shape `(169,)` - one-hot policy target, or `None` for final moves
 - **value**: `float` - value target (0.0 or 1.0)
+
+### Policy Target Handling
+**Important**: Policy targets can be `None` for final moves in games where there is no next move to predict. This occurs when:
+- A game has ended (someone won)
+- The current position is the final position of the game
+
+**Current handling in training**:
+- `None` policies are converted to zero vectors `(169,)` filled with zeros
+- This allows the model to train on final positions without policy loss
+
+**Future improvement**: Consider using uniform distribution `(1/169, 1/169, ...)` instead of zeros for better training signal.
 
 ### How to Read
 ```python

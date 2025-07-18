@@ -288,27 +288,57 @@ class AugmentedProcessedDataset(NewProcessedDataset):
         example = self.examples[idx]
         board_2ch, policy, value = example
         
+        # Debug: Check data shapes and types
+        if idx == 0:  # Only log for first example to avoid spam
+            logger.debug(f"AugmentedProcessedDataset.__getitem__({idx}):")
+            logger.debug(f"  board_2ch: type={type(board_2ch)}, shape={board_2ch.shape if hasattr(board_2ch, 'shape') else 'N/A'}")
+            logger.debug(f"  policy: type={type(policy)}, shape={policy.shape if hasattr(policy, 'shape') else 'N/A'}")
+            logger.debug(f"  value: type={type(value)}, value={value}")
+        
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:
             return super().__getitem__(idx)
         
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
-        augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value)
+        try:
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value)
+        except Exception as e:
+            logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
+            logger.error(f"  board_2ch shape: {board_2ch.shape if hasattr(board_2ch, 'shape') else 'N/A'}")
+            logger.error(f"  policy shape: {policy.shape if hasattr(policy, 'shape') else 'N/A'}")
+            logger.error(f"  value: {value}")
+            raise
         
         # Convert to tensors and create 3-channel boards
         tensor_examples = []
-        for aug_board_2ch, aug_policy, aug_value, aug_player in augmented_examples:
-            # Create player-to-move channel
-            player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
-            board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
-            
-            # Convert to tensors
-            board_tensor = torch.from_numpy(board_3ch)
-            policy_tensor = torch.FloatTensor(aug_policy)
-            value_tensor = torch.FloatTensor([aug_value])
-            
-            tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+        for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
+            try:
+                # Debug: Check augmented data shapes
+                if idx == 0:  # Only log for first example
+                    logger.debug(f"  Augmentation {i}:")
+                    logger.debug(f"    aug_board_2ch: shape={aug_board_2ch.shape}")
+                    logger.debug(f"    aug_policy: shape={aug_policy.shape}")
+                    logger.debug(f"    aug_value: {aug_value}")
+                    logger.debug(f"    aug_player: {aug_player}")
+                
+                # Create player-to-move channel
+                player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
+                board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
+                
+                # Convert to tensors
+                board_tensor = torch.from_numpy(board_3ch)
+                policy_tensor = torch.FloatTensor(aug_policy)
+                value_tensor = torch.FloatTensor([aug_value])
+                
+                tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+            except Exception as e:
+                logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
+                logger.error(f"  aug_board_2ch shape: {aug_board_2ch.shape if hasattr(aug_board_2ch, 'shape') else 'N/A'}")
+                logger.error(f"  aug_policy shape: {aug_policy.shape if hasattr(aug_policy, 'shape') else 'N/A'}")
+                logger.error(f"  aug_value: {aug_value}")
+                logger.error(f"  aug_player: {aug_player}")
+                raise
         
         # Return all 4 examples (DataLoader will handle batching)
         return tensor_examples
