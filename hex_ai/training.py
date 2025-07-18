@@ -309,13 +309,14 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
-        print(f"Trainer.train_epoch() called")
-        print(f"self.current_epoch = {self.current_epoch}")
-        if(self.current_epoch == 0):
-            print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
-            print(f"self.max_grad_norm = {self.max_grad_norm}")
-            print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
-            print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
+        logger.info("Trainer.train_epoch() called")
+        logger.info(f"self.current_epoch = {self.current_epoch}")
+
+        if self.current_epoch == 0:
+            logger.info(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
+            logger.info(f"self.max_grad_norm = {self.max_grad_norm}")
+            logger.info(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
+            logger.info(f"self.train_loader.dataset = {self.train_loader.dataset}")
 
         """Train for one epoch, with detailed timing logs."""
         self.model.train()
@@ -365,17 +366,17 @@ class Trainer:
                 log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
 
                 if batch_idx % log_interval == 0:
-                    print(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                            f"Loss: {loss_dict['total_loss']:.4f}, "
-                            f"Policy: {loss_dict['policy_loss']:.4f}, "
-                            f"Value: {loss_dict['value_loss']:.4f}, "
-                            f"Batch time: {time.time() - batch_start_time:.3f}s, "
-                            f"Data load: {batch_data_time:.3f}s", flush=True)                    
-                    logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                              f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
+                    logger.info(
+                        f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
+                        f"Loss: {loss_dict['total_loss']:.4f}, "
+                        f"Policy: {loss_dict['policy_loss']:.4f}, "
+                        f"Value: {loss_dict['value_loss']:.4f}, "
+                        f"Batch time: {time.time() - batch_start_time:.3f}s, "
+                        f"Data load: {batch_data_time:.3f}s"
+                    )
             else:
                 if batch_idx == 0:
-                    print("*", end="", flush=True)
+                    logger.info("*")
 
             # Prepare for next batch data timing
             data_load_start = time.time()
@@ -574,7 +575,7 @@ class Trainer:
         error_tracker = get_board_state_error_tracker()
         stats = error_tracker.get_stats()
         if stats['total_samples'] > 0:
-            print(
+            logger.info(
                 f"\nData loading summary:\n"
                 f"  {stats['total_samples']} samples, "
                 f"{stats['error_count']} errors "

@@ -21,8 +21,8 @@ from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
 
-from .models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
-from .training_legacy import TrainerLegacy, EarlyStopping
+from .models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel
+from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
 logger = logging.getLogger(__name__)
@@ -593,13 +593,13 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
         )
     
     # Create model
-    model = TwoHeadedResNetLegacy(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    model = TwoHeadedResNetLegacyWithPlayerChannel(dropout_prob=hyperparams.get('dropout_prob', 0.1))
     device = torch.device(experiment_config['device'])
     model = model.to(device)
     
     # Create trainer
     csv_log_file = exp_dir / "training_metrics.csv"
-    trainer = TrainerLegacy(
+    trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -947,13 +947,13 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         )
     
     # Create model
-    model = TwoHeadedResNetLegacy(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    model = TwoHeadedResNetLegacyWithPlayerChannel(dropout_prob=hyperparams.get('dropout_prob', 0.1))
     device = torch.device(experiment_config['device'])
     model = model.to(device)
     
     # Create trainer
     csv_log_file = exp_dir / "training_metrics.csv"
-    trainer = TrainerLegacy(
+    trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,

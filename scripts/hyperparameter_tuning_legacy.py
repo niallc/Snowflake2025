@@ -52,17 +52,14 @@ if __name__ == '__main__':
 
     multiprocessing.set_start_method('spawn', force=True)
 
-from hex_ai.models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
+from hex_ai.models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel
 from hex_ai.data_pipeline import (
     StreamingProcessedDataset,
     discover_processed_files,
     estimate_dataset_size,
     create_train_val_split
 )
-from hex_ai.training_utils_legacy import (
-    run_hyperparameter_tuning_current_data,
-    create_experiment_config_legacy
-)
+from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 
 # Device selection
 if torch.cuda.is_available():
@@ -91,7 +88,7 @@ EXPERIMENT_NAME = (
 # Define experiments - focusing on gradient clipping
 experiments = [
     {
-        'experiment_name': 'clip_20',
+        'experiment_name': 'NewTrainer_clip_100',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': 512,
@@ -99,11 +96,11 @@ experiments = [
             'weight_decay': 5e-4,
             'policy_weight': 0.2,
             'value_weight': 0.8,
-            'max_grad_norm': 20.0
+            'max_grad_norm': 100.0
         }
     },
     {
-        'experiment_name': 'clip_2',
+        'experiment_name': 'NewTrainer_clip_1',
         'hyperparameters': {
             'learning_rate': 0.001,
             'batch_size': 512,
@@ -111,7 +108,7 @@ experiments = [
             'weight_decay': 5e-4,
             'policy_weight': 0.2,
             'value_weight': 0.8,
-            'max_grad_norm': 2.0
+            'max_grad_norm': 1.0
         }
     },
 ]
