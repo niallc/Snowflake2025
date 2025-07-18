@@ -224,6 +224,96 @@ class NewProcessedDataset(torch.utils.data.Dataset):
         return board_state, policy_target, value_target
 
 
+def augmented_collate_fn(batch):
+    """
+    Custom collate function for AugmentedProcessedDataset.
+    
+    Each item in the batch is a list of 4 augmented examples.
+    This function flattens them into a single batch.
+    """
+    # Flatten the batch (each item is a list of 4 examples)
+    flattened_batch = []
+    for item in batch:
+        if isinstance(item, list):
+            # Augmented examples
+            flattened_batch.extend(item)
+        else:
+            # Single example (fallback)
+            flattened_batch.append(item)
+    
+    # Separate boards, policies, and values
+    boards = []
+    policies = []
+    values = []
+    
+    for board, policy, value in flattened_batch:
+        boards.append(board)
+        policies.append(policy)
+        values.append(value)
+    
+    # Stack into batch tensors
+    boards_batch = torch.stack(boards)
+    policies_batch = torch.stack(policies)
+    values_batch = torch.stack(values)
+    
+    return boards_batch, policies_batch, values_batch
+
+
+class AugmentedProcessedDataset(NewProcessedDataset):
+    """Dataset that applies data augmentation to create 4x more training examples."""
+    
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, **kwargs):
+        """
+        Initialize augmented dataset.
+        
+        Args:
+            data_files: List of paths to processed data files
+            enable_augmentation: Whether to apply augmentation (default: True)
+            **kwargs: Additional arguments passed to NewProcessedDataset
+        """
+        super().__init__(data_files, **kwargs)
+        self.enable_augmentation = enable_augmentation
+        
+        if enable_augmentation:
+            logger.info(f"AugmentedProcessedDataset: Will create 4x training examples through augmentation")
+        else:
+            logger.info(f"AugmentedProcessedDataset: Augmentation disabled, using original examples")
+    
+    def __getitem__(self, idx):
+        """Get augmented training examples."""
+        if not self.enable_augmentation:
+            return super().__getitem__(idx)
+        
+        # Load original example
+        example = self.examples[idx]
+        board_2ch, policy, value = example
+        
+        # Skip empty boards (no pieces to augment)
+        if np.sum(board_2ch) == 0:
+            return super().__getitem__(idx)
+        
+        # Create all 4 augmented examples
+        from hex_ai.data_utils import create_augmented_example_with_player_to_move
+        augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value)
+        
+        # Convert to tensors and create 3-channel boards
+        tensor_examples = []
+        for aug_board_2ch, aug_policy, aug_value, aug_player in augmented_examples:
+            # Create player-to-move channel
+            player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
+            board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
+            
+            # Convert to tensors
+            board_tensor = torch.from_numpy(board_3ch)
+            policy_tensor = torch.FloatTensor(aug_policy)
+            value_tensor = torch.FloatTensor([aug_value])
+            
+            tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+        
+        # Return all 4 examples (DataLoader will handle batching)
+        return tensor_examples
+
+
 
 
 

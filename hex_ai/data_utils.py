@@ -397,45 +397,88 @@ def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
 
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
     """
-    Create all 4 augmented versions of a board.
+    Create 4 augmented board states from a single board.
     
     Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
+        board: 2-channel board state (2, N, N)
         
     Returns:
-        List of 4 boards: [original, rotated_180, reflected_long, reflected_short]
+        List of 4 board states:
+        - Original
+        - 180° rotation (no color swap)
+        - Long diagonal reflection + color swap
+        - Short diagonal reflection + color swap
     """
+    # Ensure input is contiguous
+    board = np.ascontiguousarray(board)
+    
+    # Create augmented boards
     rotated = rotate_board_180(board)
     reflected_long = reflect_board_long_diagonal(board)
     reflected_short = reflect_board_short_diagonal(board)
     
-    return [board, rotated, reflected_long, reflected_short]
+    # Ensure all outputs are contiguous
+    return [
+        board.copy(),
+        np.ascontiguousarray(rotated),
+        np.ascontiguousarray(reflected_long),
+        np.ascontiguousarray(reflected_short)
+    ]
 
 
 def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
     """
-    Create policy arrays corresponding to the 4 board augmentations.
-    
-    Args:
-        policy: Policy array of shape (169,)
-        
-    Returns:
-        List of 4 policies corresponding to the board augmentations
+    Create policy labels for the 4 board augmentations.
+    - For color-swapping symmetries, policy is transformed accordingly.
     """
-    # Reshape policy to (13, 13) for easier manipulation
+    # Ensure input is contiguous
+    policy = np.ascontiguousarray(policy)
+    
+    # Reshape to 2D for easier manipulation
     policy_2d = policy.reshape(13, 13)
     
-    # Create the 4 augmented policies
-    rotated = np.flip(policy_2d, axis=(0, 1))  # 180° rotation
+    # Create augmented policies
+    rotated = np.flip(policy_2d, axis=(0, 1))  # 180° rotation (no color swap)
     reflected_long = np.transpose(policy_2d)  # Long diagonal reflection
-    reflected_short = np.flip(np.transpose(policy_2d), axis=(0, 1))  # Short diagonal reflection
+    reflected_short = np.zeros_like(policy_2d)  # Short diagonal reflection
+
+    # Short diagonal reflection: (row, col) -> (N-1-col, N-1-row)
+    for row in range(13):
+        for col in range(13):
+            reflected_short[12 - col, 12 - row] = policy_2d[row, col]
     
-    # Reshape back to (169,)
+    # Ensure all outputs are contiguous
     return [
-        policy,
-        rotated.reshape(169),
-        reflected_long.reshape(169),
-        reflected_short.reshape(169)
+        policy.copy(),
+        np.ascontiguousarray(rotated.reshape(169)),
+        np.ascontiguousarray(reflected_long.reshape(169)),
+        np.ascontiguousarray(reflected_short.reshape(169))
+    ]
+
+
+def create_augmented_values(value: float) -> list[float]:
+    """
+    Create value labels for the 4 board augmentations.
+    - For color-swapping symmetries, swap the value (1.0 <-> 0.0).
+    """
+    return [
+        value,          # Original
+        value,          # 180° rotation (no color swap)
+        1.0 - value,    # Long diagonal reflection + color swap
+        1.0 - value     # Short diagonal reflection + color swap
+    ]
+
+
+def create_augmented_player_to_move(player_to_move: int) -> list[int]:
+    """
+    Create player-to-move values for the 4 board augmentations.
+    - For color-swapping symmetries, swap the player (0 <-> 1).
+    """
+    return [
+        player_to_move,          # Original
+        player_to_move,          # 180° rotation (no color swap)
+        1 - player_to_move,      # Long diagonal reflection + color swap
+        1 - player_to_move       # Short diagonal reflection + color swap
     ]
 
 
@@ -601,6 +644,86 @@ def create_policy_target(move: str) -> np.ndarray:
     policy[tensor_pos] = 1.0
     
     return policy
+
+def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """
+    Create all 4 augmented examples from a single example.
+    
+    Args:
+        board: 2-channel board state (2, N, N)
+        policy: Policy target (169,)
+        value: Value target (float)
+        
+    Returns:
+        List of 4 tuples: [(board_2ch, policy, value), ...]
+        - Original
+        - 180° rotation (no color swap)
+        - Long diagonal reflection + color swap
+        - Short diagonal reflection + color swap
+    """
+    # Skip empty boards (no pieces to augment)
+    if np.sum(board) == 0:
+        return [(board, policy, value)] * 4
+    
+    # Create augmented components
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    augmented_values = create_augmented_values(value)
+    
+    # Create augmented examples
+    augmented_examples = []
+    for i in range(4):
+        augmented_examples.append((
+            augmented_boards[i],
+            augmented_policies[i],
+            augmented_values[i]
+        ))
+    
+    return augmented_examples
+
+
+def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
+    """
+    Create all 4 augmented examples with player-to-move information.
+    
+    Args:
+        board: 2-channel board state (2, N, N)
+        policy: Policy target (169,)
+        value: Value target (float)
+        
+    Returns:
+        List of 4 tuples: [(board_2ch, policy, value, player_to_move), ...]
+        - Original
+        - 180° rotation (no color swap)
+        - Long diagonal reflection + color swap
+        - Short diagonal reflection + color swap
+    """
+    # Skip empty boards (no pieces to augment)
+    if np.sum(board) == 0:
+        player_to_move = get_player_to_move_from_board(board)
+        return [(board, policy, value, player_to_move)] * 4
+    
+    # Compute player-to-move for original board
+    player_to_move = get_player_to_move_from_board(board)
+    
+    # Create augmented components
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    augmented_values = create_augmented_values(value)
+    augmented_players = create_augmented_player_to_move(player_to_move)
+    
+    # Create augmented examples
+    augmented_examples = []
+    for i in range(4):
+        augmented_examples.append((
+            augmented_boards[i],
+            augmented_policies[i],
+            augmented_values[i],
+            augmented_players[i]
+        ))
+    
+    return augmented_examples
+
 
 def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
     """
