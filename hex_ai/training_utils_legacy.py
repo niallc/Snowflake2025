@@ -934,9 +934,9 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     
     logger.info(f"Dataset summary: {len(data_files)} total files, {len(train_files)} train, {len(val_files)} validation")
     if max_examples_per_split:
-        logger.info(f"Training will use streaming with chunk_size={max_examples_per_split}")
+        logger.info(f"Training will use streaming with max_examples={max_examples_per_split:,}")
     if max_validation_examples:
-        logger.info(f"Validation will use streaming with chunk_size={max_validation_examples}")
+        logger.info(f"Validation will use streaming with max_examples={max_validation_examples:,}")
     
     # Device selection
     if torch.cuda.is_available():
@@ -975,13 +975,30 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     # Create training dataset with optional augmentation
     if enable_augmentation:
         logger.info("Using StreamingAugmentedProcessedDataset for training data (4x augmentation)")
-        train_dataset = StreamingAugmentedProcessedDataset(train_files, enable_augmentation=True, chunk_size=max_examples_per_split or 100000)
+        train_dataset = StreamingAugmentedProcessedDataset(
+            train_files, 
+            enable_augmentation=True, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_examples_per_split
+        )
         # Note: Validation dataset is not augmented
-        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_validation_examples or 100000) if val_files else None
+        val_dataset = StreamingProcessedDataset(
+            val_files, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_validation_examples
+        ) if val_files else None
     else:
         logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
-        train_dataset = StreamingProcessedDataset(train_files, chunk_size=max_examples_per_split or 100000)
-        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_validation_examples or 100000) if val_files else None
+        train_dataset = StreamingProcessedDataset(
+            train_files, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_examples_per_split
+        )
+        val_dataset = StreamingProcessedDataset(
+            val_files, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_validation_examples
+        ) if val_files else None
     
     logger.info(f"Created training dataset")
     if val_dataset:
@@ -1051,11 +1068,11 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
     logger.info(f"Data augmentation: {'Enabled' if enable_augmentation else 'Disabled'}")
     if max_examples_per_split:
-        logger.info(f"Training: streaming with chunk_size={max_examples_per_split:,}")
+        logger.info(f"Training: streaming with max_examples={max_examples_per_split:,}")
     else:
         logger.info(f"Training: streaming with unlimited examples")
     if max_validation_examples:
-        logger.info(f"Validation: streaming with chunk_size={max_validation_examples:,}")
+        logger.info(f"Validation: streaming with max_examples={max_validation_examples:,}")
     else:
         logger.info(f"Validation: streaming with unlimited examples")
     

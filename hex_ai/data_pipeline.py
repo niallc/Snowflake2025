@@ -59,7 +59,7 @@ def _validate_example_format(example, filename):
 class StreamingProcessedDataset(torch.utils.data.Dataset):
     """Streaming dataset that loads data in chunks to reduce memory usage."""
     
-    def __init__(self, data_files: List[Path], chunk_size: int = 100000, shuffle_files: bool = True):
+    def __init__(self, data_files: List[Path], chunk_size: int = 100000, shuffle_files: bool = True, max_examples: Optional[int] = None):
         """
         Initialize streaming dataset.
         
@@ -67,12 +67,14 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
             data_files: List of paths to processed data files
             chunk_size: Number of examples to load at once
             shuffle_files: Whether to shuffle the order of files
+            max_examples: Maximum number of examples to provide (None for unlimited)
         """
         self.data_files = data_files
         if shuffle_files:
             random.shuffle(self.data_files)
         
         self.chunk_size = chunk_size
+        self.max_examples = max_examples
         self.current_chunk = []
         self.current_file_idx = 0
         self.current_example_idx = 0
@@ -127,16 +129,22 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
     
     def __len__(self):
         """
-        Return an estimated number of samples (for DataLoader compatibility).
-        NOTE: This is an estimate based on the number of valid files and chunk size,
-        not the true number of available samples. For small datasets or tests, use
-        dataset.true_len() for the exact count.
+        Return the number of samples (for DataLoader compatibility).
+        If max_examples is set, returns that value. Otherwise returns an estimate.
         """
-        num_valid_files = len([f for f in self.data_files if f.exists()])
-        return num_valid_files * self.chunk_size
+        if self.max_examples is not None:
+            return self.max_examples
+        else:
+            # Return an estimate based on the number of valid files and chunk size
+            num_valid_files = len([f for f in self.data_files if f.exists()])
+            return num_valid_files * self.chunk_size
     
     def __getitem__(self, idx):
         """Get a single training sample."""
+        # Check if we've reached the maximum number of examples
+        if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
+            raise IndexError(f"Reached maximum examples limit: {self.max_examples}")
+        
         if self.current_example_idx >= len(self.current_chunk):
             if self.current_file_idx >= len(self.data_files):
                 # We've exhausted all files, start over
