@@ -143,7 +143,14 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         """Get a single training sample."""
         # Check if we've reached the maximum number of examples
         if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
-            raise IndexError(f"Reached maximum examples limit: {self.max_examples}")
+            # Instead of raising an error, cycle back to the beginning
+            # This allows training to continue with the limited dataset
+            self.current_file_idx = 0
+            self.current_example_idx = 0
+            self.total_examples_loaded = 0
+            random.shuffle(self.data_files)  # Reshuffle for next epoch
+            self._load_next_chunk()
+            self.current_example_idx = 0
         
         if self.current_example_idx >= len(self.current_chunk):
             if self.current_file_idx >= len(self.data_files):
@@ -217,10 +224,38 @@ class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
         super().__init__(data_files, **kwargs)
         self.enable_augmentation = enable_augmentation
         
+        # For augmented datasets, we need to adjust the max_examples limit
+        # since each __getitem__ call returns 4 examples instead of 1
+        if enable_augmentation and self.max_examples is not None:
+            # Store the original limit for internal tracking
+            self.original_max_examples = self.max_examples
+            # Adjust the limit for the base class (divide by 4 since we return 4x examples)
+            self.max_examples = self.max_examples // 4
+            logger.info(f"StreamingAugmentedProcessedDataset: Adjusted max_examples from {self.original_max_examples:,} to {self.max_examples:,} (will provide {self.original_max_examples:,} effective examples with augmentation)")
+        else:
+            self.original_max_examples = self.max_examples
+        
         if enable_augmentation:
             logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation")
         else:
             logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples")
+    
+    def __len__(self):
+        """
+        Return the number of samples (for DataLoader compatibility).
+        For augmented datasets, this should return the effective number of examples
+        that will be provided (4x the base examples).
+        """
+        if self.enable_augmentation and self.original_max_examples is not None:
+            # Return the original max_examples (the effective number with augmentation)
+            return self.original_max_examples
+        else:
+            base_len = super().__len__()
+            if self.enable_augmentation:
+                # Return the effective number of examples (4x the base examples)
+                return base_len * 4
+            else:
+                return base_len
     
     def __getitem__(self, idx):
         """Get augmented training examples."""
