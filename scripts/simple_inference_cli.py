@@ -19,17 +19,10 @@ def main():
 
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"
     print(f"model_path = {model_path}")
-    # --- LEGACY MODEL SUPPORT ---
-    if args.legacy_model:
-        print("Using legacy model")
-        from hex_ai.models_legacy import TwoHeadedResNetLegacy
-        model = TwoHeadedResNetLegacy()
-        infer = SimpleModelInference(model_path, device=args.device, model_instance=model)
-    else:
-        print("Using current model architecture")
-        from hex_ai.models import TwoHeadedResNet
-        # model = TwoHeadedResNet()  # Redundant, not used
-        infer = SimpleModelInference(model_path, device=args.device)
+    print("Using current model architecture")
+    from hex_ai.models import TwoHeadedResNet
+    # model = TwoHeadedResNet()  # Redundant, not used
+    infer = SimpleModelInference(model_path, device=args.device)
 
     print("\n--- Board Position ---")
     infer.display_board(args.trmph)
@@ -56,14 +49,6 @@ if __name__ == "__main__":
         --model_dir checkpoints/sweep/sweep_run_0_learning-rate0.001_batch-size128_max-grad-norm100_dropout0.0005_weight-decay0.0001_20250717_121342/ \
         --model_file best_model.pt \
         --device mps
-
-    Recreating performance from an older training run (pre refactor)
-    python3 -m scripts.simple_inference_cli \
-        --trmph https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7 \
-        --model_dir checkpoints/old_results/pre_player_turn_info/hex_ai_hyperparam_tuning_v3_500k_samples_20250714_140659/bs_1024_wd_5e-4_policy_0.1_value_0.9 \
-        --model_file checkpoint_epoch_0.pt \
-        --device mps \
-        --legacy-model
         
     """
     main() 

@@ -1000,8 +1000,8 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         log_and_print(f"Model input channels: {model.input_channels if hasattr(model, 'input_channels') else 'unknown'}")
     except Exception as e:
         log_and_print(f"Model input channels: unknown (error: {e})")
-    log_and_print(f"Train DataLoader: batch_size={hyperparams['batch_size']}, shuffle=True, num_workers=0, pin_memory=False")
-    log_and_print(f"Val DataLoader: batch_size={hyperparams['batch_size']}, shuffle=False, num_workers=0, pin_memory=False")
+    log_and_print(f"Train DataLoader: batch_size={hyperparams['batch_size']}")
+    log_and_print(f"Val DataLoader: batch_size={hyperparams['batch_size']}")
     log_and_print(f"Train dataset size: {len(train_dataset)}")
     log_and_print(f"Val dataset size: {len(val_dataset) if val_dataset else 0}")
     log_and_print(f"Learning rate: {hyperparams['learning_rate']}")
