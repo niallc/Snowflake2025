@@ -53,10 +53,14 @@ if __name__ == '__main__':
     multiprocessing.set_start_method('spawn', force=True)
 
 from hex_ai.models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
+from hex_ai.data_pipeline import (
+    StreamingProcessedDataset,
+    discover_processed_files,
+    estimate_dataset_size,
+    create_train_val_split
+)
 from hex_ai.training_utils_legacy import (
-    run_hyperparameter_tuning_legacy,
-    discover_processed_files_legacy,
-    estimate_dataset_size_legacy,
+    run_hyperparameter_tuning_current_data,
     create_experiment_config_legacy
 )
 
@@ -148,8 +152,8 @@ print(f"{'='*60}")
 
 # Discover and analyze data
 print("\nDiscovering processed data files...")
-data_files = discover_processed_files_legacy("data/processed")
-total_examples = estimate_dataset_size_legacy(data_files, max_files=10)  # Sample more files for better estimate
+data_files = discover_processed_files("data/processed")
+total_examples = estimate_dataset_size(data_files, max_files=10)  # Sample more files for better estimate
 print(f"Found {len(data_files)} data files with approximately {total_examples:,} training examples")
 
 print(f"Using {TARGET_EXAMPLES} examples for training")
@@ -157,7 +161,7 @@ print("(This provides comprehensive training for meaningful results)")
 
 # Run large-scale hyperparameter tuning
 start_time = time.time()
-overall_results = run_hyperparameter_tuning_legacy(
+overall_results = run_hyperparameter_tuning_current_data(
     experiments=experiments,
     data_dir="data/processed",
     results_dir=str(results_dir),

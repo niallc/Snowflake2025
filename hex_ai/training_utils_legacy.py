@@ -712,3 +712,303 @@ def create_summary_csv(experiment_results: List[Dict], results_path: Path):
             writer.writerow(row)
     
     logger.info(f"Created experiment summary CSV: {summary_file}") 
+
+
+def run_hyperparameter_tuning_current_data(experiments: List[Dict],
+                            data_dir: str = "data/processed",
+                            results_dir: str = "checkpoints/hyperparameter_tuning",
+                            train_ratio: float = 0.8,
+                            num_epochs: int = 10,
+                            early_stopping_patience: Optional[int] = None,
+                            random_seed: Optional[int] = None,
+                            max_examples_per_split: Optional[int] = None,
+                            experiment_name: Optional[str] = None) -> Dict:
+    """
+    Run a complete hyperparameter tuning experiment using current data pipeline.
+    
+    This version uses StreamingProcessedDataset instead of the legacy NewProcessedDataset.
+    
+    Args:
+        experiments: List of experiment configurations
+        data_dir: Directory containing processed data
+        results_dir: Directory to save results
+        train_ratio: Ratio of data to use for training
+        num_epochs: Number of epochs per experiment
+        early_stopping_patience: Early stopping patience
+        random_seed: Random seed for reproducibility
+        
+    Returns:
+        Dictionary containing all experiment results
+    """
+    import time
+    from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files, estimate_dataset_size, create_train_val_split
+    
+    # Setup
+    results_path = Path(results_dir)
+    results_path.mkdir(parents=True, exist_ok=True)
+    
+    # Use experiment name if provided, otherwise use timestamp
+    if experiment_name is None:
+        experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # Discover data files using current pipeline
+    data_files = discover_processed_files(data_dir)
+    
+    # Create train/val split (limit files for efficiency)
+    max_files_per_split = 5 if max_examples_per_split is not None else None  # Use only 5 files for quick exploration
+    logger.info(f"Creating train/val split with max_files_per_split={max_files_per_split}")
+    train_files, val_files = create_train_val_split(
+        data_files, train_ratio, random_seed, max_files_per_split
+    )
+    logger.info(f"Train files: {len(train_files)}, Val files: {len(val_files)}")
+    logger.info(f"Sample train files: {[f.name for f in train_files[:3]]}")
+    logger.info(f"Sample val files: {[f.name for f in val_files[:3]]}")
+    
+    # Estimate dataset size (use sampling for speed)
+    logger.info("Estimating dataset sizes...")
+    total_examples = estimate_dataset_size(data_files, max_files=10)  # Sample 10 files
+    train_examples = estimate_dataset_size(train_files, max_files=5)  # Sample 5 files
+    val_examples = estimate_dataset_size(val_files, max_files=5)     # Sample 5 files
+    
+    # If max_examples_per_split is specified, limit the data
+    if max_examples_per_split is not None:
+        logger.info(f"Limiting data to ~{max_examples_per_split:,} examples per split for quick exploration")
+        # We'll limit the data in the dataset creation, not here
+    
+    dataset_info = {
+        'total_files': len(data_files),
+        'train_files': len(train_files),
+        'val_files': len(val_files),
+        'total_examples': total_examples,
+        'train_examples': train_examples,
+        'val_examples': val_examples
+    }
+    
+    logger.info(f"Dataset info: {dataset_info}")
+    
+    # Device selection
+    if torch.cuda.is_available():
+        device = "cuda"
+        device_name = torch.cuda.get_device_name(0)
+        logger.info(f"Using CUDA GPU: {device_name}")
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        logger.info("Using Apple MPS GPU")
+    else:
+        device = "cpu"
+        logger.info("Using CPU")
+    
+    # Save overall configuration
+    overall_config = {
+        'experiment_name': experiment_name,
+        'dataset_info': dataset_info,
+        'device': device,
+        'num_experiments': len(experiments),
+        'train_ratio': train_ratio,
+        'num_epochs': num_epochs,
+        'early_stopping_patience': early_stopping_patience,
+        'random_seed': random_seed,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    with open(results_path / "overall_config.json", "w") as f:
+        json.dump(overall_config, f, indent=2)
+    
+    # Load data once and reuse across experiments using current pipeline
+    logger.info(f"\nLoading data once for all experiments...")
+    train_dataset = StreamingProcessedDataset(train_files, chunk_size=max_examples_per_split or 100000)
+    val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
+    
+    logger.info(f"Created streaming datasets")
+    if val_dataset:
+        logger.info(f"Created validation dataset")
+    
+    # Run experiments
+    all_results = []
+    total_start_time = time.time()
+    
+    logger.info(f"\nStarting {len(experiments)} experiments...")
+    
+    for i, exp_config in enumerate(experiments):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Experiment {i+1}/{len(experiments)}: {exp_config['experiment_name']}")
+        logger.info(f"{'='*60}")
+        
+        # Add device and max_examples_per_split to experiment config
+        exp_config['device'] = device
+        if max_examples_per_split is not None:
+            exp_config['max_examples_per_split'] = max_examples_per_split
+        
+        try:
+            results = run_hyperparameter_experiment_current_data(
+                exp_config,
+                train_dataset,
+                val_dataset,
+                results_path,
+                num_epochs,
+                early_stopping_patience,
+                exp_config['experiment_name'] # Pass experiment_name here
+            )
+            all_results.append(results)
+            
+        except Exception as e:
+            logger.error(f"Experiment {exp_config['experiment_name']} failed: {e}")
+            continue
+    
+    # Save overall results
+    total_time = time.time() - total_start_time
+    overall_results = {
+        'total_training_time': total_time,
+        'num_experiments': len(experiments),
+        'successful_experiments': len(all_results),
+        'device': device,
+        'experiments': all_results
+    }
+    
+    with open(results_path / "overall_results.json", "w") as f:
+        json.dump(overall_results, f, indent=2, default=str)
+    
+    # Create summary CSV with all experiment results
+    if all_results:
+        create_summary_csv(all_results, results_path)
+    
+    # Print summary
+    logger.info(f"\n{'='*60}")
+    logger.info("HYPERPARAMETER TUNING COMPLETE")
+    logger.info(f"{'='*60}")
+    logger.info(f"Total training time: {total_time:.1f}s")
+    logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
+    
+    if all_results:
+        best_exp = min(all_results, key=lambda x: x['best_val_loss'])
+        logger.info(f"\nBest experiment: {best_exp['experiment_name']}")
+        logger.info(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+        logger.info(f"Hyperparameters: {best_exp['hyperparameters']}")
+    
+    logger.info(f"\nAll results saved to: {results_path}")
+    
+    return overall_results
+
+
+def run_hyperparameter_experiment_current_data(experiment_config: Dict,
+                                train_dataset,
+                                val_dataset,
+                                results_dir: Path,
+                                num_epochs: int = 10,
+                                early_stopping_patience: Optional[int] = None,
+                                experiment_name: Optional[str] = None) -> Dict:
+    """
+    Run a single hyperparameter experiment using current data pipeline.
+    
+    Args:
+        experiment_config: Experiment configuration
+        train_dataset: Streaming training dataset
+        val_dataset: Streaming validation dataset (can be None)
+        results_dir: Directory to save results
+        num_epochs: Number of training epochs
+        early_stopping_patience: Early stopping patience (None to disable)
+        
+    Returns:
+        Dictionary containing experiment results
+    """
+    exp_name = experiment_config['experiment_name']
+    hyperparams = experiment_config['hyperparameters']
+    
+    logger.info(f"Starting experiment: {exp_name}")
+    logger.info(f"Hyperparameters: {hyperparams}")
+    
+    # Create experiment directory
+    exp_dir = results_dir / exp_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save experiment config
+    with open(exp_dir / "config.json", "w") as f:
+        json.dump(experiment_config, f, indent=2)
+    
+    # Create dataloaders from streaming datasets
+    logger.info(f"Creating dataloaders from streaming datasets")
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=hyperparams['batch_size'],
+        shuffle=True,
+        num_workers=0,  # Use 0 to avoid multiprocessing issues
+        pin_memory=False  # Disable pin_memory for MPS
+    )
+    
+    val_loader = None
+    if val_dataset:
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=hyperparams['batch_size'],
+            shuffle=False,
+            num_workers=0,  # Use 0 to avoid multiprocessing issues
+            pin_memory=False  # Disable pin_memory for MPS
+        )
+    
+    # Create model
+    model = TwoHeadedResNetLegacy(dropout_prob=hyperparams.get('dropout_prob', 0.1))
+    device = torch.device(experiment_config['device'])
+    model = model.to(device)
+    
+    # Create trainer
+    csv_log_file = exp_dir / "training_metrics.csv"
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        learning_rate=hyperparams['learning_rate'],
+        device=device,
+        enable_system_analysis=True,
+        enable_csv_logging=True,
+        experiment_name=experiment_name or exp_name,  # Use provided experiment_name or fall back to exp_name
+        policy_weight=hyperparams.get('policy_weight', 0.15),
+        value_weight=hyperparams.get('value_weight', 0.85),
+        weight_decay=hyperparams.get('weight_decay', 1e-4)
+    )
+    
+    # Update CSV logger to use experiment-specific file
+    if trainer.csv_logger:
+        trainer.csv_logger.log_file = csv_log_file
+        trainer.csv_logger.experiment_name = experiment_name or exp_name
+    
+    # Setup early stopping
+    early_stopping = None
+    if early_stopping_patience is not None:
+        early_stopping = EarlyStopping(patience=early_stopping_patience)
+    
+    # Train
+    training_results = trainer.train(
+        num_epochs=num_epochs,
+        save_dir=str(exp_dir),
+        early_stopping=early_stopping
+    )
+    
+    # Extract key metrics
+    best_val_loss = min(training_results['val_losses']) if training_results['val_losses'] else float('inf')
+    best_train_loss = min(training_results['train_losses']) if training_results['train_losses'] else float('inf')
+    final_val_loss = training_results['val_losses'][-1] if training_results['val_losses'] else float('inf')
+    final_train_loss = training_results['train_losses'][-1] if training_results['train_losses'] else float('inf')
+    
+    experiment_results = {
+        'experiment_name': exp_name,
+        'hyperparameters': hyperparams,
+        'best_val_loss': best_val_loss,
+        'best_train_loss': best_train_loss,
+        'final_val_loss': final_val_loss,
+        'final_train_loss': final_train_loss,
+        'epochs_trained': len(training_results['train_losses']),
+        'early_stopped': training_results.get('early_stopped', False),
+        'training_time': training_results.get('total_time', 0),
+        'all_metrics': training_results
+    }
+    
+    # Save experiment results
+    with open(exp_dir / "experiment_results.json", "w") as f:
+        json.dump(experiment_results, f, indent=2, default=str)
+    
+    logger.info(f"Experiment {exp_name} completed:")
+    logger.info(f"  Best val loss: {best_val_loss:.6f}")
+    logger.info(f"  Final val loss: {final_val_loss:.6f}")
+    logger.info(f"  Epochs trained: {len(training_results['train_losses'])}")
+    
+    return experiment_results 
