@@ -561,3 +561,48 @@ This systematic approach should allow us to identify exactly which change(s) bro
 - **Training speed**: Should not be significantly slower than 2-channel legacy
 
 **Summary**: We have successfully completed Step 2.1 of our incremental migration plan. The 3-channel legacy modifications are working correctly and ready for training. The next phase will determine whether adding the player-to-move channel breaks training performance, which will guide our next debugging steps. 
+
+---
+
+## 15. Current Data Pipeline Test: Progress and Next Steps (2024-07-18)
+
+**CURRENT STATUS:** We have now tested the current data pipeline (`StreamingProcessedDataset`) with our working 3-channel legacy model (with 5x5 first convolution). The policy loss continues to drop rapidly, confirming that the streaming data loader is not the source of the policy head regression.
+
+### What Was Accomplished
+
+#### Step 2.4: Test Current Data Pipeline (COMPLETED)
+- **Modified hyperparameter tuning script**: Now uses `StreamingProcessedDataset` from `hex_ai/data_pipeline.py` instead of the legacy dataset
+- **Model**: Still using the 3-channel legacy model with 5x5 first convolution
+- **Training**: Ran hyperparameter tuning with the streaming data loader
+- **Results**: Policy loss and value loss both drop rapidly, similar to previous steps
+- **Conclusion**: The current data pipeline is not the cause of the poor policy head performance seen in the modern code
+
+### Key Insights
+- **No regression**: Switching to the streaming data loader does not break training or degrade policy head performance
+- **Modern pipeline compatibility**: The legacy model is now fully compatible with the modern data pipeline
+- **Systematic migration**: Each step of the migration plan has been validated in isolation
+
+### Updated Next Steps
+
+#### Phase 4: Integration and Validation
+
+1. **Full Modern Pipeline Test**
+   - **Goal**: Combine all working changes into a complete modern pipeline (modern model, modern data loader, modern trainer)
+   - **Action**: Use the modern model construction and training code, but with the same data and hyperparameters
+   - **Test**: Run a full training run and compare performance to the legacy/augmented-legacy pipeline
+   - **Success criteria**: Policy loss should still drop rapidly and match or exceed legacy performance
+
+2. **Performance Comparison and Analysis**
+   - **Goal**: Directly compare legacy/augmented-legacy and modern pipelines on the same data
+   - **Action**: Use `scripts/compare_legacy_vs_modified.py` and other analysis tools
+   - **Test**: Identify any remaining differences in performance, convergence, or stability
+   - **If differences remain**: Systematically analyze model, loss, and training loop for subtle bugs or mismatches
+
+3. **Optimization and Final Migration**
+   - **Goal**: Optimize the modern pipeline for speed, memory, and maintainability
+   - **Action**: Remove legacy code, standardize on the modern pipeline, and document any architectural or training changes that improve performance
+
+**Summary:**
+- We have now validated that the current data pipeline works with the legacy model and does not cause policy head regression.
+- The next step is to fully switch to the modern model and training code, and directly compare performance.
+- If the modern pipeline still underperforms, we will have a minimal, working baseline to debug against. 
