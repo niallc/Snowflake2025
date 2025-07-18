@@ -10,9 +10,10 @@ This document summarizes the scripts and utilities available in the `scripts/` d
 scripts/
   # Legacy and Migration Tools (NEW)
   hyperparameter_tuning_legacy.py        # Legacy hyperparameter tuning with 2-channel model
+  test_3channel_legacy.py                # Test 3-channel legacy modifications (NEW)
   test_legacy_incremental.py             # Test incremental changes from legacy to modern (PLANNED)
-  compare_legacy_vs_modified.py          # Compare performance between legacy and modified versions (PLANNED)
-  test_legacy_with_player_channel.py     # Test legacy code with player-to-move channel added
+  compare_legacy_vs_modified.py          # Compare performance between legacy and modified versions
+  test_legacy_with_player_channel.py     # Test legacy code with player-to-move channel added (DELETED)
   
   # Data Analysis and Debugging
   extract_error_sample_from_pkl.py       # Extract and inspect a single record from a .pkl.gz file
@@ -67,26 +68,28 @@ scripts/
 - **Usage**: `python -m scripts.hyperparameter_tuning_legacy`
 - **Status**: ✅ **WORKING** - Successfully restored and confirmed to perform better than current version
 - **Performance**: Achieves good policy loss reduction, unlike the current 3-channel version
+- **Recent changes**: Updated to use 3-channel model (`TwoHeadedResNetLegacy3Channel`) for testing player-to-move channel
+
+### test_3channel_legacy.py (NEW)
+- **Purpose**: Test the 3-channel legacy modifications (player-to-move channel addition)
+- **Key features**: 
+  - Tests `TwoHeadedResNetLegacy3Channel` model creation and forward pass
+  - Tests modified `ProcessedDatasetLegacy` with player-to-move channel
+  - Verifies data format and tensor shapes
+  - Quick validation before running full training
+- **Usage**: `python -m scripts.test_3channel_legacy`
+- **Status**: ✅ **WORKING** - Successfully validates 3-channel modifications
+- **Test results**: Model creates with 11,256,042 parameters, accepts 3-channel input, dataset adds player-to-move channel correctly
 
 ### test_legacy_incremental.py (PLANNED)
 - **Purpose**: Test incremental changes from legacy to modern architecture
 - **Key features**: 
-  - Step 2.1: Test player-to-move channel addition
+  - Step 2.1: Test player-to-move channel addition ✅ **COMPLETED**
   - Step 2.2: Test 5x5 first convolution
   - Step 2.3: Test current training pipeline
   - Step 2.4: Test current data pipeline
 - **Usage**: `python -m scripts.test_legacy_incremental --step 2.1`
-- **Status**: 🔄 **PLANNED** - Part of incremental migration strategy
-
-### test_legacy_with_player_channel.py
-- **Purpose**: Test legacy code with player-to-move channel added
-- **Key features**: 
-  - Uses modified legacy model with 3-channel input
-  - Uses modified legacy dataset that adds player-to-move channel
-  - Uses legacy training pipeline (no gradient clipping, etc.)
-  - Compares performance to pure legacy (2-channel) version
-- **Usage**: `python -m scripts.test_legacy_with_player_channel --num-epochs 5 --batch-size 256`
-- **Status**: ✅ **READY** - Tests if player-to-move channel causes performance regression
+- **Status**: 🔄 **IN PROGRESS** - Step 2.1 completed, ready for Step 2.2
 
 ### compare_legacy_vs_modified.py
 - **Purpose**: Compare performance curves between legacy and modified versions
@@ -201,20 +204,34 @@ These modules are imported by the main scripts to avoid code duplication and ens
 ## Legacy Code Status
 
 ### Working Legacy Components
-- ✅ `hex_ai/models_legacy.py` - 2-channel ResNet18 model
+- ✅ `hex_ai/models_legacy.py` - 2-channel ResNet18 model + 3-channel variant
 - ✅ `hex_ai/training_legacy.py` - Legacy training pipeline
 - ✅ `hex_ai/data_processing_legacy.py` - Legacy data loading
-- ✅ `hex_ai/training_utils_legacy.py` - Legacy training utilities
-- ✅ `scripts/hyperparameter_tuning_legacy.py` - Legacy hyperparameter tuning
+- ✅ `hex_ai/training_utils_legacy.py` - Legacy training utilities (modified for 3-channel)
+- ✅ `scripts/hyperparameter_tuning_legacy.py` - Legacy hyperparameter tuning (updated for 3-channel)
 
 ### Legacy vs Current Performance
 - **Legacy (2-channel)**: ✅ Good policy loss reduction, stable training
+- **Legacy (3-channel)**: 🔄 **TESTING** - Step 2.1 of incremental migration
 - **Current (3-channel)**: ❌ Poor policy loss, barely improves from random
 
-### Migration Strategy
-- **Incremental testing**: Test each change individually (player-to-move channel, 5x5 conv, training pipeline, data pipeline)
-- **Rollback capability**: Can always return to working legacy version
-- **Systematic approach**: Identify exact cause of performance regression
+### Migration Strategy - Current Progress
+- ✅ **Step 2.1**: Player-to-move channel addition - **COMPLETED**
+  - Modified `TwoHeadedResNetLegacy` → `TwoHeadedResNetLegacy3Channel`
+  - Modified `ProcessedDatasetLegacy.__getitem__` to add player-to-move channel
+  - Updated hyperparameter tuning script to use 3-channel model
+  - Created test script to validate modifications
+- 🔄 **Next**: Run 3-channel legacy training and compare performance
+- 📋 **Step 2.2**: Test 5x5 first convolution (if Step 2.1 succeeds)
+- 📋 **Step 2.3**: Test current training pipeline (if Step 2.2 succeeds)
+- 📋 **Step 2.4**: Test current data pipeline (if Step 2.3 succeeds)
+
+### Recent Changes
+- **Added**: `TwoHeadedResNetLegacy3Channel` class in `hex_ai/models_legacy.py`
+- **Modified**: `ProcessedDatasetLegacy.__getitem__` to add player-to-move channel
+- **Updated**: `scripts/hyperparameter_tuning_legacy.py` to use 3-channel model
+- **Created**: `scripts/test_3channel_legacy.py` for validation
+- **Deleted**: Complex dataset modifications that were too memory-intensive
 
 ---
 
@@ -226,6 +243,7 @@ These modules are imported by the main scripts to avoid code duplication and ens
 - **CSV logging:** Per-epoch metrics are logged to `checkpoints/bookkeeping/training_metrics.csv` by default. For sweeps, you may want to configure per-experiment CSVs.
 - **Legacy code**: All legacy components are clearly marked with `_legacy` suffixes to avoid conflicts with current code.
 - **Migration tools**: New tools are being developed to systematically test incremental changes from legacy to modern architecture.
+- **Current focus**: Testing player-to-move channel addition to legacy code to identify if this change causes performance regression.
 
 ---
 

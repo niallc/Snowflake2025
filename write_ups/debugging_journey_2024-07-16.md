@@ -463,3 +463,101 @@ This systematic approach should allow us to identify exactly which change(s) bro
 ---
 
 **Summary**: We now have a working baseline (legacy code) and a clear path forward to incrementally build toward the modern design while identifying and fixing the specific issues that caused the performance regression. 
+
+---
+
+## 14. 3-Channel Legacy Modifications: Current Progress (2024-07-18)
+
+**CURRENT STATUS**: We have successfully implemented and tested the first step of our incremental migration plan - adding the player-to-move channel to the legacy code.
+
+### What Was Accomplished
+
+#### Step 2.1: Player-to-Move Channel Addition (COMPLETED)
+- **Modified legacy model**: Created `TwoHeadedResNetLegacy3Channel` that accepts 3-channel input (2 board channels + 1 player-to-move channel)
+- **Modified legacy dataset**: Updated `ProcessedDatasetLegacy` to add player-to-move channel in `__getitem__`
+- **Updated hyperparameter tuning**: Modified `scripts/hyperparameter_tuning_legacy.py` to use the 3-channel model
+- **Created test script**: `scripts/test_3channel_legacy.py` to verify the modifications work correctly
+
+#### Test Results
+- ✅ **Model creation**: 3-channel model creates successfully with 11,256,042 parameters
+- ✅ **Forward pass**: Model accepts 3-channel input and produces correct policy/value outputs
+- ✅ **Dataset loading**: Legacy dataset correctly adds player-to-move channel to board tensors
+- ✅ **Data format**: All examples have correct 3-channel board format (3, 13, 13)
+
+### Technical Implementation Details
+
+#### Model Changes
+- **File**: `hex_ai/models_legacy.py`
+- **Class**: `TwoHeadedResNetLegacy3Channel`
+- **Key change**: First convolution layer changed from `nn.Conv2d(2, 64, 3, 1, 1)` to `nn.Conv2d(3, 64, 3, 1, 1)`
+- **Architecture**: Otherwise identical to legacy 2-channel model
+
+#### Dataset Changes
+- **File**: `hex_ai/training_utils_legacy.py`
+- **Method**: `ProcessedDatasetLegacy.__getitem__`
+- **Key change**: Added player-to-move channel calculation and concatenation with board channels
+- **Logic**: Player-to-move = 1 if current player has more pieces, 0 otherwise
+
+#### Training Script Changes
+- **File**: `scripts/hyperparameter_tuning_legacy.py`
+- **Key change**: Import and use `TwoHeadedResNetLegacy3Channel` instead of `TwoHeadedResNetLegacy`
+
+### Next Steps
+
+#### Immediate Next Step: Run 3-Channel Legacy Training
+1. **Run hyperparameter tuning**: Execute the modified legacy tuning script
+   ```sh
+   PYTHONPATH=. python scripts/hyperparameter_tuning_legacy.py
+   ```
+2. **Monitor performance**: Compare policy loss curves with original 2-channel legacy runs
+3. **Success criteria**: Policy loss should still drop rapidly (similar to 2-channel legacy)
+
+#### If 3-Channel Legacy Succeeds: Step 2.2
+- **Goal**: Test 5x5 first convolution while keeping 3-channel input
+- **Changes**: Modify first conv layer from 3x3 to 5x5 in `TwoHeadedResNetLegacy3Channel`
+- **Test**: Run same training script and compare performance
+
+#### If 3-Channel Legacy Fails: Root Cause Analysis
+- **Investigation**: Determine why adding player-to-move channel broke training
+- **Possible causes**:
+  - Player-to-move calculation logic is incorrect
+  - 3-channel input changes model dynamics unfavorably
+  - Data loading changes introduce bugs
+- **Fixes**: Implement targeted fixes based on root cause
+
+### Comparison Framework
+
+#### Scripts Available
+- **Test script**: `scripts/test_3channel_legacy.py` - verifies modifications work
+- **Comparison script**: `scripts/compare_legacy_vs_modified.py` - compares training performance
+- **Analysis tools**: Existing debugging scripts can be adapted for 3-channel analysis
+
+#### Expected Outcomes
+- **Success**: 3-channel legacy performs similarly to 2-channel legacy
+- **Partial success**: 3-channel legacy works but with slightly different performance
+- **Failure**: 3-channel legacy shows poor policy learning (like current modern version)
+
+### Documentation and Tracking
+
+#### Files Modified
+- `hex_ai/models_legacy.py` - Added 3-channel model class
+- `hex_ai/training_utils_legacy.py` - Modified dataset to add player-to-move channel
+- `scripts/hyperparameter_tuning_legacy.py` - Updated to use 3-channel model
+- `scripts/test_3channel_legacy.py` - New test script
+
+#### Files Created
+- `scripts/compare_legacy_vs_modified.py` - Comparison framework (from earlier)
+
+#### Key Insights
+- **Minimal changes**: We successfully added the player-to-move channel with minimal code modifications
+- **Backward compatibility**: Legacy training pipeline remains largely unchanged
+- **Systematic approach**: Each change is isolated and testable
+- **Clear success criteria**: We can objectively measure whether the modification works
+
+### Success Metrics for Next Phase
+- **Policy loss reduction**: Should match 2-channel legacy performance
+- **Training stability**: No NaN losses, consistent convergence
+- **Memory usage**: Should not be significantly higher than 2-channel legacy
+- **Training speed**: Should not be significantly slower than 2-channel legacy
+
+**Summary**: We have successfully completed Step 2.1 of our incremental migration plan. The 3-channel legacy modifications are working correctly and ready for training. The next phase will determine whether adding the player-to-move channel breaks training performance, which will guide our next debugging steps. 

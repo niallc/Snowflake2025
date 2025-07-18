@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
 
-from .models_legacy import TwoHeadedResNetLegacy
+from .models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
@@ -184,6 +184,22 @@ class NewProcessedDataset(torch.utils.data.Dataset):
         
         # Convert numpy arrays to tensors
         board_state = torch.FloatTensor(example[0])
+        
+        # MODIFIED: Add player-to-move channel
+        board_np = board_state.numpy()
+        from hex_ai.data_utils import get_player_to_move_from_board
+        
+        try:
+            player_to_move = get_player_to_move_from_board(board_np)
+        except Exception as e:
+            # Use default value if we can't determine
+            from hex_ai.inference.board_utils import BLUE_PLAYER
+            player_to_move = BLUE_PLAYER
+        
+        # Create player-to-move channel
+        player_channel = np.full((board_np.shape[1], board_np.shape[2]), float(player_to_move), dtype=np.float32)
+        board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
+        board_state = torch.from_numpy(board_3ch)
         
         # Handle None policy targets (final moves)
         # Note that on the final move of any game there is no next move to predict,

@@ -52,7 +52,7 @@ if __name__ == '__main__':
 
     multiprocessing.set_start_method('spawn', force=True)
 
-from hex_ai.models_legacy import TwoHeadedResNetLegacy
+from hex_ai.models_legacy_with_player_channel import TwoHeadedResNetLegacyWithPlayerChannel as TwoHeadedResNetLegacy
 from hex_ai.training_utils_legacy import (
     run_hyperparameter_tuning_legacy,
     discover_processed_files_legacy,
@@ -80,7 +80,7 @@ TARGET_EXAMPLES = 100000  # 100K positions for comprehensive training
 # Experiment naming
 from datetime import datetime
 EXPERIMENT_NAME = (
-    "hex_ai_legacy_100k_samples_"
+    "hex_ai_legacy_3channel_100k_samples_"
     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 )
 
