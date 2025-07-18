@@ -142,7 +142,7 @@ with open(results_dir / "config.json", "w") as f:
     json.dump(config, f, indent=2)
 
 print(f"\n{'='*60}")
-print(f"LARGE-SCALE HYPERPARAMETER TUNING (500K)")
+print(f"LARGE-SCALE HYPERPARAMETER TUNING, targeting {TARGET_EXAMPLES} samples")
 print(f"Experiment Name: {EXPERIMENT_NAME}")
 print(f"Device: {device}")
 print(f"Epochs per experiment: {NUM_EPOCHS}")

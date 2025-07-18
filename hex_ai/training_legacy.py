@@ -316,6 +316,8 @@ class TrainerLegacy:
             # Gradient clipping (configurable)
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+            else:
+                print("WARNING: No gradient clipping, is this intended?")
             # Optimizer step with scaling
             self.mixed_precision.step_optimizer(self.optimizer)
             self.mixed_precision.update_scaler()
@@ -331,8 +333,14 @@ class TrainerLegacy:
                 # Above 2000 batches, log every 200 batches
                 log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
                 if batch_idx % log_interval == 0:
-                    logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                              f"Loss: {loss_dict['total_loss']:.4f}, Batch time: {time.time() - batch_start_time:.3f}s, Data load: {batch_data_time:.3f}s")
+                    logger.info(
+                        f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}\n"
+                        f"  Total Loss: {loss_dict['total_loss']:.4f}\n"
+                        f"  Policy Loss: {loss_dict.get('policy_loss', float('nan')):.4f}\n"
+                        f"  Value Loss: {loss_dict.get('value_loss', float('nan')):.4f}\n"
+                        f"  Batch time: {time.time() - batch_start_time:.3f}s\n"
+                        f"  Data load: {batch_data_time:.3f}s"
+                    )
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()
@@ -482,7 +490,12 @@ class TrainerLegacy:
             
             # Log results with memory info
             memory_usage_mb = get_memory_usage()
-            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f} | Memory: {memory_usage_mb:.1f}MB")
+            logger.info(
+                f"Epoch {epoch}:\n"
+                f"  Train Loss: {train_metrics['total_loss']:.4f}\n"
+                f"  Policy Loss: {train_metrics.get('policy_loss', float('nan')):.4f}\n"
+                f"  Memory: {memory_usage_mb:.1f}MB"
+            )
             if val_metrics:
                 logger.info(f"Epoch {epoch}: Val Loss: {val_metrics['total_loss']:.4f}")
             
@@ -499,6 +512,7 @@ class TrainerLegacy:
                 self.best_val_loss = val_metrics['total_loss']
                 self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
                 logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
+                logger.info(f"Save directory: {save_path}")
             
             # Check early stopping
             if early_stopping and val_metrics:
