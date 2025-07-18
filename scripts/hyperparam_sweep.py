@@ -5,6 +5,7 @@ No subprocesses are launched; all experiments are run in-process for easier debu
 """
 
 import itertools
+import logging
 import time
 import json
 import csv
@@ -13,6 +14,25 @@ from datetime import datetime
 import os
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+
+###### Logging setup ######
+log_dir = Path('logs')
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / 'hex_ai_training.log'
+
+file_handler = logging.FileHandler(log_file, mode='a')
+formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
+file_handler.setFormatter(formatter)
+
+root_logger = logging.getLogger()
+root_logger.addHandler(file_handler)
+root_logger.setLevel(logging.INFO)  # Or whatever level you want
+
+# Optionally, also add a StreamHandler for terminal output:
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+root_logger.addHandler(stream_handler)
+###### End of logging setup ######
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {

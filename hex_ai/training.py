@@ -17,6 +17,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import time
+import sys
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -309,16 +310,24 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     def train_epoch(self) -> Dict[str, float]:
-        logger.info("Trainer.train_epoch() called")
-        logger.info(f"self.current_epoch = {self.current_epoch}")
+        print(f"Trainer.train_epoch() called")
+        print(f"self.current_epoch = {self.current_epoch}")
+        if(self.current_epoch == 0):
+            print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
+            print(f"self.max_grad_norm = {self.max_grad_norm}")
+            print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
+            print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
 
-        if self.current_epoch == 0:
-            logger.info(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
-            logger.info(f"self.max_grad_norm = {self.max_grad_norm}")
-            logger.info(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
-            logger.info(f"self.train_loader.dataset = {self.train_loader.dataset}")
+        # Enhanced logging setup
+        from pathlib import Path
+        log_dir = Path('logs')
+        log_dir.mkdir(exist_ok=True)
+        verbose_log_file = log_dir / 'run_training_verbose.txt'
+        def log_and_print(msg):
+            print(msg)
+            with open(verbose_log_file, 'a') as f:
+                f.write(msg + '\n')
 
-        """Train for one epoch, with detailed timing logs."""
         self.model.train()
         epoch_losses = []
         epoch_metrics = {
@@ -330,6 +339,10 @@ class Trainer:
         batch_data_times = []
         epoch_start_time = time.time()
         data_load_start = time.time()
+        n_batches = len(self.train_loader)
+        # Choose k to get ~3-10 outputs per epoch
+        k = max(1, n_batches // 5)
+        special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
         for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
             # Time data loading
             data_load_end = time.time()
@@ -358,26 +371,18 @@ class Trainer:
             epoch_losses.append(loss_dict['total_loss'])
             for key in epoch_metrics:
                 epoch_metrics[key].append(loss_dict[key])
-            # Log progress - adjust frequency based on dataset size and verbosity
-            if VERBOSE_LEVEL >= 1:
-                # With only 100 or fewer batches, log every 5 batches
-                # Between 101 and 2000 batches, log every 50 batches
-                # Above 2000 batches, log every 200 batches
-                log_interval = 5 if len(self.train_loader) <= 100 else 50 if len(self.train_loader) <= 2000 else 200
-
-                if batch_idx % log_interval == 0:
-                    logger.info(
-                        f"Epoch {self.current_epoch}, Batch {batch_idx}/{len(self.train_loader)}, "
-                        f"Loss: {loss_dict['total_loss']:.4f}, "
-                        f"Policy: {loss_dict['policy_loss']:.4f}, "
-                        f"Value: {loss_dict['value_loss']:.4f}, "
-                        f"Batch time: {time.time() - batch_start_time:.3f}s, "
-                        f"Data load: {batch_data_time:.3f}s"
-                    )
-            else:
-                if batch_idx == 0:
-                    logger.info("*")
-
+            # Enhanced logging: print every k batches, and at special batches for epoch 0
+            should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
+            if should_log:
+                cum_epoch_time = time.time() - epoch_start_time
+                msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
+                       f"Total Loss: {loss_dict['total_loss']:.4f}, "
+                       f"Policy: {loss_dict['policy_loss']:.4f}, "
+                       f"Value: {loss_dict['value_loss']:.4f}, "
+                       f"Batch time: {time.time() - batch_start_time:.3f}s, "
+                       f"Data load: {batch_data_time:.3f}s, "
+                       f"Cumulative epoch time: {cum_epoch_time:.1f}s")
+                log_and_print(msg)
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()
@@ -393,7 +398,14 @@ class Trainer:
         epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
         epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
         # Log timing summary
-        logger.info(f"Epoch {self.current_epoch} timing: epoch_time={epoch_time:.2f}s, batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, batch_time_min={epoch_avg['batch_time_min']:.3f}s, batch_time_max={epoch_avg['batch_time_max']:.3f}s, data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s")
+        samples_per_sec = len(self.train_loader.dataset) / epoch_time if epoch_time > 0 else 0
+        summary_msg = (f"[Epoch {self.current_epoch}] DONE: epoch_time={epoch_time:.2f}s, "
+                       f"batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, "
+                       f"batch_time_min={epoch_avg['batch_time_min']:.3f}s, "
+                       f"batch_time_max={epoch_avg['batch_time_max']:.3f}s, "
+                       f"data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s, "
+                       f"samples/sec={samples_per_sec:.1f}")
+        log_and_print(summary_msg)
         return epoch_avg
     
     def validate(self) -> Dict[str, float]:
