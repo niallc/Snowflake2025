@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-import subprocess
+"""
+In-process hyperparameter sweep for Hex AI, using run_hyperparameter_tuning_current_data.
+No subprocesses are launched; all experiments are run in-process for easier debugging and unified code path.
+"""
+
 import itertools
 import time
 import json
@@ -8,96 +12,78 @@ from pathlib import Path
 from datetime import datetime
 import os
 
+from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "learning-rate": [0.001],
-    "batch-size": [256, 512],
-    "max-grad-norm": [20],
-    "dropout": [0, 0.001],
-    "weight-decay": [1e-3, 1e-4],
+    "learning_rate": [0.001],
+    "batch_size": [256, 512],
+    "max_grad_norm": [20],
+    "dropout_prob": [0, 0.001],
+    "weight_decay": [1e-3, 1e-4],
     # Add more as needed
 }
 
 DATA_DIR = "data/processed"
-RESULTS_DIR = "checkpoints"
-EPOCHS = 10 
-MAX_SAMPLES = 200_000 # Is an underscore ignored in a numberic literal in python? Answer: yes.
+RESULTS_DIR = "checkpoints/sweep"
+EPOCHS = 10
+MAX_SAMPLES = 200_000
 
+# Build all parameter combinations
 def all_param_combinations(sweep_dict):
     keys = list(sweep_dict.keys())
     for values in itertools.product(*[sweep_dict[k] for k in keys]):
         yield dict(zip(keys, values))
 
-def run_one(config, run_idx):
-    # Build command
-    # Include the data and time (up to minutes) in the experiment name
-    exp_name = f"PostLegacyRerun_{run_idx}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = Path(RESULTS_DIR) / exp_name
-    results_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "python", "-m", "scripts.run_training",
-        "--epochs", str(EPOCHS),
-        "--max-samples", str(MAX_SAMPLES),
-        "--data-dir", DATA_DIR,
-        "--results-dir", str(RESULTS_DIR),
-        "--experiment-name", exp_name,
-        "--verbose", "2",
-    ]
-    for k, v in config.items():
-        cmd += [f"--{k}", str(v)]
-    print(f"\n=== Starting run {run_idx}: {exp_name} ===")
-    print("Command:", " ".join(cmd))
-    start = time.time()
-    env = os.environ.copy()
-    env["PYTHONPATH"] = "."
-    proc = subprocess.run(cmd, capture_output=False, text=True, env=env)
-    elapsed = time.time() - start
-    print(f"Run {run_idx} finished in {elapsed/60:.1f} min")
-    if proc.returncode != 0:
-        print(f"Run {run_idx} failed! Output:\n{proc.stdout}\n{proc.stderr}")
-        return None
-    # Print last lines of stdout for quick glance
-    print(proc.stdout.splitlines()[-15:])
-    # Parse results
-    summary = summarize_run(results_dir)
-    print(f"Summary for {exp_name}: {summary}")
-    return summary
+if __name__ == "__main__":
+    print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
 
-def summarize_run(results_dir):
-    # Try to read training_results.json
-    try:
-        with open(Path(results_dir) / "training_results.json") as f:
-            results = json.load(f)
-        best_val = results.get("best_val_loss")
-        best_train = min(results.get("train_losses", []), default=None)
-        epochs = results.get("epochs_trained")
-        total_time = results.get("total_training_time")
-        return {
-            "best_val_loss": best_val,
-            "best_train_loss": best_train,
-            "epochs_trained": epochs,
-            "total_time_min": total_time / 60 if total_time else None,
-        }
-    except Exception as e:
-        print(f"Could not summarize run in {results_dir}: {e}")
-        return {}
-
-# To run this script from the command line in the parent direcory (project root),
-# being mindful of imports, run:
-# python -m scripts.hyperparam_sweep
-def main():
     all_configs = list(all_param_combinations(SWEEP))
     print(f"Total runs to launch: {len(all_configs)}")
-    all_summaries = []
+    experiments = []
     for i, config in enumerate(all_configs):
-        summary = run_one(config, i)
-        all_summaries.append({"config": config, "summary": summary})
-        # Optionally: write intermediate results
-        with open(Path(RESULTS_DIR) / "sweep_summary.json", "w") as f:
-            json.dump(all_summaries, f, indent=2)
-    print("\n=== Sweep complete! ===")
-    for entry in all_summaries:
-        print(entry)
+        exp_name = f"sweep_run_{i}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        experiments.append({
+            'experiment_name': exp_name,
+            'hyperparameters': config
+        })
 
-if __name__ == "__main__":
-    main()
+    results_dir = Path(RESULTS_DIR)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.time()
+    overall_results = run_hyperparameter_tuning_current_data(
+        experiments=experiments,
+        data_dir=DATA_DIR,
+        results_dir=str(results_dir),
+        train_ratio=0.8,
+        num_epochs=EPOCHS,
+        early_stopping_patience=3,
+        random_seed=42,
+        max_examples_per_split=MAX_SAMPLES,
+        experiment_name="sweep_run"
+    )
+    total_time = time.time() - start_time
+
+    print(f"\n{'='*60}")
+    print(f"SWEEP COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+    print(f"Successful experiments: {overall_results.get('successful_experiments', 'N/A')}/{overall_results.get('num_experiments', 'N/A')}")
+
+    # Find best experiment
+    if overall_results.get('experiments'):
+        best_exp = min(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+        print(f"\nBest experiment: {best_exp['experiment_name']}")
+        print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+        print(f"Hyperparameters: {best_exp['hyperparameters']}")
+        # Show all results sorted by validation loss
+        print(f"\nAll experiments ranked by validation loss:")
+        sorted_experiments = sorted(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+        for i, exp in enumerate(sorted_experiments):
+            print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+    else:
+        print("\nNo successful experiments!")
+
+    print(f"\nAll results saved to: {results_dir}")
+    print("Run 'python analyze_tuning_results.py' to analyze the results.")
