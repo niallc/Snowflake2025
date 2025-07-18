@@ -40,9 +40,9 @@ class ModelWrapper:
         try:
             if checkpoint_path.endswith('.gz'):
                 with gzip.open(checkpoint_path, 'rb') as f:
-                    checkpoint = torch.load(f, map_location=self.device)
+                    checkpoint = torch.load(f, map_location=self.device, weights_only=False)
             else:
-                checkpoint = torch.load(checkpoint_path, map_location=self.device)
+                checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             if 'model_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['model_state_dict'])
             else:
