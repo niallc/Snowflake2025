@@ -288,13 +288,6 @@ class AugmentedProcessedDataset(NewProcessedDataset):
         example = self.examples[idx]
         board_2ch, policy, value = example
         
-        # Debug: Check data shapes and types
-        if idx == 0:  # Only log for first example to avoid spam
-            logger.debug(f"AugmentedProcessedDataset.__getitem__({idx}):")
-            logger.debug(f"  board_2ch: type={type(board_2ch)}, shape={board_2ch.shape if hasattr(board_2ch, 'shape') else 'N/A'}")
-            logger.debug(f"  policy: type={type(policy)}, shape={policy.shape if hasattr(policy, 'shape') else 'N/A'}")
-            logger.debug(f"  value: type={type(value)}, value={value}")
-        
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:
             return super().__getitem__(idx)
@@ -305,23 +298,12 @@ class AugmentedProcessedDataset(NewProcessedDataset):
             augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value)
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
-            logger.error(f"  board_2ch shape: {board_2ch.shape if hasattr(board_2ch, 'shape') else 'N/A'}")
-            logger.error(f"  policy shape: {policy.shape if hasattr(policy, 'shape') else 'N/A'}")
-            logger.error(f"  value: {value}")
             raise
         
         # Convert to tensors and create 3-channel boards
         tensor_examples = []
         for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
             try:
-                # Debug: Check augmented data shapes
-                if idx == 0:  # Only log for first example
-                    logger.debug(f"  Augmentation {i}:")
-                    logger.debug(f"    aug_board_2ch: shape={aug_board_2ch.shape}")
-                    logger.debug(f"    aug_policy: shape={aug_policy.shape}")
-                    logger.debug(f"    aug_value: {aug_value}")
-                    logger.debug(f"    aug_player: {aug_player}")
-                
                 # Create player-to-move channel
                 player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
                 board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
@@ -334,10 +316,6 @@ class AugmentedProcessedDataset(NewProcessedDataset):
                 tensor_examples.append((board_tensor, policy_tensor, value_tensor))
             except Exception as e:
                 logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
-                logger.error(f"  aug_board_2ch shape: {aug_board_2ch.shape if hasattr(aug_board_2ch, 'shape') else 'N/A'}")
-                logger.error(f"  aug_policy shape: {aug_policy.shape if hasattr(aug_policy, 'shape') else 'N/A'}")
-                logger.error(f"  aug_value: {aug_value}")
-                logger.error(f"  aug_player: {aug_player}")
                 raise
         
         # Return all 4 examples (DataLoader will handle batching)
@@ -845,6 +823,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
                             early_stopping_patience: Optional[int] = None,
                             random_seed: Optional[int] = None,
                             max_examples_per_split: Optional[int] = None,
+                            max_validation_examples: Optional[int] = None,
                             experiment_name: Optional[str] = None,
                             enable_augmentation: bool = True) -> Dict:
     """
@@ -861,6 +840,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         num_epochs: Number of epochs per experiment
         early_stopping_patience: Early stopping patience
         random_seed: Random seed for reproducibility
+        max_examples_per_split: Maximum examples for training dataset
+        max_validation_examples: Maximum examples for validation dataset (defaults to max_examples_per_split if None)
         enable_augmentation: Whether to use data augmentation for training (default: True)
         
     Returns:
@@ -868,6 +849,10 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     """
     import time
     from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files, estimate_dataset_size, create_train_val_split
+    
+    # Use max_examples_per_split for validation if not specified
+    if max_validation_examples is None:
+        max_validation_examples = max_examples_per_split
     
     # Setup
     results_path = Path(results_dir)
@@ -898,8 +883,9 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     
     # If max_examples_per_split is specified, limit the data
     if max_examples_per_split is not None:
-        logger.info(f"Limiting data to ~{max_examples_per_split:,} examples per split for quick exploration")
-        # We'll limit the data in the dataset creation, not here
+        logger.info(f"Limiting training data to ~{max_examples_per_split:,} examples for quick exploration")
+    if max_validation_examples is not None:
+        logger.info(f"Limiting validation data to ~{max_validation_examples:,} examples for quick exploration")
     
     dataset_info = {
         'total_files': len(data_files),
@@ -907,7 +893,9 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'val_files': len(val_files),
         'total_examples': total_examples,
         'train_examples': train_examples,
-        'val_examples': val_examples
+        'val_examples': val_examples,
+        'max_training_examples': max_examples_per_split,
+        'max_validation_examples': max_validation_examples
     }
     
     logger.info(f"Dataset info: {dataset_info}")
@@ -935,6 +923,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'early_stopping_patience': early_stopping_patience,
         'random_seed': random_seed,
         'enable_augmentation': enable_augmentation,
+        'max_training_examples': max_examples_per_split,
+        'max_validation_examples': max_validation_examples,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -949,11 +939,11 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         logger.info("Using AugmentedProcessedDataset for training data (4x augmentation)")
         train_dataset = AugmentedProcessedDataset(train_files, enable_augmentation=True, max_examples=max_examples_per_split)
         # Note: Validation dataset is not augmented
-        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
+        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_validation_examples or 100000) if val_files else None
     else:
         logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
         train_dataset = StreamingProcessedDataset(train_files, chunk_size=max_examples_per_split or 100000)
-        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
+        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_validation_examples or 100000) if val_files else None
     
     logger.info(f"Created training dataset")
     if val_dataset:
@@ -974,6 +964,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         exp_config['device'] = device
         if max_examples_per_split is not None:
             exp_config['max_examples_per_split'] = max_examples_per_split
+        if max_validation_examples is not None:
+            exp_config['max_validation_examples'] = max_validation_examples
         exp_config['enable_augmentation'] = enable_augmentation
         
         try:
@@ -1001,6 +993,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'successful_experiments': len(all_results),
         'device': device,
         'enable_augmentation': enable_augmentation,
+        'max_training_examples': max_examples_per_split,
+        'max_validation_examples': max_validation_examples,
         'experiments': all_results
     }
     
@@ -1018,6 +1012,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     logger.info(f"Total training time: {total_time:.1f}s")
     logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
     logger.info(f"Data augmentation: {'Enabled' if enable_augmentation else 'Disabled'}")
+    logger.info(f"Training examples: {max_examples_per_split:,}" if max_examples_per_split else "Training examples: unlimited")
+    logger.info(f"Validation examples: {max_validation_examples:,}" if max_validation_examples else "Validation examples: unlimited")
     
     if all_results:
         best_exp = min(all_results, key=lambda x: x['best_val_loss'])

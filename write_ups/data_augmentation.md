@@ -336,19 +336,22 @@ AUGMENTATION_CONFIG = {
 
 ## TODO
 
-- [x] Implement board transformations
-- [x] Implement policy label transformations
-- [x] Implement value label transformations
-- [x] Implement player-to-move transformations
-- [x] Create comprehensive augmentation function that handles all labels together
-- [x] Implement `AugmentedProcessedDataset` class with `__getitem__` augmentation
-- [x] Create custom collate function for DataLoader compatibility
-- [x] Test augmentation pipeline with visualization and validation
-- [x] **Integration**: Update training pipeline to use `AugmentedProcessedDataset`
-- [x] **Configuration**: Add augmentation options to experiment configs
-- [x] **Performance Testing**: Measure training speed and memory impact
-- [x] **Validation**: Compare production pipeline output with visualization script
+- [x] **Integration**: Integrate `AugmentedProcessedDataset` into training pipeline
+- [x] **Configuration**: Add enable/disable flag for augmentation
+- [x] **Performance Testing**: Test training performance with augmentation enabled
+- [x] **Validation**: Ensure validation data is not augmented (as intended)
+- [x] **Documentation**: Update training documentation
+- [x] **Error Handling**: Handle `None` policy targets for final moves
+- [x] **Validation Set Size**: Optimize validation dataset size for faster training
+- [x] **Cleanup**: Remove debug logging and polish code for production
+
+## Future Improvements
+
+- [ ] **Performance Optimization**: Profile and optimize augmentation performance
+- [ ] **Memory Usage**: Monitor and optimize memory usage with 4x data
 - [ ] **Hyperparameter Tuning**: Adjust learning rates/batch sizes for augmented data
+- [ ] **Policy Target Handling**: Consider using uniform distribution `(1/169, ...)` instead of zeros for final moves
+- [ ] **Visual Testing**: Add comprehensive visual validation of augmentations
 
 ## Implementation Summary
 

@@ -690,97 +690,37 @@ def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float
 
 def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
     """
-    Create all 4 augmented examples with player-to-move information.
+    Create 4 augmented examples from a single board position.
     
     Args:
-        board: 2-channel board state (2, N, N)
-        policy: Policy target (169,) or None for final moves
-        value: Value target (float)
+        board: Board state as (2, 13, 13) array
+        policy: Policy target as (169,) array or None for final moves
+        value: Value target as float
         
     Returns:
-        List of 4 tuples: [(board_2ch, policy, value, player_to_move), ...]
-        - Original
-        - 180° rotation (no color swap)
-        - Long diagonal reflection + color swap
-        - Short diagonal reflection + color swap
+        List of 4 tuples: (augmented_board, augmented_policy, augmented_value, player_to_move)
     """
-    # Debug: Check input shapes and types
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    logger.debug(f"create_augmented_example_with_player_to_move:")
-    logger.debug(f"  board: type={type(board)}, shape={board.shape if hasattr(board, 'shape') else 'N/A'}")
-    logger.debug(f"  policy: type={type(policy)}, shape={policy.shape if hasattr(policy, 'shape') else 'N/A'}")
-    logger.debug(f"  value: type={type(value)}, value={value}")
-    
     # Handle None policies (final moves with no next move)
     if policy is None:
         policy = np.zeros(169, dtype=np.float32)
     
-    # Skip empty boards (no pieces to augment)
-    if np.sum(board) == 0:
-        player_to_move = get_player_to_move_from_board(board)
-        return [(board, policy, value, player_to_move)] * 4
+    # Create augmented boards, policies, values, and player-to-move
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    augmented_values = create_augmented_values(value)
+    augmented_player_to_move = create_augmented_player_to_move(board)
     
-    # Compute player-to-move for original board
-    player_to_move = get_player_to_move_from_board(board)
-    
-    # Create augmented components
-    try:
-        augmented_boards = create_augmented_boards(board)
-        logger.debug(f"  augmented_boards: {len(augmented_boards)} boards")
-        for i, aug_board in enumerate(augmented_boards):
-            logger.debug(f"    board {i}: shape={aug_board.shape}")
-    except Exception as e:
-        logger.error(f"Error in create_augmented_boards: {e}")
-        logger.error(f"  board shape: {board.shape if hasattr(board, 'shape') else 'N/A'}")
-        raise
-    
-    try:
-        augmented_policies = create_augmented_policies(policy)
-        logger.debug(f"  augmented_policies: {len(augmented_policies)} policies")
-        for i, aug_policy in enumerate(augmented_policies):
-            logger.debug(f"    policy {i}: shape={aug_policy.shape}")
-    except Exception as e:
-        logger.error(f"Error in create_augmented_policies: {e}")
-        logger.error(f"  policy shape: {policy.shape if hasattr(policy, 'shape') else 'N/A'}")
-        raise
-    
-    try:
-        augmented_values = create_augmented_values(value)
-        logger.debug(f"  augmented_values: {augmented_values}")
-    except Exception as e:
-        logger.error(f"Error in create_augmented_values: {e}")
-        logger.error(f"  value: {value}")
-        raise
-    
-    try:
-        augmented_players = create_augmented_player_to_move(player_to_move)
-        logger.debug(f"  augmented_players: {augmented_players}")
-    except Exception as e:
-        logger.error(f"Error in create_augmented_player_to_move: {e}")
-        logger.error(f"  player_to_move: {player_to_move}")
-        raise
-    
-    # Create augmented examples
-    augmented_examples = []
+    # Combine into examples
+    examples = []
     for i in range(4):
-        try:
-            example = (
-                augmented_boards[i],
-                augmented_policies[i],
-                augmented_values[i],
-                augmented_players[i]
-            )
-            augmented_examples.append(example)
-            logger.debug(f"  Created example {i}: board_shape={example[0].shape}, policy_shape={example[1].shape}")
-        except Exception as e:
-            logger.error(f"Error creating example {i}: {e}")
-            logger.error(f"  augmented_boards[{i}]: {augmented_boards[i] if i < len(augmented_boards) else 'N/A'}")
-            logger.error(f"  augmented_policies[{i}]: {augmented_policies[i] if i < len(augmented_policies) else 'N/A'}")
-            raise
+        examples.append((
+            augmented_boards[i],
+            augmented_policies[i], 
+            augmented_values[i],
+            augmented_player_to_move[i]
+        ))
     
-    return augmented_examples
+    return examples
 
 
 def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:

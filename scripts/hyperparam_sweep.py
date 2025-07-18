@@ -43,15 +43,17 @@ SWEEP = {
     # Add more as needed
 }
 
-DATA_DIR = "data/processed"
-RESULTS_DIR = "checkpoints/sweep"
+# Configuration
+MAX_SAMPLES = 100_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 50_000  # Validation samples (no augmentation)
+AUGMENTATION_CONFIG = {'enable_augmentation': True}
 EPOCHS = 3
-MAX_SAMPLES = 100_000
 
-# Data augmentation configuration
-AUGMENTATION_CONFIG = {
-    'enable_augmentation': True,  # Set to False to disable augmentation
-}
+print(f"Running hyperparameter sweep with:")
+print(f"  Training samples: {MAX_SAMPLES:,} (effective: {MAX_SAMPLES * 4:,} with augmentation)")
+print(f"  Validation samples: {MAX_VALIDATION_SAMPLES:,}")
+print(f"  Data augmentation: {'Enabled' if AUGMENTATION_CONFIG['enable_augmentation'] else 'Disabled'}")
+print(f"  Max Epochs: {EPOCHS}")
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -73,20 +75,21 @@ if __name__ == "__main__":
             'hyperparameters': config
         })
 
-    results_dir = Path(RESULTS_DIR)
+    results_dir = Path("checkpoints/hyperparameter_tuning")
     results_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
-    overall_results = run_hyperparameter_tuning_current_data(
+    # Run hyperparameter tuning
+    results = run_hyperparameter_tuning_current_data(
         experiments=experiments,
-        data_dir=DATA_DIR,
-        results_dir=str(results_dir),
+        data_dir="data/processed",
+        results_dir="checkpoints/hyperparameter_tuning",
         train_ratio=0.8,
         num_epochs=EPOCHS,
-        early_stopping_patience=3,
+        early_stopping_patience=None,  # Disable early stopping for now
         random_seed=42,
         max_examples_per_split=MAX_SAMPLES,
-        experiment_name="sweep_run",
+        max_validation_examples=MAX_VALIDATION_SAMPLES,
         enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation']
     )
     total_time = time.time() - start_time
@@ -95,17 +98,17 @@ if __name__ == "__main__":
     print(f"SWEEP COMPLETE")
     print(f"{'='*60}")
     print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
-    print(f"Successful experiments: {overall_results.get('successful_experiments', 'N/A')}/{overall_results.get('num_experiments', 'N/A')}")
+    print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
 
     # Find best experiment
-    if overall_results.get('experiments'):
-        best_exp = min(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+    if results.get('experiments'):
+        best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
         print(f"\nBest experiment: {best_exp['experiment_name']}")
         print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
         print(f"Hyperparameters: {best_exp['hyperparameters']}")
         # Show all results sorted by validation loss
         print(f"\nAll experiments ranked by validation loss:")
-        sorted_experiments = sorted(overall_results['experiments'], key=lambda x: x['best_val_loss'])
+        sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
         for i, exp in enumerate(sorted_experiments):
             print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
     else:
