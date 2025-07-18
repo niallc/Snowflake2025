@@ -848,7 +848,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         Dictionary containing all experiment results
     """
     import time
-    from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files, estimate_dataset_size, create_train_val_split
+    from hex_ai.data_pipeline import StreamingProcessedDataset, StreamingAugmentedProcessedDataset, discover_processed_files, estimate_dataset_size, create_train_val_split
     
     # Use max_examples_per_split for validation if not specified
     if max_validation_examples is None:
@@ -936,8 +936,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     
     # Create training dataset with optional augmentation
     if enable_augmentation:
-        logger.info("Using AugmentedProcessedDataset for training data (4x augmentation)")
-        train_dataset = AugmentedProcessedDataset(train_files, enable_augmentation=True, max_examples=max_examples_per_split)
+        logger.info("Using StreamingAugmentedProcessedDataset for training data (4x augmentation)")
+        train_dataset = StreamingAugmentedProcessedDataset(train_files, enable_augmentation=True, chunk_size=max_examples_per_split or 100000)
         # Note: Validation dataset is not augmented
         val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_validation_examples or 100000) if val_files else None
     else:

@@ -194,6 +194,72 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         return board_state, policy_target, value_target
 
 
+class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
+    """Streaming dataset that applies data augmentation to create 4x more training examples."""
+    
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, **kwargs):
+        """
+        Initialize streaming augmented dataset.
+        
+        Args:
+            data_files: List of paths to processed data files
+            enable_augmentation: Whether to apply augmentation (default: True)
+            **kwargs: Additional arguments passed to StreamingProcessedDataset
+        """
+        super().__init__(data_files, **kwargs)
+        self.enable_augmentation = enable_augmentation
+        
+        if enable_augmentation:
+            logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation")
+        else:
+            logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples")
+    
+    def __getitem__(self, idx):
+        """Get augmented training examples."""
+        if not self.enable_augmentation:
+            return super().__getitem__(idx)
+        
+        # Get original example from streaming dataset
+        original_example = super().__getitem__(idx)
+        board_3ch, policy, value = original_example
+        
+        # Extract 2-channel board for augmentation
+        board_2ch = board_3ch[:2].numpy()  # Remove player-to-move channel
+        
+        # Skip empty boards (no pieces to augment)
+        if np.sum(board_2ch) == 0:
+            return [original_example]  # Return single example for empty boards
+        
+        # Create all 4 augmented examples
+        from hex_ai.data_utils import create_augmented_example_with_player_to_move
+        try:
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item())
+        except Exception as e:
+            logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
+            raise
+        
+        # Convert to tensors and create 3-channel boards
+        tensor_examples = []
+        for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
+            try:
+                # Create player-to-move channel
+                player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
+                board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
+                
+                # Convert to tensors
+                board_tensor = torch.from_numpy(board_3ch)
+                policy_tensor = torch.FloatTensor(aug_policy)
+                value_tensor = torch.FloatTensor([aug_value])
+                
+                tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+            except Exception as e:
+                logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
+                raise
+        
+        # Return all 4 examples (DataLoader will handle batching)
+        return tensor_examples
+
+
 
 
 

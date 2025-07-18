@@ -708,7 +708,10 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     augmented_boards = create_augmented_boards(board)
     augmented_policies = create_augmented_policies(policy)
     augmented_values = create_augmented_values(value)
-    augmented_player_to_move = create_augmented_player_to_move(board)
+    
+    # Compute player-to-move from the board, then create augmented versions
+    player_to_move = get_player_to_move_from_board(board)
+    augmented_player_to_move = create_augmented_player_to_move(player_to_move)
     
     # Combine into examples
     examples = []
