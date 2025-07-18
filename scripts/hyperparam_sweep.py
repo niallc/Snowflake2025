@@ -55,6 +55,11 @@ RESULTS_DIR = "checkpoints/sweep"
 EPOCHS = 3
 MAX_SAMPLES = 200_000
 
+# Data augmentation configuration
+AUGMENTATION_CONFIG = {
+    'enable_augmentation': True,  # Set to False to disable augmentation
+}
+
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
     keys = list(sweep_dict.keys())
@@ -63,6 +68,7 @@ def all_param_combinations(sweep_dict):
 
 if __name__ == "__main__":
     print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
+    print(f"Data augmentation: {'ENABLED' if AUGMENTATION_CONFIG['enable_augmentation'] else 'DISABLED'}")
 
     all_configs = list(all_param_combinations(SWEEP))
     print(f"Total runs to launch: {len(all_configs)}")
@@ -87,7 +93,8 @@ if __name__ == "__main__":
         early_stopping_patience=3,
         random_seed=42,
         max_examples_per_split=MAX_SAMPLES,
-        experiment_name="sweep_run"
+        experiment_name="sweep_run",
+        enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation']
     )
     total_time = time.time() - start_time
 

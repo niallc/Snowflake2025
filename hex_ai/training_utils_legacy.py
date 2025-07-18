@@ -815,11 +815,13 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
                             early_stopping_patience: Optional[int] = None,
                             random_seed: Optional[int] = None,
                             max_examples_per_split: Optional[int] = None,
-                            experiment_name: Optional[str] = None) -> Dict:
+                            experiment_name: Optional[str] = None,
+                            enable_augmentation: bool = True) -> Dict:
     """
     Run a complete hyperparameter tuning experiment using current data pipeline.
     
     This version uses StreamingProcessedDataset instead of the legacy NewProcessedDataset.
+    When enable_augmentation is True, uses AugmentedProcessedDataset for training data.
     
     Args:
         experiments: List of experiment configurations
@@ -829,6 +831,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         num_epochs: Number of epochs per experiment
         early_stopping_patience: Early stopping patience
         random_seed: Random seed for reproducibility
+        enable_augmentation: Whether to use data augmentation for training (default: True)
         
     Returns:
         Dictionary containing all experiment results
@@ -901,6 +904,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'num_epochs': num_epochs,
         'early_stopping_patience': early_stopping_patience,
         'random_seed': random_seed,
+        'enable_augmentation': enable_augmentation,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -909,10 +913,19 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     
     # Load data once and reuse across experiments using current pipeline
     logger.info(f"\nLoading data once for all experiments...")
-    train_dataset = StreamingProcessedDataset(train_files, chunk_size=max_examples_per_split or 100000)
-    val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
     
-    logger.info(f"Created streaming datasets")
+    # Create training dataset with optional augmentation
+    if enable_augmentation:
+        logger.info("Using AugmentedProcessedDataset for training data (4x augmentation)")
+        train_dataset = AugmentedProcessedDataset(train_files, enable_augmentation=True, max_examples=max_examples_per_split)
+        # Note: Validation dataset is not augmented
+        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
+    else:
+        logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
+        train_dataset = StreamingProcessedDataset(train_files, chunk_size=max_examples_per_split or 100000)
+        val_dataset = StreamingProcessedDataset(val_files, chunk_size=max_examples_per_split or 100000) if val_files else None
+    
+    logger.info(f"Created training dataset")
     if val_dataset:
         logger.info(f"Created validation dataset")
     
@@ -931,6 +944,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         exp_config['device'] = device
         if max_examples_per_split is not None:
             exp_config['max_examples_per_split'] = max_examples_per_split
+        exp_config['enable_augmentation'] = enable_augmentation
         
         try:
             results = run_hyperparameter_experiment_current_data(
@@ -940,7 +954,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
                 results_path,
                 num_epochs,
                 early_stopping_patience,
-                exp_config['experiment_name'] # Pass experiment_name here
+                exp_config['experiment_name'], # Pass experiment_name here
+                enable_augmentation
             )
             all_results.append(results)
             
@@ -955,6 +970,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         'num_experiments': len(experiments),
         'successful_experiments': len(all_results),
         'device': device,
+        'enable_augmentation': enable_augmentation,
         'experiments': all_results
     }
     
@@ -971,6 +987,7 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     logger.info(f"{'='*60}")
     logger.info(f"Total training time: {total_time:.1f}s")
     logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
+    logger.info(f"Data augmentation: {'Enabled' if enable_augmentation else 'Disabled'}")
     
     if all_results:
         best_exp = min(all_results, key=lambda x: x['best_val_loss'])
@@ -989,7 +1006,8 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
                                 results_dir: Path,
                                 num_epochs: int = 10,
                                 early_stopping_patience: Optional[int] = None,
-                                experiment_name: Optional[str] = None) -> Dict:
+                                experiment_name: Optional[str] = None,
+                                enable_augmentation: bool = True) -> Dict:
     """
     Run a single hyperparameter experiment using current data pipeline.
     
@@ -1000,6 +1018,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         results_dir: Directory to save results
         num_epochs: Number of training epochs
         early_stopping_patience: Early stopping patience (None to disable)
+        enable_augmentation: Whether to use data augmentation for training (default: True)
         
     Returns:
         Dictionary containing experiment results
@@ -1020,22 +1039,43 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
     
     # Create dataloaders from streaming datasets
     logger.info(f"Creating dataloaders from streaming datasets")
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=hyperparams['batch_size'],
-        shuffle=True,  # NOTE: Consider setting to False if data is already shuffled
-        num_workers=0,  # Use 0 to avoid multiprocessing issues
-        pin_memory=False  # Disable pin_memory for MPS
-    )
-    val_loader = None
-    if val_dataset:
-        val_loader = torch.utils.data.DataLoader(
-            val_dataset,
+    
+    # Use custom collate_fn if augmentation is enabled
+    if enable_augmentation:
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
             batch_size=hyperparams['batch_size'],
-            shuffle=False,
+            shuffle=False,  
+            num_workers=0,  # Use 0 to avoid multiprocessing issues
+            pin_memory=False,  # Disable pin_memory for MPS
+            collate_fn=augmented_collate_fn # Use custom collate_fn for augmented data
+        )
+        val_loader = None
+        if val_dataset:
+            val_loader = torch.utils.data.DataLoader(
+                val_dataset,
+                batch_size=hyperparams['batch_size'],
+                shuffle=False,
+                num_workers=0,  # Use 0 to avoid multiprocessing issues
+                pin_memory=False  # Disable pin_memory for MPS
+            )
+    else:
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=hyperparams['batch_size'],
+            shuffle=True,  # NOTE: Consider setting to False if data is already shuffled
             num_workers=0,  # Use 0 to avoid multiprocessing issues
             pin_memory=False  # Disable pin_memory for MPS
         )
+        val_loader = None
+        if val_dataset:
+            val_loader = torch.utils.data.DataLoader(
+                val_dataset,
+                batch_size=hyperparams['batch_size'],
+                shuffle=False,
+                num_workers=0,  # Use 0 to avoid multiprocessing issues
+                pin_memory=False  # Disable pin_memory for MPS
+            )
 
     # Log config/environment info
     log_dir = Path('logs')
