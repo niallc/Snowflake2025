@@ -11,7 +11,8 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from hex_ai.training_utils_legacy import AugmentedProcessedDataset, augmented_collate_fn
+from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+from hex_ai.training_utils_legacy import augmented_collate_fn
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.utils.format_conversion import tensor_to_rowcol, tensor_to_trmph
 
@@ -25,10 +26,10 @@ def test_augmentation():
         print(f"Data file not found: {data_file}")
         return
     
-    print("Testing AugmentedProcessedDataset...")
+    print("Testing StreamingAugmentedProcessedDataset...")
     
     # Create augmented dataset
-    dataset = AugmentedProcessedDataset([data_file], enable_augmentation=True, max_examples=2)
+    dataset = StreamingAugmentedProcessedDataset([data_file], enable_augmentation=True, chunk_size=1000)
     
     print(f"Dataset size: {len(dataset)}")
     print(f"Expected effective size: {len(dataset) * 4} (4x augmentation)")

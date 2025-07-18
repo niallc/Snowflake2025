@@ -56,7 +56,13 @@ def _validate_example_format(example, filename):
 
 
 class NewProcessedDataset(torch.utils.data.Dataset):
-    """Dataset for loading the new processed data format."""
+    """
+    Dataset for loading the new processed data format.
+    
+    TODO: DEPRECATED - This class is now redundant. Use StreamingProcessedDataset instead.
+    This class loads all data into memory, which is inefficient for large datasets.
+    The streaming version provides the same functionality with much better memory efficiency.
+    """
     
     def __init__(self, data_files: List[Path], shuffle_files: bool = True, max_examples: Optional[int] = None):
         """
@@ -260,7 +266,13 @@ def augmented_collate_fn(batch):
 
 
 class AugmentedProcessedDataset(NewProcessedDataset):
-    """Dataset that applies data augmentation to create 4x more training examples."""
+    """
+    Dataset that applies data augmentation to create 4x more training examples.
+    
+    TODO: DEPRECATED - This class is now redundant. Use StreamingAugmentedProcessedDataset instead.
+    This class inherits from NewProcessedDataset which loads all data into memory.
+    The streaming version provides the same augmentation functionality with much better memory efficiency.
+    """
     
     def __init__(self, data_files: List[Path], enable_augmentation: bool = True, **kwargs):
         """
@@ -329,6 +341,8 @@ def discover_processed_files_legacy(data_dir: str = "data/processed") -> List[Pa
     """
     Discover all processed data files in the specified directory.
     
+    TODO: DEPRECATED - This function is now redundant. Use discover_processed_files from data_pipeline.py instead.
+    
     Args:
         data_dir: Directory containing processed data files
         
@@ -355,6 +369,8 @@ def create_train_val_split(data_files: List[Path],
                           max_files_per_split: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
     """
     Create train/validation split of data files.
+    
+    TODO: DEPRECATED - This function is now redundant. Use create_train_val_split from data_pipeline.py instead.
     
     Args:
         data_files: List of all data files
@@ -391,6 +407,8 @@ def create_train_val_split(data_files: List[Path],
 def estimate_dataset_size_legacy(data_files: List[Path], max_files: Optional[int] = None) -> int:
     """
     Estimate the total number of training examples across all files.
+    
+    TODO: DEPRECATED - This function is now redundant. Use estimate_dataset_size from data_pipeline.py instead.
     
     Args:
         data_files: List of data files to analyze
@@ -471,6 +489,11 @@ def run_hyperparameter_tuning_legacy(experiments: List[Dict],
                             random_seed: Optional[int] = None,
                             max_examples_per_split: Optional[int] = None,
                             experiment_name: Optional[str] = None) -> Dict:
+    """
+    TODO: DEPRECATED - This function is now redundant. Use run_hyperparameter_tuning_current_data instead.
+    This function uses the legacy NewProcessedDataset which loads all data into memory.
+    The current_data version uses streaming datasets for much better memory efficiency.
+    """
     """
     Run a complete hyperparameter tuning experiment.
     
@@ -642,6 +665,11 @@ def run_hyperparameter_experiment_legacy(experiment_config: Dict,
                                 num_epochs: int = 10,
                                 early_stopping_patience: Optional[int] = None,
                                 experiment_name: Optional[str] = None) -> Dict:
+    """
+    TODO: DEPRECATED - This function is now redundant. Use run_hyperparameter_experiment_current_data instead.
+    This function uses the legacy NewProcessedDataset which loads all data into memory.
+    The current_data version uses streaming datasets for much better memory efficiency.
+    """
     """
     Run a single hyperparameter experiment using pre-loaded datasets.
     
