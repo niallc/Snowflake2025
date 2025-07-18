@@ -12,13 +12,17 @@ import csv
 from pathlib import Path
 from datetime import datetime
 import os
+import sys
+
+# Removed for now as I'm concerned about brittleness, using PYTHONPATH=. instead.
+# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 
 ###### Logging setup ######
 log_dir = Path('logs')
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / 'hex_ai_training.log'
+log_file = log_dir / ('hex_ai_training_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.log')
 
 file_handler = logging.FileHandler(log_file, mode='a')
 formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
@@ -37,16 +41,18 @@ root_logger.addHandler(stream_handler)
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "learning_rate": [0.001],
-    "batch_size": [256, 512],
+    "batch_size": [256],
     "max_grad_norm": [20],
-    "dropout_prob": [0, 0.001],
-    "weight_decay": [1e-3, 1e-4],
+    "dropout_prob": [0],
+    "weight_decay": [2e-4],
+    "value_learning_rate_factor": [0.1, 0.5],  # Value head learns slower
+    "value_weight_decay_factor": [2.0, 5.0],  # Value head gets more regularization
     # Add more as needed
 }
 
 DATA_DIR = "data/processed"
 RESULTS_DIR = "checkpoints/sweep"
-EPOCHS = 10
+EPOCHS = 3
 MAX_SAMPLES = 200_000
 
 # Build all parameter combinations

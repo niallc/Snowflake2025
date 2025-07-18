@@ -226,7 +226,9 @@ class Trainer:
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
                  weight_decay: float = 1e-4,
-                 max_grad_norm: float = 20.0):
+                 max_grad_norm: float = 20.0,
+                 value_learning_rate_factor: float = 0.1,
+                 value_weight_decay_factor: float = 5.0):
         """
         Args:
             model: The neural network model to train.
@@ -241,6 +243,8 @@ class Trainer:
             value_weight: Weight for the value loss.
             weight_decay: Weight decay for the optimizer.
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
+            value_learning_rate_factor: Factor to multiply learning rate for value head (default: 0.1)
+            value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
         """
         logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
@@ -252,8 +256,27 @@ class Trainer:
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
         
+        # Create parameter groups for different learning rates and weight decay
+        # Separate the value head parameters from the rest
+        value_head_params = list(model.value_head.parameters())
+        value_head_param_ids = {id(p) for p in value_head_params}
+        other_params = [p for p in model.parameters() if id(p) not in value_head_param_ids]
+        
+        param_groups = [
+            {
+                'params': other_params,
+                'lr': learning_rate,
+                'weight_decay': weight_decay
+            },
+            {
+                'params': value_head_params,
+                'lr': learning_rate * value_learning_rate_factor,
+                'weight_decay': weight_decay * value_weight_decay_factor
+            }
+        ]
+        
         # Optimizer and loss
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        self.optimizer = optim.Adam(param_groups)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
         
         # Learning rate scheduler (ReduceLROnPlateau)
@@ -280,6 +303,10 @@ class Trainer:
         logger.info(f"Initialized trainer with {len(train_loader)} training batches")
         if val_loader:
             logger.info(f"Validation set with {len(val_loader)} batches")
+        
+        # Log parameter group info
+        logger.info(f"Value head learning rate: {learning_rate * value_learning_rate_factor:.6f} (factor: {value_learning_rate_factor})")
+        logger.info(f"Value head weight decay: {weight_decay * value_weight_decay_factor:.6f} (factor: {value_weight_decay_factor})")
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
@@ -375,11 +402,12 @@ class Trainer:
             should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
             if should_log:
                 cum_epoch_time = time.time() - epoch_start_time
+                batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
                 msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
                        f"Total Loss: {loss_dict['total_loss']:.4f}, "
                        f"Policy: {loss_dict['policy_loss']:.4f}, "
                        f"Value: {loss_dict['value_loss']:.4f}, "
-                       f"Batch time: {time.time() - batch_start_time:.3f}s, "
+                       f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
                        f"Data load: {batch_data_time:.3f}s, "
                        f"Cumulative epoch time: {cum_epoch_time:.1f}s")
                 log_and_print(msg)

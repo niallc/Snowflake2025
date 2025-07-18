@@ -312,28 +312,24 @@ def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
 
 def rotate_board_180(board: np.ndarray) -> np.ndarray:
     """
-    Rotate board 180 degrees and swap player colors.
+    Rotate board 180 degrees (no color swap).
     
-    This preserves the logical game state under the swap rule (π-rule).
-    Blue pieces become red and vice versa, while the board is rotated.
+    This preserves the logical game state by only rotating, not swapping colors.
+    The board edges maintain their meaning (red edges vs blue edges).
     
     Args:
         board: Board array of shape (2, 13, 13) or (13, 13)
         
     Returns:
-        Rotated and color-swapped board
+        Rotated board (no color swap)
     """
     if board.ndim == 3:
         # 2-channel format: (2, 13, 13)
         rotated = np.flip(board, axis=(1, 2))  # Rotate 180°
-        # Swap channels (blue <-> red)
-        rotated = rotated[::-1]
         return rotated
     else:
         # Single channel format: (13, 13) with values 0/1/2
         rotated = np.flip(board, axis=(0, 1))  # Rotate 180°
-        # Swap colors: 1 <-> 2
-        rotated = np.where(rotated == 1, 2, np.where(rotated == 2, 1, rotated))
         return rotated
 
 
@@ -366,28 +362,37 @@ def reflect_board_long_diagonal(board: np.ndarray) -> np.ndarray:
 def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
     """
     Reflect board along the short diagonal (top-right to bottom-left) and swap colors.
-    
-    This preserves the logical game state under the swap rule.
-    
+    This is a true short-diagonal reflection:
+      - Each (row, col) maps to (maxIndex - col, maxIndex - row)
+      - Colors are swapped (blue <-> red)
     Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
-        
+        board: Board array of shape (2, N, N) or (N, N)
     Returns:
         Reflected and color-swapped board
     """
     if board.ndim == 3:
-        # 2-channel format: (2, 13, 13)
-        # Short diagonal reflection = flip both axes
-        reflected = np.flip(board, axis=(1, 2))
-        # Swap channels (blue <-> red)
-        reflected = reflected[::-1]
+        # 2-channel format: (2, N, N)
+        N = board.shape[1]
+        reflected = np.zeros_like(board)
+        for row in range(N):
+            for col in range(N):
+                # Swap color channel
+                reflected[1, N - 1 - col, N - 1 - row] = board[0, row, col]  # Blue -> Red
+                reflected[0, N - 1 - col, N - 1 - row] = board[1, row, col]  # Red -> Blue
         return reflected
     else:
-        # Single channel format: (13, 13) with values 0/1/2
-        # Short diagonal reflection = flip both axes
-        reflected = np.flip(board, axis=(0, 1))
-        # Swap colors: 1 <-> 2
-        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        # Single channel format: (N, N) with values 0/1/2
+        N = board.shape[0]
+        reflected = np.zeros_like(board)
+        for row in range(N):
+            for col in range(N):
+                val = board[row, col]
+                if val == 1:
+                    reflected[N - 1 - col, N - 1 - row] = 2  # Blue -> Red
+                elif val == 2:
+                    reflected[N - 1 - col, N - 1 - row] = 1  # Red -> Blue
+                else:
+                    reflected[N - 1 - col, N - 1 - row] = 0
         return reflected
 
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:

@@ -125,7 +125,7 @@ class NewProcessedDataset(torch.utils.data.Dataset):
                     logger.error(f"Data format error in {file_path.name}: {e}")
                     continue
             
-            logger.debug(f"Processing {len(file_examples)} examples from {file_path.name}")
+            logger.info(f"Processing {len(file_examples)} examples from {file_path.name}")
             
             # Limit examples if max_examples is specified
             if self.max_examples is not None and len(self.examples) + len(file_examples) > self.max_examples:
@@ -970,7 +970,9 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         policy_weight=hyperparams.get('policy_weight', 0.15),
         value_weight=hyperparams.get('value_weight', 0.85),
         weight_decay=hyperparams.get('weight_decay', 1e-4),
-        max_grad_norm=hyperparams.get('max_grad_norm', 20.0)
+        max_grad_norm=hyperparams.get('max_grad_norm', 20.0),
+        value_learning_rate_factor=hyperparams.get('value_learning_rate_factor', 0.1),
+        value_weight_decay_factor=hyperparams.get('value_weight_decay_factor', 5.0)
     )
     
     # Update CSV logger to use experiment-specific file
@@ -1005,8 +1007,10 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
     log_and_print(f"Train dataset size: {len(train_dataset)}")
     log_and_print(f"Val dataset size: {len(val_dataset) if val_dataset else 0}")
     log_and_print(f"Learning rate: {hyperparams['learning_rate']}")
+    log_and_print(f"Value learning rate factor: {hyperparams.get('value_learning_rate_factor', 'N/A')}")
     log_and_print(f"Dropout: {hyperparams.get('dropout_prob', 'N/A')}")
     log_and_print(f"Weight decay: {hyperparams.get('weight_decay', 'N/A')}")
+    log_and_print(f"Value weight decay factor: {hyperparams.get('value_weight_decay_factor', 'N/A')}")
     log_and_print(f"Policy loss weight: {hyperparams.get('policy_weight', 'N/A')}")
     log_and_print(f"Value loss weight: {hyperparams.get('value_weight', 'N/A')}")
     log_and_print(f"Max grad norm: {hyperparams.get('max_grad_norm', 'N/A')}")
