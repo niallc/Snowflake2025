@@ -27,6 +27,7 @@ from .data_utils import (
 )
 from .utils.format_conversion import parse_trmph_game_record
 
+# See setup_logging in training_utils.py for logging configuration
 logger = logging.getLogger(__name__)
 
 
@@ -92,7 +93,7 @@ def remove_repeated_moves(moves: List[str]) -> List[str]:
     for move in moves:
         if move in seen_moves:
             # Found repeated move - discard this and all subsequent moves
-            logger.warning(f"Repeated move {move} found, discarding game from this point")
+            logger.debug(f"Repeated move {move} found, discarding game from this point")
             break
         seen_moves.add(move)
         clean_moves.append(move)
@@ -193,7 +194,7 @@ def extract_positions_range(
     start_pos: int, 
     end_pos: int, 
     game_id: Tuple[int, int]
-) -> List[Dict]:
+) -> Tuple[List[Dict], bool]:
     """
     Extract only positions in the specified range from a game.
     
@@ -210,11 +211,14 @@ def extract_positions_range(
     try:
         # Parse moves
         bare_moves = strip_trmph_preamble(trmph_text)
-        moves = split_trmph_moves(bare_moves)
-        moves = remove_repeated_moves(moves)
+        raw_moves = split_trmph_moves(bare_moves)        
+        moves = remove_repeated_moves(raw_moves)
+        repeat = False
+        if len(raw_moves) != len(moves):
+            repeat = True
         
         if not moves:
-            return []
+            return [], False
         
         # Validate winner
         if winner not in ["1", "2"]:
@@ -253,11 +257,11 @@ def extract_positions_range(
             
             examples.append(example)
         
-        return examples
+        return examples, repeat
         
     except Exception as e:
         logger.error(f"Failed to extract positions range from game: {e}")
-        return []
+        return [], False
 
 
 def create_file_lookup_table(trmph_files: List[Path], output_dir: Path) -> Path:
@@ -297,7 +301,7 @@ def create_stratified_dataset(
     output_dir: Path, 
     positions_per_pass: int = 5,
     include_trmph: bool = False,
-    max_positions_per_game: int = 200
+    max_positions_per_game: int = 169 # 13x13 board
 ) -> Tuple[List[Path], Path]:
     """
     Create dataset in multiple passes to break game correlations while managing memory.
@@ -343,6 +347,7 @@ def create_stratified_dataset(
         # Process all games for this position range
         examples = []
         games_processed = 0
+        repeat_games = 0
         
         for file_idx, trmph_file in enumerate(trmph_files):
             try:
@@ -355,13 +360,15 @@ def create_stratified_dataset(
                         trmph_url, winner = parse_trmph_game_record(game_line)
                         game_id = (file_idx, line_idx)
                         
-                        game_examples = extract_positions_range(
+                        game_examples, repeat_game = extract_positions_range(
                             trmph_url, winner, start_pos, end_pos, game_id
                         )
                         
                         if game_examples:
                             examples.extend(game_examples)
                             games_processed += 1
+                            if repeat_game:
+                                repeat_games += 1
                             
                     except Exception as e:
                         logger.warning(f"Error processing game {line_idx} in {trmph_file.name}: {e}")
@@ -401,6 +408,7 @@ def create_stratified_dataset(
             logger.warning(f"No examples generated for pass {pass_num//positions_per_pass + 1}")
     
     logger.info(f"Stratified processing complete: {len(processed_files)} files, {total_examples} total examples")
+    logger.info(f"Number of repeat games: {repeat_games}")
     return processed_files, lookup_file
 
 

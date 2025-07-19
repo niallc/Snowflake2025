@@ -56,7 +56,85 @@ python process_enhanced_data.py \
 
 ## Processing Strategies
 
-### Stratified Processing (Recommended)
+### Two-Step Mixed Strategy (Recommended)
+
+**Step 1: Individual Position Stratified Processing** ✅ (Implemented, Updated)
+- Creates individual position bands to break game correlations
+- Pass 0: Process position 0 from ALL games → `pass_000_position_0.pkl.gz`
+- Pass 1: Process position 1 from ALL games → `pass_001_position_1.pkl.gz`
+- Pass 2: Process position 2 from ALL games → `pass_002_position_2.pkl.gz`
+- etc. (up to position 168 for 13x13 board)
+
+**Benefits of individual positions:**
+- ✅ 169 bands instead of 34 = much finer granularity
+- ✅ Better position diversity in final files
+- ✅ More effective correlation breaking
+- ✅ Simpler memory management (can load all bands at once)
+- ✅ Each final file gets examples from all position ranges
+
+**Step 2: Smart Re-aggregation** (Implementation phase)
+- Choose k=500 final output files
+- Load all 169 position bands into memory
+- For each band:
+  - Count examples in that band (N examples)
+  - Divide into k chunks as evenly as possible: some chunks get ⌈N/k⌉ examples, others get ⌊N/k⌋
+  - Randomly permute chunk assignments (0 to k-1) - this breaks game reassembly
+- For each final output file j:
+  - Extract chunk j from each band (some bands may contribute 0 examples)
+  - Concatenate all chunks j into final file j
+  - Shuffle the combined examples before writing
+
+**Example with k=3 final files:**
+```
+Band 0 (position 0): [1,2,3,4,5,6,7,8] (8 examples)
+Band 1 (position 1): [2,3,6,8]         (4 examples) 
+Band 2 (position 2): [2]               (1 example)
+
+Random chunk assignments:
+Band 0: [1,3,5] → chunk_shuffled_0, [2,4,8] → chunk_shuffled_1, [6,7] → chunk_shuffled_2
+Band 1: [2,8] → chunk_shuffled_0, [6] → chunk_shuffled_1, [3] → chunk_shuffled_2  
+Band 2: [2] → chunk_shuffled_0, [] → chunk_shuffled_1, [] → chunk_shuffled_2
+
+Result (after shuffling within each file):
+chunk_shuffled_0: shuffle([1,3,5] + [2,8] + [2]) = 6 examples
+chunk_shuffled_1: shuffle([2,4,8] + [6] + []) = 4 examples
+chunk_shuffled_2: shuffle([6,7] + [3] + []) = 3 examples
+```
+
+**Key points:**
+- Some final files may get more examples than others (due to uneven division)
+- Some bands may contribute 0 examples to some final files (when N < k)
+- Random permutation ensures games don't get reassembled
+- Each final file gets a mix of all positions from different games
+- Final shuffling within each file breaks any remaining correlations
+
+**Benefits:**
+- ✅ Breaks temporal correlations between consecutive positions (Step 1)
+- ✅ Breaks temporal correlations between position bands (Step 2)
+- ✅ Memory efficient - loads all bands at once (feasible with 169 bands)
+- ✅ Random permutation prevents games from being reassembled
+- ✅ Uniform position distribution in final files
+- ✅ Scalable to any dataset size
+- ✅ Maximum position diversity in each final file
+
+**Output files:**
+- `chunk_shuffled_000.pkl.gz` (mixed all positions, chunk 0 from each band, shuffled)
+- `chunk_shuffled_001.pkl.gz` (mixed all positions, chunk 1 from each band, shuffled)
+- etc.
+
+**Why this works:**
+1. **Game correlation breaking**: Random permutation ensures chunks from same game don't end up in same final file
+2. **Position diversity**: Each final file gets examples from all 169 positions from different games
+3. **Memory efficiency**: With 169 bands, can load all at once for processing
+4. **Uniform distribution**: Each final file has roughly equal representation from all position ranges
+5. **Final shuffling**: Breaks any remaining temporal correlations within each file
+
+**Example file size distribution** (with your data):
+- `chunk_shuffled_000.pkl.gz`: ~174 examples (gets chunk from all bands)
+- `chunk_shuffled_100.pkl.gz`: ~170 examples (gets chunk from most bands)
+- `chunk_shuffled_400.pkl.gz`: ~165 examples (gets chunk from fewer bands, missing late positions)
+
+### Stratified Processing (Step 1 Only)
 
 **How it works:**
 - Pass 1: Process positions 0-4 from ALL games
@@ -69,6 +147,10 @@ python process_enhanced_data.py \
 - ✅ Memory efficient - processes in small batches
 - ✅ Maintains training diversity - each batch sees all game stages
 - ✅ Simple to implement and debug
+
+**Trade-offs:**
+- ❌ Creates position bands that need further shuffling
+- ❌ Training would proceed through early positions, then late positions
 
 **Output files:**
 - `pass_000_positions_0-5.pkl.gz` (empty boards + first few moves from all games)
@@ -174,14 +256,118 @@ This allows you to trace any processed example back to its original TRMPH file a
 - **Memory per chunk**: ~(games_per_chunk × avg_positions × example_size) bytes
 - **Example**: 10k games × 70 positions × 1KB = ~700MB per chunk
 
-## Next Steps
+## Implementation Plan
 
-After processing, you'll need to:
+### Current Status ✅
+- **Step 1: Individual Position Stratified Processing** - Implemented and tested
+- **Enhanced data format** - Implemented with metadata
+- **Value sampling tiers** - Implemented (0-3 priority levels)
+- **File lookup tables** - Implemented for game origin tracking
 
-1. **Update training pipeline** to use the enhanced format
+### Next Steps 🔄
+
+#### Step 2: Smart Re-aggregation (Implementation phase)
+**Goal**: Transform 169 individual position bands into 500 properly shuffled final files
+
+**Updated Algorithm**:
+```python
+def create_chunk_shuffled_dataset(stratified_files, output_dir, k=500):
+    """
+    Step 2: Smart re-aggregation with random permutation and final shuffling
+    """
+    # Phase 1: Load all 169 position bands into memory
+    band_info = []
+    for band_file in stratified_files:
+        with gzip.open(band_file, 'rb') as f:
+            data = pickle.load(f)
+        examples = data['examples']
+        total_examples = len(examples)
+        
+        # Calculate chunk boundaries (handle uneven division)
+        chunk_size = total_examples // k
+        remainder = total_examples % k
+        chunks = []
+        start = 0
+        for i in range(k):
+            # First 'remainder' chunks get one extra example
+            current_chunk_size = chunk_size + (1 if i < remainder else 0)
+            end = start + current_chunk_size
+            chunks.append((start, end))
+            start = end
+        
+        # Randomly permute chunk assignments
+        chunk_permutation = list(range(k))
+        random.shuffle(chunk_permutation)
+        
+        band_info.append({
+            'file': band_file,
+            'examples': examples,  # Keep in memory
+            'total_examples': total_examples,
+            'chunks': chunks,
+            'permutation': chunk_permutation
+        })
+    
+    # Phase 2: Create final files with shuffling
+    for final_file_idx in range(k):
+        all_examples = []
+        
+        for band_data in band_info:
+            # Find which chunk from this band goes to final_file_idx
+            chunk_idx = band_data['permutation'].index(final_file_idx)
+            start, end = band_data['chunks'][chunk_idx]
+            
+            # Extract chunk from memory (may be empty)
+            if start < end:  # Only extract if chunk has examples
+                chunk_examples = band_data['examples'][start:end]
+                all_examples.extend(chunk_examples)
+        
+        # Shuffle the combined examples before writing
+        random.shuffle(all_examples)
+        
+        # Save final file
+        output_file = output_dir / f"chunk_shuffled_{final_file_idx:03d}.pkl.gz"
+        save_processed_data(output_file, all_examples, final_file_idx)
+```
+
+**Key Implementation Notes**:
+- Load all 169 bands into memory (feasible with individual positions)
+- Handle uneven division: first `remainder` chunks get one extra example
+- Some chunks may be empty (when N < k)
+- Some final files may have fewer examples than others
+- Final shuffling within each file breaks any remaining correlations
+- Code must handle empty chunks gracefully
+
+**Key Design Decisions**:
+1. **k=500 final files** - Balance between file size and shuffling effectiveness
+2. **Random permutation per band** - Ensures games don't get reassembled
+3. **Memory-based processing** - Load all bands at once for efficiency
+4. **Final shuffling** - Breaks any remaining temporal correlations
+5. **chunk_shuffled naming** - Clear indication of the processing applied
+
+**Expected Output**:
+- `chunk_shuffled_000.pkl.gz` through `chunk_shuffled_499.pkl.gz`
+- File sizes will vary: some files get more examples than others due to uneven division
+- All bands (positions 0-168) will contribute to most final files
+- Each file has mix of all positions from different games
+- No temporal correlations between consecutive examples
+- Maximum position diversity in each final file
+
+**Example file size distribution** (with your data):
+- `chunk_shuffled_000.pkl.gz`: ~174 examples (gets chunk from all bands)
+- `chunk_shuffled_100.pkl.gz`: ~170 examples (gets chunk from most bands)
+- `chunk_shuffled_400.pkl.gz`: ~165 examples (gets chunk from fewer bands, missing late positions)
+
+#### Step 3: Training Pipeline Updates
+1. **Update data loading** to handle new file structure
 2. **Implement selective value training** based on sampling tiers
-3. **Update data loading** to handle the new file structure
-4. **Test with a small subset** before full training
+3. **Add value tier filtering** in training loop
+4. **Test with small subset** before full training
+
+### Testing Strategy
+1. **Small-scale test**: Use `--max_files 2` to test complete pipeline
+2. **Position distribution analysis**: Verify final files have mixed positions
+3. **Game correlation test**: Verify no temporal correlations remain
+4. **Memory usage monitoring**: Ensure processing stays within limits
 
 ## Troubleshooting
 

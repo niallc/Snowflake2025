@@ -92,7 +92,6 @@ def augmented_collate_fn(batch):
     return boards_batch, policies_batch, values_batch
 
 
-
 def create_experiment_config_legacy(experiment_name: str,
                            hyperparams: Dict,
                            dataset_info: Dict,
@@ -117,8 +116,6 @@ def create_experiment_config_legacy(experiment_name: str,
         'timestamp': datetime.now().isoformat(),
         'version': '1.0'  # For tracking format changes
     }
-
-
 
 
 def create_summary_csv(experiment_results: List[Dict], results_path: Path):

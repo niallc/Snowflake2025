@@ -17,9 +17,6 @@ import time
 from pathlib import Path
 from typing import List
 
-# Add the project root to the path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from hex_ai.enhanced_data_processing import (
     create_stratified_dataset, create_chunked_dataset
 )
@@ -54,7 +51,7 @@ def main():
     # Input/output arguments
     parser.add_argument('--data_dir', type=str, default="data",
                        help='Directory containing TRMPH files')
-    parser.add_argument('--output_dir', type=str, default="data/enhanced_processed",
+    parser.add_argument('--output_dir', type=str, default="data/processed_jul19",
                        help='Directory to save processed files')
     
     # Processing strategy
@@ -65,7 +62,7 @@ def main():
     # Stratified processing options
     parser.add_argument('--positions_per_pass', type=int, default=5,
                        help='Number of positions to process per pass (stratified only)')
-    parser.add_argument('--max_positions_per_game', type=int, default=200,
+    parser.add_argument('--max_positions_per_game', type=int, default=169, # 13x13 board
                        help='Maximum positions to consider per game')
     
     # Chunked processing options  
@@ -165,6 +162,53 @@ def main():
         logger.error(f"Processing failed: {e}")
         raise
 
-
+# Example (small scale) usage:
+# PYTHONPATH=. python scripts/process_enhanced_data.py --max_files 2 --strategy stratified
+# from project root.
+# See add_argument code above for more options.
 if __name__ == "__main__":
     main() 
+
+# To informally look at the output data one could run the following in a
+# python shell:
+"""
+import pickle
+import gzip
+
+example_fn = "data/processed_jul19/pass_015_positions_15-20.pkl.gz"
+with gzip.open(example_fn, "rb") as f:
+    data = pickle.load(f)
+
+print("Top level keys:", data.keys())
+# Expected output:
+# Top level keys: dict_keys(['examples', 'pass_info', 'processed_at', 'format_version'])
+print("Structure of an individual game record:", data["examples"][0].keys())
+# Expected output:
+# Structure of an individual game record: dict_keys(['board', 'policy', 'value', 'metadata'])
+print("Example metadata:", data["examples"][0]["metadata"])
+# Expected output:
+# {'game_id': (1, 24),
+#  'position_in_game': 18,
+#  'total_positions': 84,
+#  'value_sample_tier': 0,
+#  'winner': 'BLUE'}
+
+print("Dimensions of board state: ", data["examples"][0]["board"].shape)
+# Dimensions of board state:  (2, 13, 13)
+
+print("Example policy:", data["examples"][0]["policy"])
+
+# To see how to join the game_id and position_in_game to get the full
+# see file_lookup_<data_and_time>.json
+# Example:
+# {
+# "file_mapping": {
+#     "0": "data/twoNetGames/twoNetGames_13x13_mk15_d2b10_v1036_0s9_p973k_vt0_pt0.trmph",
+#     "1": "data/twoNetGames/twoNetGames_13x13_mk15_d2b10_v1543_0s2_p973k_vt0_pt0.trmph"
+# },
+# "created_at": "2025-07-19T11:44:59.729338",
+# "total_files": 2,
+# "format_version": "1.0"
+# }
+
+"""
