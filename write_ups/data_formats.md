@@ -8,12 +8,42 @@ This document describes the various data formats used in the Hex AI project, inc
 Processed data files contain training examples extracted from raw TRMPH game files. They are stored as compressed pickle files with the extension `.pkl.gz`.
 
 ### File Structure
+
+#### Version 1.0 (Current)
 ```python
 {
     'examples': [(board, policy, value), ...],  # List of training examples
     'source_file': str,                         # Original TRMPH file path
     'processing_stats': dict,                   # Processing metadata
     'processed_at': str                         # Timestamp of processing
+}
+```
+
+#### Version 2.0 (Enhanced - Planned)
+```python
+{
+    'examples': [example_dict, ...],            # List of enhanced training examples
+    'source_file': str,                         # Original TRMPH file path
+    'processing_stats': dict,                   # Processing metadata
+    'processed_at': str,                        # Timestamp of processing
+    'format_version': '2.0'                     # Format version identifier
+}
+```
+
+**Enhanced Example Structure (Version 2.0)**:
+```python
+{
+    'board': np.ndarray,                        # (2, 13, 13) board state
+    'policy': np.ndarray,                       # (169,) policy target or None
+    'value': float,                             # 0.0 or 1.0
+    'metadata': {
+        'game_id': (file_idx, line_idx),        # (file_index, line_index) tuple
+        'position_in_game': int,                # 0-based position index
+        'total_positions': int,                 # Total positions in game
+        'value_sample_tier': int,               # 0, 1, 2, 3 for sampling control
+        'trmph_game': str,                      # Full TRMPH string (optional)
+        'winner': str                           # "1" or "2"
+    }
 }
 ```
 
@@ -39,9 +69,39 @@ Processed data files contain training examples extracted from raw TRMPH game fil
 ```
 
 ### Data Types
+
+#### Version 1.0 (Current)
 - **board**: `numpy.ndarray` of shape `(2, 13, 13)` - 2-channel format (blue, red)
 - **policy**: `numpy.ndarray` of shape `(169,)` - one-hot policy target, or `None` for final moves
 - **value**: `float` - value target (0.0 or 1.0)
+
+#### Version 2.0 (Enhanced - Planned)
+- **board**: `numpy.ndarray` of shape `(2, 13, 13)` - 2-channel format (blue, red)
+- **policy**: `numpy.ndarray` of shape `(169,)` - one-hot policy target, or `None` for final moves
+- **value**: `float` - value target (0.0 or 1.0)
+- **metadata**: `dict` - Game metadata including:
+  - **game_id**: `tuple(int, int)` - (file_index, line_index) for tracking
+  - **position_in_game**: `int` - 0-based position index within game
+  - **total_positions**: `int` - Total number of positions in the game
+  - **value_sample_tier**: `int` - Sampling tier (0-3) for value training control
+  - **trmph_game**: `str` - Full TRMPH string (optional, for debugging)
+  - **winner**: `str` - Game winner ("BLUE" or "RED")
+
+### Winner Format Mapping
+
+**Important**: There are multiple winner formats used throughout the pipeline:
+
+- **TRMPH format**: "1" = BLUE win, "2" = RED win
+- **Training format**: BLUE = 0.0, RED = 1.0  
+- **Enhanced metadata**: "BLUE" or "RED" (clear text)
+
+**BLUE definition**: 
+- Goes from top to bottom in standard representation
+- h1 is at the top edge
+- Always goes first in un-augmented TRMPH data
+- Represented as 0 in most training code (first channel)
+
+**Note**: After data augmentation (reflections), colors may be swapped, so the "first player" concept becomes relative to the augmentation.
 
 ### Policy Target Handling
 **Important**: Policy targets can be `None` for final moves in games where there is no next move to predict. This occurs when:
@@ -55,6 +115,8 @@ Processed data files contain training examples extracted from raw TRMPH game fil
 **Future improvement**: Consider using uniform distribution `(1/169, 1/169, ...)` instead of zeros for better training signal.
 
 ### How to Read
+
+#### Version 1.0 (Current)
 ```python
 import gzip
 import pickle
@@ -72,6 +134,49 @@ for board, policy, value in examples[:5]:  # First 5 examples
     print(f"Policy shape: {policy.shape}")
     print(f"Value: {value}")
 ```
+
+#### Version 2.0 (Enhanced - Planned)
+```python
+import gzip
+import pickle
+
+# Load a processed data file with format detection
+def load_processed_data_v2(filepath):
+    with gzip.open(filepath, 'rb') as f:
+        data = pickle.load(f)
+    
+    format_version = data.get('format_version', '1.0')
+    examples = data['examples']
+    
+    if format_version == '2.0':
+        # Enhanced format
+        for example in examples[:5]:
+            print(f"Board shape: {example['board'].shape}")
+            print(f"Policy shape: {example['policy'].shape}")
+            print(f"Value: {example['value']}")
+            print(f"Game ID: {example['metadata']['game_id']}")
+            print(f"Position: {example['metadata']['position_in_game']}/{example['metadata']['total_positions']}")
+            print(f"Value tier: {example['metadata']['value_sample_tier']}")
+    else:
+        # Legacy format
+        for board, policy, value in examples[:5]:
+            print(f"Board shape: {board.shape}")
+            print(f"Policy shape: {policy.shape}")
+            print(f"Value: {value}")
+    
+    return examples, format_version
+```
+
+### Value Sample Tiers (Version 2.0)
+
+The enhanced format introduces value sample tiers to control how many positions per game are used for value network training:
+
+- **Tier 0**: High priority (5 positions) - Always used for value training
+- **Tier 1**: Medium priority (5 positions) - Usually used for value training  
+- **Tier 2**: Low priority (10 positions) - Sometimes used for value training
+- **Tier 3**: Very low priority (20+ positions) - Rarely used for value training
+
+This allows flexible control over value training while preserving all positions for policy training.
 
 ### File Naming Convention
 Processed files follow the pattern:

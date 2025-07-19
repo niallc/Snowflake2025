@@ -44,11 +44,14 @@ if __name__ == "__main__":
 
     # To run this script from the command line, run:
     """
-    python3 -m scripts.simple_inference_cli \
+    PYTHONPATH=. python scripts/simple_inference_cli.py \
         --trmph https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7 \
-        --model_dir checkpoints/sweep/sweep_run_0_learning-rate0.001_batch-size128_max-grad-norm100_dropout0.0005_weight-decay0.0001_20250717_121342/ \
+        --model_dir checkpoints/hyperparameter_tuning/sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.01_value_weight_decay_factor25.0_20250719_052409/ \
         --model_file best_model.pt \
         --device mps
         
     """
+    # Older way
+    # python3 -m scripts.simple_inference_cli \    
+    
     main() 

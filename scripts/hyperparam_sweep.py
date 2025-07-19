@@ -33,21 +33,21 @@ root_logger.addHandler(stream_handler)
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "learning_rate": [0.001],
+    "learning_rate": [0.001, 0.01],
     "batch_size": [256],
     "max_grad_norm": [20],
-    "dropout_prob": [0],
-    "weight_decay": [2e-4],
-    "value_learning_rate_factor": [0.1, 0.5],  # Value head learns slower
-    "value_weight_decay_factor": [2.0, 5.0],  # Value head gets more regularization
+    "dropout_prob": [0, 0.001],
+    "weight_decay": [1e-4],
+    "value_learning_rate_factor": [0.00001, 0.005],  # Value head learns slower
+    "value_weight_decay_factor": [250.0, 10.0],  # Value head gets more regularization
     # Add more as needed
 }
 
 # Configuration
-MAX_SAMPLES = 200_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 50_000  # Validation samples (no augmentation)
+MAX_SAMPLES = 1_600_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 400_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 3
+EPOCHS = 2
 
 print(f"Running hyperparameter sweep with:")
 print(f"  Training samples: {MAX_SAMPLES:,} (effective: {MAX_SAMPLES * 4:,} with augmentation)")

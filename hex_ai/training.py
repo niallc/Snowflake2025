@@ -314,14 +314,12 @@ class Trainer:
             from .system_utils import get_system_info, calculate_optimal_batch_size
             
             system_info = get_system_info()
-            optimal_batch_size, batch_analysis = calculate_optimal_batch_size()
+            _, batch_analysis = calculate_optimal_batch_size()
             
             logger.info("=== System Analysis ===")
             logger.info(f"Platform: {system_info['platform']}")
             logger.info(f"Memory: {system_info['memory_available_gb']:.1f} GB available")
             logger.info(f"GPU: {'Available' if system_info['gpu_available'] else 'Not available'}")
-            logger.info(f"Old notion of optimal batch size, from calculate_optimal_batch_size: {batch_analysis['optimal_batch_size']}")
-            logger.info(f"Current batch size: {self.train_loader.batch_size}")
             
             # Warn if batch size is suboptimal
             if batch_analysis['optimal_batch_size'] > self.train_loader.batch_size:
