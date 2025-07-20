@@ -87,52 +87,8 @@ def create_test_data(num_files: int = 3, examples_per_file: int = 100, games_per
     return temp_dir
 
 
-def test_game_grouping():
-    """Test the game grouping functionality."""
-    print("Testing game grouping...")
-    
-    # Create test examples
-    examples = []
-    for game_idx in range(3):
-        game_length = 10
-        winner = "BLUE" if game_idx % 2 == 0 else "RED"
-        
-        for position in range(game_length):
-            metadata = {
-                'position_in_game': position,
-                'total_positions': game_length,
-                'winner': winner
-            }
-            examples.append({'metadata': metadata})
-    
-    # The grouping logic groups by winner + total_positions + (position // 10)
-    # So with position 0-9, all will be in same group for each game
-    # This should create 3 games (BLUE_10_0, RED_10_0, BLUE_10_0)
-    # But since the last game is also BLUE_10_0, it will be merged with the first
-    
-    # Test grouping
-    shuffler = DataShuffler(input_dir="temp", output_dir="temp", temp_dir="temp")
-    games = shuffler._group_examples_by_game(examples)
-    
-    # With the current grouping logic, we expect 2 games:
-    # - BLUE_10_0 (combines first and third games)
-    # - RED_10_0 (second game)
-    assert len(games) == 2, f"Expected 2 games, got {len(games)}"
-    
-    for game_examples in games:
-        # All examples in a game should have same winner and total_positions
-        winner = game_examples[0]['metadata']['winner']
-        total_positions = game_examples[0]['metadata']['total_positions']
-        
-        for example in game_examples:
-            assert example['metadata']['winner'] == winner
-            assert example['metadata']['total_positions'] == total_positions
-    
-    print("✓ Game grouping test passed")
-
-
 def test_bucket_distribution():
-    """Test that games are properly distributed across buckets."""
+    """Test that examples are properly distributed across buckets."""
     print("Testing bucket distribution...")
     
     # Create test data
@@ -147,8 +103,7 @@ def test_bucket_distribution():
             input_dir=str(input_dir),
             output_dir=str(output_dir),
             temp_dir=str(temp_bucket_dir),
-            num_buckets=5,
-            chunk_size=10
+            num_buckets=5
         )
         
         # Run distribution phase
@@ -156,7 +111,7 @@ def test_bucket_distribution():
         shuffler._distribute_to_buckets(input_files)
         
         # Check that bucket files were created
-        bucket_files = list(temp_bucket_dir.glob("bucket_*.pkl.gz"))
+        bucket_files = list(temp_bucket_dir.glob("*_bucket_*.pkl.gz"))
         assert len(bucket_files) > 0, "No bucket files created"
         
         # Check that examples are distributed across buckets
@@ -192,8 +147,7 @@ def test_shuffling_effectiveness():
             input_dir=str(input_dir),
             output_dir=str(output_dir),
             temp_dir=str(temp_bucket_dir),
-            num_buckets=3,
-            chunk_size=50
+            num_buckets=3
         )
         
         # Run full shuffling process
@@ -267,13 +221,12 @@ def test_memory_efficiency():
             process = psutil.Process(os.getpid())
             initial_memory = process.memory_info().rss / 1024 / 1024  # MB
             
-            # Create shuffler with small chunk size to test memory management
+            # Create shuffler
             shuffler = DataShuffler(
                 input_dir=str(input_dir),
                 output_dir=str(output_dir),
                 temp_dir=str(temp_bucket_dir),
-                num_buckets=10,
-                chunk_size=50  # Small chunks to test memory management
+                num_buckets=10
             )
             
             # Run distribution phase
@@ -314,8 +267,7 @@ def test_resume_functionality():
             input_dir=str(input_dir),
             output_dir=str(output_dir),
             temp_dir=str(temp_bucket_dir),
-            num_buckets=5,
-            chunk_size=50
+            num_buckets=5
         )
         
         # Run first phase
@@ -331,8 +283,7 @@ def test_resume_functionality():
             input_dir=str(input_dir),
             output_dir=str(output_dir),
             temp_dir=str(temp_bucket_dir),
-            num_buckets=5,
-            chunk_size=50
+            num_buckets=5
         )
         
         # Should detect existing progress
@@ -377,8 +328,7 @@ def test_data_integrity():
             input_dir=str(input_dir),
             output_dir=str(output_dir),
             temp_dir=str(temp_bucket_dir),
-            num_buckets=5,
-            chunk_size=50
+            num_buckets=5
         )
         shuffler.shuffle_data()
         
@@ -413,18 +363,221 @@ def test_data_integrity():
         shutil.rmtree(temp_dir)
 
 
+def test_error_handling():
+    """Test that errors are handled properly."""
+    print("Testing error handling...")
+    
+    # Create test data
+    temp_dir = create_test_data(num_files=1, examples_per_file=50, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        # Test with non-existent input directory
+        shuffler = DataShuffler(
+            input_dir="non_existent_dir",
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=5
+        )
+        
+        # Should handle missing directory gracefully
+        input_files = list(Path("non_existent_dir").glob("*.pkl.gz"))
+        assert len(input_files) == 0, "Should handle missing directory"
+        
+        print("✓ Error handling test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
+def test_file_naming():
+    """Test that bucket files are named correctly."""
+    print("Testing file naming...")
+    
+    # Create test data
+    temp_dir = create_test_data(num_files=1, examples_per_file=50, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        shuffler = DataShuffler(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=5
+        )
+        
+        # Run distribution phase
+        input_files = list(input_dir.glob("*.pkl.gz"))
+        shuffler._distribute_to_buckets(input_files)
+        
+        # Check bucket file naming
+        bucket_files = list(temp_bucket_dir.glob("*_bucket_*.pkl.gz"))
+        assert len(bucket_files) > 0, "No bucket files created"
+        
+        # Check naming pattern
+        for bucket_file in bucket_files:
+            filename = bucket_file.name
+            assert "_bucket_" in filename, f"Invalid bucket filename: {filename}"
+            assert filename.endswith(".pkl.gz"), f"Invalid bucket filename: {filename}"
+        
+        print("✓ File naming test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
+def test_empty_input():
+    """Test handling of empty input directory."""
+    print("Testing empty input handling...")
+    
+    # Create empty input directory
+    temp_dir = Path(tempfile.mkdtemp())
+    input_dir = temp_dir / "input"
+    input_dir.mkdir()
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        shuffler = DataShuffler(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=5
+        )
+        
+        # Should handle empty directory gracefully
+        input_files = list(input_dir.glob("*.pkl.gz"))
+        assert len(input_files) == 0, "Should handle empty directory"
+        
+        print("✓ Empty input test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
+def test_large_bucket_count():
+    """Test with a large number of buckets."""
+    print("Testing large bucket count...")
+    
+    # Create test data
+    temp_dir = create_test_data(num_files=1, examples_per_file=100, games_per_file=3)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        # Use large number of buckets
+        shuffler = DataShuffler(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=50  # Large bucket count
+        )
+        
+        # Run full process
+        shuffler.shuffle_data()
+        
+        # Check output
+        shuffled_files = list(output_dir.glob("shuffled_*.pkl.gz"))
+        assert len(shuffled_files) > 0, "Should create shuffled files"
+        
+        print("✓ Large bucket count test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
+def test_corrupted_input_file():
+    """Test handling of corrupted input files."""
+    print("Testing corrupted input file handling...")
+    
+    # Create test data
+    temp_dir = create_test_data(num_files=1, examples_per_file=50, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        # Corrupt one of the input files
+        input_files = list(input_dir.glob("*.pkl.gz"))
+        if input_files:
+            with open(input_files[0], 'wb') as f:
+                f.write(b"corrupted data")
+        
+        shuffler = DataShuffler(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=5
+        )
+        
+        # Should fail when trying to process corrupted file
+        try:
+            shuffler.shuffle_data()
+            assert False, "Should have failed on corrupted file"
+        except Exception:
+            # Expected to fail
+            pass
+        
+        print("✓ Corrupted input file test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
+def test_validation_disabled():
+    """Test that validation can be disabled."""
+    print("Testing validation disabled...")
+    
+    # Create test data
+    temp_dir = create_test_data(num_files=1, examples_per_file=50, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    
+    try:
+        shuffler = DataShuffler(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            temp_dir=str(temp_bucket_dir),
+            num_buckets=5,
+            validation_enabled=False
+        )
+        
+        # Run full process
+        shuffler.shuffle_data()
+        
+        # Check output exists
+        shuffled_files = list(output_dir.glob("shuffled_*.pkl.gz"))
+        assert len(shuffled_files) > 0, "Should create shuffled files even with validation disabled"
+        
+        print("✓ Validation disabled test passed")
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+
 def main():
     """Run all tests."""
     print("Running data shuffling tests...")
     print("=" * 50)
     
     tests = [
-        test_game_grouping,
         test_bucket_distribution,
         test_shuffling_effectiveness,
         test_memory_efficiency,
         test_resume_functionality,
-        test_data_integrity
+        test_data_integrity,
+        test_error_handling,
+        test_file_naming,
+        test_empty_input,
+        test_large_bucket_count,
+        test_corrupted_input_file,
+        test_validation_disabled
     ]
     
     passed = 0

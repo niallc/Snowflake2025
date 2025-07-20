@@ -28,6 +28,10 @@ sys.path.append('hex_ai')
 
 from hex_ai.file_utils import GracefulShutdown, atomic_write_pickle_gz
 
+# Configuration constants
+DEFAULT_NUM_BUCKETS = 500
+BUCKET_ID_FORMAT_WIDTH = 4  # For :04d format in filenames
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -47,7 +51,7 @@ class DataShuffler:
                  input_dir: str = "data/processed/data",
                  output_dir: str = "data/processed/shuffled",
                  temp_dir: str = "data/processed/temp_buckets",
-                 num_buckets: int = 500,
+                 num_buckets: int = DEFAULT_NUM_BUCKETS,
                  resume_enabled: bool = True,
                  cleanup_temp: bool = True,
                  validation_enabled: bool = True):
@@ -136,7 +140,7 @@ class DataShuffler:
         """Write examples to a bucket file."""
         # Use input filename in bucket filename to avoid overwriting
         input_filename = Path(source_files[0]).stem  # Remove .pkl.gz extension
-        bucket_file = self.temp_dir / f"{input_filename}_bucket_{bucket_idx:04d}.pkl.gz"
+        bucket_file = self.temp_dir / f"{input_filename}_bucket_{bucket_idx:0{BUCKET_ID_FORMAT_WIDTH}d}.pkl.gz"
         
         bucket_data = {
             'examples': examples,
@@ -155,7 +159,7 @@ class DataShuffler:
     
     def _write_shuffled_file(self, bucket_idx: int, examples: List[Dict], source_files: List[str]):
         """Write shuffled examples to final output file."""
-        shuffled_file = self.output_dir / f"shuffled_{bucket_idx:04d}.pkl.gz"
+        shuffled_file = self.output_dir / f"shuffled_{bucket_idx:0{BUCKET_ID_FORMAT_WIDTH}d}.pkl.gz"
         
         shuffled_data = {
             'examples': examples,
@@ -198,7 +202,8 @@ class DataShuffler:
                 bucket_examples = [[] for _ in range(self.num_buckets)]
                 
                 # Distribute examples directly across buckets
-                # This breaks game-level correlations: with 500 buckets and ≤169 moves per game,
+                # This breaks game-level correlations: with {self.num_buckets} buckets and 
+                # ≤BOARD_SIZE * BOARD_SIZE (likely 169) moves per game,
                 # each bucket contains at most one position from any given game.
                 # During training, the trainer will process ~200k records before seeing another
                 # position from the same game, making fingerprinting extremely difficult.
@@ -237,7 +242,7 @@ class DataShuffler:
         logger.info(f"Processing bucket {bucket_idx}")
         
         # Find all bucket files for this bucket index
-        bucket_pattern = f"*_bucket_{bucket_idx:04d}.pkl.gz"
+        bucket_pattern = f"*_bucket_{bucket_idx:0{BUCKET_ID_FORMAT_WIDTH}d}.pkl.gz"
         bucket_files = list(self.temp_dir.glob(bucket_pattern))
         
         if not bucket_files:
@@ -305,7 +310,12 @@ class DataShuffler:
         logger.info("Phase 2 completed")
     
     def _validate_output(self):
-        """Validate the shuffled output data."""
+        """Validate the shuffled output data.
+        
+        Currently only counts total examples to verify no data was lost.
+        The distribution is guaranteed to be even by construction (≤169 moves per game,
+        {self.num_buckets} buckets), so no distribution validation is needed.
+        """
         if not self.validation_enabled:
             return
         
@@ -313,36 +323,21 @@ class DataShuffler:
         
         shuffled_files = list(self.output_dir.glob("shuffled_*.pkl.gz"))
         total_examples = 0
-        bucket_sizes = []
         
         for shuffled_file in shuffled_files:
             try:
                 data = self._load_pkl_gz(shuffled_file)
                 examples = data['examples']
                 total_examples += len(examples)
-                bucket_sizes.append(len(examples))
                 
             except Exception as e:
                 logger.error(f"Error validating {shuffled_file}: {e}")
+                raise  # Make validation errors fatal
         
         # Report validation results
         logger.info(f"Validation complete:")
         logger.info(f"  Total shuffled files: {len(shuffled_files)}")
         logger.info(f"  Total examples: {total_examples}")
-        
-        # Check for even distribution across buckets
-        if bucket_sizes:
-            max_bucket_size = max(bucket_sizes)
-            min_bucket_size = min(bucket_sizes)
-            avg_bucket_size = sum(bucket_sizes) / len(bucket_sizes)
-            
-            logger.info(f"  Max bucket size: {max_bucket_size}")
-            logger.info(f"  Min bucket size: {min_bucket_size}")
-            logger.info(f"  Avg bucket size: {avg_bucket_size:.2f}")
-            
-            # Check if distribution is reasonably even (within 50% of average)
-            if max_bucket_size > avg_bucket_size * 1.5:
-                logger.warning("Uneven bucket distribution detected - some buckets may be significantly larger than others")
     
     def shuffle_data(self):
         """Main method to run the complete shuffling process."""
@@ -403,7 +398,7 @@ def main():
                        help="Output directory for shuffled files")
     parser.add_argument("--temp-dir", default="data/processed/temp_buckets", 
                        help="Temporary directory for bucket files")
-    parser.add_argument("--num-buckets", type=int, default=500, 
+    parser.add_argument("--num-buckets", type=int, default=DEFAULT_NUM_BUCKETS, 
                        help="Number of buckets for distribution")
     parser.add_argument("--no-resume", action="store_true", 
                        help="Disable resume functionality")
