@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 # We match up to the number (13) and then the comma.
 TRMPH_BOARD_PATTERN = re.compile(r"#(\d+),")
 LETTERS = string.ascii_lowercase
+TRLETTERS = LETTERS[:BOARD_SIZE]
 
 
 # ============================================================================
@@ -141,7 +142,7 @@ def split_trmph_moves(bare_moves: str) -> list[str]:
     moves = []
     i = 0
     while i < len(bare_moves):
-        if bare_moves[i] not in LETTERS:
+        if bare_moves[i] not in TRLETTERS:
             raise ValueError(f"Expected letter at position {i} in {bare_moves}")
         j = i + 1
         while j < len(bare_moves) and bare_moves[j].isdigit():
@@ -159,7 +160,7 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
         raise ValueError(f"Invalid trmph move: {move}")
     letter = move[0]
     number = int(move[1:])
-    if letter not in LETTERS[:board_size]:
+    if letter not in TRLETTERS:
         raise ValueError(f"Invalid letter in move: {move}")
     if not (1 <= number <= board_size):
         raise ValueError(f"Invalid number in move: {move}")
