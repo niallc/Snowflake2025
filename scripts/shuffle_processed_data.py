@@ -134,7 +134,9 @@ class DataShuffler:
     
     def _write_bucket_file(self, bucket_idx: int, examples: List[Dict], source_files: List[str]):
         """Write examples to a bucket file."""
-        bucket_file = self.temp_dir / f"bucket_{bucket_idx:04d}.pkl.gz"
+        # Use input filename in bucket filename to avoid overwriting
+        input_filename = Path(source_files[0]).stem  # Remove .pkl.gz extension
+        bucket_file = self.temp_dir / f"{input_filename}_bucket_{bucket_idx:04d}.pkl.gz"
         
         bucket_data = {
             'examples': examples,
@@ -146,9 +148,9 @@ class DataShuffler:
         
         try:
             atomic_write_pickle_gz(bucket_data, bucket_file)
-            logger.debug(f"Written bucket {bucket_idx} with {len(examples)} examples")
+            logger.debug(f"Written bucket {bucket_idx} from {input_filename} with {len(examples)} examples")
         except Exception as e:
-            logger.error(f"Failed to write bucket {bucket_idx}: {e}")
+            logger.error(f"Failed to write bucket {bucket_idx} from {input_filename}: {e}")
             raise
     
     def _write_shuffled_file(self, bucket_idx: int, examples: List[Dict], source_files: List[str]):
@@ -177,10 +179,6 @@ class DataShuffler:
         """Phase 1: Distribute games from input files across buckets."""
         logger.info(f"Starting Phase 1: Distribution to {self.num_buckets} buckets")
         
-        # Initialize bucket data structures
-        bucket_data = [[] for _ in range(self.num_buckets)]
-        bucket_sources = [set() for _ in range(self.num_buckets)]
-        
         for file_idx, input_file in enumerate(input_files):
             if self.shutdown_handler.shutdown_requested:
                 logger.info("Shutdown requested, stopping distribution")
@@ -196,14 +194,23 @@ class DataShuffler:
                 data = self._load_pkl_gz(input_file)
                 examples = data['examples']
                 
+                # Collect examples by bucket for THIS input file only
+                bucket_examples = [[] for _ in range(self.num_buckets)]
+                
                 # Distribute examples directly across buckets
-                # No need to group by games since the input data is already grouped by games.
-                # With 500 buckets and ≤169 moves per game, each move will go in <= 1 bucket.
+                # This breaks game-level correlations: with 500 buckets and ≤169 moves per game,
+                # each bucket contains at most one position from any given game.
+                # During training, the trainer will process ~200k records before seeing another
+                # position from the same game, making fingerprinting extremely difficult.
+                # See write_ups/data_shuffling_specification.md for detailed explanation.
                 for example_idx, example in enumerate(examples):
                     bucket_idx = example_idx % self.num_buckets
-                    
-                    bucket_data[bucket_idx].append(example)
-                    bucket_sources[bucket_idx].add(str(input_file))
+                    bucket_examples[bucket_idx].append(example)
+                
+                # Write bucket files for THIS input file immediately
+                for bucket_idx, examples_for_bucket in enumerate(bucket_examples):
+                    if examples_for_bucket:  # Only write if we have examples for this bucket
+                        self._write_bucket_file(bucket_idx, examples_for_bucket, [str(input_file)])
                 
                 # Update progress
                 self.progress['processed_files'].append(str(input_file))
@@ -213,14 +220,7 @@ class DataShuffler:
                 
             except Exception as e:
                 logger.error(f"Error processing {input_file}: {e}")
-                continue
-        
-        # Write remaining bucket data
-        logger.info("Writing remaining bucket data...")
-        for bucket_idx in range(self.num_buckets):
-            if bucket_data[bucket_idx]:
-                self._write_bucket_file(bucket_idx, bucket_data[bucket_idx], 
-                                      list(bucket_sources[bucket_idx]))
+                raise  # Make file processing errors fatal
         
         logger.info("Phase 1 completed")
     
@@ -228,28 +228,38 @@ class DataShuffler:
         """Phase 2: Consolidate and shuffle a single bucket.
         
         This method:
-        1. Loads the bucket file
-        2. Shuffles the examples to break any remaining correlations
-        3. Writes the final shuffled file
-        4. Optionally cleans up the temporary bucket file
+        1. Loads all bucket files for this bucket index from different input files
+        2. Concatenates all examples into a single list
+        3. Shuffles the examples to break any remaining correlations
+        4. Writes the final shuffled file
+        5. Optionally cleans up the temporary bucket files
         """
         logger.info(f"Processing bucket {bucket_idx}")
         
-        # Find the bucket file
-        bucket_file = self.temp_dir / f"bucket_{bucket_idx:04d}.pkl.gz"
+        # Find all bucket files for this bucket index
+        bucket_pattern = f"*_bucket_{bucket_idx:04d}.pkl.gz"
+        bucket_files = list(self.temp_dir.glob(bucket_pattern))
         
-        if not bucket_file.exists():
-            logger.warning(f"No file found for bucket {bucket_idx}")
+        if not bucket_files:
+            logger.warning(f"No files found for bucket {bucket_idx}")
             return
         
-        # Load examples from the bucket file
-        try:
-            data = self._load_pkl_gz(bucket_file)
-            all_examples = data['examples']
-            source_files = data.get('source_files', [])
-        except Exception as e:
-            logger.error(f"Error loading {bucket_file}: {e}")
-            return
+        # Load and consolidate examples from all bucket files
+        all_examples = []
+        source_files = []
+        
+        for bucket_file in bucket_files:
+            try:
+                data = self._load_pkl_gz(bucket_file)
+                examples = data['examples']
+                file_source_files = data.get('source_files', [])
+                
+                all_examples.extend(examples)
+                source_files.extend(file_source_files)
+                    
+            except Exception as e:
+                logger.error(f"Error loading {bucket_file}: {e}")
+                raise  # Make file processing errors fatal
         
         if not all_examples:
             logger.warning(f"No examples found for bucket {bucket_idx}")
@@ -268,12 +278,14 @@ class DataShuffler:
         self.stats['buckets_completed'] += 1
         self._save_progress()
         
-        # Clean up temporary bucket file if requested
+        # Clean up temporary bucket files if requested
         if self.cleanup_temp:
-            try:
-                bucket_file.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to delete {bucket_file}: {e}")
+            for bucket_file in bucket_files:
+                try:
+                    bucket_file.unlink()
+                except Exception as e:
+                    logger.error(f"Failed to delete {bucket_file}: {e}")
+                    raise  # Make cleanup errors fatal
     
     def _consolidate_and_shuffle_all_buckets(self):
         """Phase 2: Consolidate and shuffle all buckets."""
