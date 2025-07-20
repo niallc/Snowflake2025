@@ -22,7 +22,7 @@ from datetime import datetime
 import random
 
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, PLAYER_CHANNEL
 from hex_ai.data_utils import get_player_to_move_from_board
 from hex_ai.error_handling import check_data_loading_errors
 
@@ -267,7 +267,9 @@ class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
         board_3ch, policy, value = original_example
         
         # Extract 2-channel board for augmentation
-        board_2ch = board_3ch[:2].numpy()  # Remove player-to-move channel
+        # NOTE: This looks brittle. Especially if we add more channels to the board, this
+        # will rely on channel order
+        board_2ch = board_3ch[:PLAYER_CHANNEL].numpy()  # Remove player-to-move channel
         
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:

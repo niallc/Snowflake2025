@@ -70,8 +70,9 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
                 continue
             else:
                 raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
-        player = (i % 2) + 1
-        board[row, col] = player
+        # Alternating players: blue=1, red=2 for N×N format
+        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
+        board[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
     return board
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:

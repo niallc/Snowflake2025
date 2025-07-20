@@ -110,7 +110,7 @@ class HexGameState:
         new_move_history = self.move_history + [(row, col)]
         new_state = HexGameState(
             board=new_board,
-            current_player=1 - self.current_player,
+            current_player=RED_PLAYER if self.current_player == BLUE_PLAYER else BLUE_PLAYER,
             move_history=new_move_history,
             game_over=False,
             winner=None

@@ -363,8 +363,10 @@ def reflect_board_long_diagonal(board: np.ndarray) -> np.ndarray:
     else:
         # Single channel format: (13, 13) with values 0/1/2
         reflected = np.transpose(board)  # Transpose
-        # Swap colors: 1 <-> 2
-        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        # Swap colors: BLUE_PIECE <-> RED_PIECE
+        reflected = np.where(reflected == BLUE_PIECE, RED_PIECE,
+                             np.where(reflected == RED_PIECE, BLUE_PIECE,
+                                      reflected))
         return reflected
 
 
@@ -396,12 +398,12 @@ def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
         for row in range(N):
             for col in range(N):
                 val = board[row, col]
-                if val == 1:
-                    reflected[N - 1 - col, N - 1 - row] = 2  # Blue -> Red
-                elif val == 2:
-                    reflected[N - 1 - col, N - 1 - row] = 1  # Red -> Blue
+                if val == BLUE_PIECE:
+                    reflected[N - 1 - col, N - 1 - row] = RED_PIECE  # Blue -> Red
+                elif val == RED_PIECE:
+                    reflected[N - 1 - col, N - 1 - row] = BLUE_PIECE  # Red -> Blue
                 else:
-                    reflected[N - 1 - col, N - 1 - row] = 0
+                    reflected[N - 1 - col, N - 1 - row] = EMPTY_PIECE
         return reflected
 
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
@@ -628,9 +630,9 @@ def create_board_from_moves(moves: List[str]) -> np.ndarray:
     # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move)
-        # Alternating players: blue=1, red=2
-        player = (i % 2) + 1
-        board_matrix[row, col] = player
+        # Alternating players: blue=1, red=2 for N×N format
+        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
+        board_matrix[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
     
     # Convert to 2-channel format
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
