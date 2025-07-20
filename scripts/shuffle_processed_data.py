@@ -48,7 +48,6 @@ class DataShuffler:
                  output_dir: str = "data/processed/shuffled",
                  temp_dir: str = "data/processed/temp_buckets",
                  num_buckets: int = 500,
-                 chunk_size: int = 1000,
                  resume_enabled: bool = True,
                  cleanup_temp: bool = True,
                  validation_enabled: bool = True):
@@ -57,7 +56,6 @@ class DataShuffler:
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
         self.num_buckets = num_buckets
-        self.chunk_size = chunk_size
         self.resume_enabled = resume_enabled
         self.cleanup_temp = cleanup_temp
         self.validation_enabled = validation_enabled
@@ -70,7 +68,6 @@ class DataShuffler:
         self.stats = {
             'files_processed': 0,
             'total_examples': 0,
-            'games_distributed': 0,
             'buckets_completed': 0,
             'start_time': time.time()
         }
@@ -139,49 +136,17 @@ class DataShuffler:
         """Write examples to a bucket file."""
         bucket_file = self.temp_dir / f"bucket_{bucket_idx:04d}.pkl.gz"
         
-        # Check if bucket file already exists
-        if bucket_file.exists():
-            # Load existing data and append
-            try:
-                with gzip.open(bucket_file, 'rb') as f:
-                    existing_data = pickle.load(f)
-                existing_examples = existing_data.get('examples', [])
-                existing_sources = set(existing_data.get('source_files', []))
-                
-                # Append new examples and sources
-                all_examples = existing_examples + examples
-                all_sources = existing_sources.union(source_files)
-                
-                bucket_data = {
-                    'examples': all_examples,
-                    'bucket_id': bucket_idx,
-                    'source_files': list(all_sources),
-                    'created_at': existing_data.get('created_at', datetime.now().isoformat()),
-                    'updated_at': datetime.now().isoformat(),
-                    'num_examples': len(all_examples)
-                }
-            except Exception as e:
-                logger.warning(f"Failed to load existing bucket {bucket_idx}, creating new: {e}")
-                bucket_data = {
-                    'examples': examples,
-                    'bucket_id': bucket_idx,
-                    'source_files': source_files,
-                    'created_at': datetime.now().isoformat(),
-                    'num_examples': len(examples)
-                }
-        else:
-            # Create new bucket file
-            bucket_data = {
-                'examples': examples,
-                'bucket_id': bucket_idx,
-                'source_files': source_files,
-                'created_at': datetime.now().isoformat(),
-                'num_examples': len(examples)
-            }
+        bucket_data = {
+            'examples': examples,
+            'bucket_id': bucket_idx,
+            'source_files': source_files,
+            'created_at': datetime.now().isoformat(),
+            'num_examples': len(examples)
+        }
         
         try:
             atomic_write_pickle_gz(bucket_data, bucket_file)
-            logger.debug(f"Written bucket {bucket_idx} with {len(bucket_data['examples'])} examples")
+            logger.debug(f"Written bucket {bucket_idx} with {len(examples)} examples")
         except Exception as e:
             logger.error(f"Failed to write bucket {bucket_idx}: {e}")
             raise
@@ -235,26 +200,15 @@ class DataShuffler:
                 # No need to group by games since the input data is already grouped by games.
                 # With 500 buckets and ≤169 moves per game, each move will go in <= 1 bucket.
                 for example_idx, example in enumerate(examples):
-                    bucket_idx = (file_idx * len(examples) + example_idx) % self.num_buckets
+                    bucket_idx = example_idx % self.num_buckets
                     
                     bucket_data[bucket_idx].append(example)
                     bucket_sources[bucket_idx].add(str(input_file))
-                    
-                    # Write bucket in chunks to manage memory
-                    # Note: This chunking is optional - if memory allows, chunk_size can be increased
-                    # or chunking can be removed entirely for simpler logic
-                    if len(bucket_data[bucket_idx]) >= self.chunk_size:
-                        self._write_bucket_file(bucket_idx, bucket_data[bucket_idx], 
-                                              list(bucket_sources[bucket_idx]))
-                        bucket_data[bucket_idx] = []
-                        # Note: We don't reset bucket_sources here to maintain cumulative tracking
-                        # The sources will be properly consolidated in Phase 2
                 
                 # Update progress
                 self.progress['processed_files'].append(str(input_file))
                 self.stats['files_processed'] += 1
                 self.stats['total_examples'] += len(examples)
-                self.stats['games_distributed'] += len(examples)  # Count examples, not games
                 self._save_progress()
                 
             except Exception as e:
@@ -274,34 +228,28 @@ class DataShuffler:
         """Phase 2: Consolidate and shuffle a single bucket.
         
         This method:
-        1. Loads all chunk files for a specific bucket
-        2. Consolidates all examples and source file information
-        3. Shuffles the examples to break any remaining correlations
-        4. Writes the final shuffled file
-        5. Optionally cleans up temporary chunk files
+        1. Loads the bucket file
+        2. Shuffles the examples to break any remaining correlations
+        3. Writes the final shuffled file
+        4. Optionally cleans up the temporary bucket file
         """
         logger.info(f"Processing bucket {bucket_idx}")
         
-        # Find all chunk files for this bucket (may be multiple due to chunking)
-        bucket_files = list(self.temp_dir.glob(f"bucket_{bucket_idx:04d}.pkl.gz"))
+        # Find the bucket file
+        bucket_file = self.temp_dir / f"bucket_{bucket_idx:04d}.pkl.gz"
         
-        if not bucket_files:
-            logger.warning(f"No files found for bucket {bucket_idx}")
+        if not bucket_file.exists():
+            logger.warning(f"No file found for bucket {bucket_idx}")
             return
         
-        # Load and consolidate all examples from all chunks for this bucket
-        all_examples = []
-        source_files = set()
-        
-        for bucket_file in bucket_files:
-            try:
-                data = self._load_pkl_gz(bucket_file)
-                all_examples.extend(data['examples'])
-                # Union all source files to get complete source tracking
-                source_files.update(data.get('source_files', []))
-            except Exception as e:
-                logger.error(f"Error loading {bucket_file}: {e}")
-                continue
+        # Load examples from the bucket file
+        try:
+            data = self._load_pkl_gz(bucket_file)
+            all_examples = data['examples']
+            source_files = data.get('source_files', [])
+        except Exception as e:
+            logger.error(f"Error loading {bucket_file}: {e}")
+            return
         
         if not all_examples:
             logger.warning(f"No examples found for bucket {bucket_idx}")
@@ -313,20 +261,19 @@ class DataShuffler:
         random.shuffle(all_examples)
         
         # Write final shuffled file with complete source tracking
-        self._write_shuffled_file(bucket_idx, all_examples, list(source_files))
+        self._write_shuffled_file(bucket_idx, all_examples, source_files)
         
         # Update progress tracking
         self.progress['completed_buckets'].append(bucket_idx)
         self.stats['buckets_completed'] += 1
         self._save_progress()
         
-        # Clean up temporary chunk files if requested
+        # Clean up temporary bucket file if requested
         if self.cleanup_temp:
-            for bucket_file in bucket_files:
-                try:
-                    bucket_file.unlink()
-                except Exception as e:
-                    logger.warning(f"Failed to delete {bucket_file}: {e}")
+            try:
+                bucket_file.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to delete {bucket_file}: {e}")
     
     def _consolidate_and_shuffle_all_buckets(self):
         """Phase 2: Consolidate and shuffle all buckets."""
@@ -354,17 +301,14 @@ class DataShuffler:
         
         shuffled_files = list(self.output_dir.glob("shuffled_*.pkl.gz"))
         total_examples = 0
-        source_file_counts = defaultdict(int)
+        bucket_sizes = []
         
         for shuffled_file in shuffled_files:
             try:
                 data = self._load_pkl_gz(shuffled_file)
                 examples = data['examples']
                 total_examples += len(examples)
-                
-                # Check source file distribution
-                for source_file in data.get('shuffling_stats', {}).get('source_files', []):
-                    source_file_counts[source_file] += 1
+                bucket_sizes.append(len(examples))
                 
             except Exception as e:
                 logger.error(f"Error validating {shuffled_file}: {e}")
@@ -373,20 +317,20 @@ class DataShuffler:
         logger.info(f"Validation complete:")
         logger.info(f"  Total shuffled files: {len(shuffled_files)}")
         logger.info(f"  Total examples: {total_examples}")
-        logger.info(f"  Source files represented: {len(source_file_counts)}")
         
-        # Check for even distribution across source files
-        if source_file_counts:
-            max_examples_per_source = max(source_file_counts.values())
-            min_examples_per_source = min(source_file_counts.values())
-            avg_examples_per_source = sum(source_file_counts.values()) / len(source_file_counts)
+        # Check for even distribution across buckets
+        if bucket_sizes:
+            max_bucket_size = max(bucket_sizes)
+            min_bucket_size = min(bucket_sizes)
+            avg_bucket_size = sum(bucket_sizes) / len(bucket_sizes)
             
-            logger.info(f"  Max examples per source: {max_examples_per_source}")
-            logger.info(f"  Min examples per source: {min_examples_per_source}")
-            logger.info(f"  Avg examples per source: {avg_examples_per_source:.2f}")
+            logger.info(f"  Max bucket size: {max_bucket_size}")
+            logger.info(f"  Min bucket size: {min_bucket_size}")
+            logger.info(f"  Avg bucket size: {avg_bucket_size:.2f}")
             
-            if max_examples_per_source > avg_examples_per_source * 2:
-                logger.warning("Potential source file clustering detected - some sources may be over-represented")
+            # Check if distribution is reasonably even (within 50% of average)
+            if max_bucket_size > avg_bucket_size * 1.5:
+                logger.warning("Uneven bucket distribution detected - some buckets may be significantly larger than others")
     
     def shuffle_data(self):
         """Main method to run the complete shuffling process."""
@@ -427,7 +371,6 @@ class DataShuffler:
             logger.info("=" * 60)
             logger.info(f"Files processed: {self.stats['files_processed']}")
             logger.info(f"Total examples: {self.stats['total_examples']}")
-            logger.info(f"Games distributed: {self.stats['games_distributed']}")
             logger.info(f"Buckets completed: {self.stats['buckets_completed']}")
             logger.info(f"Elapsed time: {elapsed_time:.2f} seconds")
             logger.info(f"Output files: {self.output_dir}")
@@ -450,8 +393,6 @@ def main():
                        help="Temporary directory for bucket files")
     parser.add_argument("--num-buckets", type=int, default=500, 
                        help="Number of buckets for distribution")
-    parser.add_argument("--chunk-size", type=int, default=1000, 
-                       help="Examples per write operation")
     parser.add_argument("--no-resume", action="store_true", 
                        help="Disable resume functionality")
     parser.add_argument("--no-cleanup", action="store_true", 
@@ -467,7 +408,6 @@ def main():
         output_dir=args.output_dir,
         temp_dir=args.temp_dir,
         num_buckets=args.num_buckets,
-        chunk_size=args.chunk_size,
         resume_enabled=not args.no_resume,
         cleanup_temp=not args.no_cleanup,
         validation_enabled=not args.no_validation
