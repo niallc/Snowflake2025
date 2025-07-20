@@ -31,9 +31,11 @@ This document specifies the data shuffling process to address value head fingerp
 4. Each bucket file contains games from multiple source files
 
 **Memory Management**:
-- Process one input file at a time
-- Write bucket files incrementally
-- Close files immediately after writing
+- **Critical constraint**: Never load all data from all input files simultaneously
+- **Acceptable**: Load all data from a single input file (~200-500MB per file)
+- **Process**: One input file at a time, distribute its examples across buckets
+- **Write**: All bucket files for current input file at once (~500 writes per input file)
+- **Memory usage**: ~500MB peak (one input file + bucket data structures)
 
 #### Phase 2: Bucket Consolidation and Shuffling
 **Goal**: Consolidate each bucket and shuffle positions within memory constraints
@@ -47,9 +49,31 @@ This document specifies the data shuffling process to address value head fingerp
 2. Result: k final files, each containing ~200MB of shuffled data
 
 **Memory Management**:
-- Process one bucket at a time
-- Each bucket fits in memory (~200MB)
-- Clean up intermediate bucket files after processing
+- **Critical constraint**: Never load all bucket data from all input files simultaneously
+- **Acceptable**: Load all bucket files for a single bucket index (~343 files × ~200KB each = ~70MB)
+- **Process**: One bucket index at a time, consolidate all its bucket files
+- **Memory usage**: ~70MB peak (all bucket files for one bucket index)
+- **Clean up**: Remove intermediate bucket files after processing each bucket
+
+
+## Important Note: Consecutive Moves in Adjacent Buckets
+
+**Being in adjacent buckets is no problem at all.**
+
+The training process will read in single buckets at a time, break them down into batches, and process those batches. With 500 buckets and ~97M total positions, each bucket contains approximately **200,000 records**. This means the trainer will have to process approximately **200,000 records** before encountering another position from the same game - making fingerprinting extremely difficult.
+
+**Additional dispersion during training:**
+- The training pipeline will shuffle the order of buckets during training
+- Only about 1/3 of the buckets contain any moves from a given 169-move game
+- This increases the effective separation to approximately **600,000 records** between positions from the same game
+
+**Why this works:**
+1. **Bucket-level separation**: Each bucket is processed independently during training
+2. **Large separation distances**: 200k-600k records between same-game positions
+3. **Training-time shuffling**: Bucket order is randomized during training
+4. **Batch-level mixing**: Within each bucket, examples are shuffled, further breaking correlations
+
+This approach successfully breaks the temporal correlations that were causing value head fingerprinting while maintaining memory efficiency. 
 
 ## Data Structure
 

@@ -18,6 +18,25 @@ A two-phase shuffling process that:
 2. **Consolidates and shuffles each bucket** to create final shuffled dataset
 3. **Manages memory efficiently** by processing data in manageable chunks
 
+## Important Note: Consecutive Moves in Adjacent Buckets
+
+**Being in adjacent buckets is no problem at all.**
+
+The training process will read in single buckets at a time, break them down into batches, and process those batches. With 500 buckets and ~97M total positions, each bucket contains approximately **200,000 records**. This means the trainer will have to process approximately **200,000 records** before encountering another position from the same game - making fingerprinting extremely difficult.
+
+**Additional dispersion during training:**
+- The training pipeline will shuffle the order of buckets during training
+- Only about 1/3 of the buckets contain any moves from a given 169-move game
+- This increases the effective separation to approximately **600,000 records** between positions from the same game
+
+**Why this works:**
+1. **Bucket-level separation**: Each bucket is processed independently during training
+2. **Large separation distances**: 200k-600k records between same-game positions
+3. **Training-time shuffling**: Bucket order is randomized during training
+4. **Batch-level mixing**: Within each bucket, examples are shuffled, further breaking correlations
+
+This approach successfully breaks the temporal correlations that were causing value head fingerprinting while maintaining memory efficiency. 
+
 ## Implementation Details
 
 ### Files Created
@@ -49,7 +68,7 @@ class DataShuffler:
 
 **Features**:
 - **Resume Functionality**: Can resume interrupted processing
-- **Memory Management**: Processes data in chunks to stay within memory limits
+- **Memory Management**: Processes data in manageable chunks, never loading all data simultaneously
 - **Progress Tracking**: Saves progress to JSON file
 - **Error Handling**: Graceful handling of corrupted files and errors
 - **Validation**: Built-in validation of output data
@@ -58,7 +77,6 @@ class DataShuffler:
 
 **Phase 1: Distribution Bucketing**
 - Loads each input `.pkl.gz` file
-- Groups examples by game using metadata
 - Distributes games evenly across k buckets (default: 500)
 - Writes bucket files incrementally to manage memory
 
@@ -160,12 +178,11 @@ python3 scripts/analyze_shuffling_results.py \
 ### Test Suite
 The implementation includes comprehensive tests in `tests/test_data_shuffling.py`:
 
-1. **Game Grouping Test**: Validates game identification logic
-2. **Bucket Distribution Test**: Ensures games are properly distributed
-3. **Shuffling Effectiveness Test**: Verifies games are broken up
-4. **Memory Efficiency Test**: Checks memory usage stays reasonable
-5. **Resume Functionality Test**: Tests interruption and resume
-6. **Data Integrity Test**: Ensures no data is lost
+1. **Bucket Distribution Test**: Ensures games are properly distributed
+2. **Shuffling Effectiveness Test**: Verifies games are broken up
+3. **Memory Efficiency Test**: Checks memory usage stays reasonable
+4. **Resume Functionality Test**: Tests interruption and resume
+5. **Data Integrity Test**: Ensures no data is lost
 
 ### Test Results
 All tests pass successfully:
@@ -177,9 +194,17 @@ All tests passed! ✓
 ## Performance Characteristics
 
 ### Memory Usage
-- **Phase 1**: ~200MB per bucket (manageable)
-- **Phase 2**: ~200MB per bucket consolidation (manageable)
-- **Total peak memory**: ~400MB
+- **Phase 1**: ~500MB peak (one input file + bucket data structures)
+  - **Critical**: Never load all input files simultaneously
+  - **Acceptable**: Load one input file at a time (~200-500MB per file)
+  - **Process**: Distribute examples across 500 buckets, write all bucket files at once
+
+- **Phase 2**: ~70MB peak (all bucket files for one bucket index)
+  - **Critical**: Never load all bucket data from all input files simultaneously  
+  - **Acceptable**: Load all bucket files for single bucket index (~343 files × ~200KB each)
+  - **Process**: Consolidate and shuffle one bucket index at a time
+
+- **Total peak memory**: ~500MB (dominated by Phase 1)
 
 ### Disk Usage
 - **Intermediate bucket files**: ~50GB total
