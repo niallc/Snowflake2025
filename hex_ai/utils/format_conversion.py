@@ -22,7 +22,8 @@ from hex_ai.config import (
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
 )
 import string
-
+import logging
+logger = logging.getLogger(__name__)
 
 LETTERS = string.ascii_lowercase
 
@@ -59,21 +60,58 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
     col = LETTERS.index(letter)
     return row, col
 
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_info: str = "") -> np.ndarray:
+def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicate_action: str = "exception") -> np.ndarray:
+    """
+    Parse a trmph string to a board matrix.
+    
+    Args:
+        trmph_text: Complete trmph string
+        board_size: Size of the board
+        duplicate_action: How to handle duplicate moves ("exception" or "ignore")
+        
+    Returns:
+        Board matrix with 0=empty, 1=blue, 2=red
+        
+    Raises:
+        ValueError: If duplicate_action="exception" and duplicate move found
+    """
+    # Strip preamble and get moves
     bare_moves = strip_trmph_preamble(trmph_text)
     moves = split_trmph_moves(bare_moves)
+    
+    # Initialize board
     board = np.zeros((board_size, board_size), dtype=np.int8)
+    
+    # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
-        if board[row, col] != 0:
-            if "training" in debug_info.lower() or "game" in debug_info.lower():
-                continue
+        
+        # Check for duplicate moves
+        if board[row, col] != EMPTY_PIECE:
+            if duplicate_action == "ignore":
+                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
+                break  # Do not process any moves after a duplicate.
             else:
+                # Enhanced debugging output for non-training contexts
+                import traceback
+                frame = traceback.extract_stack()[-2]  # Get calling frame
+                logger.error(f"DUPLICATE MOVE DETECTED:")
+                logger.error(f"  File: {frame.filename}")
+                logger.error(f"  Line: {frame.lineno}")
+                logger.error(f"  Function: {frame.name}")
+                logger.error(f"  Move: '{move}' at position ({row}, {col})")
+                logger.error(f"  Move index: {i}")
+                logger.error(f"  Board value at position: {board[row, col]}")
+                logger.error(f"  Full trmph string: {trmph_text}")
+                logger.error(f"  All moves: {moves}")
                 raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
-        # Alternating players: blue=1, red=2 for N×N format
+        
+        # Place move (Alternating players. Piece colours are blue=1, red=2 for nxn boards)
         player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
         board[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
+    
     return board
+
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
     if not (0 <= row < board_size) or not (0 <= col < board_size):

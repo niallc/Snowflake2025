@@ -49,6 +49,10 @@ BLUE_CHANNEL = 0      # Channel index for blue pieces
 RED_CHANNEL = 1       # Channel index for red pieces
 PLAYER_CHANNEL = 2    # Channel index for player-to-move (3N×N format)
 
+# Model input channel counts
+LEGACY_MODEL_CHANNELS = 2  # Legacy models expect 2-channel input (BLUE_CHANNEL, RED_CHANNEL)
+CURRENT_MODEL_CHANNELS = 3 # Current models expect 3-channel input (BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL)
+
 # Winner format mapping
 # TRMPH format: "1" = BLUE win, "2" = RED win
 # Training format: BLUE = 0.0, RED = 1.0 (subtract 1 from TRMPH values)

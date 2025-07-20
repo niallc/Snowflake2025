@@ -168,60 +168,6 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
     return row, col
 
 
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_info: str = "") -> np.ndarray:
-    """
-    Parse a trmph string to a board matrix.
-    
-    Args:
-        trmph_text: Complete trmph string
-        board_size: Size of the board
-        debug_info: Optional debug information (e.g., line number)
-        
-    Returns:
-        Board matrix with 0=empty, 1=blue, 2=red
-    """
-    # Strip preamble and get moves
-    bare_moves = strip_trmph_preamble(trmph_text)
-    moves = split_trmph_moves(bare_moves)
-    
-    # Initialize board
-    board = np.zeros((board_size, board_size), dtype=np.int8)
-    
-    # Place moves on board
-    for i, move in enumerate(moves):
-        row, col = trmph_move_to_rowcol(move, board_size)
-        
-        # Check for duplicate moves
-        if board[row, col] != 0:
-            # For training data, skip duplicate moves instead of failing
-            if "training" in debug_info.lower() or "game" in debug_info.lower():
-                logger.warning(f"Skipping game after duplicate move '{move}' at {(row, col)} in training data")
-                break  # Skip this move and continue with the next
-            else:
-                # Enhanced debugging output for non-training contexts
-                import traceback
-                frame = traceback.extract_stack()[-2]  # Get calling frame
-                logger.error(f"DUPLICATE MOVE DETECTED:")
-                if debug_info:
-                    logger.error(f"  {debug_info}")
-                logger.error(f"  File: {frame.filename}")
-                logger.error(f"  Line: {frame.lineno}")
-                logger.error(f"  Function: {frame.name}")
-                logger.error(f"  Move: '{move}' at position ({row}, {col})")
-                logger.error(f"  Move index: {i}")
-                logger.error(f"  Board value at position: {board[row, col]}")
-                logger.error(f"  Full trmph string: {trmph_text}")
-                logger.error(f"  All moves: {moves}")
-                raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
-        
-        # Place move (Alternating players. Piece colours are blue=1, red=2 for nxn boards)
-        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
-        board[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
-    
-    return board
-
-
-
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
     """
     Convert (row, col) coordinates to trmph move.
@@ -532,7 +478,7 @@ def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np
 # ============================================================================
 
 
-def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None, debug_info: str = "") -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
+def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None) -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
     """
     Extract training examples from a game using correct logic for two-headed networks.
     
@@ -547,7 +493,7 @@ def extract_training_examples_from_game(trmph_text: str, winner_from_file: str =
     Args:
         trmph_text: Complete trmph string
         winner_from_file: Winner from file data ("1" for blue, "2" for red)
-        debug_info: Optional debug information
+        duplicate_action: How to handle duplicate moves ("exception" or "ignore")
         
     Returns:
         List of (board_state, policy_target, value_target) tuples
@@ -568,22 +514,16 @@ def extract_training_examples_from_game(trmph_text: str, winner_from_file: str =
         # Reject empty games - they provide no useful training signal
         if not moves:
             logger.error(f"Empty game found - no moves to learn from: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
             raise ValueError("Empty game - no moves to learn from")
 
         # Require winner data from file - no automatic calculation
         if winner_from_file is None:
             logger.error(f"Missing winner data for game: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
             raise ValueError("Missing winner data - cannot determine training target")
 
         # Validate winner format
         if winner_from_file not in ["1", "2"]:
             logger.error(f"Invalid winner format '{winner_from_file}' for game: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
             raise ValueError(f"Invalid winner format: {winner_from_file}")
 
         # Set value target from validated file data
@@ -609,8 +549,6 @@ def extract_training_examples_from_game(trmph_text: str, winner_from_file: str =
         if isinstance(e, ValueError):
             raise
         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
-        if debug_info:
-            logger.error(f"Debug info: {debug_info}")
         raise ValueError(f"Failed to process game: {e}")
 
 

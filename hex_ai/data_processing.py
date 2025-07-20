@@ -98,7 +98,7 @@ class DataProcessor:
             try:
                 # Extract multiple training examples from each game
                 from .data_utils import extract_training_examples_from_game
-                training_examples = extract_training_examples_from_game(trmph_url, f"Training data - Game from {winner_indicator}")
+                training_examples = extract_training_examples_from_game(trmph_url, winner_indicator)
                 
                 # Override value targets based on actual winner
                 if winner_indicator == "1":

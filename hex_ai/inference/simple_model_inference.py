@@ -4,6 +4,7 @@ from typing import Union, Tuple, List
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.board_display import display_hex_board
+from hex_ai.config import PLAYER_CHANNEL, LEGACY_MODEL_CHANNELS
 
 class SimpleModelInference:
     def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18", model_instance=None):
@@ -16,7 +17,7 @@ class SimpleModelInference:
             # Check the first layer's input channels to determine if it's legacy
             first_layer = list(self.model.model.children())[0]
             if hasattr(first_layer, 'in_channels'):
-                self.is_legacy = (first_layer.in_channels == 2)
+                self.is_legacy = (first_layer.in_channels == LEGACY_MODEL_CHANNELS)  # Legacy models have 2 channels, current models have 3
             else:
                 # Fallback: assume legacy if model_instance was provided
                 self.is_legacy = True
