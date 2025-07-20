@@ -592,8 +592,8 @@ class BatchProcessor:
             estimated_size += sys.getsizeof(example)
         
         # Extrapolate to full size
-        if len(examples) > 100:
-            estimated_size = estimated_size * len(examples) // 100
+        if len(examples) > 10000:
+            estimated_size = estimated_size * len(examples) // 10
         
-        if estimated_size > 1000 * 1024 * 1024:  # 1GB limit
+        if estimated_size >  1024 * 1024:  # 1GB limit
             logger.warning(f"Large dataset detected: ~{estimated_size // (1024*1024)}MB") 
