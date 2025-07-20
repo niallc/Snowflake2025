@@ -1020,7 +1020,7 @@ def create_file_lookup_table(trmph_files: List[Path], output_dir: Path) -> Path:
 # Player-to-move Channel Utility
 # =========================================================================
 
-from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> int:
     """

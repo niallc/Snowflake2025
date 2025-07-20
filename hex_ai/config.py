@@ -32,6 +32,25 @@ NUM_PLAYERS = 2
 POLICY_OUTPUT_SIZE = BOARD_SIZE * BOARD_SIZE  # 169 for 13x13 board
 VALUE_OUTPUT_SIZE = 1
 
+# Player and piece constants
+# Player constants (for player-to-move channel and game logic)
+BLUE_PLAYER = 0
+RED_PLAYER = 1
+
+# Piece constants (for board representation)
+BLUE_PIECE = 1  # Blue pieces on the board
+RED_PIECE = 2   # Red pieces on the board
+EMPTY_PIECE = 0 # Empty positions
+
+# Winner format mapping
+# TRMPH format: "1" = BLUE win, "2" = RED win
+# Training format: BLUE = 0.0, RED = 1.0 (subtract 1 from TRMPH values)
+# Enhanced metadata: "BLUE" or "RED" (clear text)
+TRMPH_BLUE_WIN = "1"
+TRMPH_RED_WIN = "2"
+TRAINING_BLUE_WIN = 0.0
+TRAINING_RED_WIN = 1.0
+
 # Default hyperparameters
 LEARNING_RATE = 0.001
 BATCH_SIZE = 128

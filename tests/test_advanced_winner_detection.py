@@ -10,12 +10,12 @@ This module tests complex scenarios including:
 
 import pytest
 import numpy as np
-from hex_ai.inference.game_engine import HexGameState, BLUE, RED
+from hex_ai.inference.game_engine import HexGameState
 from hex_ai.data_utils import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
 
 
-from hex_ai.inference.board_utils import (
-    EMPTY, BLUE, RED, BLUE_PLAYER, RED_PLAYER,
+from hex_ai.config import (
+    EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER,
 )
 
 def board_state_to_trmph(state: HexGameState) -> str:

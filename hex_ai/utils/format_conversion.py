@@ -16,17 +16,10 @@ Migrated from:
 import torch
 import numpy as np
 from typing import Tuple
-from hex_ai.config import BOARD_SIZE
+# Board value constants for N×N format
+from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
 import string
 
-# Board value constants for N×N format
-EMPTY = 0
-BLUE = 1
-RED = 2
-
-# Player constants
-BLUE_PLAYER = 0
-RED_PLAYER = 1
 
 LETTERS = string.ascii_lowercase
 
@@ -110,16 +103,16 @@ def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
     if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
     board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-    board_nxn[board_2nxn[0] == 1.0] = BLUE
-    board_nxn[board_2nxn[1] == 1.0] = RED
+    board_nxn[board_2nxn[0] == 1.0] = BLUE_PIECE
+    board_nxn[board_2nxn[1] == 1.0] = RED_PIECE
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
     if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
     board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-    board_2nxn[0] = torch.from_numpy((board_nxn == BLUE).astype(np.float32))
-    board_2nxn[1] = torch.from_numpy((board_nxn == RED).astype(np.float32))
+    board_2nxn[0] = torch.from_numpy((board_nxn == BLUE_PIECE).astype(np.float32))
+    board_2nxn[1] = torch.from_numpy((board_nxn == RED_PIECE).astype(np.float32))
     return board_2nxn 
 
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:

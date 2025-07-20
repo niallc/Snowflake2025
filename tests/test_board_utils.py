@@ -11,9 +11,9 @@ import numpy as np
 
 from hex_ai.inference.board_utils import (
     board_2nxn_to_nxn, board_nxn_to_2nxn, get_piece_at, has_piece_at,
-    is_empty, place_piece, board_to_string, validate_board, count_pieces,
-    EMPTY, BLUE, RED
+    is_empty, place_piece, board_to_string, validate_board, count_pieces
 )
+from hex_ai.config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE
 from hex_ai.config import BOARD_SIZE
 
 
@@ -29,7 +29,7 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check all positions are empty
-        assert np.all(board_nxn == EMPTY)
+        assert np.all(board_nxn == EMPTY_PIECE)
         
         # Convert back
         board_2nxn_back = board_nxn_to_2nxn(board_nxn)
@@ -47,11 +47,11 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check blue piece is at (0,0)
-        assert board_nxn[0, 0] == BLUE
+        assert board_nxn[0, 0] == BLUE_PIECE
         
         # Check all other positions are empty
-        board_nxn[0, 0] = EMPTY  # Temporarily remove the piece
-        assert np.all(board_nxn == EMPTY)
+        board_nxn[0, 0] = EMPTY_PIECE  # Temporarily remove the piece
+        assert np.all(board_nxn == EMPTY_PIECE)
     
     def test_red_piece_conversion(self):
         """Test conversion with red piece."""
@@ -63,11 +63,11 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check red piece is at (1,1)
-        assert board_nxn[1, 1] == RED
+        assert board_nxn[1, 1] == RED_PIECE
         
         # Check all other positions are empty
-        board_nxn[1, 1] = EMPTY  # Temporarily remove the piece
-        assert np.all(board_nxn == EMPTY)
+        board_nxn[1, 1] = EMPTY_PIECE  # Temporarily remove the piece
+        assert np.all(board_nxn == EMPTY_PIECE)
     
     def test_multiple_pieces_conversion(self):
         """Test conversion with multiple pieces."""
@@ -81,9 +81,9 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check pieces are in correct positions
-        assert board_nxn[0, 0] == BLUE
-        assert board_nxn[1, 1] == RED
-        assert board_nxn[2, 2] == BLUE
+        assert board_nxn[0, 0] == BLUE_PIECE
+        assert board_nxn[1, 1] == RED_PIECE
+        assert board_nxn[2, 2] == BLUE_PIECE
         
         # Convert back
         board_2nxn_back = board_nxn_to_2nxn(board_nxn)
@@ -98,12 +98,12 @@ class TestBoardOperations:
     def test_get_piece_at(self):
         """Test getting piece at position."""
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
         
-        assert get_piece_at(board_nxn, 0, 0) == BLUE
-        assert get_piece_at(board_nxn, 1, 1) == RED
-        assert get_piece_at(board_nxn, 2, 2) == EMPTY
+        assert get_piece_at(board_nxn, 0, 0) == BLUE_PIECE
+        assert get_piece_at(board_nxn, 1, 1) == RED_PIECE
+        assert get_piece_at(board_nxn, 2, 2) == EMPTY_PIECE
         
         # Test out of bounds
         with pytest.raises(IndexError):
@@ -114,8 +114,8 @@ class TestBoardOperations:
     def test_has_piece_at(self):
         """Test checking for pieces of specific color."""
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
         
         assert has_piece_at(board_nxn, 0, 0, "blue")
         assert not has_piece_at(board_nxn, 0, 0, "red")
@@ -131,8 +131,8 @@ class TestBoardOperations:
     def test_is_empty(self):
         """Test checking if position is empty."""
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
         
         assert not is_empty(board_nxn, 0, 0)
         assert not is_empty(board_nxn, 1, 1)
@@ -148,13 +148,13 @@ class TestBoardOperations:
         
         # Place blue piece
         new_board = place_piece(board_nxn, 0, 0, "blue")
-        assert new_board[0, 0] == BLUE
-        assert np.all(new_board[1:, :] == EMPTY)
-        assert np.all(new_board[0, 1:] == EMPTY)
+        assert new_board[0, 0] == BLUE_PIECE
+        assert np.all(new_board[1:, :] == EMPTY_PIECE)
+        assert np.all(new_board[0, 1:] == EMPTY_PIECE)
         
         # Place red piece
         new_board = place_piece(new_board, 1, 1, "red")
-        assert new_board[1, 1] == RED
+        assert new_board[1, 1] == RED_PIECE
         
         # Test placing on occupied position
         with pytest.raises(ValueError):
@@ -173,8 +173,8 @@ class TestBoardOperations:
     def test_board_to_string(self):
         """Test board string representation."""
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
         
         board_str = board_to_string(board_nxn)
         lines = board_str.split('\n')
@@ -188,8 +188,8 @@ class TestBoardOperations:
         """Test board validation."""
         # Valid board
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
         assert validate_board(board_nxn)
         
         # Invalid board (wrong shape)
@@ -204,9 +204,9 @@ class TestBoardOperations:
     def test_count_pieces(self):
         """Test counting pieces."""
         board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_nxn[0, 0] = BLUE
-        board_nxn[1, 1] = RED
-        board_nxn[2, 2] = BLUE
+        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn[1, 1] = RED_PIECE
+        board_nxn[2, 2] = BLUE_PIECE
         
         blue_count, red_count = count_pieces(board_nxn)
         assert blue_count == 2

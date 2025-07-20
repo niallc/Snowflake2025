@@ -13,10 +13,10 @@ from typing import List, Tuple, Optional
 from collections import namedtuple
 
 from .board_utils import (
-    EMPTY, BLUE, RED, BLUE_PLAYER, RED_PLAYER,
     board_2nxn_to_nxn, board_nxn_to_2nxn,
     has_piece_at, is_empty, place_piece, board_to_string
 )
+from ..config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER
 from ..data_utils import rowcol_to_trmph, trmph_move_to_rowcol
 from ..config import BOARD_SIZE
 VERBOSE_LEVEL = 3
@@ -171,13 +171,13 @@ class HexGameState:
         # Add all pieces on the board and connect them
         for row in range(BOARD_SIZE):
             for col in range(BOARD_SIZE):
-                if self.board[row, col] == RED:
+                if self.board[row, col] == RED_PIECE:
                     piece = Piece(row=row, column=col, colour="red")
                     connections.make_set(piece)
                     if VERBOSE_LEVEL >= 4:
                         print(f"[DEBUG] Make set for RED piece: {piece}")
                     self._connect_piece_to_neighbors(piece, connections)
-                elif self.board[row, col] == BLUE:
+                elif self.board[row, col] == BLUE_PIECE:
                     piece = Piece(row=row, column=col, colour="blue")
                     connections.make_set(piece)
                     if VERBOSE_LEVEL >= 4:
@@ -187,24 +187,24 @@ class HexGameState:
         # Explicitly connect edge pieces to board edge pieces (legacy logic)
         for col in range(BOARD_SIZE):
             # Blue: top and bottom rows
-            if self.board[0, col] == BLUE:
+            if self.board[0, col] == BLUE_PIECE:
                 piece = Piece(row=0, column=col, colour="blue")
                 connections.union(piece, blue_top)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union BLUE top: {piece} <-> {blue_top}")
-            if self.board[BOARD_SIZE-1, col] == BLUE:
+            if self.board[BOARD_SIZE-1, col] == BLUE_PIECE:
                 piece = Piece(row=BOARD_SIZE-1, column=col, colour="blue")
                 connections.union(piece, blue_bottom)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union BLUE bottom: {piece} <-> {blue_bottom}")
         for row in range(BOARD_SIZE):
             # Red: left and right columns
-            if self.board[row, 0] == RED:
+            if self.board[row, 0] == RED_PIECE:
                 piece = Piece(row=row, column=0, colour="red")
                 connections.union(piece, red_left)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union RED left: {piece} <-> {red_left}")
-            if self.board[row, BOARD_SIZE-1] == RED:
+            if self.board[row, BOARD_SIZE-1] == RED_PIECE:
                 piece = Piece(row=row, column=BOARD_SIZE-1, colour="red")
                 connections.union(piece, red_right)
                 if VERBOSE_LEVEL >= 4:
@@ -233,7 +233,7 @@ class HexGameState:
         """Get all same-color neighbors of a piece."""
         neighbors = []
         color = piece.colour
-        expected_value = RED if color == "red" else BLUE
+        expected_value = RED_PIECE if color == "red" else BLUE_PIECE
         
         # Get adjacent positions
         adjacent_positions = self._get_adjacent_positions(piece.row, piece.column)

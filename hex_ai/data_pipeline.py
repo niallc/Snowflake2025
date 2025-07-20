@@ -173,7 +173,7 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         board_state = torch.FloatTensor(sample[0])
         # Add player-to-move channel
         board_np = board_state.numpy()
-        from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+        from hex_ai.config import BLUE_PLAYER, RED_PLAYER
         
         # Get current file info for error tracking
         current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"

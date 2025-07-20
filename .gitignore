@@ -88,7 +88,8 @@ gemini
 gpu_finding_summary_Jul15th.md
 exclude_files.txt
 scripts/test_value_head_regularization.py
-
+write_ups/constants_centralization.md
+write_ups/constants_migration_complete.md
 
 # VSCode
 .vscode/
