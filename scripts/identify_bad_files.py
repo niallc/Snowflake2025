@@ -21,8 +21,10 @@ def analyze_file_error_rate(file_path: Path, max_samples: int = 1000) -> Dict:
         
         invalid_count = 0
         
-        for i, example in enumerate(examples[:max_samples]):
-            board_state, policy_target, value_target = example
+        for example in examples:
+            board_state = example['board']
+            policy_target = example['policy']
+            value_target = example['value']
             
             blue_count = int(np.sum(board_state[0]))
             red_count = int(np.sum(board_state[1]))

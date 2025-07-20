@@ -517,7 +517,7 @@ def create_policy_target(move: str) -> np.ndarray:
         move: Trmph move (e.g., 'a1')
         
     Returns:
-        Policy target of shape (169,) with 1.0 for the move, 0.0 elsewhere
+        Policy target of shape (BOARD_SIZE * BOARD_SIZE,) with 1.0 for the move, 0.0 elsewhere
     """
     # Convert move to tensor position
     row, col = trmph_move_to_rowcol(move)
@@ -526,85 +526,7 @@ def create_policy_target(move: str) -> np.ndarray:
     # Create one-hot policy target
     policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
     policy[tensor_pos] = 1.0
-    
     return policy
-
-def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float]]:
-    """
-    Create all 4 augmented examples from a single example.
-    
-    Args:
-        board: 2-channel board state (2, N, N)
-        policy: Policy target (169,)
-        value: Value target (float)
-        
-    Returns:
-        List of 4 tuples: [(board_2ch, policy, value), ...]
-        - Original
-        - 180° rotation (no color swap)
-        - Long diagonal reflection + color swap
-        - Short diagonal reflection + color swap
-    """
-    # Skip empty boards (no pieces to augment)
-    if np.sum(board) == 0:
-        return [(board, policy, value)] * 4
-    
-    # Create augmented components
-    augmented_boards = create_augmented_boards(board)
-    augmented_policies = create_augmented_policies(policy)
-    augmented_values = create_augmented_values(value)
-    
-    # Create augmented examples
-    augmented_examples = []
-    for i in range(4):
-        augmented_examples.append((
-            augmented_boards[i],
-            augmented_policies[i],
-            augmented_values[i]
-        ))
-    
-    return augmented_examples
-
-
-def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
-    """
-    Create 4 augmented examples from a single board position.
-    
-    Args:
-        board: Board state as (2, 13, 13) array
-        policy: Policy target as (169,) array or None for final moves
-        value: Value target as float
-        error_tracker: Optional BoardStateErrorTracker for handling invalid board states
-        
-    Returns:
-        List of 4 tuples: (augmented_board, augmented_policy, augmented_value, player_to_move)
-    """
-    # Handle None policies (final moves with no next move)
-    if policy is None:
-        policy = np.zeros(169, dtype=np.float32)
-    
-    # Create augmented boards, policies, values, and player-to-move
-    augmented_boards = create_augmented_boards(board)
-    augmented_policies = create_augmented_policies(policy)
-    augmented_values = create_augmented_values(value)
-    
-    # Compute player-to-move from the board, then create augmented versions
-    # Use error tracker to handle invalid board states gracefully
-    player_to_move = get_player_to_move_from_board(board, error_tracker)
-    augmented_player_to_move = create_augmented_player_to_move(player_to_move)
-    
-    # Combine into examples
-    examples = []
-    for i in range(4):
-        examples.append((
-            augmented_boards[i],
-            augmented_policies[i], 
-            augmented_values[i],
-            augmented_player_to_move[i]
-        ))
-    
-    return examples
-
 
 def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
     """

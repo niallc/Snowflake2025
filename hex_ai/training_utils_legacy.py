@@ -30,12 +30,16 @@ logger = logging.getLogger(__name__)
 
 def _validate_example_format(example, filename):
     """Validate example format early to fail fast."""
-    if not isinstance(example, tuple):
-        raise ValueError(f"Example in {filename} must be tuple, got {type(example)}")
-    if len(example) != 3:
-        raise ValueError(f"Example in {filename} must have 3 elements, got {len(example)}")
+    if not isinstance(example, dict):
+        raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
     
-    board_state, policy_target, value_target = example
+    # Check for required keys
+    if not all(key in example for key in ['board', 'policy', 'value']):
+        raise ValueError(f"Example in {filename} missing required keys: {example.keys()}")
+    
+    board_state = example['board']
+    policy_target = example['policy']
+    value_target = example['value']
     
     # Validate board state
     if not isinstance(board_state, np.ndarray):
@@ -79,10 +83,10 @@ def augmented_collate_fn(batch):
     policies = []
     values = []
     
-    for board, policy, value in flattened_batch:
-        boards.append(board)
-        policies.append(policy)
-        values.append(value)
+    for example in flattened_batch:
+        boards.append(example['board'])
+        policies.append(example['policy'])
+        values.append(example['value'])
     
     # Stack into batch tensors
     boards_batch = torch.stack(boards)

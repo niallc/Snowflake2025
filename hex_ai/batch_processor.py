@@ -161,6 +161,33 @@ class BatchProcessor:
         logger.info(f"Files failed: {len(self.state['failed_files'])}")
         logger.info(f"Total files: {self.state['total_files']}")
         
+        # Show more detailed information about existing files
+        if self.state["processed_files"]:
+            logger.info("")
+            logger.info("COMPLETED FILES:")
+            for i, file_info in enumerate(self.state["processed_files"][:5]):  # Show first 5
+                file_path = Path(file_info["file"])
+                output_path = Path(file_info["output"]) if file_info["output"] else "No output"
+                logger.info(f"  {i+1}. {file_path.name}")
+                logger.info(f"     Output: {output_path.name if output_path != 'No output' else 'No output'}")
+                logger.info(f"     Completed: {file_info['completed_at']}")
+            if len(self.state["processed_files"]) > 5:
+                logger.info(f"  ... and {len(self.state['processed_files']) - 5} more completed files")
+        
+        if self.state["failed_files"]:
+            logger.info("")
+            logger.info("FAILED FILES:")
+            for i, file_info in enumerate(self.state["failed_files"][:5]):  # Show first 5
+                file_path = Path(file_info["file"])
+                logger.info(f"  {i+1}. {file_path.name}")
+                logger.info(f"     Error: {file_info['error'][:100]}{'...' if len(file_info['error']) > 100 else ''}")
+                logger.info(f"     Attempted: {file_info['attempted_at']}")
+            if len(self.state["failed_files"]) > 5:
+                logger.info(f"  ... and {len(self.state['failed_files']) - 5} more failed files")
+        
+        logger.info("")
+        logger.info(f"Output directory: {self.output_dir.absolute()}")
+        
         if partial_files:
             logger.info(f"Cleaned up {len(partial_files)} partial files")
         
@@ -170,7 +197,11 @@ class BatchProcessor:
         # Get user input for resume strategy
         resume_strategy = self._get_resume_strategy()
         
-        if resume_strategy == "skip_completed":
+        if resume_strategy == "abandon":
+            logger.info("Processing abandoned by user")
+            raise KeyboardInterrupt("Processing abandoned by user")
+        
+        elif resume_strategy == "skip_completed":
             # Skip already completed and failed files
             completed_files = {p["file"] for p in self.state["processed_files"]}
             failed_files = {p["file"] for p in self.state["failed_files"]}
@@ -223,10 +254,11 @@ class BatchProcessor:
         print("2. Retry failed files only")
         print("3. Skip current file and continue from next")
         print("4. Start fresh (delete all existing output)")
+        print("5. Abandon processing")
         
         while True:
             try:
-                choice = input("\nEnter choice (1-4): ").strip()
+                choice = input("\nEnter choice (1-5): ").strip()
                 if choice == "1":
                     return "skip_completed"
                 elif choice == "2":
@@ -235,8 +267,10 @@ class BatchProcessor:
                     return "skip_current"
                 elif choice == "4":
                     return "fresh_start"
+                elif choice == "5":
+                    return "abandon"
                 else:
-                    print("Invalid choice. Please enter 1, 2, 3, or 4.")
+                    print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
             except KeyboardInterrupt:
                 logger.info("Resume cancelled by user")
                 raise
@@ -329,6 +363,7 @@ class BatchProcessor:
                     try:
                         examples = extract_training_examples_from_game(trmph_url, winner)
                         if examples:
+                            # Use dictionary format directly - no conversion needed
                             all_examples.extend(examples)
                             file_stats['valid_games'] += 1
                             file_stats['examples_generated'] += len(examples)
@@ -534,20 +569,20 @@ class BatchProcessor:
         
         # Validate each example has required structure
         for i, example in enumerate(examples):
-            if not isinstance(example, tuple):
-                raise ValueError(f"Example {i} is not a tuple")
+            if not isinstance(example, dict):
+                raise ValueError(f"Example {i} is not a dictionary")
             
-            # Check for required tuple length (board, policy, value)
-            if len(example) != 3:
-                raise ValueError(f"Example {i} must have exactly 3 elements (board, policy, value), got {len(example)}")
+            # Check for required dictionary keys (board, policy, value)
+            if not all(key in example for key in ['board', 'policy', 'value']):
+                raise ValueError(f"Example {i} missing required keys: {example.keys()}")
             
             # Check that elements are numpy arrays or appropriate types
             import numpy as np
-            if not isinstance(example[0], np.ndarray):
+            if not isinstance(example['board'], np.ndarray):
                 raise ValueError(f"Example {i} board state must be numpy array")
-            if not isinstance(example[1], np.ndarray):
-                raise ValueError(f"Example {i} policy target must be numpy array")
-            if not isinstance(example[2], (int, float, np.number)):
+            if example['policy'] is not None and not isinstance(example['policy'], np.ndarray):
+                raise ValueError(f"Example {i} policy target must be numpy array or None")
+            if not isinstance(example['value'], (int, float, np.number)):
                 raise ValueError(f"Example {i} value target must be numeric")
         
         # Check total data size (rough estimate)

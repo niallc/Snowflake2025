@@ -31,12 +31,16 @@ logger = logging.getLogger(__name__)
 
 def _validate_example_format(example, filename):
     """Validate example format early to fail fast."""
-    if not isinstance(example, tuple):
-        raise ValueError(f"Example in {filename} must be tuple, got {type(example)}")
-    if len(example) != 3:
-        raise ValueError(f"Example in {filename} must have 3 elements, got {len(example)}")
+    if not isinstance(example, dict):
+        raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
     
-    board_state, policy_target, value_target = example
+    # Check for required keys
+    if not all(key in example for key in ['board', 'policy', 'value']):
+        raise ValueError(f"Example in {filename} missing required keys: {example.keys()}")
+    
+    board_state = example['board']
+    policy_target = example['policy']
+    value_target = example['value']
     
     # Validate board state
     if not isinstance(board_state, np.ndarray):
@@ -170,7 +174,7 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         from hex_ai.error_handling import get_board_state_error_tracker
         error_tracker = get_board_state_error_tracker()
         
-        board_state = torch.FloatTensor(sample[0])
+        board_state = torch.FloatTensor(sample['board'])
         # Add player-to-move channel
         board_np = board_state.numpy()
         from hex_ai.config import BLUE_PLAYER, RED_PLAYER
@@ -204,8 +208,8 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         player_channel = np.full((board_np.shape[1], board_np.shape[2]), float(player_to_move), dtype=np.float32)
         board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
         board_state = torch.from_numpy(board_3ch)
-        policy_target = torch.FloatTensor(sample[1]) if sample[1] is not None else torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
-        value_target = torch.FloatTensor([sample[2]])
+        policy_target = torch.FloatTensor(sample['policy']) if sample['policy'] is not None else torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
+        value_target = torch.FloatTensor([sample['value']])
         return board_state, policy_target, value_target
 
 

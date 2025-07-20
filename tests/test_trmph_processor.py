@@ -426,8 +426,8 @@ class TestTrmphProcessor:
         # Test valid data
         import numpy as np
         valid_examples = [
-            (np.zeros((2, 2, 2)), np.zeros(4), 1.0),  # (board, policy, value)
-            (np.ones((2, 2, 2)), np.ones(4), 0.0),
+            {'board': np.zeros((2, 2, 2)), 'policy': np.zeros(4), 'value': 1.0},
+            {'board': np.ones((2, 2, 2)), 'policy': np.ones(4), 'value': 0.0},
         ]
         processor._validate_examples_data(valid_examples)  # Should not raise
         
@@ -438,18 +438,18 @@ class TestTrmphProcessor:
         with pytest.raises(ValueError, match="cannot be empty"):
             processor._validate_examples_data([])
         
-        # Test wrong tuple length
-        invalid_examples = [(np.zeros((2, 2, 2)), np.zeros(4))]  # Missing value
-        with pytest.raises(ValueError, match="must have exactly 3 elements"):
+        # Test missing required keys
+        invalid_examples = [{'board': np.zeros((2, 2, 2)), 'policy': np.zeros(4)}]  # Missing value
+        with pytest.raises(ValueError, match="missing required keys"):
             processor._validate_examples_data(invalid_examples)
         
-        # Test non-tuple examples
-        invalid_examples = [(np.zeros((2, 2, 2)), np.zeros(4), 1.0), "not a tuple"]
-        with pytest.raises(ValueError, match="not a tuple"):
+        # Test non-dictionary examples
+        invalid_examples = [{'board': np.zeros((2, 2, 2)), 'policy': np.zeros(4), 'value': 1.0}, "not a dict"]
+        with pytest.raises(ValueError, match="not a dictionary"):
             processor._validate_examples_data(invalid_examples)
         
         # Test wrong types
-        invalid_examples = [("not array", np.zeros(4), 1.0)]
+        invalid_examples = [{'board': "not array", 'policy': np.zeros(4), 'value': 1.0}]
         with pytest.raises(ValueError, match="board state must be numpy array"):
             processor._validate_examples_data(invalid_examples)
     
@@ -492,12 +492,14 @@ class TestTrmphProcessor:
         # Check examples have required structure
         assert len(data['examples']) > 0
         for example in data['examples']:
-            assert isinstance(example, tuple)
-            assert len(example) == 3  # (board, policy, value)
+            assert isinstance(example, dict)
+            assert 'board' in example
+            assert 'policy' in example
+            assert 'value' in example
             import numpy as np
-            assert isinstance(example[0], np.ndarray)  # board state
-            assert isinstance(example[1], np.ndarray)  # policy target
-            assert isinstance(example[2], (int, float, np.number))  # value target
+            assert isinstance(example['board'], np.ndarray)  # board state
+            assert isinstance(example['policy'], np.ndarray)  # policy target
+            assert isinstance(example['value'], (int, float, np.number))  # value target
     
     def test_atomic_file_writing(self):
         """Test that files are written atomically (temp file then rename)."""

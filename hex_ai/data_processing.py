@@ -108,7 +108,12 @@ class DataProcessor:
                 else:
                     assert False, "Error (2nd) in data_processing.py, _convert_games_to_tensors: Unknown winner - cannot use game without a winner."
                 
-                for board_state, policy_target, value_target in training_examples:
+                for example in training_examples:
+                    # Extract components from dictionary format
+                    board_state = example['board']
+                    policy_target = example['policy']
+                    value_target = example['value']
+                    
                     # Override value if we have explicit winner info
                     if value_override is not None:
                         value_target = value_override

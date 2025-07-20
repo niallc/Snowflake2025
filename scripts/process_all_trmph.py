@@ -38,7 +38,7 @@ def main():
     
     parser = argparse.ArgumentParser(description="Process all .trmph files into training data")
     parser.add_argument("--data-dir", default="data", help="Directory containing .trmph files")
-    parser.add_argument("--output-dir", default="processed_data", help="Output directory for processed files")
+    parser.add_argument("--output-dir", default="data/processed_data", help="Output directory for processed files")
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
     parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")

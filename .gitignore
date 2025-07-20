@@ -1,6 +1,7 @@
 # Niall's directories to ignore
 legacy_code/
 data/
+processed_data/
 test_checkpoints/
 checkpoints/
 exploratory_results/
