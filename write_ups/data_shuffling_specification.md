@@ -142,12 +142,9 @@ def distribute_to_buckets(input_files, num_buckets):
     for file_idx, input_file in enumerate(input_files):
         data = load_pkl_gz(input_file)
         
-        # Group examples by game (using metadata)
-        games = group_examples_by_game(data['examples'])
-        
         # Distribute games evenly across buckets
-        for game_idx, game_examples in enumerate(games):
-            bucket_idx = (file_idx * len(games) + game_idx) % num_buckets
+        for game_idx, game_examples in enumerate(data['examples']):
+            bucket_idx = (file_idx * len(data['examples']) + game_idx) % num_buckets
             bucket_data[bucket_idx].extend(game_examples)
     
     # Write bucket files

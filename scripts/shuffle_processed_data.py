@@ -126,28 +126,6 @@ class DataShuffler:
         except Exception as e:
             logger.error(f"Failed to save progress file: {e}")
     
-    def _group_examples_by_game(self, examples: List[Dict]) -> List[List[Dict]]:
-        """Group examples by game using metadata."""
-        games = defaultdict(list)
-        
-        for example in examples:
-            metadata = example.get('metadata', {})
-            # Use a combination of source file and position info to identify games
-            # Since game_id is None in current data, we'll use position_in_game to group
-            # consecutive positions that likely belong to the same game
-            position = metadata.get('position_in_game', 0)
-            total_positions = metadata.get('total_positions', 1)
-            
-            # Create a game identifier based on position pattern
-            game_key = f"{metadata.get('winner', 'UNKNOWN')}_{total_positions}_{position // 10}"
-            games[game_key].append(example)
-        
-        # Sort examples within each game by position
-        for game_examples in games.values():
-            game_examples.sort(key=lambda x: x['metadata'].get('position_in_game', 0))
-        
-        return list(games.values())
-    
     def _load_pkl_gz(self, file_path: Path) -> Dict[str, Any]:
         """Load data from a .pkl.gz file."""
         try:
@@ -253,27 +231,30 @@ class DataShuffler:
                 data = self._load_pkl_gz(input_file)
                 examples = data['examples']
                 
-                # Group examples by game
-                games = self._group_examples_by_game(examples)
-                
-                # Distribute games evenly across buckets
-                for game_idx, game_examples in enumerate(games):
-                    bucket_idx = (file_idx * len(games) + game_idx) % self.num_buckets
-                    bucket_data[bucket_idx].extend(game_examples)
+                # Distribute examples directly across buckets
+                # No need to group by games since the input data is already grouped by games.
+                # With 500 buckets and ≤169 moves per game, each move will go in <= 1 bucket.
+                for example_idx, example in enumerate(examples):
+                    bucket_idx = (file_idx * len(examples) + example_idx) % self.num_buckets
+                    
+                    bucket_data[bucket_idx].append(example)
                     bucket_sources[bucket_idx].add(str(input_file))
                     
                     # Write bucket in chunks to manage memory
+                    # Note: This chunking is optional - if memory allows, chunk_size can be increased
+                    # or chunking can be removed entirely for simpler logic
                     if len(bucket_data[bucket_idx]) >= self.chunk_size:
                         self._write_bucket_file(bucket_idx, bucket_data[bucket_idx], 
                                               list(bucket_sources[bucket_idx]))
                         bucket_data[bucket_idx] = []
-                        bucket_sources[bucket_idx] = set()  # Reset sources for next chunk
+                        # Note: We don't reset bucket_sources here to maintain cumulative tracking
+                        # The sources will be properly consolidated in Phase 2
                 
                 # Update progress
                 self.progress['processed_files'].append(str(input_file))
                 self.stats['files_processed'] += 1
                 self.stats['total_examples'] += len(examples)
-                self.stats['games_distributed'] += len(games)
+                self.stats['games_distributed'] += len(examples)  # Count examples, not games
                 self._save_progress()
                 
             except Exception as e:
@@ -290,17 +271,25 @@ class DataShuffler:
         logger.info("Phase 1 completed")
     
     def _consolidate_and_shuffle_bucket(self, bucket_idx: int):
-        """Phase 2: Consolidate and shuffle a single bucket."""
+        """Phase 2: Consolidate and shuffle a single bucket.
+        
+        This method:
+        1. Loads all chunk files for a specific bucket
+        2. Consolidates all examples and source file information
+        3. Shuffles the examples to break any remaining correlations
+        4. Writes the final shuffled file
+        5. Optionally cleans up temporary chunk files
+        """
         logger.info(f"Processing bucket {bucket_idx}")
         
-        # Find all files for this bucket
+        # Find all chunk files for this bucket (may be multiple due to chunking)
         bucket_files = list(self.temp_dir.glob(f"bucket_{bucket_idx:04d}.pkl.gz"))
         
         if not bucket_files:
             logger.warning(f"No files found for bucket {bucket_idx}")
             return
         
-        # Load all examples for this bucket
+        # Load and consolidate all examples from all chunks for this bucket
         all_examples = []
         source_files = set()
         
@@ -308,6 +297,7 @@ class DataShuffler:
             try:
                 data = self._load_pkl_gz(bucket_file)
                 all_examples.extend(data['examples'])
+                # Union all source files to get complete source tracking
                 source_files.update(data.get('source_files', []))
             except Exception as e:
                 logger.error(f"Error loading {bucket_file}: {e}")
@@ -317,19 +307,20 @@ class DataShuffler:
             logger.warning(f"No examples found for bucket {bucket_idx}")
             return
         
-        # Shuffle examples
+        # Shuffle examples to break any remaining correlations
+        # This is the final randomization step that addresses value head fingerprinting
         logger.info(f"Shuffling {len(all_examples)} examples in bucket {bucket_idx}")
         random.shuffle(all_examples)
         
-        # Write shuffled file
+        # Write final shuffled file with complete source tracking
         self._write_shuffled_file(bucket_idx, all_examples, list(source_files))
         
-        # Update progress
+        # Update progress tracking
         self.progress['completed_buckets'].append(bucket_idx)
         self.stats['buckets_completed'] += 1
         self._save_progress()
         
-        # Clean up bucket files if requested
+        # Clean up temporary chunk files if requested
         if self.cleanup_temp:
             for bucket_file in bucket_files:
                 try:
@@ -363,7 +354,7 @@ class DataShuffler:
         
         shuffled_files = list(self.output_dir.glob("shuffled_*.pkl.gz"))
         total_examples = 0
-        game_distribution = defaultdict(int)
+        source_file_counts = defaultdict(int)
         
         for shuffled_file in shuffled_files:
             try:
@@ -371,11 +362,9 @@ class DataShuffler:
                 examples = data['examples']
                 total_examples += len(examples)
                 
-                # Check game distribution
-                for example in examples:
-                    metadata = example.get('metadata', {})
-                    game_key = f"{metadata.get('winner', 'UNKNOWN')}_{metadata.get('total_positions', 0)}"
-                    game_distribution[game_key] += 1
+                # Check source file distribution
+                for source_file in data.get('shuffling_stats', {}).get('source_files', []):
+                    source_file_counts[source_file] += 1
                 
             except Exception as e:
                 logger.error(f"Error validating {shuffled_file}: {e}")
@@ -384,17 +373,20 @@ class DataShuffler:
         logger.info(f"Validation complete:")
         logger.info(f"  Total shuffled files: {len(shuffled_files)}")
         logger.info(f"  Total examples: {total_examples}")
-        logger.info(f"  Unique games: {len(game_distribution)}")
+        logger.info(f"  Source files represented: {len(source_file_counts)}")
         
-        # Check for potential game clustering
-        max_examples_per_game = max(game_distribution.values()) if game_distribution else 0
-        avg_examples_per_game = sum(game_distribution.values()) / len(game_distribution) if game_distribution else 0
-        
-        logger.info(f"  Max examples per game: {max_examples_per_game}")
-        logger.info(f"  Avg examples per game: {avg_examples_per_game:.2f}")
-        
-        if max_examples_per_game > avg_examples_per_game * 2:
-            logger.warning("Potential game clustering detected - some games may be over-represented")
+        # Check for even distribution across source files
+        if source_file_counts:
+            max_examples_per_source = max(source_file_counts.values())
+            min_examples_per_source = min(source_file_counts.values())
+            avg_examples_per_source = sum(source_file_counts.values()) / len(source_file_counts)
+            
+            logger.info(f"  Max examples per source: {max_examples_per_source}")
+            logger.info(f"  Min examples per source: {min_examples_per_source}")
+            logger.info(f"  Avg examples per source: {avg_examples_per_source:.2f}")
+            
+            if max_examples_per_source > avg_examples_per_source * 2:
+                logger.warning("Potential source file clustering detected - some sources may be over-represented")
     
     def shuffle_data(self):
         """Main method to run the complete shuffling process."""
