@@ -48,10 +48,10 @@ class TrmphProcessor:
         self.stats = {
             'files_processed': 0,
             'files_failed': 0,
-            'total_games': 0,
-            'total_examples': 0,
-            'corrupted_games': 0,
-            'valid_games': 0,
+            'all_games': 0,           # Total games attempted across all files
+            'valid_games': 0,         # Successfully processed games
+            'skipped_games': 0,       # Games that couldn't be processed
+            'total_examples': 0,      # Total training examples generated
             'start_time': time.time()
         }
         
@@ -63,62 +63,83 @@ class TrmphProcessor:
         """Process a single .trmph file and return statistics."""
         file_stats = {
             'file_path': str(file_path),
-            'games_processed': 0,
-            'examples_generated': 0,
-            'corrupted_games': 0,
-            'valid_games': 0,
-            'error': None
+            'all_games': 0,           # Total games attempted (including invalid ones)
+            'valid_games': 0,         # Successfully processed games
+            'skipped_games': 0,       # Games that couldn't be processed (format errors, etc.)
+            'examples_generated': 0,  # Total training examples created
+            'file_error': None        # File-level error (if any)
         }
         
         try:
             logger.info(f"Processing {file_path}")
             
-            # Load the trmph file (now returns list of games)
-            games = load_trmph_file(str(file_path))
-            logger.info(f"  Loaded {len(games)} games from {file_path}")
+            # Load the trmph file
+            try:
+                games = load_trmph_file(str(file_path))
+                logger.info(f"  Loaded {len(games)} games from {file_path}")
+            except (FileNotFoundError, ValueError) as e:
+                # File-level error - can't process this file at all
+                file_stats['file_error'] = str(e)
+                logger.error(f"File error processing {file_path}: {e}")
+                return file_stats
             
             # Process each game
             all_examples = []
             for i, game_line in enumerate(games):
+                file_stats['all_games'] += 1
+                
                 try:
-                    # Split the line into trmph URL and winner
+                    # Parse the game record
                     try:
                         trmph_url, winner = parse_trmph_game_record(game_line)
                     except ValueError as e:
                         logger.warning(f"    Game {i+1} has wrong format: {repr(game_line)}: {e}")
-                        file_stats['corrupted_games'] += 1
+                        file_stats['skipped_games'] += 1
                         continue
-                    examples = extract_training_examples_from_game(trmph_url, winner)
-                    if examples:
-                        all_examples.extend(examples)
-                        file_stats['valid_games'] += 1
-                        file_stats['examples_generated'] += len(examples)
-                    else:
-                        file_stats['corrupted_games'] += 1
-                        logger.warning(f"    Game {i+1} in {file_path.name} produced no examples")
+                    
+                    # Extract training examples
+                    try:
+                        examples = extract_training_examples_from_game(trmph_url, winner)
+                        if examples:
+                            all_examples.extend(examples)
+                            file_stats['valid_games'] += 1
+                            file_stats['examples_generated'] += len(examples)
+                        else:
+                            logger.warning(f"    Game {i+1} in {file_path.name} produced no examples")
+                            file_stats['skipped_games'] += 1
+                    except Exception as e:
+                        logger.warning(f"    Error extracting examples from game {i+1} in {file_path.name}: {e}")
+                        file_stats['skipped_games'] += 1
+                        
                 except Exception as e:
-                    file_stats['corrupted_games'] += 1
-                    logger.warning(f"    Error processing game {i+1} in {file_path.name}: {e}")
-                
-                file_stats['games_processed'] += 1
+                    # Catch any other unexpected errors during game processing
+                    logger.warning(f"    Unexpected error processing game {i+1} in {file_path.name}: {e}")
+                    file_stats['skipped_games'] += 1
             
             # Save processed examples
             if all_examples:
                 output_file = self.output_dir / f"{file_path.stem}_processed.pkl.gz"
-                with gzip.open(output_file, 'wb') as f:
-                    pickle.dump({
-                        'examples': all_examples,
-                        'source_file': str(file_path),
-                        'processing_stats': file_stats,
-                        'processed_at': datetime.now().isoformat()
-                    }, f)
-                logger.info(f"  Saved {len(all_examples)} examples to {output_file}")
+                try:
+                    with gzip.open(output_file, 'wb') as f:
+                        pickle.dump({
+                            'examples': all_examples,
+                            'source_file': str(file_path),
+                            'processing_stats': file_stats,
+                            'processed_at': datetime.now().isoformat()
+                        }, f)
+                    logger.info(f"  Saved {len(all_examples)} examples to {output_file}")
+                except Exception as e:
+                    logger.error(f"    Error saving output file {output_file}: {e}")
+                    file_stats['file_error'] = f"Failed to save output: {e}"
+            else:
+                logger.info(f"  No valid examples generated from {file_path}")
             
             return file_stats
             
         except Exception as e:
-            file_stats['error'] = str(e)
-            logger.error(f"Error processing {file_path}: {e}")
+            # Catch any other unexpected file-level errors
+            file_stats['file_error'] = str(e)
+            logger.error(f"Unexpected error processing {file_path}: {e}")
             return file_stats
     
     def process_all_files(self, max_files: Optional[int] = None) -> Dict[str, Any]:
@@ -134,13 +155,13 @@ class TrmphProcessor:
             
             # Update overall statistics
             self.stats['files_processed'] += 1
-            if file_stats['error']:
+            if file_stats['file_error']:
                 self.stats['files_failed'] += 1
             
-            self.stats['total_games'] += file_stats['games_processed']
-            self.stats['total_examples'] += file_stats['examples_generated']
-            self.stats['corrupted_games'] += file_stats['corrupted_games']
+            self.stats['all_games'] += file_stats['all_games']
             self.stats['valid_games'] += file_stats['valid_games']
+            self.stats['skipped_games'] += file_stats['skipped_games']
+            self.stats['total_examples'] += file_stats['examples_generated']
             
             # Log progress every 10 files
             if (i + 1) % 10 == 0:
@@ -157,9 +178,10 @@ class TrmphProcessor:
         logger.info("Processing complete!")
         logger.info(f"  Files processed: {self.stats['files_processed']}")
         logger.info(f"  Files failed: {self.stats['files_failed']}")
-        logger.info(f"  Total games: {self.stats['total_games']}")
+        logger.info(f"  All games attempted: {self.stats['all_games']}")
         logger.info(f"  Valid games: {self.stats['valid_games']}")
-        logger.info(f"  Corrupted games: {self.stats['corrupted_games']}")
+        logger.info(f"  Skipped games: {self.stats['skipped_games']}")
+        logger.info(f"  Success rate: {self.stats['valid_games']/self.stats['all_games']*100:.1f}%" if self.stats['all_games'] > 0 else "Success rate: N/A")
         logger.info(f"  Total examples: {self.stats['total_examples']}")
         logger.info(f"  Elapsed time: {elapsed:.1f} seconds")
         logger.info(f"  Rate: {self.stats['files_per_second']:.2f} files/sec")
