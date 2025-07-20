@@ -195,6 +195,63 @@ create_loss_plot <- function(data, loss_type = "policy", title = NULL) {
   return(plot)
 }
 
+# Function to create bar plot of best validation value losses
+create_best_val_value_loss_barplot <- function(combined_data) {
+  # Extract the best validation value loss for each run
+  best_val_losses <- combined_data %>%
+    group_by(run_label, original_dir) %>%
+    summarise(
+      best_val_value_loss = min(val_value_loss, na.rm = TRUE),
+      epoch_of_best = epoch[which.min(val_value_loss)],
+      .groups = 'drop'
+    ) %>%
+    arrange(best_val_value_loss)
+  
+  # Create bar plot
+  plot <- ggplot(best_val_losses, aes(x = reorder(run_label, best_val_value_loss), y = best_val_value_loss)) +
+    geom_bar(stat = "identity", fill = "steelblue", alpha = 0.8) +
+    geom_text(aes(label = sprintf("%.4f", best_val_value_loss)), 
+              position = position_stack(vjust = 0.5), 
+              size = 3, color = "white", fontface = "bold") +
+    coord_flip() +  # Horizontal bars for better label readability
+    ggtitle("Best Validation Value Loss by Model Configuration") +
+    labs(
+      x = "Model Configuration",
+      y = "Best Validation Value Loss"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 8),
+      plot.title = element_text(size = 14, face = "bold"),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank()
+    )
+  
+  return(list(plot = plot, data = best_val_losses))
+}
+
+# Function to print top 3 best models
+print_top_3_models <- function(best_val_losses) {
+  cat("\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n")
+  cat("TOP 3 BEST MODELS BY VALIDATION VALUE LOSS\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n")
+  
+  top_3 <- head(best_val_losses, 3)
+  
+  for (i in 1:nrow(top_3)) {
+    cat(sprintf("\n%d. %s\n", i, top_3$run_label[i]))
+    cat(sprintf("   Best Validation Value Loss: %.6f\n", top_3$best_val_value_loss[i]))
+    cat(sprintf("   Achieved at Epoch: %d\n", top_3$epoch_of_best[i]))
+    cat(sprintf("   Directory: %s\n", top_3$original_dir[i]))
+  }
+  
+  cat("\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n")
+  
+  return(top_3)
+}
+
 # Main execution
 main <- function() {
   cat("Starting training performance analysis...\n")
@@ -264,15 +321,34 @@ main <- function() {
   ggsave(value_filename, plot = value_plot, width = 10, height = 6, dpi = 150)
   cat("Saved value loss plot:", value_filename, "\n")
   
+  # Create best validation value loss bar plot
+  cat("Creating best validation value loss bar plot...\n")
+  best_val_plot_result <- create_best_val_value_loss_barplot(combined_data)
+  best_val_plot <- best_val_plot_result$plot
+  best_val_losses <- best_val_plot_result$data
+  
+  best_val_filename <- get_unique_filename(file.path(plots_dir, paste0("best_val_value_loss_barplot_", run_tag)))
+  ggsave(best_val_filename, plot = best_val_plot, width = 12, height = 8, dpi = 150)
+  cat("Saved best validation value loss bar plot:", best_val_filename, "\n")
+  
+  # Print top 3 best models
+  top_3_models <- print_top_3_models(best_val_losses)
+  
   # Print summary
   cat("\nSummary:\n")
   cat("- Total runs found:", length(valid_dirs), "\n")
   cat("- Successful reads:", successful_reads, "\n")
   cat("- Unique configurations:", length(unique(combined_data$run_label)), "\n")
   cat("- Total epochs across all runs:", nrow(combined_data), "\n")
+  cat("- Best overall validation value loss:", min(best_val_losses$best_val_value_loss), "\n")
+  cat("- Worst overall validation value loss:", max(best_val_losses$best_val_value_loss), "\n")
   
-  # Return the combined data for further analysis if needed
-  invisible(combined_data)
+  # Return the combined data and best losses for further analysis if needed
+  invisible(list(
+    combined_data = combined_data,
+    best_val_losses = best_val_losses,
+    top_3_models = top_3_models
+  ))
 }
 
 # Run the main function

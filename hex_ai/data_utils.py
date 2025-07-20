@@ -19,6 +19,10 @@ from typing import List, Tuple, Dict, Optional, Union
 import logging
 import re
 import string
+import random
+from datetime import datetime
+import json
+
 
 from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
 from hex_ai.utils.format_conversion import (
@@ -186,8 +190,8 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
         if board[row, col] != 0:
             # For training data, skip duplicate moves instead of failing
             if "training" in debug_info.lower() or "game" in debug_info.lower():
-                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in training data")
-                continue  # Skip this move and continue with the next
+                logger.warning(f"Skipping game after duplicate move '{move}' at {(row, col)} in training data")
+                break  # Skip this move and continue with the next
             else:
                 # Enhanced debugging output for non-training contexts
                 import traceback
@@ -746,6 +750,270 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
         return True, ""
     except Exception as e:
         return False, str(e)
+
+def assign_value_sample_tiers(total_positions: int) -> List[int]:
+    """
+    Assign sampling tiers to positions in a game.
+    
+    Tiers:
+    - 0: High priority (5 positions) - Always used for value training
+    - 1: Medium priority (5 positions) - Usually used for value training  
+    - 2: Low priority (10 positions) - Sometimes used for value training
+    - 3: Very low priority (20+ positions) - Rarely used for value training
+    
+    This allows flexible control over how many positions per game are used
+    for value network training while keeping all positions for policy training.
+    """
+    if total_positions <= 5:
+        # Small games: all positions get tier 0
+        return [0] * total_positions
+    
+    # Define positions per tier
+    positions_per_tier = [5, 5, 10, max(0, total_positions - 20)]
+    
+    # Assign tiers
+    tiers = []
+    for tier, count in enumerate(positions_per_tier):
+        if count > 0:
+            tiers.extend([tier] * min(count, total_positions - len(tiers)))
+    
+    # Shuffle within each tier to avoid bias
+    tier_groups = {}
+    for i, tier in enumerate(tiers):
+        if tier not in tier_groups:
+            tier_groups[tier] = []
+        tier_groups[tier].append(i)
+    
+    # Shuffle each tier group
+    for tier in tier_groups:
+        random.shuffle(tier_groups[tier])
+    
+    # Reconstruct tiers list
+    result = [0] * total_positions
+    for tier, indices in tier_groups.items():
+        for idx in indices:
+            result[idx] = tier
+    
+    return result
+
+
+def remove_repeated_moves(moves: List[str]) -> List[str]:
+    """
+    Remove repeated moves and all subsequent moves from the game.
+    
+    Args:
+        moves: List of TRMPH moves
+        
+    Returns:
+        Cleaned list of moves with no repetitions
+    """
+    seen_moves = set()
+    clean_moves = []
+    
+    for move in moves:
+        if move in seen_moves:
+            # Found repeated move - discard this and all subsequent moves
+            logger.debug(f"Repeated move {move} found, discarding game from this point")
+            break
+        seen_moves.add(move)
+        clean_moves.append(move)
+    
+    return clean_moves
+
+
+def extract_training_examples_from_game_v2(
+    trmph_text: str, 
+    winner_from_file: str = None,
+    game_id: Tuple[int, int] = None,  # (file_idx, line_idx)
+    include_trmph: bool = False,       # Whether to include full TRMPH string
+    shuffle_positions: bool = True
+) -> List[Dict]:
+    """
+    Extract training examples with comprehensive metadata and flexible sampling.
+    
+    Args:
+        trmph_text: Complete TRMPH string
+        winner_from_file: Winner from file data ("1" for blue, "2" for red)
+        game_id: Tuple of (file_index, line_index) for tracking
+        include_trmph: Whether to include full TRMPH string in metadata
+        shuffle_positions: Whether to shuffle position order within game
+        
+    Returns:
+        List of enhanced training examples with metadata
+    """
+    try:
+        # Parse moves and validate
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = split_trmph_moves(bare_moves)
+        
+        # Handle repeated moves
+        moves = remove_repeated_moves(moves)
+        
+        if not moves:
+            raise ValueError("Empty game after removing repeated moves")
+        
+        # Validate winner and convert to clear format
+        if winner_from_file not in ["1", "2"]:
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+        
+        # Convert winner format: "1"=BLUE, "2"=RED
+        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
+        value_target = 0.0 if winner_from_file == "1" else 1.0  # BLUE=0.0, RED=1.0
+        
+        total_positions = len(moves) + 1
+        
+        # Assign sampling tiers
+        value_sample_tiers = assign_value_sample_tiers(total_positions)
+        
+        # Create position indices (shuffle if requested)
+        position_indices = list(range(total_positions))
+        if shuffle_positions:
+            random.shuffle(position_indices)
+        
+        training_examples = []
+        
+        for i, position in enumerate(position_indices):
+            # Create board state
+            board_state = create_board_from_moves(moves[:position])
+            
+            # Create policy target
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            
+            # Create metadata
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': value_sample_tiers[i],
+                'winner': winner_clear  # Store as "BLUE" or "RED"
+            }
+            
+            if include_trmph:
+                metadata['trmph_game'] = trmph_text
+            
+            # Create example
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'metadata': metadata
+            }
+            
+            training_examples.append(example)
+        
+        return training_examples
+        
+    except Exception as e:
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        raise ValueError(f"Failed to process game: {e}")
+
+
+def extract_positions_range(
+    trmph_text: str, 
+    winner: str, 
+    start_pos: int, 
+    end_pos: int, 
+    game_id: Tuple[int, int]
+) -> Tuple[List[Dict], bool]:
+    """
+    Extract only positions in the specified range from a game.
+    
+    Args:
+        trmph_text: Complete TRMPH string
+        winner: Winner from file data ("1" or "2")
+        start_pos: Starting position (inclusive)
+        end_pos: Ending position (exclusive)
+        game_id: Tuple of (file_index, line_index)
+        
+    Returns:
+        List of training examples for the specified position range
+    """
+    try:
+        # Parse moves
+        bare_moves = strip_trmph_preamble(trmph_text)
+        raw_moves = split_trmph_moves(bare_moves)        
+        moves = remove_repeated_moves(raw_moves)
+        repeat = False
+        if len(raw_moves) != len(moves):
+            repeat = True
+        
+        if not moves:
+            return [], False
+        
+        # Validate winner
+        if winner not in ["1", "2"]:
+            raise ValueError(f"Invalid winner format: {winner}")
+        
+        winner_clear = "BLUE" if winner == "1" else "RED"
+        value_target = 0.0 if winner == "1" else 1.0
+        
+        total_positions = len(moves) + 1
+        examples = []
+        
+        # Extract positions in range
+        for position in range(start_pos, min(end_pos, total_positions)):
+            # Create board state
+            board_state = create_board_from_moves(moves[:position])
+            
+            # Create policy target
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            
+            # Create metadata
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': 0,  # Default tier for range extraction
+                'winner': winner_clear
+            }
+            
+            # Create example
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'metadata': metadata
+            }
+            
+            examples.append(example)
+        
+        return examples, repeat
+        
+    except Exception as e:
+        logger.error(f"Failed to extract positions range from game: {e}")
+        return [], False
+
+
+def create_file_lookup_table(trmph_files: List[Path], output_dir: Path) -> Path:
+    """
+    Create a file lookup table mapping file indices to actual filenames.
+    
+    Args:
+        trmph_files: List of TRMPH file paths
+        output_dir: Directory to save the lookup table
+        
+    Returns:
+        Path to the created lookup table file
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    lookup_file = output_dir / f"file_lookup_{timestamp}.json"
+    
+    file_mapping = {}
+    for file_idx, file_path in enumerate(trmph_files):
+        file_mapping[file_idx] = str(file_path)
+    
+    lookup_data = {
+        'file_mapping': file_mapping,
+        'created_at': datetime.now().isoformat(),
+        'total_files': len(trmph_files),
+        'format_version': '1.0'
+    }
+    
+    with open(lookup_file, 'w') as f:
+        json.dump(lookup_data, f, indent=2)
+    
+    logger.info(f"Created file lookup table: {lookup_file}")
+    return lookup_file
 
 
 # =========================================================================
