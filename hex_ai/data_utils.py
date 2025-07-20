@@ -477,106 +477,33 @@ def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np
 # Training Data Preparation
 # ============================================================================
 
-
-def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None) -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
-    """
-    Extract training examples from a game using correct logic for two-headed networks.
-    
-    This function creates training examples from all positions in a game:
-    - Position i (0 to M): Board state after i moves
-    - Policy target: Next move (position i+1) if available, None for final position
-    - Value target: Final game outcome for all positions
-    
-    For two-headed networks, we include all positions and handle missing policy targets
-    in the loss function. This ensures both heads get trained on the same board states.
-    
-    Args:
-        trmph_text: Complete trmph string
-        winner_from_file: Winner from file data ("1" for blue, "2" for red)
-        duplicate_action: How to handle duplicate moves ("exception" or "ignore")
-        
-    Returns:
-        List of (board_state, policy_target, value_target) tuples
-        - board_state: Current board state (2, 13, 13)
-        - policy_target: Next move as one-hot (169,) or None if no next move
-        - value_target: Final game outcome (0.0 or 1.0)
-
-    Limitations:
-    - No data augmentation (will be added later)
-    Raises:
-        ValueError: If game has no moves (empty game) or missing winner data
-    """
-    try:
-        # Parse moves from trmph string
-        bare_moves = strip_trmph_preamble(trmph_text)
-        moves = split_trmph_moves(bare_moves)
-
-        # Reject empty games - they provide no useful training signal
-        if not moves:
-            logger.error(f"Empty game found - no moves to learn from: {trmph_text[:50]}...")
-            raise ValueError("Empty game - no moves to learn from")
-
-        # Require winner data from file - no automatic calculation
-        if winner_from_file is None:
-            logger.error(f"Missing winner data for game: {trmph_text[:50]}...")
-            raise ValueError("Missing winner data - cannot determine training target")
-
-        # Validate winner format
-        if winner_from_file not in ["1", "2"]:
-            logger.error(f"Invalid winner format '{winner_from_file}' for game: {trmph_text[:50]}...")
-            raise ValueError(f"Invalid winner format: {winner_from_file}")
-
-        # Set value target from validated file data
-        value_target = 1.0 if winner_from_file == "1" else 0.0
-
-        training_examples = []
-
-        # Iterate through all positions (0 to M) to create training examples
-        # Position 0 is the empty board
-        # Positions 1 to M are board states after each move
-        for position in range(len(moves) + 1):
-            board_state = create_board_from_moves(moves[:position])
-            policy_target = None
-            if position < len(moves):
-                next_move = moves[position]
-                policy_target = create_policy_target(next_move)
-            training_examples.append((board_state, policy_target, value_target))
-
-        return training_examples
-
-    except Exception as e:
-        # Re-raise ValueError (our validation errors) but catch other exceptions
-        if isinstance(e, ValueError):
-            raise
-        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
-        raise ValueError(f"Failed to process game: {e}")
-
-
 def create_board_from_moves(moves: List[str]) -> np.ndarray:
     """
     Create a board state from a list of moves.
+    
+    This function uses parse_trmph_to_board internally to ensure consistent
+    duplicate move handling and error checking.
     
     Args:
         moves: List of trmph moves (e.g., ['a1', 'b2', 'c3'])
         
     Returns:
         Board state of shape (2, 13, 13)
+        
+    Raises:
+        ValueError: If duplicate moves are found (duplicate_action="exception")
     """
-    # Initialize board
-    board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    # Convert moves list to TRMPH string format
+    trmph_text = f"#13,{''.join(moves)}"
     
-    # Place moves on board
-    for i, move in enumerate(moves):
-        row, col = trmph_move_to_rowcol(move)
-        # Alternating players: blue=1, red=2 for N×N format
-        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
-        board_matrix[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
+    # Use parse_trmph_to_board for consistent duplicate handling and error checking
+    # We use "exception" since remove_repeated_moves should be called before this function
+    board_nxn = parse_trmph_to_board(trmph_text, duplicate_action="exception")
     
-    # Convert to 2-channel format
+    # Convert N×N format to 2-channel format for neural network training
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    # Convert N×N format to one-hot encoded channels
-    board_state[BLUE_CHANNEL] = (board_matrix == BLUE_PIECE).astype(np.float32)  # Blue channel
-    board_state[RED_CHANNEL] = (board_matrix == RED_PIECE).astype(np.float32)   # Red channel
+    board_state[BLUE_CHANNEL] = (board_nxn == BLUE_PIECE).astype(np.float32)  # Blue channel
+    board_state[RED_CHANNEL] = (board_nxn == RED_PIECE).astype(np.float32)   # Red channel
     
     return board_state
 
@@ -767,7 +694,7 @@ def remove_repeated_moves(moves: List[str]) -> List[str]:
     return clean_moves
 
 
-def extract_training_examples_from_game_v2(
+def extract_training_examples_from_game(
     trmph_text: str, 
     winner_from_file: str = None,
     game_id: Tuple[int, int] = None,  # (file_idx, line_idx)
