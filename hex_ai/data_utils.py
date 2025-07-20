@@ -24,7 +24,11 @@ from datetime import datetime
 import json
 
 
-from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
+from .config import (
+    BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE, 
+    BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+)
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
@@ -88,8 +92,9 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     if board.ndim == 3:
         # 2-channel format: convert to single channel
         board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_2d[board[0] == 1] = 1  # Blue pieces
-        board_2d[board[1] == 1] = 2  # Red pieces
+        # Convert one-hot encoded channels to N×N format
+        board_2d[board[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE  # Blue pieces
+        board_2d[board[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE   # Red pieces
     else:
         board_2d = board
     
@@ -209,9 +214,9 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_in
                 logger.error(f"  All moves: {moves}")
                 raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
         
-        # Place move (alternating players: blue=1, red=2)
-        player = (i % 2) + 1
-        board[row, col] = player
+        # Place move (Alternating players. Piece colours are blue=1, red=2 for nxn boards)
+        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
+        board[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
     
     return board
 
@@ -629,8 +634,9 @@ def create_board_from_moves(moves: List[str]) -> np.ndarray:
     
     # Convert to 2-channel format
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
-    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
+    # Convert N×N format to one-hot encoded channels
+    board_state[BLUE_CHANNEL] = (board_matrix == BLUE_PIECE).astype(np.float32)  # Blue channel
+    board_state[RED_CHANNEL] = (board_matrix == RED_PIECE).astype(np.float32)   # Red channel
     
     return board_state
 

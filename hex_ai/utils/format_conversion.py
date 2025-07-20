@@ -17,7 +17,10 @@ import torch
 import numpy as np
 from typing import Tuple
 # Board value constants for N×N format
-from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.config import (
+    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+)
 import string
 
 
@@ -103,17 +106,19 @@ def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
     if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
     board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-    board_nxn[board_2nxn[0] == 1.0] = BLUE_PIECE
-    board_nxn[board_2nxn[1] == 1.0] = RED_PIECE
+    # Convert one-hot encoded channels to N×N format
+    board_nxn[board_2nxn[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE
+    board_nxn[board_2nxn[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
     if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
     board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-    board_2nxn[0] = torch.from_numpy((board_nxn == BLUE_PIECE).astype(np.float32))
-    board_2nxn[1] = torch.from_numpy((board_nxn == RED_PIECE).astype(np.float32))
-    return board_2nxn 
+    # Convert N×N format to one-hot encoded channels
+    board_2nxn[BLUE_CHANNEL] = torch.from_numpy((board_nxn == BLUE_PIECE).astype(np.float32))
+    board_2nxn[RED_CHANNEL] = torch.from_numpy((board_nxn == RED_PIECE).astype(np.float32))
+    return board_2nxn
 
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     """
@@ -134,8 +139,9 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     # This will use the original behavior (raise exception for invalid boards)
     player_to_move = get_player_to_move_from_board(board_np, error_tracker=None)
     player_channel = np.full((BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=np.float32)
+    # Add player-to-move channel as the third channel
     board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
-    return torch.from_numpy(board_3ch) 
+    return torch.from_numpy(board_3ch)
 
 def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
     """

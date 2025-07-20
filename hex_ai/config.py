@@ -37,10 +37,17 @@ VALUE_OUTPUT_SIZE = 1
 BLUE_PLAYER = 0
 RED_PLAYER = 1
 
-# Piece constants (for board representation)
+# Piece constants (for N×N board representation)
 BLUE_PIECE = 1  # Blue pieces on the board
 RED_PIECE = 2   # Red pieces on the board
 EMPTY_PIECE = 0 # Empty positions
+
+# One-hot encoded board constants (for 2N×N and 3N×N formats)
+PIECE_ONEHOT = 1      # Value for occupied positions in one-hot encoding
+EMPTY_ONEHOT = 0      # Value for empty positions in one-hot encoding
+BLUE_CHANNEL = 0      # Channel index for blue pieces
+RED_CHANNEL = 1       # Channel index for red pieces
+PLAYER_CHANNEL = 2    # Channel index for player-to-move (3N×N format)
 
 # Winner format mapping
 # TRMPH format: "1" = BLUE win, "2" = RED win
