@@ -50,7 +50,7 @@ def create_test_data(num_files: int = 3, examples_per_file: int = 100, games_per
                 
                 # Create metadata
                 metadata = {
-                    'game_id': None,
+                    'game_id': (file_idx, game_idx),  # Use file_idx and game_idx for tracking
                     'position_in_game': position,
                     'total_positions': game_length,
                     'value_sample_tier': random.randint(0, 3),

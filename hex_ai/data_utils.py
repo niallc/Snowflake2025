@@ -15,7 +15,7 @@ Key functions:
 import torch
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional, Union, Any
 import logging
 import re
 import string
@@ -542,7 +542,9 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
     """
     try:
         # Test if we can extract training examples from the game without errors
-        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, line_info)
+        # Use a dummy game_id for validation since we don't have file context yet
+        dummy_game_id = (-1, -1)  # Invalid game_id for validation purposes
+        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, dummy_game_id)
         return True, ""
     except Exception as e:
         return False, str(e)
@@ -619,8 +621,8 @@ def remove_repeated_moves(moves: List[str]) -> List[str]:
 
 def extract_training_examples_from_game(
     trmph_text: str, 
-    winner_from_file: str = None,
-    game_id: Tuple[int, int] = None,  # (file_idx, line_idx)
+    winner_from_file: str,
+    game_id: Tuple[int, int],  # (file_idx, line_idx)
     include_trmph: bool = False,       # Whether to include full TRMPH string
     shuffle_positions: bool = True
 ) -> List[Dict]:
@@ -810,6 +812,71 @@ def create_file_lookup_table(trmph_files: List[Path], output_dir: Path) -> Path:
     
     logger.info(f"Created file lookup table: {lookup_file}")
     return lookup_file
+
+
+# =========================================================================
+# File Lookup Utilities
+# =========================================================================
+
+def get_filename_from_game_id_using_state(game_id: tuple, state_file_path: Path) -> str:
+    """
+    Get filename from game_id using processing state file.
+    
+    Args:
+        game_id: Tuple of (file_idx, line_idx)
+        state_file_path: Path to processing_state.json file
+        
+    Returns:
+        Filename corresponding to the game_id
+        
+    Raises:
+        FileNotFoundError: If state file doesn't exist
+        ValueError: If file_idx is out of range
+    """
+    if not state_file_path.exists():
+        raise FileNotFoundError(f"Processing state file not found: {state_file_path}")
+    
+    with open(state_file_path, 'r') as f:
+        state_data = json.load(f)
+    
+    processed_files = state_data.get('processed_files', [])
+    file_idx, line_idx = game_id
+    
+    if file_idx >= len(processed_files):
+        raise ValueError(f"File index {file_idx} out of range (max: {len(processed_files)-1})")
+    
+    file_path = processed_files[file_idx]['file']
+    return Path(file_path).name
+
+
+def get_file_info_from_game_id_using_state(game_id: tuple, state_file_path: Path) -> Dict[str, Any]:
+    """
+    Get complete file information from game_id using processing state file.
+    
+    Args:
+        game_id: Tuple of (file_idx, line_idx)
+        state_file_path: Path to processing_state.json file
+        
+    Returns:
+        Dictionary with file information including path, output file, stats, etc.
+        
+    Raises:
+        FileNotFoundError: If state file doesn't exist
+        ValueError: If file_idx is out of range
+    """
+    if not state_file_path.exists():
+        raise FileNotFoundError(f"Processing state file not found: {state_file_path}")
+    
+    with open(state_file_path, 'r') as f:
+        state_data = json.load(f)
+    
+    processed_files = state_data.get('processed_files', [])
+    file_idx, line_idx = game_id
+    
+    if file_idx >= len(processed_files):
+        raise ValueError(f"File index {file_idx} out of range (max: {len(processed_files)-1})")
+    
+    return processed_files[file_idx].copy()
 
 
 # =========================================================================

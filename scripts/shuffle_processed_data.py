@@ -96,6 +96,20 @@ class DataShuffler:
             logger.info(f"Files processed: {len(progress.get('processed_files', []))}")
             logger.info(f"Buckets completed: {len(progress.get('completed_buckets', []))}")
             
+            # Restore stats from saved progress
+            saved_stats = progress.get('stats', {})
+            if saved_stats:
+                self.stats.update(saved_stats)
+                logger.info(f"Restored stats: {saved_stats}")
+            
+            # Fix incorrect phase state: if we have processed files but no completed buckets,
+            # we should still be in distribution phase, not completed
+            if (len(progress.get('processed_files', [])) > 0 and 
+                len(progress.get('completed_buckets', [])) == 0 and
+                progress.get('current_phase') == 'completed'):
+                logger.warning("Detected incorrect phase state: files processed but no buckets completed, fixing to 'distribution'")
+                progress['current_phase'] = 'distribution'
+            
             return progress
         except Exception as e:
             logger.warning(f"Failed to load progress file: {e}")

@@ -317,7 +317,7 @@ class BatchProcessor:
         self.state["current_file_started"] = None
         self._save_state()
     
-    def process_single_file(self, file_path: Path) -> Dict[str, Any]:
+    def process_single_file(self, file_path: Path, file_idx: int) -> Dict[str, Any]:
         """Process a single .trmph file and return statistics."""
         file_stats = {
             'file_path': str(file_path),
@@ -361,7 +361,9 @@ class BatchProcessor:
                     
                     # Extract training examples
                     try:
-                        examples = extract_training_examples_from_game(trmph_url, winner)
+                        # Create game_id with file_idx and line_idx (i+1 for 1-based line numbers)
+                        game_id = (file_idx, i+1)
+                        examples = extract_training_examples_from_game(trmph_url, winner, game_id)
                         if examples:
                             # Use dictionary format directly - no conversion needed
                             all_examples.extend(examples)
@@ -453,7 +455,7 @@ class BatchProcessor:
             self.current_file_index = i
             logger.info(f"Progress: {i+1}/{len(files_to_process)} ({((i+1)/len(files_to_process)*100):.1f}%)")
             
-            file_stats = self.process_single_file(file_path)
+            file_stats = self.process_single_file(file_path, file_idx=i)
             
             # Update overall statistics
             self.stats['files_processed'] += 1

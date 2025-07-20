@@ -31,7 +31,7 @@ class DataProcessor:
         self.processed_dir = Path(processed_dir)
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         
-    def process_file(self, trmph_file: Path, games_per_shard: int = 1000, 
+    def process_file(self, trmph_file: Path, file_idx: int, games_per_shard: int = 1000, 
                     compress: bool = True) -> List[Path]:
         """
         Process a single .trmph file into sharded, compressed training data.
@@ -54,7 +54,7 @@ class DataProcessor:
             return []
         
         # Convert games to tensors
-        processed_games = self._convert_games_to_tensors(valid_games)
+        processed_games = self._convert_games_to_tensors(valid_games, file_idx)
         
         # Shard the data
         shard_files = self._create_shards(processed_games, games_per_shard, compress)
@@ -90,15 +90,17 @@ class DataProcessor:
         
         return valid_games, corrupted_games
     
-    def _convert_games_to_tensors(self, games: List[Tuple[str, str]]) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    def _convert_games_to_tensors(self, games: List[Tuple[str, str]], file_idx: int) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Convert games to tensor format for training."""
         processed_games = []
         
-        for trmph_url, winner_indicator in tqdm(games, desc="Converting games to tensors"):
+        for game_idx, (trmph_url, winner_indicator) in enumerate(tqdm(games, desc="Converting games to tensors")):
             try:
                 # Extract multiple training examples from each game
                 from .data_utils import extract_training_examples_from_game
-                training_examples = extract_training_examples_from_game(trmph_url, winner_indicator)
+                # Create game_id with file_idx and line_idx (game_idx+1 for 1-based line numbers)
+                game_id = (file_idx, game_idx+1)
+                training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, game_id)
                 
                 # Override value targets based on actual winner
                 if winner_indicator == "1":
@@ -154,8 +156,8 @@ class DataProcessor:
         
         all_shard_files = []
         
-        for trmph_file in tqdm(trmph_files, desc="Processing files"):
-            shard_files = self.process_file(trmph_file, games_per_shard, compress)
+        for file_idx, trmph_file in enumerate(tqdm(trmph_files, desc="Processing files")):
+            shard_files = self.process_file(trmph_file, file_idx, games_per_shard, compress)
             all_shard_files.extend(shard_files)
         
         logger.info(f"Total shard files created: {len(all_shard_files)}")
