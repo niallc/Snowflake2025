@@ -3,6 +3,10 @@ In-process hyperparameter sweep for Hex AI, using run_hyperparameter_tuning_curr
 No subprocesses are launched; all experiments are run in-process for easier debugging and unified code path.
 """
 
+# =============================================================
+#  Imports and Logging Setup
+# =============================================================
+
 import itertools
 import logging
 import time
@@ -14,20 +18,10 @@ import os
 import hashlib
 import json
 
-# Safety check: ensure running inside the correct virtual environment
-expected_env = "hex_ai_env"
-venv_path = os.environ.get("VIRTUAL_ENV", "")
-if not venv_path or expected_env not in venv_path:
-    sys.stderr.write(
-        f"\nERROR: This script must be run inside the '{expected_env}' virtual environment.\n"
-        f"Please activate it first by running:\n\n"
-        f"    source {expected_env}/bin/activate\n\n"
-        f"Then re-run this script.\n"
-    )
-    sys.exit(1)
-
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
+from hex_ai.system_utils import check_virtual_env
+check_virtual_env("hex_ai_env")
 
 ###### Logging setup ######
 log_dir = Path('logs')
@@ -47,6 +41,10 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 root_logger.addHandler(stream_handler)
 ###### End of logging setup ######
+
+# =============================================================
+#  Sweep Configuration and Parameter Processing
+# =============================================================
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
@@ -78,23 +76,6 @@ SHORT_LABELS = {
 # Determine which parameters vary in this sweep
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
-def make_experiment_name(config, idx, tag = ""):
-    # Only include varying params, use short labels
-    parts = []
-    for k in VARYING_PARAMS:
-        short = SHORT_LABELS.get(k, k)
-        val = config[k]
-        # Remove trailing zeros for floats, e.g. 0.10 -> 0.1
-        if isinstance(val, float):
-            val = ('%.4f' % val).rstrip('0').rstrip('.')
-        parts.append(f"{short}{val}")
-    # Optionally, add a short hash for extra uniqueness
-    config_str = json.dumps({k: config[k] for k in VARYING_PARAMS}, sort_keys=True)
-    short_hash = hashlib.md5(config_str.encode()).hexdigest()[:6]
-    # Timestamp for uniqueness
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{tag}_exp{idx}_{'_'.join(parts)}_{short_hash}_{timestamp}"
-
 # Configuration
 MAX_SAMPLES = 3_200_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 400_000  # Validation samples (no augmentation)
@@ -113,6 +94,27 @@ def all_param_combinations(sweep_dict):
     keys = list(sweep_dict.keys())
     for values in itertools.product(*[sweep_dict[k] for k in keys]):
         yield dict(zip(keys, values))
+
+# =============================================================
+#  Helper Functions
+# =============================================================
+
+def make_experiment_name(config, idx, tag = ""):
+    # Only include varying params, use short labels
+    parts = []
+    for k in VARYING_PARAMS:
+        short = SHORT_LABELS.get(k, k)
+        val = config[k]
+        # Remove trailing zeros for floats, e.g. 0.10 -> 0.1
+        if isinstance(val, float):
+            val = ('%.4f' % val).rstrip('0').rstrip('.')
+        parts.append(f"{short}{val}")
+    # Optionally, add a short hash for extra uniqueness
+    config_str = json.dumps({k: config[k] for k in VARYING_PARAMS}, sort_keys=True)
+    short_hash = hashlib.md5(config_str.encode()).hexdigest()[:6]
+    # Timestamp for uniqueness
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{tag}_exp{idx}_{'_'.join(parts)}_{short_hash}_{timestamp}"
 
 def print_sweep_summary(results, results_dir, interrupted=False):
     print("\n" + "="*60)
@@ -138,6 +140,10 @@ def print_sweep_summary(results, results_dir, interrupted=False):
             print("\nNo successful experiments!")
     print(f"\nAll results saved to: {results_dir}")
     print("Run 'python analyze_tuning_results.py' to analyze the results.")
+
+# =============================================================
+#  Main Execution and Experiment Loop
+# =============================================================
 
 if __name__ == "__main__":
     print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
