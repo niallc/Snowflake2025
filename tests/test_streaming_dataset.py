@@ -30,7 +30,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
         fake_file = Path("tests/fake_example.pkl.gz")
         board_2ch = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
         board_2ch[0, 0, 0] = 1  # Blue's move
-        example = (board_2ch, np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 1.0)
+        example = {'board': board_2ch, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
         with gzip.open(fake_file, "wb") as f:
             pickle.dump({"examples": [example]}, f)
         try:
@@ -46,7 +46,7 @@ class TestStreamingProcessedDataset(unittest.TestCase):
         fake_file = Path("tests/fake_example.pkl.gz")
         board_2ch = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
         board_2ch[0, 0, 0] = 1  # Blue's move
-        example = (board_2ch, np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 1.0)
+        example = {'board': board_2ch, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
         with gzip.open(fake_file, "wb") as f:
             pickle.dump({"examples": [example]}, f)
         try:

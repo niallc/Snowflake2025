@@ -22,7 +22,7 @@ from datetime import datetime
 import random
 
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, PLAYER_CHANNEL
 from hex_ai.data_utils import get_player_to_move_from_board
 from hex_ai.error_handling import check_data_loading_errors
 
@@ -31,12 +31,16 @@ logger = logging.getLogger(__name__)
 
 def _validate_example_format(example, filename):
     """Validate example format early to fail fast."""
-    if not isinstance(example, tuple):
-        raise ValueError(f"Example in {filename} must be tuple, got {type(example)}")
-    if len(example) != 3:
-        raise ValueError(f"Example in {filename} must have 3 elements, got {len(example)}")
+    if not isinstance(example, dict):
+        raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
     
-    board_state, policy_target, value_target = example
+    # Check for required keys
+    if not all(key in example for key in ['board', 'policy', 'value']):
+        raise ValueError(f"Example in {filename} missing required keys: {example.keys()}")
+    
+    board_state = example['board']
+    policy_target = example['policy']
+    value_target = example['value']
     
     # Validate board state
     if not isinstance(board_state, np.ndarray):
@@ -59,7 +63,7 @@ def _validate_example_format(example, filename):
 class StreamingProcessedDataset(torch.utils.data.Dataset):
     """Streaming dataset that loads data in chunks to reduce memory usage."""
     
-    def __init__(self, data_files: List[Path], chunk_size: int = 100000, shuffle_files: bool = True):
+    def __init__(self, data_files: List[Path], chunk_size: int = 100000, shuffle_files: bool = True, max_examples: Optional[int] = None):
         """
         Initialize streaming dataset.
         
@@ -67,12 +71,14 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
             data_files: List of paths to processed data files
             chunk_size: Number of examples to load at once
             shuffle_files: Whether to shuffle the order of files
+            max_examples: Maximum number of examples to provide (None for unlimited)
         """
         self.data_files = data_files
         if shuffle_files:
             random.shuffle(self.data_files)
         
         self.chunk_size = chunk_size
+        self.max_examples = max_examples
         self.current_chunk = []
         self.current_file_idx = 0
         self.current_example_idx = 0
@@ -109,6 +115,10 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
                 error_details.append((str(file_path), str(e)))
                 self.current_file_idx += 1
                 continue
+        # Shuffle the chunk for better randomization
+        if len(self.current_chunk) > 0:
+            random.shuffle(self.current_chunk)
+        
         # After loading, check error thresholds
         if files_attempted > 0:
             error_log_dir = str(self.data_files[0].parent) if self.data_files else "."
@@ -123,16 +133,29 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
     
     def __len__(self):
         """
-        Return an estimated number of samples (for DataLoader compatibility).
-        NOTE: This is an estimate based on the number of valid files and chunk size,
-        not the true number of available samples. For small datasets or tests, use
-        dataset.true_len() for the exact count.
+        Return the number of samples (for DataLoader compatibility).
+        If max_examples is set, returns that value. Otherwise returns an estimate.
         """
-        num_valid_files = len([f for f in self.data_files if f.exists()])
-        return num_valid_files * self.chunk_size
+        if self.max_examples is not None:
+            return self.max_examples
+        else:
+            # Return an estimate based on the number of valid files and chunk size
+            num_valid_files = len([f for f in self.data_files if f.exists()])
+            return num_valid_files * self.chunk_size
     
     def __getitem__(self, idx):
         """Get a single training sample."""
+        # Check if we've reached the maximum number of examples
+        if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
+            # Instead of raising an error, cycle back to the beginning
+            # This allows training to continue with the limited dataset
+            self.current_file_idx = 0
+            self.current_example_idx = 0
+            self.total_examples_loaded = 0
+            random.shuffle(self.data_files)  # Reshuffle for next epoch
+            self._load_next_chunk()
+            self.current_example_idx = 0
+        
         if self.current_example_idx >= len(self.current_chunk):
             if self.current_file_idx >= len(self.data_files):
                 # We've exhausted all files, start over
@@ -151,10 +174,10 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         from hex_ai.error_handling import get_board_state_error_tracker
         error_tracker = get_board_state_error_tracker()
         
-        board_state = torch.FloatTensor(sample[0])
+        board_state = torch.FloatTensor(sample['board'])
         # Add player-to-move channel
         board_np = board_state.numpy()
-        from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+        from hex_ai.config import BLUE_PLAYER, RED_PLAYER
         
         # Get current file info for error tracking
         current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
@@ -185,9 +208,117 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         player_channel = np.full((board_np.shape[1], board_np.shape[2]), float(player_to_move), dtype=np.float32)
         board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
         board_state = torch.from_numpy(board_3ch)
-        policy_target = torch.FloatTensor(sample[1]) if sample[1] is not None else torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
-        value_target = torch.FloatTensor([sample[2]])
+        policy_target = torch.FloatTensor(sample['policy']) if sample['policy'] is not None else torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
+        value_target = torch.FloatTensor([sample['value']])
         return board_state, policy_target, value_target
+
+
+class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
+    """Streaming dataset that applies data augmentation to create 4x more training examples."""
+    
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, **kwargs):
+        """
+        Initialize streaming augmented dataset.
+        
+        Args:
+            data_files: List of paths to processed data files
+            enable_augmentation: Whether to apply augmentation (default: True)
+            **kwargs: Additional arguments passed to StreamingProcessedDataset
+        """
+        super().__init__(data_files, **kwargs)
+        self.enable_augmentation = enable_augmentation
+        
+        # For augmented datasets, we need to adjust the max_examples limit
+        # since each __getitem__ call returns 4 examples instead of 1
+        if enable_augmentation and self.max_examples is not None:
+            # Store the original limit for internal tracking
+            self.original_max_examples = self.max_examples
+            # Adjust the limit for the base class (divide by 4 since we return 4x examples)
+            self.max_examples = self.max_examples // 4
+            logger.info(f"StreamingAugmentedProcessedDataset: Adjusted max_examples from {self.original_max_examples:,} to {self.max_examples:,} (will provide {self.original_max_examples:,} effective examples with augmentation)")
+        else:
+            self.original_max_examples = self.max_examples
+        
+        if enable_augmentation:
+            logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation")
+        else:
+            logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples")
+    
+    def __len__(self):
+        """
+        Return the number of samples (for DataLoader compatibility).
+        For augmented datasets, this should return the effective number of examples
+        that will be provided (4x the base examples).
+        """
+        if self.enable_augmentation and self.original_max_examples is not None:
+            # Return the original max_examples (the effective number with augmentation)
+            return self.original_max_examples
+        else:
+            base_len = super().__len__()
+            if self.enable_augmentation:
+                # Return the effective number of examples (4x the base examples)
+                return base_len * 4
+            else:
+                return base_len
+    
+    def __getitem__(self, idx):
+        """Get augmented training examples."""
+        if not self.enable_augmentation:
+            return super().__getitem__(idx)
+        
+        # Get original example from streaming dataset
+        original_example = super().__getitem__(idx)
+        board_3ch, policy, value = original_example
+        
+        # Extract 2-channel board for augmentation
+        # NOTE: This looks brittle. Especially if we add more channels to the board, this
+        # will rely on channel order
+        board_2ch = board_3ch[:PLAYER_CHANNEL].numpy()  # Remove player-to-move channel
+        
+        # Skip empty boards (no pieces to augment)
+        if np.sum(board_2ch) == 0:
+            return [original_example]  # Return single example for empty boards
+        
+        # Create all 4 augmented examples
+        from hex_ai.data_utils import create_augmented_example_with_player_to_move
+        try:
+            # Get error tracker for board state validation
+            from hex_ai.error_handling import get_board_state_error_tracker
+            error_tracker = get_board_state_error_tracker()
+            
+            # Get current file info for error tracking
+            current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
+            sample_info = f"augmented_chunk_idx={self.current_example_idx-1}, total_loaded={self.total_examples_loaded}"
+            
+            # Set context for error tracking
+            error_tracker._current_file = str(current_file)
+            error_tracker._current_sample = sample_info
+            
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item(), error_tracker)
+        except Exception as e:
+            logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
+            raise
+        
+        # Convert to tensors and create 3-channel boards
+        tensor_examples = []
+        for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
+            try:
+                # Create player-to-move channel
+                player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
+                board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
+                
+                # Convert to tensors
+                board_tensor = torch.from_numpy(board_3ch)
+                policy_tensor = torch.FloatTensor(aug_policy)
+                value_tensor = torch.FloatTensor([aug_value])
+                
+                tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+            except Exception as e:
+                logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
+                raise
+        
+        # Return all 4 examples (DataLoader will handle batching)
+        return tensor_examples
 
 
 
@@ -207,13 +338,19 @@ def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:
     if not data_path.exists():
         raise FileNotFoundError(f"Data directory {data_dir} not found")
     
-    # Find all .pkl.gz files
-    data_files = list(data_path.glob("*.pkl.gz"))
+    # Check if this is shuffled data directory
+    if (data_path / "shuffling_progress.json").exists():
+        # Shuffled data: look for shuffled_*.pkl.gz files
+        data_files = list(data_path.glob("shuffled_*.pkl.gz"))
+        logger.info(f"Found {len(data_files)} shuffled data files")
+    else:
+        # Original processed data: look for *_processed.pkl.gz files
+        data_files = list(data_path.glob("*_processed.pkl.gz"))
+        logger.info(f"Found {len(data_files)} processed data files")
     
     if not data_files:
-        raise FileNotFoundError(f"No processed data files found in {data_dir}")
+        raise FileNotFoundError(f"No data files found in {data_dir}")
     
-    logger.info(f"Found {len(data_files)} processed data files")
     return data_files
 
 

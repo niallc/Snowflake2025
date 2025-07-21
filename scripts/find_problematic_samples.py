@@ -17,9 +17,12 @@ def reconstruct_move_sequence(examples):
     """
     move_sequences = []
     issues = []
-    prev_board = np.zeros_like(examples[0][0])  # Start from empty board
+    prev_board = np.zeros_like(examples[0]['board'])  # Start from empty board
     prev_moves = []
-    for idx, (board_state, _, _) in enumerate(examples):
+    for idx, example in enumerate(examples):
+        board_state = example['board']
+        policy_target = example['policy']
+        value_target = example['value']
         # Find the difference between prev_board and board_state
         diff = board_state - prev_board
         # Check for impossible states: both red and blue at same location
@@ -63,7 +66,9 @@ def find_problematic_samples(file_path: str, max_samples: int = 1000):
     problematic_samples = []
     problematic_indices = []
     for i, example in enumerate(examples[:max_samples]):
-        board_state, policy_target, value_target = example
+        board_state = example['board']
+        policy_target = example['policy']
+        value_target = example['value']
         blue_count = int(np.sum(board_state[0]))
         red_count = int(np.sum(board_state[1]))
         # Check validity

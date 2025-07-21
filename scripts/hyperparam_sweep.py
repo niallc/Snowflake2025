@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""
+In-process hyperparameter sweep for Hex AI, using run_hyperparameter_tuning_current_data.
+No subprocesses are launched; all experiments are run in-process for easier debugging and unified code path.
+"""
+
+import itertools
+import logging
+import time
+from pathlib import Path
+from datetime import datetime
+
+from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+
+###### Logging setup ######
+log_dir = Path('logs')
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / ('hex_ai_training_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.log')
+
+file_handler = logging.FileHandler(log_file, mode='a')
+formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
+file_handler.setFormatter(formatter)
+
+root_logger = logging.getLogger()
+root_logger.addHandler(file_handler)
+root_logger.setLevel(logging.INFO)  # Or whatever level you want
+
+# Optionally, also add a StreamHandler for terminal output:
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+root_logger.addHandler(stream_handler)
+###### End of logging setup ######
+
+# Define your sweep grid here (edit as needed)
+SWEEP = {
+    "learning_rate": [0.001, 0.01],
+    "batch_size": [256],
+    "max_grad_norm": [20],
+    "dropout_prob": [0, 0.001, 0.01],
+    "weight_decay": [1e-4],
+    "value_learning_rate_factor": [0.2, 0.001],  # Value head learns slower
+    "value_weight_decay_factor": [3.0, 50.0, 1],  # Value head gets more regularization
+    # Add more as needed
+}
+
+# Configuration
+MAX_SAMPLES = 1_600_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 400_000  # Validation samples (no augmentation)
+AUGMENTATION_CONFIG = {'enable_augmentation': True}
+EPOCHS = 4
+
+print(f"Running hyperparameter sweep with shuffled data:")
+print(f"  Data directory: data/processed/shuffled")
+print(f"  Training samples: {MAX_SAMPLES:,} (effective: {MAX_SAMPLES * 4:,} with augmentation)")
+print(f"  Validation samples: {MAX_VALIDATION_SAMPLES:,}")
+print(f"  Data augmentation: {'Enabled' if AUGMENTATION_CONFIG['enable_augmentation'] else 'Disabled'}")
+print(f"  Max Epochs: {EPOCHS}")
+
+# Build all parameter combinations
+def all_param_combinations(sweep_dict):
+    keys = list(sweep_dict.keys())
+    for values in itertools.product(*[sweep_dict[k] for k in keys]):
+        yield dict(zip(keys, values))
+
+if __name__ == "__main__":
+    print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
+    print(f"Data augmentation: {'ENABLED' if AUGMENTATION_CONFIG['enable_augmentation'] else 'DISABLED'}")
+
+    all_configs = list(all_param_combinations(SWEEP))
+    print(f"Total runs to launch: {len(all_configs)}")
+    experiments = []
+    for i, config in enumerate(all_configs):
+        exp_name = f"shuffled_sweep_run_{i}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        experiments.append({
+            'experiment_name': exp_name,
+            'hyperparameters': config
+        })
+
+    results_dir = Path("checkpoints/hyperparameter_tuning")
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.time()
+    # Run hyperparameter tuning
+    results = run_hyperparameter_tuning_current_data(
+        experiments=experiments,
+        data_dir="data/processed/shuffled",
+        results_dir="checkpoints/hyperparameter_tuning",
+        train_ratio=0.8,
+        num_epochs=EPOCHS,
+        early_stopping_patience=None,  # Disable early stopping for now
+        random_seed=42,
+        max_examples_per_split=MAX_SAMPLES,
+        max_validation_examples=MAX_VALIDATION_SAMPLES,
+        enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation']
+    )
+    total_time = time.time() - start_time
+
+    print(f"\n{'='*60}")
+    print(f"SWEEP COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+    print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
+
+    # Find best experiment
+    if results.get('experiments'):
+        best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
+        print(f"\nBest experiment: {best_exp['experiment_name']}")
+        print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+        print(f"Hyperparameters: {best_exp['hyperparameters']}")
+        # Show all results sorted by validation loss
+        print(f"\nAll experiments ranked by validation loss:")
+        sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
+        for i, exp in enumerate(sorted_experiments):
+            print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+    else:
+        print("\nNo successful experiments!")
+
+    print(f"\nAll results saved to: {results_dir}")
+    print("Run 'python analyze_tuning_results.py' to analyze the results.")

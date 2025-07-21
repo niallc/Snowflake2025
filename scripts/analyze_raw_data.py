@@ -55,7 +55,9 @@ def analyze_file(file_path: Path, max_samples: int = 1000) -> Dict:
         analyses = []
         
         for i, example in enumerate(samples_to_analyze):
-            board_state, policy_target, value_target = example
+            board_state = example['board']
+            policy_target = example['policy']
+            value_target = example['value']
             analysis = analyze_board_state(board_state)
             analysis['sample_index'] = i
             analyses.append(analysis)
@@ -171,7 +173,9 @@ def examine_specific_sample(file_path: str, sample_index: int = 0):
             print(f"Sample index {sample_index} out of range (0-{len(examples)-1})")
             return
         
-        board_state, policy_target, value_target = examples[sample_index]
+        board_state = examples[sample_index]['board']
+        policy_target = examples[sample_index]['policy']
+        value_target = examples[sample_index]['value']
         
         print(f"=== Sample {sample_index} from {file_path.name} ===")
         print(f"Board shape: {board_state.shape}")

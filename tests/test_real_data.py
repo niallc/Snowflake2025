@@ -11,7 +11,7 @@ from hex_ai.data_utils import (
     parse_trmph_to_board, display_board, 
     rowcol_to_trmph, trmph_move_to_rowcol
 )
-from hex_ai.config import BOARD_SIZE
+from hex_ai.config import BOARD_SIZE, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
 
 
 class TestRealDataIntegration(unittest.TestCase):
@@ -23,13 +23,13 @@ class TestRealDataIntegration(unittest.TestCase):
         board = parse_trmph_to_board(trmph)
         
         # Check that pieces are in correct positions
-        self.assertEqual(board[0, 0], 1)  # a1 = blue at (0,0)
-        self.assertEqual(board[1, 1], 2)  # b2 = red at (1,1)
-        self.assertEqual(board[2, 2], 1)  # c3 = blue at (2,2)
+        self.assertEqual(board[0, 0], BLUE_PIECE)  # a1 = blue at (0,0)
+        self.assertEqual(board[1, 1], RED_PIECE)   # b2 = red at (1,1)
+        self.assertEqual(board[2, 2], BLUE_PIECE)  # c3 = blue at (2,2)
         
         # Check that other positions are empty
-        self.assertEqual(board[0, 1], 0)  # Should be empty
-        self.assertEqual(board[1, 0], 0)  # Should be empty
+        self.assertEqual(board[0, 1], EMPTY_PIECE)  # Should be empty
+        self.assertEqual(board[1, 0], EMPTY_PIECE)  # Should be empty
     
     def test_complex_game_parsing(self):
         """Test parsing a more complex game."""
@@ -37,15 +37,15 @@ class TestRealDataIntegration(unittest.TestCase):
         board = parse_trmph_to_board(trmph)
         
         # Check that we have the right number of pieces
-        blue_pieces = np.sum(board == 1)
-        red_pieces = np.sum(board == 2)
+        blue_pieces = np.sum(board == BLUE_PIECE)
+        red_pieces = np.sum(board == RED_PIECE)
         self.assertEqual(blue_pieces, 7)  # Blue starts, so more pieces
         self.assertEqual(red_pieces, 6)
         
         # Check specific positions
-        self.assertEqual(board[0, 0], 1)   # a1 = blue
-        self.assertEqual(board[1, 1], 2)   # b2 = red
-        self.assertEqual(board[12, 12], 1) # m13 = blue
+        self.assertEqual(board[0, 0], BLUE_PIECE)   # a1 = blue
+        self.assertEqual(board[1, 1], RED_PIECE)    # b2 = red
+        self.assertEqual(board[12, 12], BLUE_PIECE) # m13 = blue
     
     def test_coordinate_conversion_roundtrip(self):
         """Test that coordinate conversions work in both directions."""
@@ -75,8 +75,8 @@ class TestRealDataIntegration(unittest.TestCase):
         """Test board display functions."""
         # Create a simple board
         board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board[0, 0] = 1  # Blue at a1
-        board[1, 1] = 2  # Red at b2
+        board[0, 0] = BLUE_PIECE  # Blue at a1
+        board[1, 1] = RED_PIECE   # Red at b2
         
         # Test matrix display
         matrix_display = display_board(board, "matrix")
@@ -139,12 +139,12 @@ class TestRealDataIntegration(unittest.TestCase):
         moves = []
         for row in range(BOARD_SIZE):
             for col in range(BOARD_SIZE):
-                if board[row, col] != 0:
+                if board[row, col] != EMPTY_PIECE:
                     moves.append((row, col, board[row, col]))
         
-        # First move should be blue (1), second red (2), etc.
+        # First move should be blue (BLUE_PIECE), second red (RED_PIECE), etc.
         for i, (row, col, color) in enumerate(moves):
-            expected_color = 1 if i % 2 == 0 else 2
+            expected_color = BLUE_PIECE if i % 2 == 0 else RED_PIECE
             self.assertEqual(color, expected_color, 
                            f"Move {i} at ({row},{col}) should be {expected_color}, got {color}")
 

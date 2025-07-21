@@ -21,7 +21,9 @@ def inspect_batch(examples, batch_size=10, random_sample=True, only_show_issues=
 
     issues = []
     for idx in indices:
-        board, policy, value = examples[idx]
+        board = examples[idx]['board']
+        policy = examples[idx]['policy']
+        value = examples[idx]['value']
         issue_found = False
         highlight_move, trmph_move = visualize_board_with_policy(board, policy)
         # Consistency check: is policy target on empty cell?

@@ -4,20 +4,20 @@ from hex_ai.data_utils import (
     rotate_board_180, reflect_board_long_diagonal, reflect_board_short_diagonal,
     create_augmented_boards, create_augmented_policies
 )
-from hex_ai.config import BOARD_SIZE
+from hex_ai.config import BOARD_SIZE, BLUE_PIECE, RED_PIECE, EMPTY_PIECE, PIECE_ONEHOT, EMPTY_ONEHOT
 
 class TestAugmentation(unittest.TestCase):
     def setUp(self):
         """Create test boards and policies."""
         # Create a simple test board with 2 channels
         self.board_2ch = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        self.board_2ch[0, 0, 0] = 1  # Blue piece at (0,0)
-        self.board_2ch[1, 1, 1] = 1  # Red piece at (1,1)
+        self.board_2ch[0, 0, 0] = PIECE_ONEHOT  # Blue piece at (0,0)
+        self.board_2ch[1, 1, 1] = PIECE_ONEHOT  # Red piece at (1,1)
         
         # Create a test board with single channel
         self.board_1ch = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        self.board_1ch[0, 0] = 1  # Blue piece at (0,0)
-        self.board_1ch[1, 1] = 2  # Red piece at (1,1)
+        self.board_1ch[0, 0] = BLUE_PIECE  # Blue piece at (0,0)
+        self.board_1ch[1, 1] = RED_PIECE   # Red piece at (1,1)
         
         # Create a more complex test policy with asymmetric values
         self.policy = np.zeros(169, dtype=np.float32)
@@ -33,13 +33,13 @@ class TestAugmentation(unittest.TestCase):
         # Check shape
         self.assertEqual(rotated.shape, (2, BOARD_SIZE, BOARD_SIZE))
         
-        # Check that pieces moved to opposite corners
-        self.assertEqual(rotated[1, BOARD_SIZE-1, BOARD_SIZE-1], 1)  # Blue piece moved
-        self.assertEqual(rotated[0, BOARD_SIZE-2, BOARD_SIZE-2], 1)  # Red piece moved
+        # Check that pieces moved to opposite corners (no color swap)
+        self.assertEqual(rotated[0, BOARD_SIZE-1, BOARD_SIZE-1], PIECE_ONEHOT)  # Blue piece moved to opposite corner
+        self.assertEqual(rotated[1, BOARD_SIZE-2, BOARD_SIZE-2], PIECE_ONEHOT)  # Red piece moved to opposite corner
         
-        # Check that channels were swapped
-        self.assertEqual(rotated[0, 0, 0], 0)  # Blue channel should be empty
-        self.assertEqual(rotated[1, 0, 0], 0)  # Red channel should be empty
+        # Check that original positions are empty
+        self.assertEqual(rotated[0, 0, 0], EMPTY_ONEHOT)  # Blue channel should be empty at original position
+        self.assertEqual(rotated[1, 1, 1], EMPTY_ONEHOT)  # Red channel should be empty at original position
 
     def test_rotate_board_180_1ch(self):
         """Test 180-degree rotation with single-channel board."""
@@ -49,8 +49,8 @@ class TestAugmentation(unittest.TestCase):
         self.assertEqual(rotated.shape, (BOARD_SIZE, BOARD_SIZE))
         
         # Check that pieces moved to opposite corners and colors swapped
-        self.assertEqual(rotated[BOARD_SIZE-1, BOARD_SIZE-1], 2)  # Blue became red
-        self.assertEqual(rotated[BOARD_SIZE-2, BOARD_SIZE-2], 1)  # Red became blue
+        self.assertEqual(rotated[BOARD_SIZE-1, BOARD_SIZE-1], BLUE_PIECE) 
+        self.assertEqual(rotated[BOARD_SIZE-2, BOARD_SIZE-2], RED_PIECE) 
 
     def test_reflect_board_long_diagonal_2ch(self):
         """Test long diagonal reflection with 2-channel board."""
@@ -60,8 +60,8 @@ class TestAugmentation(unittest.TestCase):
         self.assertEqual(reflected.shape, (2, BOARD_SIZE, BOARD_SIZE))
         
         # Check that pieces moved to transposed positions
-        self.assertEqual(reflected[1, 0, 0], 1)  # Blue piece transposed and channel swapped
-        self.assertEqual(reflected[0, 1, 1], 1)  # Red piece transposed and channel swapped
+        self.assertEqual(reflected[1, 0, 0], PIECE_ONEHOT)  # Blue piece transposed and channel swapped
+        self.assertEqual(reflected[0, 1, 1], PIECE_ONEHOT)  # Red piece transposed and channel swapped
 
     def test_reflect_board_long_diagonal_1ch(self):
         """Test long diagonal reflection with single-channel board."""
@@ -71,8 +71,8 @@ class TestAugmentation(unittest.TestCase):
         self.assertEqual(reflected.shape, (BOARD_SIZE, BOARD_SIZE))
         
         # Check that pieces moved to transposed positions and colors swapped
-        self.assertEqual(reflected[0, 0], 2)  # Blue became red
-        self.assertEqual(reflected[1, 1], 1)  # Red became blue
+        self.assertEqual(reflected[0, 0], RED_PIECE)  # Blue became red
+        self.assertEqual(reflected[1, 1], BLUE_PIECE)  # Red became blue
 
     def test_reflect_board_short_diagonal_2ch(self):
         """Test short diagonal reflection with 2-channel board."""
@@ -83,8 +83,8 @@ class TestAugmentation(unittest.TestCase):
         
         # Check that pieces moved to correct positions
         # Short diagonal reflection = 180° rotation + long diagonal reflection
-        self.assertEqual(reflected[1, BOARD_SIZE-1, BOARD_SIZE-1], 1)  # Blue piece
-        self.assertEqual(reflected[0, BOARD_SIZE-2, BOARD_SIZE-2], 1)  # Red piece
+        self.assertEqual(reflected[1, BOARD_SIZE-1, BOARD_SIZE-1], PIECE_ONEHOT)  # Blue piece
+        self.assertEqual(reflected[0, BOARD_SIZE-2, BOARD_SIZE-2], PIECE_ONEHOT)  # Red piece
 
     def test_reflect_board_short_diagonal_1ch(self):
         """Test short diagonal reflection with single-channel board."""
@@ -94,8 +94,8 @@ class TestAugmentation(unittest.TestCase):
         self.assertEqual(reflected.shape, (BOARD_SIZE, BOARD_SIZE))
         
         # Check that pieces moved to correct positions and colors swapped
-        self.assertEqual(reflected[BOARD_SIZE-1, BOARD_SIZE-1], 2)  # Blue became red
-        self.assertEqual(reflected[BOARD_SIZE-2, BOARD_SIZE-2], 1)  # Red became blue
+        self.assertEqual(reflected[BOARD_SIZE-1, BOARD_SIZE-1], RED_PIECE)  # Blue became red
+        self.assertEqual(reflected[BOARD_SIZE-2, BOARD_SIZE-2], BLUE_PIECE)  # Red became blue
 
     def test_create_augmented_boards(self):
         """Test creating all 4 augmented boards."""

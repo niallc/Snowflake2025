@@ -15,12 +15,20 @@ Key functions:
 import torch
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional, Union, Any
 import logging
 import re
 import string
+import random
+from datetime import datetime
+import json
 
-from .config import BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE
+
+from .config import (
+    BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE, 
+    BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+)
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
@@ -33,6 +41,7 @@ logger = logging.getLogger(__name__)
 # We match up to the number (13) and then the comma.
 TRMPH_BOARD_PATTERN = re.compile(r"#(\d+),")
 LETTERS = string.ascii_lowercase
+TRLETTERS = LETTERS[:BOARD_SIZE]
 
 
 # ============================================================================
@@ -84,8 +93,9 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     if board.ndim == 3:
         # 2-channel format: convert to single channel
         board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_2d[board[0] == 1] = 1  # Blue pieces
-        board_2d[board[1] == 1] = 2  # Red pieces
+        # Convert one-hot encoded channels to N×N format
+        board_2d[board[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE  # Blue pieces
+        board_2d[board[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE   # Red pieces
     else:
         board_2d = board
     
@@ -132,7 +142,7 @@ def split_trmph_moves(bare_moves: str) -> list[str]:
     moves = []
     i = 0
     while i < len(bare_moves):
-        if bare_moves[i] not in LETTERS:
+        if bare_moves[i] not in TRLETTERS:
             raise ValueError(f"Expected letter at position {i} in {bare_moves}")
         j = i + 1
         while j < len(bare_moves) and bare_moves[j].isdigit():
@@ -150,67 +160,13 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
         raise ValueError(f"Invalid trmph move: {move}")
     letter = move[0]
     number = int(move[1:])
-    if letter not in LETTERS[:board_size]:
+    if letter not in TRLETTERS:
         raise ValueError(f"Invalid letter in move: {move}")
     if not (1 <= number <= board_size):
         raise ValueError(f"Invalid number in move: {move}")
     row = number - 1
     col = LETTERS.index(letter)
     return row, col
-
-
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, debug_info: str = "") -> np.ndarray:
-    """
-    Parse a trmph string to a board matrix.
-    
-    Args:
-        trmph_text: Complete trmph string
-        board_size: Size of the board
-        debug_info: Optional debug information (e.g., line number)
-        
-    Returns:
-        Board matrix with 0=empty, 1=blue, 2=red
-    """
-    # Strip preamble and get moves
-    bare_moves = strip_trmph_preamble(trmph_text)
-    moves = split_trmph_moves(bare_moves)
-    
-    # Initialize board
-    board = np.zeros((board_size, board_size), dtype=np.int8)
-    
-    # Place moves on board
-    for i, move in enumerate(moves):
-        row, col = trmph_move_to_rowcol(move, board_size)
-        
-        # Check for duplicate moves
-        if board[row, col] != 0:
-            # For training data, skip duplicate moves instead of failing
-            if "training" in debug_info.lower() or "game" in debug_info.lower():
-                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in training data")
-                continue  # Skip this move and continue with the next
-            else:
-                # Enhanced debugging output for non-training contexts
-                import traceback
-                frame = traceback.extract_stack()[-2]  # Get calling frame
-                logger.error(f"DUPLICATE MOVE DETECTED:")
-                if debug_info:
-                    logger.error(f"  {debug_info}")
-                logger.error(f"  File: {frame.filename}")
-                logger.error(f"  Line: {frame.lineno}")
-                logger.error(f"  Function: {frame.name}")
-                logger.error(f"  Move: '{move}' at position ({row}, {col})")
-                logger.error(f"  Move index: {i}")
-                logger.error(f"  Board value at position: {board[row, col]}")
-                logger.error(f"  Full trmph string: {trmph_text}")
-                logger.error(f"  All moves: {moves}")
-                raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
-        
-        # Place move (alternating players: blue=1, red=2)
-        player = (i % 2) + 1
-        board[row, col] = player
-    
-    return board
-
 
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
@@ -312,28 +268,24 @@ def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
 
 def rotate_board_180(board: np.ndarray) -> np.ndarray:
     """
-    Rotate board 180 degrees and swap player colors.
+    Rotate board 180 degrees (no color swap).
     
-    This preserves the logical game state under the swap rule (π-rule).
-    Blue pieces become red and vice versa, while the board is rotated.
+    This preserves the logical game state by only rotating, not swapping colors.
+    The board edges maintain their meaning (red edges vs blue edges).
     
     Args:
         board: Board array of shape (2, 13, 13) or (13, 13)
         
     Returns:
-        Rotated and color-swapped board
+        Rotated board (no color swap)
     """
     if board.ndim == 3:
         # 2-channel format: (2, 13, 13)
         rotated = np.flip(board, axis=(1, 2))  # Rotate 180°
-        # Swap channels (blue <-> red)
-        rotated = rotated[::-1]
         return rotated
     else:
         # Single channel format: (13, 13) with values 0/1/2
         rotated = np.flip(board, axis=(0, 1))  # Rotate 180°
-        # Swap colors: 1 <-> 2
-        rotated = np.where(rotated == 1, 2, np.where(rotated == 2, 1, rotated))
         return rotated
 
 
@@ -358,79 +310,139 @@ def reflect_board_long_diagonal(board: np.ndarray) -> np.ndarray:
     else:
         # Single channel format: (13, 13) with values 0/1/2
         reflected = np.transpose(board)  # Transpose
-        # Swap colors: 1 <-> 2
-        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        # Swap colors: BLUE_PIECE <-> RED_PIECE
+        reflected = np.where(reflected == BLUE_PIECE, RED_PIECE,
+                             np.where(reflected == RED_PIECE, BLUE_PIECE,
+                                      reflected))
         return reflected
 
 
 def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
     """
     Reflect board along the short diagonal (top-right to bottom-left) and swap colors.
-    
-    This preserves the logical game state under the swap rule.
-    
+    This is a true short-diagonal reflection:
+      - Each (row, col) maps to (maxIndex - col, maxIndex - row)
+      - Colors are swapped (blue <-> red)
     Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
-        
+        board: Board array of shape (2, N, N) or (N, N)
     Returns:
         Reflected and color-swapped board
     """
     if board.ndim == 3:
-        # 2-channel format: (2, 13, 13)
-        # Short diagonal reflection = flip both axes
-        reflected = np.flip(board, axis=(1, 2))
-        # Swap channels (blue <-> red)
-        reflected = reflected[::-1]
+        # 2-channel format: (2, N, N)
+        N = board.shape[1]
+        reflected = np.zeros_like(board)
+        for row in range(N):
+            for col in range(N):
+                # Swap color channel
+                reflected[1, N - 1 - col, N - 1 - row] = board[0, row, col]  # Blue -> Red
+                reflected[0, N - 1 - col, N - 1 - row] = board[1, row, col]  # Red -> Blue
         return reflected
     else:
-        # Single channel format: (13, 13) with values 0/1/2
-        # Short diagonal reflection = flip both axes
-        reflected = np.flip(board, axis=(0, 1))
-        # Swap colors: 1 <-> 2
-        reflected = np.where(reflected == 1, 2, np.where(reflected == 2, 1, reflected))
+        # Single channel format: (N, N) with values 0/1/2
+        N = board.shape[0]
+        reflected = np.zeros_like(board)
+        for row in range(N):
+            for col in range(N):
+                val = board[row, col]
+                if val == BLUE_PIECE:
+                    reflected[N - 1 - col, N - 1 - row] = RED_PIECE  # Blue -> Red
+                elif val == RED_PIECE:
+                    reflected[N - 1 - col, N - 1 - row] = BLUE_PIECE  # Red -> Blue
+                else:
+                    reflected[N - 1 - col, N - 1 - row] = EMPTY_PIECE
         return reflected
 
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
     """
-    Create all 4 augmented versions of a board.
+    Create 4 augmented board states from a single board.
     
     Args:
-        board: Board array of shape (2, 13, 13) or (13, 13)
+        board: 2-channel board state (2, N, N)
         
     Returns:
-        List of 4 boards: [original, rotated_180, reflected_long, reflected_short]
+        List of 4 board states:
+        - Original
+        - 180° rotation (no color swap)
+        - Long diagonal reflection + color swap
+        - Short diagonal reflection + color swap
     """
+    # Ensure input is contiguous
+    board = np.ascontiguousarray(board)
+    
+    # Create augmented boards
     rotated = rotate_board_180(board)
     reflected_long = reflect_board_long_diagonal(board)
     reflected_short = reflect_board_short_diagonal(board)
     
-    return [board, rotated, reflected_long, reflected_short]
+    # Ensure all outputs are contiguous
+    return [
+        board.copy(),
+        np.ascontiguousarray(rotated),
+        np.ascontiguousarray(reflected_long),
+        np.ascontiguousarray(reflected_short)
+    ]
 
 
 def create_augmented_policies(policy: np.ndarray) -> list[np.ndarray]:
     """
-    Create policy arrays corresponding to the 4 board augmentations.
-    
-    Args:
-        policy: Policy array of shape (169,)
-        
-    Returns:
-        List of 4 policies corresponding to the board augmentations
+    Create policy labels for the 4 board augmentations.
+    - For color-swapping symmetries, policy is transformed accordingly.
     """
-    # Reshape policy to (13, 13) for easier manipulation
+    # Handle None policies (final moves with no next move)
+    if policy is None:
+        # Return 4 copies of zero policy for final moves
+        zero_policy = np.zeros(169, dtype=np.float32)
+        return [zero_policy.copy() for _ in range(4)]
+    
+    # Ensure input is contiguous
+    policy = np.ascontiguousarray(policy)
+    
+    # Reshape to 2D for easier manipulation
     policy_2d = policy.reshape(13, 13)
     
-    # Create the 4 augmented policies
-    rotated = np.flip(policy_2d, axis=(0, 1))  # 180° rotation
+    # Create augmented policies
+    rotated = np.flip(policy_2d, axis=(0, 1))  # 180° rotation (no color swap)
     reflected_long = np.transpose(policy_2d)  # Long diagonal reflection
-    reflected_short = np.flip(np.transpose(policy_2d), axis=(0, 1))  # Short diagonal reflection
+    reflected_short = np.zeros_like(policy_2d)  # Short diagonal reflection
+
+    # Short diagonal reflection: (row, col) -> (N-1-col, N-1-row)
+    for row in range(13):
+        for col in range(13):
+            reflected_short[12 - col, 12 - row] = policy_2d[row, col]
     
-    # Reshape back to (169,)
+    # Ensure all outputs are contiguous
     return [
-        policy,
-        rotated.reshape(169),
-        reflected_long.reshape(169),
-        reflected_short.reshape(169)
+        policy.copy(),
+        np.ascontiguousarray(rotated.reshape(169)),
+        np.ascontiguousarray(reflected_long.reshape(169)),
+        np.ascontiguousarray(reflected_short.reshape(169))
+    ]
+
+
+def create_augmented_values(value: float) -> list[float]:
+    """
+    Create value labels for the 4 board augmentations.
+    - For color-swapping symmetries, swap the value (1.0 <-> 0.0).
+    """
+    return [
+        value,          # Original
+        value,          # 180° rotation (no color swap)
+        1.0 - value,    # Long diagonal reflection + color swap
+        1.0 - value     # Short diagonal reflection + color swap
+    ]
+
+
+def create_augmented_player_to_move(player_to_move: int) -> list[int]:
+    """
+    Create player-to-move values for the 4 board augmentations.
+    - For color-swapping symmetries, swap the player (0 <-> 1).
+    """
+    return [
+        player_to_move,          # Original
+        player_to_move,          # 180° rotation (no color swap)
+        1 - player_to_move,      # Long diagonal reflection + color swap
+        1 - player_to_move       # Short diagonal reflection + color swap
     ]
 
 
@@ -466,113 +478,33 @@ def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np
 # Training Data Preparation
 # ============================================================================
 
-
-def extract_training_examples_from_game(trmph_text: str, winner_from_file: str = None, debug_info: str = "") -> List[Tuple[np.ndarray, Optional[np.ndarray], float]]:
-    """
-    Extract training examples from a game using correct logic for two-headed networks.
-    
-    This function creates training examples from all positions in a game:
-    - Position i (0 to M): Board state after i moves
-    - Policy target: Next move (position i+1) if available, None for final position
-    - Value target: Final game outcome for all positions
-    
-    For two-headed networks, we include all positions and handle missing policy targets
-    in the loss function. This ensures both heads get trained on the same board states.
-    
-    Args:
-        trmph_text: Complete trmph string
-        winner_from_file: Winner from file data ("1" for blue, "2" for red)
-        debug_info: Optional debug information
-        
-    Returns:
-        List of (board_state, policy_target, value_target) tuples
-        - board_state: Current board state (2, 13, 13)
-        - policy_target: Next move as one-hot (169,) or None if no next move
-        - value_target: Final game outcome (0.0 or 1.0)
-
-    Limitations:
-    - No data augmentation (will be added later)
-    Raises:
-        ValueError: If game has no moves (empty game) or missing winner data
-    """
-    try:
-        # Parse moves from trmph string
-        bare_moves = strip_trmph_preamble(trmph_text)
-        moves = split_trmph_moves(bare_moves)
-
-        # Reject empty games - they provide no useful training signal
-        if not moves:
-            logger.error(f"Empty game found - no moves to learn from: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
-            raise ValueError("Empty game - no moves to learn from")
-
-        # Require winner data from file - no automatic calculation
-        if winner_from_file is None:
-            logger.error(f"Missing winner data for game: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
-            raise ValueError("Missing winner data - cannot determine training target")
-
-        # Validate winner format
-        if winner_from_file not in ["1", "2"]:
-            logger.error(f"Invalid winner format '{winner_from_file}' for game: {trmph_text[:50]}...")
-            if debug_info:
-                logger.error(f"Debug info: {debug_info}")
-            raise ValueError(f"Invalid winner format: {winner_from_file}")
-
-        # Set value target from validated file data
-        value_target = 1.0 if winner_from_file == "1" else 0.0
-
-        training_examples = []
-
-        # Iterate through all positions (0 to M) to create training examples
-        # Position 0 is the empty board
-        # Positions 1 to M are board states after each move
-        for position in range(len(moves) + 1):
-            board_state = create_board_from_moves(moves[:position])
-            policy_target = None
-            if position < len(moves):
-                next_move = moves[position]
-                policy_target = create_policy_target(next_move)
-            training_examples.append((board_state, policy_target, value_target))
-
-        return training_examples
-
-    except Exception as e:
-        # Re-raise ValueError (our validation errors) but catch other exceptions
-        if isinstance(e, ValueError):
-            raise
-        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
-        if debug_info:
-            logger.error(f"Debug info: {debug_info}")
-        raise ValueError(f"Failed to process game: {e}")
-
-
 def create_board_from_moves(moves: List[str]) -> np.ndarray:
     """
     Create a board state from a list of moves.
+    
+    This function uses parse_trmph_to_board internally to ensure consistent
+    duplicate move handling and error checking.
     
     Args:
         moves: List of trmph moves (e.g., ['a1', 'b2', 'c3'])
         
     Returns:
         Board state of shape (2, 13, 13)
+        
+    Raises:
+        ValueError: If duplicate moves are found (duplicate_action="exception")
     """
-    # Initialize board
-    board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    # Convert moves list to TRMPH string format
+    trmph_text = f"#13,{''.join(moves)}"
     
-    # Place moves on board
-    for i, move in enumerate(moves):
-        row, col = trmph_move_to_rowcol(move)
-        # Alternating players: blue=1, red=2
-        player = (i % 2) + 1
-        board_matrix[row, col] = player
+    # Use parse_trmph_to_board for consistent duplicate handling and error checking
+    # We use "exception" since remove_repeated_moves should be called before this function
+    board_nxn = parse_trmph_to_board(trmph_text, duplicate_action="exception")
     
-    # Convert to 2-channel format
+    # Convert N×N format to 2-channel format for neural network training
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board_state[0] = (board_matrix == 1).astype(np.float32)  # Blue channel
-    board_state[1] = (board_matrix == 2).astype(np.float32)  # Red channel
+    board_state[BLUE_CHANNEL] = (board_nxn == BLUE_PIECE).astype(np.float32)  # Blue channel
+    board_state[RED_CHANNEL] = (board_nxn == RED_PIECE).astype(np.float32)   # Red channel
     
     return board_state
 
@@ -585,7 +517,7 @@ def create_policy_target(move: str) -> np.ndarray:
         move: Trmph move (e.g., 'a1')
         
     Returns:
-        Policy target of shape (169,) with 1.0 for the move, 0.0 elsewhere
+        Policy target of shape (BOARD_SIZE * BOARD_SIZE,) with 1.0 for the move, 0.0 elsewhere
     """
     # Convert move to tensor position
     row, col = trmph_move_to_rowcol(move)
@@ -594,7 +526,6 @@ def create_policy_target(move: str) -> np.ndarray:
     # Create one-hot policy target
     policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
     policy[tensor_pos] = 1.0
-    
     return policy
 
 def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") -> Tuple[bool, str]:
@@ -611,17 +542,348 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
     """
     try:
         # Test if we can extract training examples from the game without errors
-        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, line_info)
+        # Use a dummy game_id for validation since we don't have file context yet
+        dummy_game_id = (-1, -1)  # Invalid game_id for validation purposes
+        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, dummy_game_id)
         return True, ""
     except Exception as e:
         return False, str(e)
+
+def assign_value_sample_tiers(total_positions: int) -> List[int]:
+    """
+    Assign sampling tiers to positions in a game.
+    
+    Tiers:
+    - 0: High priority (5 positions) - Always used for value training
+    - 1: Medium priority (5 positions) - Usually used for value training  
+    - 2: Low priority (10 positions) - Sometimes used for value training
+    - 3: Very low priority (20+ positions) - Rarely used for value training
+    
+    This allows flexible control over how many positions per game are used
+    for value network training while keeping all positions for policy training.
+    """
+    if total_positions <= 5:
+        # Small games: all positions get tier 0
+        return [0] * total_positions
+    
+    # Define positions per tier
+    positions_per_tier = [5, 5, 10, max(0, total_positions - 20)]
+    
+    # Assign tiers
+    tiers = []
+    for tier, count in enumerate(positions_per_tier):
+        if count > 0:
+            tiers.extend([tier] * min(count, total_positions - len(tiers)))
+    
+    # Shuffle within each tier to avoid bias
+    tier_groups = {}
+    for i, tier in enumerate(tiers):
+        if tier not in tier_groups:
+            tier_groups[tier] = []
+        tier_groups[tier].append(i)
+    
+    # Shuffle each tier group
+    for tier in tier_groups:
+        random.shuffle(tier_groups[tier])
+    
+    # Reconstruct tiers list
+    result = [0] * total_positions
+    for tier, indices in tier_groups.items():
+        for idx in indices:
+            result[idx] = tier
+    
+    return result
+
+
+def remove_repeated_moves(moves: List[str]) -> List[str]:
+    """
+    Remove repeated moves and all subsequent moves from the game.
+    
+    Args:
+        moves: List of TRMPH moves
+        
+    Returns:
+        Cleaned list of moves with no repetitions
+    """
+    seen_moves = set()
+    clean_moves = []
+    
+    for move in moves:
+        if move in seen_moves:
+            # Found repeated move - discard this and all subsequent moves
+            logger.debug(f"Repeated move {move} found, discarding game from this point")
+            break
+        seen_moves.add(move)
+        clean_moves.append(move)
+    
+    return clean_moves
+
+
+def extract_training_examples_from_game(
+    trmph_text: str, 
+    winner_from_file: str,
+    game_id: Tuple[int, int],  # (file_idx, line_idx)
+    include_trmph: bool = False,       # Whether to include full TRMPH string
+    shuffle_positions: bool = True
+) -> List[Dict]:
+    """
+    Extract training examples with comprehensive metadata and flexible sampling.
+    
+    Args:
+        trmph_text: Complete TRMPH string
+        winner_from_file: Winner from file data ("1" for blue, "2" for red)
+        game_id: Tuple of (file_index, line_index) for tracking
+        include_trmph: Whether to include full TRMPH string in metadata
+        shuffle_positions: Whether to shuffle position order within game
+        
+    Returns:
+        List of enhanced training examples with metadata
+    """
+    try:
+        # Parse moves and validate
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = split_trmph_moves(bare_moves)
+        
+        # Handle repeated moves
+        moves = remove_repeated_moves(moves)
+        
+        if not moves:
+            raise ValueError("Empty game after removing repeated moves")
+        
+        # Validate winner and convert to clear format
+        if winner_from_file not in ["1", "2"]:
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+        
+        # Convert winner format: "1"=BLUE, "2"=RED
+        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
+        value_target = 0.0 if winner_from_file == "1" else 1.0  # BLUE=0.0, RED=1.0
+        
+        total_positions = len(moves) + 1
+        
+        # Assign sampling tiers
+        value_sample_tiers = assign_value_sample_tiers(total_positions)
+        
+        # Create position indices (shuffle if requested)
+        position_indices = list(range(total_positions))
+        if shuffle_positions:
+            random.shuffle(position_indices)
+        
+        training_examples = []
+        
+        for i, position in enumerate(position_indices):
+            # Create board state
+            board_state = create_board_from_moves(moves[:position])
+            
+            # Create policy target
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            
+            # Create metadata
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': value_sample_tiers[i],
+                'winner': winner_clear  # Store as "BLUE" or "RED"
+            }
+            
+            if include_trmph:
+                metadata['trmph_game'] = trmph_text
+            
+            # Create example
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'metadata': metadata
+            }
+            
+            training_examples.append(example)
+        
+        return training_examples
+        
+    except Exception as e:
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        raise ValueError(f"Failed to process game: {e}")
+
+
+def extract_positions_range(
+    trmph_text: str, 
+    winner: str, 
+    start_pos: int, 
+    end_pos: int, 
+    game_id: Tuple[int, int]
+) -> Tuple[List[Dict], bool]:
+    """
+    Extract only positions in the specified range from a game.
+    
+    Args:
+        trmph_text: Complete TRMPH string
+        winner: Winner from file data ("1" or "2")
+        start_pos: Starting position (inclusive)
+        end_pos: Ending position (exclusive)
+        game_id: Tuple of (file_index, line_index)
+        
+    Returns:
+        List of training examples for the specified position range
+    """
+    try:
+        # Parse moves
+        bare_moves = strip_trmph_preamble(trmph_text)
+        raw_moves = split_trmph_moves(bare_moves)        
+        moves = remove_repeated_moves(raw_moves)
+        repeat = False
+        if len(raw_moves) != len(moves):
+            repeat = True
+        
+        if not moves:
+            return [], False
+        
+        # Validate winner
+        if winner not in ["1", "2"]:
+            raise ValueError(f"Invalid winner format: {winner}")
+        
+        winner_clear = "BLUE" if winner == "1" else "RED"
+        value_target = 0.0 if winner == "1" else 1.0
+        
+        total_positions = len(moves) + 1
+        examples = []
+        
+        # Extract positions in range
+        for position in range(start_pos, min(end_pos, total_positions)):
+            # Create board state
+            board_state = create_board_from_moves(moves[:position])
+            
+            # Create policy target
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            
+            # Create metadata
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': 0,  # Default tier for range extraction
+                'winner': winner_clear
+            }
+            
+            # Create example
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'metadata': metadata
+            }
+            
+            examples.append(example)
+        
+        return examples, repeat
+        
+    except Exception as e:
+        logger.error(f"Failed to extract positions range from game: {e}")
+        return [], False
+
+
+def create_file_lookup_table(trmph_files: List[Path], output_dir: Path) -> Path:
+    """
+    Create a file lookup table mapping file indices to actual filenames.
+    
+    Args:
+        trmph_files: List of TRMPH file paths
+        output_dir: Directory to save the lookup table
+        
+    Returns:
+        Path to the created lookup table file
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    lookup_file = output_dir / f"file_lookup_{timestamp}.json"
+    
+    file_mapping = {}
+    for file_idx, file_path in enumerate(trmph_files):
+        file_mapping[file_idx] = str(file_path)
+    
+    lookup_data = {
+        'file_mapping': file_mapping,
+        'created_at': datetime.now().isoformat(),
+        'total_files': len(trmph_files),
+        'format_version': '1.0'
+    }
+    
+    with open(lookup_file, 'w') as f:
+        json.dump(lookup_data, f, indent=2)
+    
+    logger.info(f"Created file lookup table: {lookup_file}")
+    return lookup_file
+
+
+# =========================================================================
+# File Lookup Utilities
+# =========================================================================
+
+def get_filename_from_game_id_using_state(game_id: tuple, state_file_path: Path) -> str:
+    """
+    Get filename from game_id using processing state file.
+    
+    Args:
+        game_id: Tuple of (file_idx, line_idx)
+        state_file_path: Path to processing_state.json file
+        
+    Returns:
+        Filename corresponding to the game_id
+        
+    Raises:
+        FileNotFoundError: If state file doesn't exist
+        ValueError: If file_idx is out of range
+    """
+    if not state_file_path.exists():
+        raise FileNotFoundError(f"Processing state file not found: {state_file_path}")
+    
+    with open(state_file_path, 'r') as f:
+        state_data = json.load(f)
+    
+    processed_files = state_data.get('processed_files', [])
+    file_idx, line_idx = game_id
+    
+    if file_idx >= len(processed_files):
+        raise ValueError(f"File index {file_idx} out of range (max: {len(processed_files)-1})")
+    
+    file_path = processed_files[file_idx]['file']
+    return Path(file_path).name
+
+
+def get_file_info_from_game_id_using_state(game_id: tuple, state_file_path: Path) -> Dict[str, Any]:
+    """
+    Get complete file information from game_id using processing state file.
+    
+    Args:
+        game_id: Tuple of (file_idx, line_idx)
+        state_file_path: Path to processing_state.json file
+        
+    Returns:
+        Dictionary with file information including path, output file, stats, etc.
+        
+    Raises:
+        FileNotFoundError: If state file doesn't exist
+        ValueError: If file_idx is out of range
+    """
+    if not state_file_path.exists():
+        raise FileNotFoundError(f"Processing state file not found: {state_file_path}")
+    
+    with open(state_file_path, 'r') as f:
+        state_data = json.load(f)
+    
+    processed_files = state_data.get('processed_files', [])
+    file_idx, line_idx = game_id
+    
+    if file_idx >= len(processed_files):
+        raise ValueError(f"File index {file_idx} out of range (max: {len(processed_files)-1})")
+    
+    return processed_files[file_idx].copy()
 
 
 # =========================================================================
 # Player-to-move Channel Utility
 # =========================================================================
 
-from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> int:
     """

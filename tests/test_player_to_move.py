@@ -4,7 +4,7 @@
 import unittest
 import numpy as np
 from hex_ai.data_utils import get_player_to_move_from_board
-from hex_ai.inference.board_utils import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.config import BOARD_SIZE
 
 class TestPlayerToMoveUtility(unittest.TestCase):
