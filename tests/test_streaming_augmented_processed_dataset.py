@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from unittest.mock import patch
 from pathlib import Path
+from collections import Counter
 
 from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
 from hex_ai.config import BOARD_SIZE
@@ -182,11 +183,10 @@ def test_get_non_augmented_example_logic(tmp_path):
             break
     assert seen == {0, 1, 2}
 
-def test_get_augmented_example_logic(tmp_path):
+def _run_augmented_example_logic_test(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
     from unittest.mock import patch
-    from collections import Counter
     # Create a .pkl.gz file with 2 examples
     file_path = tmp_path / "aug_logic_test.pkl.gz"
     examples = []
@@ -196,6 +196,10 @@ def test_get_augmented_example_logic(tmp_path):
         examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": examples}, f)
+    # Print what was written
+    print("[TEST DEBUG] Written examples:")
+    for idx, ex in enumerate(examples):
+        print(f"  Example {idx}: board sum={ex['board'].sum()}, board[0,0,0]={ex['board'][0,0,0]}, value={ex['value']}")
     # Patch augmentation to return 4 augmentations per example
     with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
         mock_aug.side_effect = lambda board, policy, value, error_tracker: [
@@ -204,20 +208,26 @@ def test_get_augmented_example_logic(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        # Set max_examples=None to process all base examples and get all augmentations
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=None, enable_augmentation=True)
-        # Collect all board[0,0,0] values using the public interface
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=None, enable_augmentation=True, verbose=True)
         values = []
+        boards = []
         i = 0
         while True:
             try:
                 board, policy, value = ds[i]
                 values.append(board[0, 0, 0].item())
+                boards.append(board.detach().cpu().numpy())
                 i += 1
             except IndexError:
                 break
-        # Should be one 0 (empty board, not augmented) and four 1s (non-empty, augmented)
+        print(f"[TEST DEBUG] values: {values}")
+        print(f"[TEST DEBUG] Counter: {Counter(int(v) for v in values)}")
+        for idx, b in enumerate(boards):
+            print(f"[TEST DEBUG] Board {idx} sum: {b.sum()}, board[0,0,0]: {b[0,0,0]}")
         assert Counter(int(v) for v in values) == Counter([0, 1, 1, 1, 1])
+
+def test_get_augmented_example_logic(tmp_path):
+    _run_augmented_example_logic_test(tmp_path)
 
 # ---
 # Test: Augmentation value label logic (multiset comparison)
@@ -259,3 +269,22 @@ def test_augmentation_value_label(tmp_path):
                 break
         # For each base example, should get two 0s and two 1s (order doesn't matter)
         assert Counter(int(v) for v in values) == Counter([0, 0, 1, 1, 0, 0, 1, 1]) 
+
+def test_flakiness_of_get_augmented_example_logic(tmp_path_factory):
+    """
+    Run _run_augmented_example_logic_test 100 times to check for flakiness.
+    Print the number of passes and failures.
+    """
+    import traceback
+    passes = 0
+    failures = 0
+    for i in range(100):
+        tmp_path = tmp_path_factory.mktemp(f"flakytest_{i}")
+        try:
+            _run_augmented_example_logic_test(tmp_path)
+            passes += 1
+        except Exception as e:
+            print(f"Iteration {i+1} failed: {e}")
+            traceback.print_exc()
+            failures += 1
+    print(f"test_get_augmented_example_logic: {passes} passes, {failures} failures out of 100 runs.") 

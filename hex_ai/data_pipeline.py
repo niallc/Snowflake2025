@@ -221,6 +221,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         aug_idx = idx % 4
         chunk_start = 0
         chunk_end = len(self.current_chunk)
+        if self.verbose:
+            print(f"[AUG] idx={idx}, base_example_idx={base_example_idx}, aug_idx={aug_idx}, chunk_start={chunk_start}, chunk_end={chunk_end}")
         while not (chunk_start <= base_example_idx < chunk_end):
             if self.verbose:
                 print(f"[GETITEM] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, base_example_idx={base_example_idx}")
@@ -237,6 +239,9 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             chunk_end = chunk_start + len(self.current_chunk)
         local_idx = base_example_idx - chunk_start
         example = self.current_chunk[local_idx]
+        if self.verbose:
+            print(f"[AUG] Processing local_idx={local_idx}, example keys={list(example.keys())}")
+            print(f"[AUG] Board sum: {np.sum(example['board'])}, aug_idx={aug_idx}")
         # --- Validation and augmentation ---
         _validate_example_format(example, filename="<stream>")
         board_state = example['board']
@@ -246,12 +251,16 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         board_2ch = board_state[:PLAYER_CHANNEL] if board_state.shape[0] > 1 else board_state
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:
+            if self.verbose:
+                print(f"[AUG] Empty board detected at idx={idx}, aug_idx={aug_idx}. Returning only for aug_idx==0.")
             # Only one example for empty boards
             if aug_idx == 0:
                 self.total_examples_loaded += 1
                 return self._tensorize_example(board_state, policy, value)
             else:
                 # For aug_idx > 0, return the first example again (or raise IndexError)
+                if self.verbose:
+                    print(f"[AUG] IndexError: No augmented examples for empty board at idx={idx}, aug_idx={aug_idx}")
                 raise IndexError("No augmented examples for empty board.")
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
@@ -263,10 +272,14 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             error_tracker._current_file = str(current_file)
             error_tracker._current_sample = sample_info
             augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
+            if self.verbose:
+                print(f"[AUG] Augmented {len(augmented_examples)} examples for idx={idx}, aug_idx={aug_idx}")
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise
         if aug_idx >= len(augmented_examples):
+            if self.verbose:
+                print(f"[AUG] IndexError: Requested augmentation {aug_idx} but only {len(augmented_examples)} available at idx={idx}")
             raise IndexError(f"Requested augmentation {aug_idx} but only {len(augmented_examples)} available.")
         aug_board_2ch, aug_policy, aug_value, aug_player = augmented_examples[aug_idx]
         tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
@@ -306,6 +319,11 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                     examples_to_add = file_examples[:remaining_in_chunk]
                     self.current_chunk.extend(examples_to_add)
                     self.current_file_idx += 1
+                    # Print loaded examples for debug
+                    print(f"[DATASET DEBUG] Loaded examples from {file_path}:")
+                    for idx, ex in enumerate(examples_to_add):
+                        board = ex['board']
+                        print(f"  Example {idx}: board sum={board.sum()}, board[0,0,0]={board[0,0,0]}, value={ex['value']}")
                 else:
                     files_with_errors += 1
                     error_details.append((str(file_path), "Missing 'examples' key"))
