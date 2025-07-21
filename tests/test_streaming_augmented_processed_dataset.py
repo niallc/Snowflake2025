@@ -78,9 +78,8 @@ def test_player_channel_correctness():
         assert torch.all((player_channel == 0) | (player_channel == 1)), "Player channel should be 0 or 1"
 
 # ---
-# Test: Empty board should not be augmented
-# Expectation: Only one (non-augmented) example is returned for an empty board, even if augmentation is enabled.
-# Any further access should raise IndexError. This matches the dataset logic: empty boards are not augmented.
+# Test: Empty board should be augmented (4x)
+# Expectation: Every board, even empty, yields 4 augmentations if augmentation is enabled.
 # ---
 def test_empty_board_handling(tmp_path):
     import gzip, pickle
@@ -92,15 +91,15 @@ def test_empty_board_handling(tmp_path):
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": [example]}, f)
     ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=1, enable_augmentation=True)
-    # Should return a single example for ds[0]
-    board, policy, value = ds[0]
-    assert isinstance(board, torch.Tensor)
-    assert board.shape[0] == 2 or board.shape[0] == 3  # Accept 2 or 3 channels
-    # Should raise IndexError for ds[1] (no augmentations for empty board)
-    # This is by design: empty boards are not augmented.
+    # Should return 4 augmentations for ds[0]..ds[3]
+    for i in range(4):
+        board, policy, value = ds[i]
+        assert isinstance(board, torch.Tensor)
+        assert board.shape[0] == 2 or board.shape[0] == 3  # Accept 2 or 3 channels
+    # Should raise IndexError for ds[4] (no more augmentations)
     import pytest
     with pytest.raises(IndexError):
-        _ = ds[1] 
+        _ = ds[4]
 
 # ---
 # Test: Non-empty boards are augmented (4x examples per base example)
@@ -187,7 +186,7 @@ def _run_augmented_example_logic_test(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
     from unittest.mock import patch
-    # Create a .pkl.gz file with 2 examples
+    # Create a .pkl.gz file with 2 examples (one empty, one non-empty)
     file_path = tmp_path / "aug_logic_test.pkl.gz"
     examples = []
     for i in range(2):
@@ -221,15 +220,14 @@ def _run_augmented_example_logic_test(tmp_path):
             except IndexError:
                 break
         print(f"[TEST DEBUG] values: {values}")
-        print(f"[TEST DEBUG] Counter: {Counter(int(v) for v in values)}")
+        print(f"[TEST DEBUG] Counter: {Counter(int(v) for v in values)})")
         for idx, b in enumerate(boards):
             print(f"[TEST DEBUG] Board {idx} sum: {b.sum()}, board[0,0,0]: {b[0,0,0]}")
-        # Because the dataset shuffles the chunk, the order of examples is not guaranteed.
-        # We expect 4 augmentations of the non-empty board (value 1.0) and 1 of the empty board (value 0.0), in any order.
+        # Now, every example (even empty) yields 4 augmentations
         c = Counter(int(v) for v in values)
         assert c[1] == 4, f"Expected 4 augmentations of non-empty board, got {c[1]}"
-        assert c[0] == 1, f"Expected 1 augmentation of empty board, got {c[0]}"
-        assert len(values) == 5, f"Expected 5 total examples, got {len(values)}"
+        assert c[0] == 4, f"Expected 4 augmentations of empty board, got {c[0]}"
+        assert len(values) == 8, f"Expected 8 total examples, got {len(values)}"
 
 def test_get_augmented_example_logic(tmp_path):
     _run_augmented_example_logic_test(tmp_path)

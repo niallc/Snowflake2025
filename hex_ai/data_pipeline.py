@@ -103,17 +103,15 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     def __len__(self):
         """
         Return the number of samples (for DataLoader compatibility).
-        For augmented datasets, this should return the effective number of examples
-        that will be provided (4x the base examples).
+        For augmented datasets, this should return 4x the number of base examples.
         For non-augmented datasets, return the number of original examples.
         """
         if self.enable_augmentation:
-            if self.effective_max_examples is not None:
-                return self.effective_max_examples
+            if self.max_examples is not None:
+                return self.max_examples * 4
             else:
                 raise NotImplementedError("Length is undefined when max_examples is not set.")
         else:
-            # For non-augmented, just count the base examples
             if self.max_examples is not None:
                 return self.max_examples
             else:
@@ -209,54 +207,19 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
             start_new_epoch = self.max_examples is not None and exceeded_max_samples
 
-    def _map_augmented_index_to_chunk_local_idx(self, idx):
-        """
-        Map a global augmented index (idx) to (local_idx, aug_idx) in the current chunk.
-        Handles the fact that the chunk may be shuffled, and that empty boards only yield one example (no augmentation).
-        For each non-empty board: 4 augmentations (aug_idx 0-3)
-        For each empty board: 1 example (aug_idx 0 only)
-        Returns (local_idx, aug_idx) such that current_chunk[local_idx] and aug_idx yield the correct example.
-        Raises IndexError if idx is out of bounds for the current chunk.
-        """
-        # Build a list of (local_idx, num_augs) for each example in the chunk
-        aug_counts = []
-        for i, ex in enumerate(self.current_chunk):
-            board_2ch = ex['board'][:PLAYER_CHANNEL] if ex['board'].shape[0] > 1 else ex['board']
-            if np.sum(board_2ch) == 0:
-                aug_counts.append((i, 1))  # Only one example for empty board
-            else:
-                aug_counts.append((i, 4))  # Four augmentations for non-empty board
-        # Walk through aug_counts to find which (local_idx, aug_idx) matches idx
-        running_total = 0
-        for local_idx, num_augs in aug_counts:
-            if idx < running_total + num_augs:
-                aug_idx = idx - running_total
-                return local_idx, aug_idx
-            running_total += num_augs
-        # If we get here, idx is out of bounds for this chunk
-        raise IndexError(f"Augmented idx {idx} out of bounds for current chunk (total augmented examples: {running_total})")
-
     def _get_augmented_example(self, idx):
         """
         Augmented path: returns an augmented example for the given global index.
-        Handles epoch boundary logic, chunk loading, index mapping, and augmentation.
+        Now, every example (including empty boards) yields 4 augmentations.
+        Index mapping is trivial: local_idx = idx // 4, aug_idx = idx % 4.
         """
-        # --- Epoch boundary logic ---
         self._handle_epoch_boundary_if_needed()
-        # --- Chunk loading and index mapping ---
         chunk_start = 0
         chunk_end = len(self.current_chunk)
-        # Compute total number of augmented examples in the chunk
-        def chunk_augmented_length(chunk):
-            n = 0
-            for ex in chunk:
-                board_2ch = ex['board'][:PLAYER_CHANNEL] if ex['board'].shape[0] > 1 else ex['board']
-                n += 1 if np.sum(board_2ch) == 0 else 4
-            return n
-        total_aug_examples = chunk_augmented_length(self.current_chunk)
-        # Find the right chunk for idx
-        while not (chunk_start <= idx < chunk_start + total_aug_examples):
-            print(f"[AUG DEBUG] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}, total_aug_examples={total_aug_examples}")
+        chunk_size = len(self.current_chunk)
+        # Each chunk has chunk_size * 4 augmented examples
+        while not (chunk_start * 4 <= idx < (chunk_start + chunk_size) * 4):
+            print(f"[AUG DEBUG] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}, chunk_size={chunk_size}")
             self._load_next_chunk()
             if len(self.current_chunk) == 0:
                 print("[AUG DEBUG] No more data to load from dataset. Raising IndexError.")
@@ -265,33 +228,21 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                 raise IndexError("No more data to load from dataset")
             from time import sleep
             sleep(0.1)
-            chunk_start += total_aug_examples
+            chunk_start += chunk_size
             chunk_end = chunk_start + len(self.current_chunk)
-            total_aug_examples = chunk_augmented_length(self.current_chunk)
-            print(f"[AUG DEBUG] After loading: chunk_start={chunk_start}, chunk_end={chunk_end}, total_aug_examples={total_aug_examples}")
-        # Map idx to (local_idx, aug_idx) in the chunk
-        local_idx, aug_idx = self._map_augmented_index_to_chunk_local_idx(idx - chunk_start)
+            chunk_size = len(self.current_chunk)
+            print(f"[AUG DEBUG] After loading: chunk_start={chunk_start}, chunk_end={chunk_end}, chunk_size={chunk_size}")
+        # Trivial index mapping
+        local_idx = (idx - chunk_start * 4) // 4
+        aug_idx = (idx - chunk_start * 4) % 4
         print(f"[AUG DEBUG] idx={idx}, chunk_start={chunk_start}, local_idx={local_idx}, aug_idx={aug_idx}, current_chunk_len={len(self.current_chunk)}")
         example = self.current_chunk[local_idx]
-        print(f"[AUG DEBUG] Processing example at local_idx={local_idx}, board sum={np.sum(example['board'])}, aug_idx={aug_idx}, value={example['value']}")
-        # --- Validation and augmentation ---
+        print(f"[AUG DEBUG] Processing example at local_idx={local_idx}, aug_idx={aug_idx}, value={example['value']}")
         _validate_example_format(example, filename="<stream>")
         board_state = example['board']
         policy = example['policy']
         value = example['value']
-        # Extract 2-channel board for augmentation
         board_2ch = board_state[:PLAYER_CHANNEL] if board_state.shape[0] > 1 else board_state
-        # Skip empty boards (no pieces to augment)
-        if np.sum(board_2ch) == 0:
-            print(f"[AUG DEBUG] Empty board detected at idx={idx}, aug_idx={aug_idx}. Returning only for aug_idx==0.")
-            # Only one example for empty boards
-            if aug_idx == 0:
-                self.total_examples_loaded += 1
-                return self._tensorize_example(board_state, policy, value)
-            else:
-                print(f"[AUG DEBUG] IndexError: No augmented examples for empty board at idx={idx}, aug_idx={aug_idx}")
-                raise IndexError("No augmented examples for empty board.")
-        # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
             from hex_ai.error_handling import get_board_state_error_tracker
