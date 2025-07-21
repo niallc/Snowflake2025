@@ -61,26 +61,6 @@ def _validate_example_format(example, filename):
 
 
 
-def augmented_collate_fn(batch):
-    """
-    Custom collate function for AugmentedProcessedDataset.
-    Each item in the batch is a list of 4 augmented examples (tuples).
-    This function flattens them into a single batch.
-    """
-    # Flatten the batch (each item is a list of 4 examples)
-    flattened_batch = []
-    for item in batch:
-        if isinstance(item, list):
-            flattened_batch.extend(item)
-        else:
-            flattened_batch.append(item)
-    boards, policies, values = zip(*flattened_batch)
-    boards_batch = torch.stack(boards)
-    policies_batch = torch.stack(policies)
-    values_batch = torch.stack(values)
-    return boards_batch, policies_batch, values_batch
-
-
 def create_experiment_config_legacy(experiment_name: str,
                            hyperparams: Dict,
                            dataset_info: Dict,
@@ -448,7 +428,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
             shuffle=False,  # Always let the dataset control order
             num_workers=0,  # Use 0 to avoid multiprocessing issues
             pin_memory=False,  # Disable pin_memory for MPS
-            collate_fn=augmented_collate_fn # Use custom collate_fn for augmented data
+            collate_fn=None # No longer need custom collate_fn
         )
         val_loader = None
         if val_dataset:
