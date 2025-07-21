@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 In-process hyperparameter sweep for Hex AI, using run_hyperparameter_tuning_current_data.
 No subprocesses are launched; all experiments are run in-process for easier debugging and unified code path.
@@ -10,6 +9,20 @@ import time
 from pathlib import Path
 from datetime import datetime
 import traceback
+import sys
+import os
+
+# Safety check: ensure running inside the correct virtual environment
+expected_env = "hex_ai_env"
+venv_path = os.environ.get("VIRTUAL_ENV", "")
+if not venv_path or expected_env not in venv_path:
+    sys.stderr.write(
+        f"\nERROR: This script must be run inside the '{expected_env}' virtual environment.\n"
+        f"Please activate it first by running:\n\n"
+        f"    source {expected_env}/bin/activate\n\n"
+        f"Then re-run this script.\n"
+    )
+    sys.exit(1)
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 

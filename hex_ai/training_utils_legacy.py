@@ -64,35 +64,20 @@ def _validate_example_format(example, filename):
 def augmented_collate_fn(batch):
     """
     Custom collate function for AugmentedProcessedDataset.
-    
-    Each item in the batch is a list of 4 augmented examples.
+    Each item in the batch is a list of 4 augmented examples (tuples).
     This function flattens them into a single batch.
     """
     # Flatten the batch (each item is a list of 4 examples)
     flattened_batch = []
     for item in batch:
         if isinstance(item, list):
-            # Augmented examples
             flattened_batch.extend(item)
         else:
-            # Single example (fallback)
             flattened_batch.append(item)
-    
-    # Separate boards, policies, and values
-    boards = []
-    policies = []
-    values = []
-    
-    for example in flattened_batch:
-        boards.append(example['board'])
-        policies.append(example['policy'])
-        values.append(example['value'])
-    
-    # Stack into batch tensors
+    boards, policies, values = zip(*flattened_batch)
     boards_batch = torch.stack(boards)
     policies_batch = torch.stack(policies)
     values_batch = torch.stack(values)
-    
     return boards_batch, policies_batch, values_batch
 
 

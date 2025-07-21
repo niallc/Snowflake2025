@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Shuffle processed data to address value head fingerprinting issues.
 
@@ -22,6 +21,18 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
+
+# Safety check: ensure running inside the correct virtual environment
+expected_env = "hex_ai_env"
+venv_path = os.environ.get("VIRTUAL_ENV", "")
+if not venv_path or expected_env not in venv_path:
+    sys.stderr.write(
+        f"\nERROR: This script must be run inside the '{expected_env}' virtual environment.\n"
+        f"Please activate it first by running:\n\n"
+        f"    source {expected_env}/bin/activate\n\n"
+        f"Then re-run this script.\n"
+    )
+    sys.exit(1)
 
 # Add the hex_ai directory to the path
 sys.path.append('hex_ai')
