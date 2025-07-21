@@ -77,17 +77,10 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 800_000  # Training samples (will be 4x larger with augmentation)
+MAX_SAMPLES = 320_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 200_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2
-
-print(f"Running hyperparameter sweep with shuffled data:")
-print(f"  Data directory: data/processed/shuffled")
-print(f"  Training samples: {MAX_SAMPLES:,} (effective: {MAX_SAMPLES * 4:,} with augmentation)")
-print(f"  Validation samples: {MAX_VALIDATION_SAMPLES:,}")
-print(f"  Data augmentation: {'Enabled' if AUGMENTATION_CONFIG['enable_augmentation'] else 'Disabled'}")
-print(f"  Max Epochs: {EPOCHS}")
+EPOCHS = 6
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -146,17 +139,12 @@ def print_sweep_summary(results, results_dir, interrupted=False):
 # =============================================================
 
 if __name__ == "__main__":
-    print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
-    print(f"Data augmentation: {'ENABLED' if AUGMENTATION_CONFIG['enable_augmentation'] else 'DISABLED'}")
-
     shutdown_handler = GracefulShutdown()
 
     all_configs = list(all_param_combinations(SWEEP))
-    print(f"Total runs to launch: {len(all_configs)}")
     experiments = []
     for i, config in enumerate(all_configs):
         if shutdown_handler.shutdown_requested:
-            print("\nGraceful shutdown requested. Exiting sweep early.")
             break
         # Compute value_weight so that policy_weight + value_weight = 1
         config = dict(config)  # Make a copy to avoid mutating the sweep dict
