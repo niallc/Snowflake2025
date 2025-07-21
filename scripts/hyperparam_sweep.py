@@ -11,6 +11,8 @@ from datetime import datetime
 import traceback
 import sys
 import os
+import hashlib
+import json
 
 # Safety check: ensure running inside the correct virtual environment
 expected_env = "hex_ai_env"
@@ -25,6 +27,7 @@ if not venv_path or expected_env not in venv_path:
     sys.exit(1)
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+from hex_ai.file_utils import GracefulShutdown
 
 ###### Logging setup ######
 log_dir = Path('logs')
@@ -47,21 +50,56 @@ root_logger.addHandler(stream_handler)
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "learning_rate": [0.001, 0.01],
+    "learning_rate": [0.001],
     "batch_size": [256],
     "max_grad_norm": [20],
-    "dropout_prob": [0, 0.001, 0.01],
+    "dropout_prob": [0],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [0.2, 0.001],  # Value head learns slower
-    "value_weight_decay_factor": [3.0, 50.0, 1],  # Value head gets more regularization
+    "value_learning_rate_factor": [0.1],  # Value head learns slower
+    "value_weight_decay_factor": [1],  # Value head gets more regularization
+    "policy_weight": [0.01, 0.7],
     # Add more as needed
 }
 
+# Short labels for parameters
+SHORT_LABELS = {
+    "learning_rate": "lr",
+    "batch_size": "bs",
+    "max_grad_norm": "mgn",
+    "dropout_prob": "do",
+    "weight_decay": "wd",
+    "value_learning_rate_factor": "vlrf",
+    "value_weight_decay_factor": "vwdf",
+    "policy_weight": "pw",
+    "value_weight": "vw",
+    # Add more as needed
+}
+
+# Determine which parameters vary in this sweep
+VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
+
+def make_experiment_name(config, idx, tag = ""):
+    # Only include varying params, use short labels
+    parts = []
+    for k in VARYING_PARAMS:
+        short = SHORT_LABELS.get(k, k)
+        val = config[k]
+        # Remove trailing zeros for floats, e.g. 0.10 -> 0.1
+        if isinstance(val, float):
+            val = ('%.4f' % val).rstrip('0').rstrip('.')
+        parts.append(f"{short}{val}")
+    # Optionally, add a short hash for extra uniqueness
+    config_str = json.dumps({k: config[k] for k in VARYING_PARAMS}, sort_keys=True)
+    short_hash = hashlib.md5(config_str.encode()).hexdigest()[:6]
+    # Timestamp for uniqueness
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{tag}_exp{idx}_{'_'.join(parts)}_{short_hash}_{timestamp}"
+
 # Configuration
-MAX_SAMPLES = 1_600_000  # Training samples (will be 4x larger with augmentation)
+MAX_SAMPLES = 3_200_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 400_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 4
+EPOCHS = 2
 
 print(f"Running hyperparameter sweep with shuffled data:")
 print(f"  Data directory: data/processed/shuffled")
@@ -76,15 +114,49 @@ def all_param_combinations(sweep_dict):
     for values in itertools.product(*[sweep_dict[k] for k in keys]):
         yield dict(zip(keys, values))
 
+def print_sweep_summary(results, results_dir, interrupted=False):
+    print("\n" + "="*60)
+    if not interrupted:
+        print("SWEEP COMPLETE")
+    else:
+        print("SWEEP INTERRUPTED")
+    print("="*60)
+    if results is not None:
+        print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
+        # Find best experiment
+        if results.get('experiments'):
+            best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
+            print(f"\nBest experiment: {best_exp['experiment_name']}")
+            print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+            print(f"Hyperparameters: {best_exp['hyperparameters']}")
+            # Show all results sorted by validation loss
+            print(f"\nAll experiments ranked by validation loss:")
+            sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
+            for i, exp in enumerate(sorted_experiments):
+                print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+        else:
+            print("\nNo successful experiments!")
+    print(f"\nAll results saved to: {results_dir}")
+    print("Run 'python analyze_tuning_results.py' to analyze the results.")
+
 if __name__ == "__main__":
     print("WARNING: This sweep runs all experiments in-process using run_hyperparameter_tuning_current_data. No subprocesses will be launched.")
     print(f"Data augmentation: {'ENABLED' if AUGMENTATION_CONFIG['enable_augmentation'] else 'DISABLED'}")
+
+    shutdown_handler = GracefulShutdown()
 
     all_configs = list(all_param_combinations(SWEEP))
     print(f"Total runs to launch: {len(all_configs)}")
     experiments = []
     for i, config in enumerate(all_configs):
-        exp_name = f"shuffled_sweep_run_{i}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        if shutdown_handler.shutdown_requested:
+            print("\nGraceful shutdown requested. Exiting sweep early.")
+            break
+        # Compute value_weight so that policy_weight + value_weight = 1
+        config = dict(config)  # Make a copy to avoid mutating the sweep dict
+        if "policy_weight" in config:
+            config["value_weight"] = 1.0 - config["policy_weight"]
+        exp_name = make_experiment_name(config, i, tag = "loss_weight_sweep")
         experiments.append({
             'experiment_name': exp_name,
             'hyperparameters': config
@@ -94,7 +166,13 @@ if __name__ == "__main__":
     results_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
+    results = None
+    interrupted = False
     try:
+        if shutdown_handler.shutdown_requested:
+            interrupted = True
+            print_sweep_summary(results, results_dir, interrupted=True)
+            sys.exit(0)
         # Run hyperparameter tuning with fail_fast enabled
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
@@ -110,29 +188,8 @@ if __name__ == "__main__":
             fail_fast=True
         )
         total_time = time.time() - start_time
-
-        print(f"\n{'='*60}")
-        print(f"SWEEP COMPLETE")
-        print(f"{'='*60}")
-        print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
-        print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
-
-        # Find best experiment
-        if results.get('experiments'):
-            best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
-            print(f"\nBest experiment: {best_exp['experiment_name']}")
-            print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
-            print(f"Hyperparameters: {best_exp['hyperparameters']}")
-            # Show all results sorted by validation loss
-            print(f"\nAll experiments ranked by validation loss:")
-            sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
-            for i, exp in enumerate(sorted_experiments):
-                print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
-        else:
-            print("\nNo successful experiments!")
-
-        print(f"\nAll results saved to: {results_dir}")
-        print("Run 'python analyze_tuning_results.py' to analyze the results.")
+        print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+        print_sweep_summary(results, results_dir, interrupted=False)
     except Exception as e:
         print("\n" + "="*60)
         print("SWEEP FAILED - FAIL FAST MODE")
@@ -148,3 +205,4 @@ if __name__ == "__main__":
                 print(f"  {k}: {v}")
         print("\nSweep stopped due to a critical error. Please check the logs above and in the logs/ directory for more details.")
         print("If the error was due to a missing or corrupt file, check the data directory and filenames listed above.")
+        print_sweep_summary(results, results_dir, interrupted=True)
