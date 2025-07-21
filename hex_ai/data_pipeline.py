@@ -230,97 +230,85 @@ class StreamingAugmentedProcessedDataset(StreamingProcessedDataset):
         """
         super().__init__(data_files, **kwargs)
         self.enable_augmentation = enable_augmentation
-        
-        # For augmented datasets, we need to adjust the max_examples limit
-        # since each __getitem__ call returns 4 examples instead of 1
-        if enable_augmentation and self.max_examples is not None:
-            # Store the original limit for internal tracking
-            self.original_max_examples = self.max_examples
-            # Adjust the limit for the base class (divide by 4 since we return 4x examples)
-            self.max_examples = self.max_examples // 4
-            logger.info(f"StreamingAugmentedProcessedDataset: Adjusted max_examples from {self.original_max_examples:,} to {self.max_examples:,} (will provide {self.original_max_examples:,} effective examples with augmentation)")
+        self.max_examples = kwargs.get('max_examples', None)
+        # Effective number of examples after augmentation (for reporting and __len__)
+        if self.enable_augmentation and self.max_examples is not None:
+            self.effective_max_examples = self.max_examples * 4
         else:
-            self.original_max_examples = self.max_examples
-        
+            self.effective_max_examples = self.max_examples
         if enable_augmentation:
-            logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation")
+            logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation (max_examples={self.max_examples}, effective={self.effective_max_examples})")
         else:
-            logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples")
-    
+            logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples={self.max_examples})")
+
     def __len__(self):
         """
         Return the number of samples (for DataLoader compatibility).
         For augmented datasets, this should return the effective number of examples
         that will be provided (4x the base examples).
         """
-        if self.enable_augmentation and self.original_max_examples is not None:
-            # Return the original max_examples (the effective number with augmentation)
-            return self.original_max_examples
+        if self.effective_max_examples is not None:
+            return self.effective_max_examples
         else:
             base_len = super().__len__()
             if self.enable_augmentation:
-                # Return the effective number of examples (4x the base examples)
                 return base_len * 4
             else:
                 return base_len
-    
+
+    def _start_new_epoch(self):
+        """Reset counters and reshuffle files for a new epoch."""
+        if self.enable_augmentation and self.max_examples is not None:
+            print(f"Max samples ({self.max_examples}, effective {self.effective_max_examples} with augmentation) reached, starting next epoch")
+        else:
+            print(f"Max samples ({self.max_examples}) reached, starting next epoch")
+        self.epoch_file_list = self._get_shuffled_file_list()
+        self.current_file_idx = 0
+        self.current_example_idx = 0
+        self.total_examples_loaded = 0
+        self._load_next_chunk()
+        self.current_example_idx = 0
+
     def __getitem__(self, idx):
         """Get augmented training examples."""
         if not self.enable_augmentation:
             return super().__getitem__(idx)
-        
+        # The logic for when to start a new epoch is based on pre-augmentation max_examples
+        if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
+            self._start_new_epoch()
         # Get original example from streaming dataset
         original_example = super().__getitem__(idx)
         board_3ch, policy, value = original_example
-        
         # Extract 2-channel board for augmentation
-        # NOTE: This looks brittle. Especially if we add more channels to the board, this
-        # will rely on channel order
         board_2ch = board_3ch[:PLAYER_CHANNEL].numpy()  # Remove player-to-move channel
-        
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:
             return [original_example]  # Return single example for empty boards
-        
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
-            # Get error tracker for board state validation
             from hex_ai.error_handling import get_board_state_error_tracker
             error_tracker = get_board_state_error_tracker()
-            
-            # Get current file info for error tracking
             current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
             sample_info = f"augmented_chunk_idx={self.current_example_idx-1}, total_loaded={self.total_examples_loaded}"
-            
-            # Set context for error tracking
             error_tracker._current_file = str(current_file)
             error_tracker._current_sample = sample_info
-            
             augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item(), error_tracker)
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise
-        
-        # Convert to tensors and create 3-channel boards
         tensor_examples = []
         for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
             try:
-                # Create player-to-move channel
                 player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
                 board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
-                
-                # Convert to tensors
                 board_tensor = torch.from_numpy(board_3ch)
                 policy_tensor = torch.FloatTensor(aug_policy)
                 value_tensor = torch.FloatTensor([aug_value])
-                
                 tensor_examples.append((board_tensor, policy_tensor, value_tensor))
             except Exception as e:
                 logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
                 raise
-        
-        # Return all 4 examples (DataLoader will handle batching)
         return tensor_examples
 
 
