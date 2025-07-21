@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
-
+from time import sleep
 from .models import TwoHeadedResNet
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, PLAYER_CHANNEL
 from hex_ai.data_utils import get_player_to_move_from_board
@@ -100,6 +100,13 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             else:
                 return base_len
 
+    def _get_shuffled_file_list(self):
+        """Return a new shuffled list of files for the epoch."""
+        file_list = self.data_files.copy()
+        if self.shuffle_files:
+            random.shuffle(file_list)
+        return file_list
+
     def _start_new_epoch(self):
         """Reset counters and reshuffle files for a new epoch."""
         if self.enable_augmentation and self.max_examples is not None:
@@ -114,12 +121,37 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.current_example_idx = 0
 
     def __getitem__(self, idx):
-        """Get augmented training examples."""
+        """
+        Get augmented training examples.
+
+        The while loop below ensures that if the DataLoader calls __getitem__ multiple
+        times at the epoch boundary (for example, due to shuffling, multi-worker
+        loading, or repeated idx values), we only proceed to fetch a sample when the
+        counters are correct and the epoch has been properly reset.
+
+        This prevents repeated resets and duplicate prints.
+        """
         if not self.enable_augmentation:
             return super().__getitem__(idx)
-        # The logic for when to start a new epoch is based on pre-augmentation max_examples
-        if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
+        # --- Epoch boundary logic ---
+        num_restarts = 0
+        exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
+        start_new_epoch = self.max_examples is not None and exceeded_max_samples
+        # The while loop ensures that after resetting, we only proceed when the counters are correct.
+        # This is robust to any DataLoader behavior (shuffling, multi-worker, etc.).
+        while start_new_epoch:
             self._start_new_epoch()
+            if num_restarts > 0:
+                logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
+                sleep(1)
+
+            num_restarts += 1
+            if num_restarts > 100:
+                logger.warning("WARNING: Restarting epoch failed too many times. Continuing to avoid infinite loop.")
+                break
+            exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
+            start_new_epoch = self.max_examples is not None and exceeded_max_samples
+        # --- End epoch boundary logic ---
         # Get original example from streaming dataset
         original_example = super().__getitem__(idx)
         board_3ch, policy, value = original_example
