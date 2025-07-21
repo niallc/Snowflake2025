@@ -9,6 +9,7 @@ import logging
 import time
 from pathlib import Path
 from datetime import datetime
+import traceback
 
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 
@@ -80,40 +81,57 @@ if __name__ == "__main__":
     results_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
-    # Run hyperparameter tuning
-    results = run_hyperparameter_tuning_current_data(
-        experiments=experiments,
-        data_dir="data/processed/shuffled",
-        results_dir="checkpoints/hyperparameter_tuning",
-        train_ratio=0.8,
-        num_epochs=EPOCHS,
-        early_stopping_patience=None,  # Disable early stopping for now
-        random_seed=42,
-        max_examples_per_split=MAX_SAMPLES,
-        max_validation_examples=MAX_VALIDATION_SAMPLES,
-        enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation']
-    )
-    total_time = time.time() - start_time
+    try:
+        # Run hyperparameter tuning with fail_fast enabled
+        results = run_hyperparameter_tuning_current_data(
+            experiments=experiments,
+            data_dir="data/processed/shuffled",
+            results_dir="checkpoints/hyperparameter_tuning",
+            train_ratio=0.8,
+            num_epochs=EPOCHS,
+            early_stopping_patience=None,  # Disable early stopping for now
+            random_seed=42,
+            max_examples_per_split=MAX_SAMPLES,
+            max_validation_examples=MAX_VALIDATION_SAMPLES,
+            enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation'],
+            fail_fast=True
+        )
+        total_time = time.time() - start_time
 
-    print(f"\n{'='*60}")
-    print(f"SWEEP COMPLETE")
-    print(f"{'='*60}")
-    print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
-    print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
+        print(f"\n{'='*60}")
+        print(f"SWEEP COMPLETE")
+        print(f"{'='*60}")
+        print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+        print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
 
-    # Find best experiment
-    if results.get('experiments'):
-        best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
-        print(f"\nBest experiment: {best_exp['experiment_name']}")
-        print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
-        print(f"Hyperparameters: {best_exp['hyperparameters']}")
-        # Show all results sorted by validation loss
-        print(f"\nAll experiments ranked by validation loss:")
-        sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
-        for i, exp in enumerate(sorted_experiments):
-            print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
-    else:
-        print("\nNo successful experiments!")
+        # Find best experiment
+        if results.get('experiments'):
+            best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
+            print(f"\nBest experiment: {best_exp['experiment_name']}")
+            print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+            print(f"Hyperparameters: {best_exp['hyperparameters']}")
+            # Show all results sorted by validation loss
+            print(f"\nAll experiments ranked by validation loss:")
+            sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
+            for i, exp in enumerate(sorted_experiments):
+                print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+        else:
+            print("\nNo successful experiments!")
 
-    print(f"\nAll results saved to: {results_dir}")
-    print("Run 'python analyze_tuning_results.py' to analyze the results.")
+        print(f"\nAll results saved to: {results_dir}")
+        print("Run 'python analyze_tuning_results.py' to analyze the results.")
+    except Exception as e:
+        print("\n" + "="*60)
+        print("SWEEP FAILED - FAIL FAST MODE")
+        print("="*60)
+        print(f"Exception: {e}")
+        print("Traceback:")
+        traceback.print_exc()
+        # Try to print more context if available
+        if hasattr(e, 'args') and e.args and isinstance(e.args[0], dict):
+            err_info = e.args[0]
+            print("\nAdditional error context:")
+            for k, v in err_info.items():
+                print(f"  {k}: {v}")
+        print("\nSweep stopped due to a critical error. Please check the logs above and in the logs/ directory for more details.")
+        print("If the error was due to a missing or corrupt file, check the data directory and filenames listed above.")

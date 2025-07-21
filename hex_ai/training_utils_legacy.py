@@ -175,22 +175,22 @@ def create_summary_csv(experiment_results: List[Dict], results_path: Path):
     logger.info(f"Created experiment summary CSV: {summary_file}") 
 
 
-def run_hyperparameter_tuning_current_data(experiments: List[Dict],
-                            data_dir: str = "data/processed",
-                            results_dir: str = "checkpoints/hyperparameter_tuning",
-                            train_ratio: float = 0.8,
-                            num_epochs: int = 10,
-                            early_stopping_patience: Optional[int] = None,
-                            random_seed: Optional[int] = None,
-                            max_examples_per_split: Optional[int] = None,
-                            max_validation_examples: Optional[int] = None,
-                            experiment_name: Optional[str] = None,
-                            enable_augmentation: bool = True) -> Dict:
+def run_hyperparameter_tuning_current_data(
+    experiments: List[Dict],
+    data_dir: str,
+    results_dir: str = "checkpoints/hyperparameter_tuning",
+    train_ratio: float = 0.8,
+    num_epochs: int = 10,
+    early_stopping_patience: Optional[int] = None,
+    random_seed: Optional[int] = None,
+    max_examples_per_split: Optional[int] = None,
+    max_validation_examples: Optional[int] = None,
+    experiment_name: Optional[str] = None,
+    enable_augmentation: bool = True,
+    fail_fast: bool = True
+) -> Dict:
     """
     Run a complete hyperparameter tuning experiment using current data pipeline.
-    
-    This version uses StreamingProcessedDataset instead of the legacy NewProcessedDataset.
-    When enable_augmentation is True, uses AugmentedProcessedDataset for training data.
     
     Args:
         experiments: List of experiment configurations
@@ -203,7 +203,8 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         max_examples_per_split: Maximum examples for training dataset
         max_validation_examples: Maximum examples for validation dataset (defaults to max_examples_per_split if None)
         enable_augmentation: Whether to use data augmentation for training (default: True)
-        
+        fail_fast: If True, any serious failure (e.g., import error, data loading error, experiment failure) will immediately stop the sweep and raise the error. If False, will continue to next experiment. Default: True.
+    
     Returns:
         Dictionary containing all experiment results
     """
@@ -223,16 +224,27 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
         experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     # Discover data files using current pipeline
-    data_files = discover_processed_files(data_dir)
+    try:
+        data_files = discover_processed_files(data_dir)
+    except Exception as e:
+        logger.error(f"Failed to discover processed files in {data_dir}: {e}")
+        if fail_fast:
+            raise
+        else:
+            return {'error': str(e), 'stage': 'discover_processed_files'}
     
     # Create train/val split (no file limit needed with streaming)
-    logger.info(f"Creating train/val split (no file limit with streaming)")
-    train_files, val_files = create_train_val_split(
-        data_files, train_ratio, random_seed, max_files_per_split=None
-    )
-    logger.info(f"Train files: {len(train_files)}, Val files: {len(val_files)}")
-    logger.info(f"Sample train files: {[f.name for f in train_files[:3]]}")
-    logger.info(f"Sample val files: {[f.name for f in val_files[:3]]}")
+    try:
+        logger.info(f"Creating train/val split (no file limit with streaming)")
+        train_files, val_files = create_train_val_split(
+            data_files, train_ratio, random_seed, max_files_per_split=None
+        )
+    except Exception as e:
+        logger.error(f"Failed to create train/val split: {e}")
+        if fail_fast:
+            raise
+        else:
+            return {'error': str(e), 'stage': 'create_train_val_split'}
     
     # If max_examples_per_split is specified, limit the data
     if max_examples_per_split is not None:
@@ -289,32 +301,39 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
     logger.info(f"\nLoading data once for all experiments...")
     
     # Create training dataset with optional augmentation
-    if enable_augmentation:
-        logger.info("Using StreamingAugmentedProcessedDataset for training data (4x augmentation)")
-        train_dataset = StreamingAugmentedProcessedDataset(
-            train_files, 
-            enable_augmentation=True, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_examples_per_split
-        )
-        # Note: Validation dataset is not augmented
-        val_dataset = StreamingProcessedDataset(
-            val_files, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_validation_examples
-        ) if val_files else None
-    else:
-        logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
-        train_dataset = StreamingProcessedDataset(
-            train_files, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_examples_per_split
-        )
-        val_dataset = StreamingProcessedDataset(
-            val_files, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_validation_examples
-        ) if val_files else None
+    try:
+        if enable_augmentation:
+            logger.info("Using StreamingAugmentedProcessedDataset for training data (4x augmentation)")
+            train_dataset = StreamingAugmentedProcessedDataset(
+                train_files, 
+                enable_augmentation=True, 
+                chunk_size=100000,  # Use fixed chunk size for memory efficiency
+                max_examples=max_examples_per_split
+            )
+            # Note: Validation dataset is not augmented
+            val_dataset = StreamingProcessedDataset(
+                val_files, 
+                chunk_size=100000,  # Use fixed chunk size for memory efficiency
+                max_examples=max_validation_examples
+            ) if val_files else None
+        else:
+            logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
+            train_dataset = StreamingProcessedDataset(
+                train_files, 
+                chunk_size=100000,  # Use fixed chunk size for memory efficiency
+                max_examples=max_examples_per_split
+            )
+            val_dataset = StreamingProcessedDataset(
+                val_files, 
+                chunk_size=100000,  # Use fixed chunk size for memory efficiency
+                max_examples=max_validation_examples
+            ) if val_files else None
+    except Exception as e:
+        logger.error(f"Failed to create training/validation datasets: {e}")
+        if fail_fast:
+            raise
+        else:
+            return {'error': str(e), 'stage': 'create_datasets'}
     
     logger.info(f"Created training dataset")
     if val_dataset:
@@ -354,7 +373,13 @@ def run_hyperparameter_tuning_current_data(experiments: List[Dict],
             
         except Exception as e:
             logger.error(f"Experiment {exp_config['experiment_name']} failed: {e}")
-            continue
+            import traceback
+            logger.error(traceback.format_exc())
+            if fail_fast:
+                logger.error(f"Fail-fast mode enabled: stopping sweep after failure in experiment {exp_config['experiment_name']}")
+                raise
+            else:
+                continue
     
     # Save overall results
     total_time = time.time() - total_start_time
