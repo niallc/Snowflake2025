@@ -105,13 +105,19 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         Return the number of samples (for DataLoader compatibility).
         For augmented datasets, this should return the effective number of examples
         that will be provided (4x the base examples).
+        For non-augmented datasets, return the number of original examples.
         """
-        if self.effective_max_examples is not None:
-            return self.effective_max_examples
+        if self.enable_augmentation:
+            if self.effective_max_examples is not None:
+                return self.effective_max_examples
+            else:
+                raise NotImplementedError("Length is undefined when max_examples is not set.")
         else:
-            # If not specified, estimate from files (not recommended for streaming)
-            # TODO: Optionally scan files to estimate total length
-            raise NotImplementedError("Length is undefined when max_examples is not set.")
+            # For non-augmented, just count the base examples
+            if self.max_examples is not None:
+                return self.max_examples
+            else:
+                raise NotImplementedError("Length is undefined when max_examples is not set.")
 
     def _get_shuffled_file_list(self):
         """Return a new shuffled list of files for the epoch."""
@@ -138,15 +144,54 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         """
-        Get augmented training examples for the given global index.
-        Maps idx to the correct chunk and example, loading new chunks as needed.
+        Get training examples for the given global index.
+        If augmentation is enabled, returns an augmented example.
+        If not, returns the original example (tensorized).
         """
-        if self.verbose:
-            print(f"[GETITEM] idx={idx}, total_examples_loaded={self.total_examples_loaded}")
-        # TODO: Support non-augmented mode for validation
-        if not self.enable_augmentation:
-            raise NotImplementedError("Non-augmented mode is not yet supported.")
-        # --- Epoch boundary logic ---
+        if self.enable_augmentation:
+            return self._get_augmented_example(idx)
+        else:
+            return self._get_non_augmented_example(idx)
+
+    def _get_non_augmented_example(self, idx):
+        """
+        Non-augmented path: returns the original example tensorized.
+        Handles chunk loading and index mapping.
+        """
+        # --- Chunk loading and index mapping ---
+        chunk_start = 0
+        chunk_end = len(self.current_chunk)
+        while not (chunk_start <= idx < chunk_end):
+            if self.verbose:
+                print(f"[GETITEM] (non-aug) Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}")
+            self._load_next_chunk()
+            if len(self.current_chunk) == 0:
+                if self.verbose:
+                    print("[GETITEM] (non-aug) No more data to load from dataset. Raising IndexError.")
+                from time import sleep
+                sleep(0.1)
+                raise IndexError("No more data to load from dataset")
+            from time import sleep
+            sleep(0.1)
+            chunk_start += chunk_end
+            chunk_end = chunk_start + len(self.current_chunk)
+        local_idx = idx - chunk_start
+        example = self.current_chunk[local_idx]
+        _validate_example_format(example, filename="<stream>")
+        board_state = example['board']
+        policy = example['policy']
+        value = example['value']
+        # Always tensorize, but do not augment
+        tensor_example = self._tensorize_example(board_state, policy, value)
+        self.total_examples_loaded += 1
+        return tensor_example
+
+    def _handle_epoch_boundary_if_needed(self):
+        """
+        Check if the epoch boundary has been reached (i.e., max_examples exhausted),
+        and if so, restart the epoch. Handles restart counter, sleep, and logging.
+        Returns when a valid epoch is ready or after too many restarts.
+        """
         num_restarts = 0
         exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
         start_new_epoch = self.max_examples is not None and exceeded_max_samples
@@ -163,15 +208,19 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                 break
             exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
             start_new_epoch = self.max_examples is not None and exceeded_max_samples
-        # --- End epoch boundary logic ---
-        # Map global idx to chunk and example
-        # Each original example produces 4 augmented examples
+
+    def _get_augmented_example(self, idx):
+        """
+        Augmented path: returns an augmented example for the given global index.
+        Handles epoch boundary logic, chunk loading, index mapping, and augmentation.
+        """
+        # --- Epoch boundary logic ---
+        self._handle_epoch_boundary_if_needed()
+        # --- Chunk loading and index mapping ---
         base_example_idx = idx // 4
         aug_idx = idx % 4
-        # Find the chunk containing base_example_idx
         chunk_start = 0
         chunk_end = len(self.current_chunk)
-        # If current chunk does not contain the desired example, load next chunk(s)
         while not (chunk_start <= base_example_idx < chunk_end):
             if self.verbose:
                 print(f"[GETITEM] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, base_example_idx={base_example_idx}")
@@ -186,10 +235,9 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             sleep(0.1)
             chunk_start += chunk_end
             chunk_end = chunk_start + len(self.current_chunk)
-        # Index within current chunk
         local_idx = base_example_idx - chunk_start
         example = self.current_chunk[local_idx]
-        # Validate and augment
+        # --- Validation and augmentation ---
         _validate_example_format(example, filename="<stream>")
         board_state = example['board']
         policy = example['policy']
