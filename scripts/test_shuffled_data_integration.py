@@ -10,7 +10,7 @@ from pathlib import Path
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hex_ai.data_pipeline import discover_processed_files, create_train_val_split, StreamingProcessedDataset
+from hex_ai.data_pipeline import discover_processed_files, create_train_val_split, StreamingAugmentedProcessedDataset
 from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
 
 # Setup logging
@@ -33,7 +33,7 @@ def test_shuffled_data_loading():
     try:
         # Use just a few files for testing
         test_files = train_files[:2]
-        dataset = StreamingProcessedDataset(test_files, chunk_size=1000, max_examples=100)
+        dataset = StreamingAugmentedProcessedDataset(test_files, chunk_size=1000, max_examples=100)
         print(f"✓ Created dataset with {len(dataset)} examples")
         
         # Test loading a few examples

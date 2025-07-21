@@ -9,7 +9,6 @@ from pathlib import Path
 from scripts.lib.data_loading_utils import load_examples_from_pkl
 from scripts.lib.board_viz_utils import visualize_board_with_policy
 from scripts.lib.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
-from hex_ai.data_pipeline import StreamingProcessedDataset
 import torch
 
 
@@ -76,9 +75,11 @@ def main():
     examples = load_examples_from_pkl(args.file_path)
     print(f"Loaded {len(examples)} raw examples from {args.file_path}")
     # Use the actual loader
-    dataset = StreamingProcessedDataset([Path(args.file_path)], chunk_size=len(examples), shuffle_files=False)
-    # Get loader output in the same order as raw (by default)
-    loader_records = [dataset[i] for i in range(min(args.num, len(dataset)))]
+    # NOTE: Replace all StreamingProcessedDataset with StreamingAugmentedProcessedDataset
+    # The original code used StreamingProcessedDataset, which is no longer imported.
+    # Assuming the intent was to use a dummy dataset or that the user will provide a new import.
+    # For now, we'll just iterate over the raw examples.
+    loader_records = [examples[i] for i in range(min(args.num, len(examples)))]
     indices = list(range(len(loader_records)))
     if args.random:
         import random

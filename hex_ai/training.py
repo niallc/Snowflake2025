@@ -25,7 +25,7 @@ from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
-from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files
+from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files
 
 from hex_ai.training_utils import get_device
 DEVICE = get_device()
@@ -790,11 +790,11 @@ def create_trainer(model: TwoHeadedResNet,
                   enable_system_analysis: bool = True) -> Trainer:
     """Create a trainer with data loaders from processed shard files."""
     # Use StreamingProcessedDataset for all data loading
-    train_dataset = StreamingProcessedDataset(train_shard_files)
+    train_dataset = StreamingAugmentedProcessedDataset(train_shard_files)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     val_loader = None
     if val_shard_files:
-        val_dataset = StreamingProcessedDataset(val_shard_files)
+        val_dataset = StreamingAugmentedProcessedDataset(val_shard_files)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer

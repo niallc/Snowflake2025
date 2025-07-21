@@ -194,7 +194,7 @@ def run_hyperparameter_tuning_current_data(
         Dictionary containing all experiment results
     """
     import time
-    from hex_ai.data_pipeline import StreamingProcessedDataset, StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
     
     # Use max_examples_per_split for validation if not specified
     if max_validation_examples is None:
@@ -287,32 +287,19 @@ def run_hyperparameter_tuning_current_data(
     
     # Create training dataset with optional augmentation
     try:
-        if enable_augmentation:
-            logger.info("Using StreamingAugmentedProcessedDataset for training data (4x augmentation)")
-            train_dataset = StreamingAugmentedProcessedDataset(
-                train_files, 
-                enable_augmentation=True, 
-                chunk_size=100000,  # Use fixed chunk size for memory efficiency
-                max_examples=max_examples_per_split
-            )
-            # Note: Validation dataset is not augmented
-            val_dataset = StreamingProcessedDataset(
-                val_files, 
-                chunk_size=100000,  # Use fixed chunk size for memory efficiency
-                max_examples=max_validation_examples
-            ) if val_files else None
-        else:
-            logger.info("Using standard StreamingProcessedDataset for training data (no augmentation)")
-            train_dataset = StreamingProcessedDataset(
-                train_files, 
-                chunk_size=100000,  # Use fixed chunk size for memory efficiency
-                max_examples=max_examples_per_split
-            )
-            val_dataset = StreamingProcessedDataset(
-                val_files, 
-                chunk_size=100000,  # Use fixed chunk size for memory efficiency
-                max_examples=max_validation_examples
-            ) if val_files else None
+        train_dataset = StreamingAugmentedProcessedDataset(
+            train_files, 
+            enable_augmentation=True, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_examples_per_split
+        )
+        # Note: Validation dataset is not augmented
+        val_dataset = StreamingAugmentedProcessedDataset(
+            val_files, 
+            enable_augmentation=False, # Validation dataset is not augmented
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_validation_examples
+        ) if val_files else None
     except Exception as e:
         logger.error(f"Failed to create training/validation datasets: {e}")
         if fail_fast:

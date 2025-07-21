@@ -161,7 +161,4 @@ class DataProcessor:
             all_shard_files.extend(shard_files)
         
         logger.info(f"Total shard files created: {len(all_shard_files)}")
-        return all_shard_files
-
-
-# All code should use StreamingProcessedDataset from hex_ai.training_utils instead. 
+        return all_shard_files 

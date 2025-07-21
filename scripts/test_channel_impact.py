@@ -22,7 +22,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hex_ai.models import TwoHeadedResNet
-from hex_ai.data_pipeline import StreamingProcessedDataset
+from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
 
 
 def create_model(num_channels, device):
@@ -144,10 +144,11 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load dataset
-    dataset = StreamingProcessedDataset(
+    dataset = StreamingAugmentedProcessedDataset(
         data_files=[Path(args.data_file)],
         chunk_size=10000,
-        shuffle_files=True
+        shuffle_files=True,
+        enable_augmentation=False # Disable augmentation for this test
     )
     
     # Create a limited dataset to control sample count
