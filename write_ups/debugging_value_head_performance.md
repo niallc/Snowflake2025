@@ -160,3 +160,30 @@ PYTHONPATH=. python scripts/simple_inference_cli.py \
     --device mps
 ```
 This runs inference on a known blue win and prints the value head’s prediction. 
+
+---
+
+## Manual Inspection of Dumped Training Batch
+
+To directly inspect the data passed to the network, we:
+- Added a debug block to `Trainer.train_epoch` to dump the first batch of epoch 0 to `analysis/debugging/value_head_performance/batch0_epoch0.pkl`.
+- Created `scripts/analyze_dumped_batch.py` to load and display samples from this batch, using the project’s display and conversion utilities.
+
+**Usage example:**
+```python
+from scripts.analyze_dumped_batch import main
+all_data = main("analysis/debugging/value_head_performance/batch0_epoch0.pkl", max_samples=6, interactive=False)
+```
+This prints a summary of the first 6 samples and returns a dictionary with both raw and reformatted data for further interactive analysis.
+
+### Visual Inspection Findings
+- **Shuffling:** The 5th position in the batch is completely different from the first 4, confirming that shuffling is working as intended.
+- **Augmentation:** For each original position, the two reflections swap the value label and player-to-move channel, while the rotation does not. This matches the intended augmentation logic.
+- **Player-to-move:** The player-to-move channel appears correct and changes appropriately with augmentation.
+- **Value label:** The value label is swapped as expected for color-swapping augmentations.
+
+**Conclusion:**
+- The data pipeline, shuffling, and augmentation all appear correct on visual/manual inspection.
+- No further automated checks are planned at this stage, as existing code and tests already validate the main invariants.
+
+If further issues or hypotheses arise, additional checks or scripts can be added as needed. 

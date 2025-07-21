@@ -369,6 +369,17 @@ class Trainer:
         k = max(1, n_batches // 5)
         special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
         for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
+            # DEBUG: Dump first batch of epoch 0 for inspection
+            if self.current_epoch == 0 and batch_idx == 0:
+                import pickle, os
+                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                with open('analysis/debugging/value_head_performance/batch0_epoch0.pkl', 'wb') as f:
+                    pickle.dump({
+                        'boards': boards.cpu(),
+                        'policies': policies.cpu(),
+                        'values': values.cpu()
+                    }, f)
+                print("[DEBUG] Dumped first batch of epoch 0 to analysis/debugging/value_head_performance/batch0_epoch0.pkl")
             # Time data loading
             data_load_end = time.time()
             batch_data_time = data_load_end - data_load_start
