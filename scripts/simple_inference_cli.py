@@ -44,12 +44,17 @@ if __name__ == "__main__":
 
     # To run this script from the command line, run:
     """
+    # To find recent results, run:
+    ls -lth checkpoints/hyperparameter_tuning | head -n 3 | less
+
     resCollDir="checkpoints/hyperparameter_tuning/"
     resDirTa1g="shuffled_sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor3.0_20250721_064254/"
     resDirTag2="shuffled_sweep_run_1_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor50.0_20250721_064254/"
     resDirTag3="loss_weight_sweep_exp0_pw0.01_475646_20250721_131001/"
     resDirTag4="loss_weight_sweep_exp0_pw0.001_57e0af_20250721_150933/"
-    resDir=${resCollDir}${resDirTag4}
+    resDirTag5="loss_weight_sweep_exp1_pw0.0001_6c84d6_20250721_150933/"
+    resDirTag6="loss_weight_sweep_exp2_pw0.7_c0cb27_20250721_150933/"
+    resDir=${resCollDir}${resDirTag6}
     blueWin="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7"
     redWin="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2"
     realGameB="http://www.trmph.com/hex/board#13,a6i2d10d9f8e9g9g10i9h9i8h8i7j4g6g7f7h6g8f10h7i10j10j11h10g4e5e4f4g12i11g2h2g3h4h13g11f12f11e12l11k12h12g13l12k10i12h3j3i4i3h5g5j2k2j12i13h11j9f3d5k1l1"
@@ -57,7 +62,7 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     
 PYTHONPATH=. python scripts/simple_inference_cli.py \
-    --trmph ${realGameB} \
+    --trmph ${blueWin} \
     --model_dir ${resDir} \
     --model_file best_model.pt \
     --device mps
