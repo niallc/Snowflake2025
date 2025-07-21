@@ -63,18 +63,20 @@ def _validate_example_format(example, filename):
 class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     """Streaming dataset that applies data augmentation to create 4x more training examples."""
     
-    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, **kwargs):
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 1024, **kwargs):
         """
         Initialize streaming augmented dataset.
         
         Args:
             data_files: List of paths to processed data files
             enable_augmentation: Whether to apply augmentation (default: True)
-            **kwargs: Additional arguments passed to StreamingProcessedDataset
+            chunk_size: Number of examples to load per chunk
+            **kwargs: Additional arguments (max_examples, shuffle_files)
         """
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation
+        self.chunk_size = chunk_size
         self.max_examples = kwargs.get('max_examples', None)
         self.shuffle_files = kwargs.get('shuffle_files', False)
         # Effective number of examples after augmentation (for reporting and __len__)
@@ -88,9 +90,11 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples={self.max_examples})")
         # Initialize epoch state
         self.epoch_file_list = self._get_shuffled_file_list()
-        self.current_file_idx = 0
-        self.current_example_idx = 0
-        self.total_examples_loaded = 0
+        self.current_file_idx = 0  # Index in epoch_file_list
+        self.current_chunk = []    # List of raw examples in current chunk
+        self.current_chunk_idx = 0 # Index within current chunk
+        self.total_examples_loaded = 0  # Across epoch
+        self._load_next_chunk()    # Load first chunk
 
     def __len__(self):
         """
@@ -101,11 +105,9 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         if self.effective_max_examples is not None:
             return self.effective_max_examples
         else:
-            base_len = super().__len__()
-            if self.enable_augmentation:
-                return base_len * 4
-            else:
-                return base_len
+            # If not specified, estimate from files (not recommended for streaming)
+            # TODO: Optionally scan files to estimate total length
+            raise NotImplementedError("Length is undefined when max_examples is not set.")
 
     def _get_shuffled_file_list(self):
         """Return a new shuffled list of files for the epoch."""
@@ -122,36 +124,29 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             print(f"Max samples ({self.max_examples}) reached, starting next epoch")
         self.epoch_file_list = self._get_shuffled_file_list()
         self.current_file_idx = 0
-        self.current_example_idx = 0
+        self.current_chunk = []
+        self.current_chunk_idx = 0
         self.total_examples_loaded = 0
         self._load_next_chunk()
-        self.current_example_idx = 0
+        self.current_chunk_idx = 0
 
     def __getitem__(self, idx):
         """
-        Get augmented training examples.
-
-        The while loop below ensures that if the DataLoader calls __getitem__ multiple
-        times at the epoch boundary (for example, due to shuffling, multi-worker
-        loading, or repeated idx values), we only proceed to fetch a sample when the
-        counters are correct and the epoch has been properly reset.
-
-        This prevents repeated resets and duplicate prints.
+        Get augmented training examples for the given global index.
+        Maps idx to the correct chunk and example, loading new chunks as needed.
         """
+        # TODO: Support non-augmented mode for validation
         if not self.enable_augmentation:
-            return super().__getitem__(idx)
+            raise NotImplementedError("Non-augmented mode is not yet supported.")
         # --- Epoch boundary logic ---
         num_restarts = 0
         exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
         start_new_epoch = self.max_examples is not None and exceeded_max_samples
-        # The while loop ensures that after resetting, we only proceed when the counters are correct.
-        # This is robust to any DataLoader behavior (shuffling, multi-worker, etc.).
         while start_new_epoch:
             self._start_new_epoch()
             if num_restarts > 0:
                 logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
                 sleep(0.5)
-
             num_restarts += 1
             if num_restarts > 200:
                 logger.warning("WARNING: Restarting epoch failed too many times. Continuing to avoid infinite loop.")
@@ -159,42 +154,110 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
             start_new_epoch = self.max_examples is not None and exceeded_max_samples
         # --- End epoch boundary logic ---
-        # Get original example from streaming dataset
-        original_example = super().__getitem__(idx)
-        board_3ch, policy, value = original_example
+        # Map global idx to chunk and example
+        # Each original example produces 4 augmented examples
+        base_example_idx = idx // 4
+        aug_idx = idx % 4
+        # Find the chunk containing base_example_idx
+        chunk_start = 0
+        chunk_end = len(self.current_chunk)
+        # If current chunk does not contain the desired example, load next chunk(s)
+        while not (chunk_start <= base_example_idx < chunk_end):
+            self._load_next_chunk()
+            chunk_start += chunk_end
+            chunk_end = chunk_start + len(self.current_chunk)
+        # Index within current chunk
+        local_idx = base_example_idx - chunk_start
+        example = self.current_chunk[local_idx]
+        # Validate and augment
+        _validate_example_format(example, filename="<stream>")
+        board_state = example['board']
+        policy = example['policy']
+        value = example['value']
         # Extract 2-channel board for augmentation
-        board_2ch = board_3ch[:PLAYER_CHANNEL].numpy()  # Remove player-to-move channel
+        board_2ch = board_state[:PLAYER_CHANNEL] if board_state.shape[0] > 1 else board_state
         # Skip empty boards (no pieces to augment)
         if np.sum(board_2ch) == 0:
-            return [original_example]  # Return single example for empty boards
+            # Only one example for empty boards
+            if aug_idx == 0:
+                self.total_examples_loaded += 1
+                return self._tensorize_example(board_state, policy, value)
+            else:
+                # For aug_idx > 0, return the first example again (or raise IndexError)
+                raise IndexError("No augmented examples for empty board.")
         # Create all 4 augmented examples
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
             from hex_ai.error_handling import get_board_state_error_tracker
             error_tracker = get_board_state_error_tracker()
-            current_file = self.data_files[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
-            sample_info = f"augmented_chunk_idx={self.current_example_idx-1}, total_loaded={self.total_examples_loaded}"
+            current_file = self.epoch_file_list[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
+            sample_info = f"augmented_chunk_idx={local_idx}, total_loaded={self.total_examples_loaded}"
             error_tracker._current_file = str(current_file)
             error_tracker._current_sample = sample_info
-            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy.numpy(), value.item(), error_tracker)
+            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise
-        tensor_examples = []
-        for i, (aug_board_2ch, aug_policy, aug_value, aug_player) in enumerate(augmented_examples):
+        if aug_idx >= len(augmented_examples):
+            raise IndexError(f"Requested augmentation {aug_idx} but only {len(augmented_examples)} available.")
+        aug_board_2ch, aug_policy, aug_value, aug_player = augmented_examples[aug_idx]
+        tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
+        self.total_examples_loaded += 1
+        return tensor_example
+
+    def _tensorize_example(self, board_2ch, policy, value, player=None):
+        """Convert numpy arrays to torch tensors, adding player channel if needed."""
+        if player is not None:
+            player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), float(player), dtype=np.float32)
+            board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
+        else:
+            board_3ch = board_2ch
+        board_tensor = torch.from_numpy(board_3ch).float()
+        policy_tensor = torch.FloatTensor(policy)
+        value_tensor = torch.FloatTensor([value])
+        return (board_tensor, policy_tensor, value_tensor)
+
+    def _load_next_chunk(self):
+        """Load the next chunk of examples from files (no repeats within epoch)."""
+        self.current_chunk = []
+        files_attempted = 0
+        files_with_errors = 0
+        error_details = []
+        # Only use files from the current epoch's shuffled list
+        while len(self.current_chunk) < self.chunk_size and self.current_file_idx < len(self.epoch_file_list):
+            file_path = self.epoch_file_list[self.current_file_idx]
+            files_attempted += 1
             try:
-                player_channel = np.full((aug_board_2ch.shape[1], aug_board_2ch.shape[2]), float(aug_player), dtype=np.float32)
-                board_3ch = np.concatenate([aug_board_2ch, player_channel[None, ...]], axis=0)
-                board_tensor = torch.from_numpy(board_3ch)
-                policy_tensor = torch.FloatTensor(aug_policy)
-                value_tensor = torch.FloatTensor([aug_value])
-                tensor_examples.append((board_tensor, policy_tensor, value_tensor))
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                if 'examples' in data:
+                    file_examples = data['examples']
+                    remaining_in_chunk = self.chunk_size - len(self.current_chunk)
+                    examples_to_add = file_examples[:remaining_in_chunk]
+                    self.current_chunk.extend(examples_to_add)
+                    self.current_file_idx += 1
+                else:
+                    files_with_errors += 1
+                    error_details.append((str(file_path), "Missing 'examples' key"))
+                    self.current_file_idx += 1
             except Exception as e:
-                logger.error(f"Error processing augmentation {i} for idx {idx}: {e}")
-                raise
-        return tensor_examples
-
-
+                logger.warning(f"Error loading {file_path}: {e}")
+                files_with_errors += 1
+                error_details.append((str(file_path), str(e)))
+                self.current_file_idx += 1
+                continue
+        # Shuffle the chunk for better randomization
+        if len(self.current_chunk) > 0:
+            random.shuffle(self.current_chunk)
+        # After loading, check error thresholds
+        if files_attempted > 0:
+            error_log_dir = str(self.data_files[0].parent) if self.data_files else "."
+            check_data_loading_errors(files_attempted, files_with_errors, error_details, error_log_dir)
+        import logging
+        if logging.getLogger().getEffectiveLevel() <= logging.INFO:
+            print(".", end="", flush=True)
+            if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
+                print()  # Newline
 
 
 
