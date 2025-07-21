@@ -368,62 +368,66 @@ class Trainer:
         # Choose k to get ~3-10 outputs per epoch
         k = max(1, n_batches // 5)
         special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
-        for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
-            # DEBUG: Dump first batch of epoch 0 for inspection
-            if self.current_epoch == 0 and batch_idx == 0:
-                import pickle, os
-                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                with open('analysis/debugging/value_head_performance/batch0_epoch0.pkl', 'wb') as f:
-                    pickle.dump({
-                        'boards': boards.cpu(),
-                        'policies': policies.cpu(),
-                        'values': values.cpu()
-                    }, f)
-                print("[DEBUG] Dumped first batch of epoch 0 to analysis/debugging/value_head_performance/batch0_epoch0.pkl")
-            # Time data loading
-            data_load_end = time.time()
-            batch_data_time = data_load_end - data_load_start
-            batch_data_times.append(batch_data_time)
-            batch_start_time = time.time()
-            # Move to device
-            boards = boards.to(self.device)
-            policies = policies.to(self.device)
-            values = values.to(self.device)
-            # Forward pass with mixed precision
-            self.optimizer.zero_grad()
-            with self.mixed_precision.autocast_context():
-                policy_pred, value_pred = self.model(boards)
-                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-            # Backward pass with scaling
-            scaled_loss = self.mixed_precision.scale_loss(total_loss)
-            scaled_loss.backward()
-            # Gradient clipping (configurable)
-            if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-            # Optimizer step with scaling
-            self.mixed_precision.step_optimizer(self.optimizer)
-            self.mixed_precision.update_scaler()
-            # Track metrics
-            epoch_losses.append(loss_dict['total_loss'])
-            for key in epoch_metrics:
-                epoch_metrics[key].append(loss_dict[key])
-            # Enhanced logging: print every k batches, and at special batches for epoch 0
-            should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
-            if should_log:
-                cum_epoch_time = time.time() - epoch_start_time
-                batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
-                msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
-                       f"Total Loss: {loss_dict['total_loss']:.4f}, "
-                       f"Policy: {loss_dict['policy_loss']:.4f}, "
-                       f"Value: {loss_dict['value_loss']:.4f}, "
-                       f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
-                       f"Data load: {batch_data_time:.3f}s, "
-                       f"Cumulative epoch time: {cum_epoch_time:.1f}s")
-                log_and_print(msg)
-            # Prepare for next batch data timing
-            data_load_start = time.time()
-            batch_end_time = time.time()
-            batch_times.append(batch_end_time - batch_start_time)
+        try:
+            for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
+                # DEBUG: Dump first batch of epoch 0 for inspection
+                if self.current_epoch == 0 and batch_idx == 0:
+                    import pickle, os
+                    os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                    with open('analysis/debugging/value_head_performance/batch0_epoch0.pkl', 'wb') as f:
+                        pickle.dump({
+                            'boards': boards.cpu(),
+                            'policies': policies.cpu(),
+                            'values': values.cpu()
+                        }, f)
+                    print("[DEBUG] Dumped first batch of epoch 0 to analysis/debugging/value_head_performance/batch0_epoch0.pkl")
+                # Time data loading
+                data_load_end = time.time()
+                batch_data_time = data_load_end - data_load_start
+                batch_data_times.append(batch_data_time)
+                batch_start_time = time.time()
+                # Move to device
+                boards = boards.to(self.device)
+                policies = policies.to(self.device)
+                values = values.to(self.device)
+                # Forward pass with mixed precision
+                self.optimizer.zero_grad()
+                with self.mixed_precision.autocast_context():
+                    policy_pred, value_pred = self.model(boards)
+                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                # Backward pass with scaling
+                scaled_loss = self.mixed_precision.scale_loss(total_loss)
+                scaled_loss.backward()
+                # Gradient clipping (configurable)
+                if self.max_grad_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+                # Optimizer step with scaling
+                self.mixed_precision.step_optimizer(self.optimizer)
+                self.mixed_precision.update_scaler()
+                # Track metrics
+                epoch_losses.append(loss_dict['total_loss'])
+                for key in epoch_metrics:
+                    epoch_metrics[key].append(loss_dict[key])
+                # Enhanced logging: print every k batches, and at special batches for epoch 0
+                should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
+                if should_log:
+                    cum_epoch_time = time.time() - epoch_start_time
+                    batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
+                    msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
+                           f"Total Loss: {loss_dict['total_loss']:.4f}, "
+                           f"Policy: {loss_dict['policy_loss']:.4f}, "
+                           f"Value: {loss_dict['value_loss']:.4f}, "
+                           f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
+                           f"Data load: {batch_data_time:.3f}s, "
+                           f"Cumulative epoch time: {cum_epoch_time:.1f}s")
+                    log_and_print(msg)
+                # Prepare for next batch data timing
+                data_load_start = time.time()
+                batch_end_time = time.time()
+                batch_times.append(batch_end_time - batch_start_time)
+        except IndexError:
+            log_and_print("[INFO] No more data in dataset. Ending epoch early.")
+            pass
         epoch_end_time = time.time()
         epoch_time = epoch_end_time - epoch_start_time
         # Compute epoch averages

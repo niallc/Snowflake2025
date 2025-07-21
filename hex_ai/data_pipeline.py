@@ -63,7 +63,7 @@ def _validate_example_format(example, filename):
 class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     """Streaming dataset that applies data augmentation to create 4x more training examples."""
     
-    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 1024, **kwargs):
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 1024, verbose: bool = False, **kwargs):
         """
         Initialize streaming augmented dataset.
         
@@ -72,6 +72,7 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             enable_augmentation: Whether to apply augmentation (default: True)
             chunk_size: Number of examples to load per chunk
             **kwargs: Additional arguments (max_examples, shuffle_files)
+            verbose: If True, print debug info
         """
         super().__init__()
         self.data_files = data_files
@@ -79,6 +80,7 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.chunk_size = chunk_size
         self.max_examples = kwargs.get('max_examples', None)
         self.shuffle_files = kwargs.get('shuffle_files', False)
+        self.verbose = verbose
         # Effective number of examples after augmentation (for reporting and __len__)
         if self.enable_augmentation and self.max_examples is not None:
             self.effective_max_examples = self.max_examples * 4
@@ -95,6 +97,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.current_chunk_idx = 0 # Index within current chunk
         self.total_examples_loaded = 0  # Across epoch
         self._load_next_chunk()    # Load first chunk
+        if self.verbose:
+            print(f"[INIT] Loaded first chunk. Files: {self.epoch_file_list}")
 
     def __len__(self):
         """
@@ -129,12 +133,16 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.total_examples_loaded = 0
         self._load_next_chunk()
         self.current_chunk_idx = 0
+        if self.verbose:
+            print(f"[EPOCH RESET] New epoch started. Files: {self.epoch_file_list}")
 
     def __getitem__(self, idx):
         """
         Get augmented training examples for the given global index.
         Maps idx to the correct chunk and example, loading new chunks as needed.
         """
+        if self.verbose:
+            print(f"[GETITEM] idx={idx}, total_examples_loaded={self.total_examples_loaded}")
         # TODO: Support non-augmented mode for validation
         if not self.enable_augmentation:
             raise NotImplementedError("Non-augmented mode is not yet supported.")
@@ -143,6 +151,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
         start_new_epoch = self.max_examples is not None and exceeded_max_samples
         while start_new_epoch:
+            if self.verbose:
+                print(f"[GETITEM] Epoch boundary detected. Restarting epoch.")
             self._start_new_epoch()
             if num_restarts > 0:
                 logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
@@ -163,7 +173,17 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         chunk_end = len(self.current_chunk)
         # If current chunk does not contain the desired example, load next chunk(s)
         while not (chunk_start <= base_example_idx < chunk_end):
+            if self.verbose:
+                print(f"[GETITEM] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, base_example_idx={base_example_idx}")
             self._load_next_chunk()
+            if len(self.current_chunk) == 0:
+                if self.verbose:
+                    print("[GETITEM] No more data to load from dataset. Raising IndexError.")
+                from time import sleep
+                sleep(0.1)
+                raise IndexError("No more data to load from dataset")
+            from time import sleep
+            sleep(0.1)
             chunk_start += chunk_end
             chunk_end = chunk_start + len(self.current_chunk)
         # Index within current chunk
@@ -219,6 +239,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
 
     def _load_next_chunk(self):
         """Load the next chunk of examples from files (no repeats within epoch)."""
+        if self.verbose:
+            print(f"[_LOAD_NEXT_CHUNK] Loading chunk. current_file_idx={self.current_file_idx}, chunk_size={self.chunk_size}")
         self.current_chunk = []
         files_attempted = 0
         files_with_errors = 0
@@ -258,6 +280,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             print(".", end="", flush=True)
             if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
                 print()  # Newline
+        if self.verbose:
+            print(f"[_LOAD_NEXT_CHUNK] Loaded chunk with {len(self.current_chunk)} examples.")
 
 
 
