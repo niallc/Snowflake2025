@@ -224,7 +224,12 @@ def _run_augmented_example_logic_test(tmp_path):
         print(f"[TEST DEBUG] Counter: {Counter(int(v) for v in values)}")
         for idx, b in enumerate(boards):
             print(f"[TEST DEBUG] Board {idx} sum: {b.sum()}, board[0,0,0]: {b[0,0,0]}")
-        assert Counter(int(v) for v in values) == Counter([0, 1, 1, 1, 1])
+        # Because the dataset shuffles the chunk, the order of examples is not guaranteed.
+        # We expect 4 augmentations of the non-empty board (value 1.0) and 1 of the empty board (value 0.0), in any order.
+        c = Counter(int(v) for v in values)
+        assert c[1] == 4, f"Expected 4 augmentations of non-empty board, got {c[1]}"
+        assert c[0] == 1, f"Expected 1 augmentation of empty board, got {c[0]}"
+        assert len(values) == 5, f"Expected 5 total examples, got {len(values)}"
 
 def test_get_augmented_example_logic(tmp_path):
     _run_augmented_example_logic_test(tmp_path)
