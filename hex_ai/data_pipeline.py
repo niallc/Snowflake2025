@@ -74,27 +74,44 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
             max_examples: Maximum number of examples to provide (None for unlimited)
         """
         self.data_files = data_files
-        if shuffle_files:
-            random.shuffle(self.data_files)
-        
+        self.shuffle_files = shuffle_files
         self.chunk_size = chunk_size
         self.max_examples = max_examples
         self.current_chunk = []
         self.current_file_idx = 0
         self.current_example_idx = 0
         self.total_examples_loaded = 0
-        
+        # Use a per-epoch shuffled file list
+        self.epoch_file_list = self._get_shuffled_file_list()
         # Load first chunk
         self._load_next_chunk()
-    
+
+    def _get_shuffled_file_list(self):
+        """Return a new shuffled list of files for the epoch."""
+        file_list = self.data_files.copy()
+        if self.shuffle_files:
+            random.shuffle(file_list)
+        return file_list
+
+    def _start_new_epoch(self):
+        """Reset counters and reshuffle files for a new epoch."""
+        print(f"Max samples ({self.max_examples}) reached, starting next epoch")
+        self.epoch_file_list = self._get_shuffled_file_list()
+        self.current_file_idx = 0
+        self.current_example_idx = 0
+        self.total_examples_loaded = 0
+        self._load_next_chunk()
+        self.current_example_idx = 0
+
     def _load_next_chunk(self):
-        """Load the next chunk of examples from files."""
+        """Load the next chunk of examples from files (no repeats within epoch)."""
         self.current_chunk = []
         files_attempted = 0
         files_with_errors = 0
         error_details = []
-        while len(self.current_chunk) < self.chunk_size and self.current_file_idx < len(self.data_files):
-            file_path = self.data_files[self.current_file_idx]
+        # Only use files from the current epoch's shuffled list
+        while len(self.current_chunk) < self.chunk_size and self.current_file_idx < len(self.epoch_file_list):
+            file_path = self.epoch_file_list[self.current_file_idx]
             files_attempted += 1
             try:
                 with gzip.open(file_path, 'rb') as f:
@@ -118,19 +135,16 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         # Shuffle the chunk for better randomization
         if len(self.current_chunk) > 0:
             random.shuffle(self.current_chunk)
-        
         # After loading, check error thresholds
         if files_attempted > 0:
             error_log_dir = str(self.data_files[0].parent) if self.data_files else "."
             check_data_loading_errors(files_attempted, files_with_errors, error_details, error_log_dir)
-        # Compact logging for verbose level 2
         import logging
         if logging.getLogger().getEffectiveLevel() <= logging.INFO:
             print(".", end="", flush=True)
-            # Add newline every 50 chunks for readability
             if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
                 print()  # Newline
-    
+
     def __len__(self):
         """
         Return the number of samples (for DataLoader compatibility).
@@ -139,29 +153,18 @@ class StreamingProcessedDataset(torch.utils.data.Dataset):
         if self.max_examples is not None:
             return self.max_examples
         else:
-            # Return an estimate based on the number of valid files and chunk size
             num_valid_files = len([f for f in self.data_files if f.exists()])
             return num_valid_files * self.chunk_size
-    
+
     def __getitem__(self, idx):
         """Get a single training sample."""
         # Check if we've reached the maximum number of examples
         if self.max_examples is not None and self.total_examples_loaded >= self.max_examples:
-            # Instead of raising an error, cycle back to the beginning
-            # This allows training to continue with the limited dataset
-            self.current_file_idx = 0
-            self.current_example_idx = 0
-            self.total_examples_loaded = 0
-            random.shuffle(self.data_files)  # Reshuffle for next epoch
-            self._load_next_chunk()
-            self.current_example_idx = 0
-        
+            self._start_new_epoch()
         if self.current_example_idx >= len(self.current_chunk):
-            if self.current_file_idx >= len(self.data_files):
-                # We've exhausted all files, start over
-                self.current_file_idx = 0
-                self.current_example_idx = 0
-                random.shuffle(self.data_files)  # Reshuffle for next epoch
+            if self.current_file_idx >= len(self.epoch_file_list):
+                # We've exhausted all files for this epoch, start new epoch
+                self._start_new_epoch()
             self._load_next_chunk()
             self.current_example_idx = 0
         if len(self.current_chunk) == 0:

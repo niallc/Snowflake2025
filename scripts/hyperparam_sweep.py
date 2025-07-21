@@ -53,9 +53,9 @@ SWEEP = {
     "max_grad_norm": [20],
     "dropout_prob": [0],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [0.1],  # Value head learns slower
-    "value_weight_decay_factor": [1],  # Value head gets more regularization
-    "policy_weight": [0.01, 0.7],
+    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
+    "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
+    "policy_weight": [0.001, 0.0001, 0.7, 0.01],
     # Add more as needed
 }
 
