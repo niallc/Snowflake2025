@@ -72,9 +72,11 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             enable_augmentation: Whether to apply augmentation (default: True)
             **kwargs: Additional arguments passed to StreamingProcessedDataset
         """
-        super().__init__(data_files, **kwargs)
+        super().__init__()
+        self.data_files = data_files
         self.enable_augmentation = enable_augmentation
         self.max_examples = kwargs.get('max_examples', None)
+        self.shuffle_files = kwargs.get('shuffle_files', False)
         # Effective number of examples after augmentation (for reporting and __len__)
         if self.enable_augmentation and self.max_examples is not None:
             self.effective_max_examples = self.max_examples * 4
@@ -84,6 +86,11 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation (max_examples={self.max_examples}, effective={self.effective_max_examples})")
         else:
             logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples={self.max_examples})")
+        # Initialize epoch state
+        self.epoch_file_list = self._get_shuffled_file_list()
+        self.current_file_idx = 0
+        self.current_example_idx = 0
+        self.total_examples_loaded = 0
 
     def __len__(self):
         """
@@ -143,10 +150,10 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             self._start_new_epoch()
             if num_restarts > 0:
                 logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
-                sleep(1)
+                sleep(0.5)
 
             num_restarts += 1
-            if num_restarts > 100:
+            if num_restarts > 200:
                 logger.warning("WARNING: Restarting epoch failed too many times. Continuing to avoid infinite loop.")
                 break
             exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False

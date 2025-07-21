@@ -445,7 +445,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=hyperparams['batch_size'],
-            shuffle=False,  
+            shuffle=False,  # Always let the dataset control order
             num_workers=0,  # Use 0 to avoid multiprocessing issues
             pin_memory=False,  # Disable pin_memory for MPS
             collate_fn=augmented_collate_fn # Use custom collate_fn for augmented data
@@ -455,7 +455,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
             val_loader = torch.utils.data.DataLoader(
                 val_dataset,
                 batch_size=hyperparams['batch_size'],
-                shuffle=False,
+                shuffle=False,  # Always let the dataset control order
                 num_workers=0,  # Use 0 to avoid multiprocessing issues
                 pin_memory=False  # Disable pin_memory for MPS
             )
@@ -463,7 +463,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=hyperparams['batch_size'],
-            shuffle=True,  # NOTE: Consider setting to False if data is already shuffled
+            shuffle=False,  # Always let the dataset control order
             num_workers=0,  # Use 0 to avoid multiprocessing issues
             pin_memory=False  # Disable pin_memory for MPS
         )
@@ -472,7 +472,7 @@ def run_hyperparameter_experiment_current_data(experiment_config: Dict,
             val_loader = torch.utils.data.DataLoader(
                 val_dataset,
                 batch_size=hyperparams['batch_size'],
-                shuffle=False,
+                shuffle=False,  # Always let the dataset control order
                 num_workers=0,  # Use 0 to avoid multiprocessing issues
                 pin_memory=False  # Disable pin_memory for MPS
             )
