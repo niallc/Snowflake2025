@@ -338,13 +338,19 @@ def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:
     if not data_path.exists():
         raise FileNotFoundError(f"Data directory {data_dir} not found")
     
-    # Find all .pkl.gz files
-    data_files = list(data_path.glob("*.pkl.gz"))
+    # Check if this is shuffled data directory
+    if (data_path / "shuffling_progress.json").exists():
+        # Shuffled data: look for shuffled_*.pkl.gz files
+        data_files = list(data_path.glob("shuffled_*.pkl.gz"))
+        logger.info(f"Found {len(data_files)} shuffled data files")
+    else:
+        # Original processed data: look for *_processed.pkl.gz files
+        data_files = list(data_path.glob("*_processed.pkl.gz"))
+        logger.info(f"Found {len(data_files)} processed data files")
     
     if not data_files:
-        raise FileNotFoundError(f"No processed data files found in {data_dir}")
+        raise FileNotFoundError(f"No data files found in {data_dir}")
     
-    logger.info(f"Found {len(data_files)} processed data files")
     return data_files
 
 

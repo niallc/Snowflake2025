@@ -36,10 +36,10 @@ SWEEP = {
     "learning_rate": [0.001, 0.01],
     "batch_size": [256],
     "max_grad_norm": [20],
-    "dropout_prob": [0, 0.001],
+    "dropout_prob": [0, 0.001, 0.01],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [0.00001, 0.005],  # Value head learns slower
-    "value_weight_decay_factor": [250.0, 10.0],  # Value head gets more regularization
+    "value_learning_rate_factor": [0.2, 0.001],  # Value head learns slower
+    "value_weight_decay_factor": [3.0, 50.0, 1],  # Value head gets more regularization
     # Add more as needed
 }
 
@@ -47,9 +47,10 @@ SWEEP = {
 MAX_SAMPLES = 1_600_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 400_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2
+EPOCHS = 4
 
-print(f"Running hyperparameter sweep with:")
+print(f"Running hyperparameter sweep with shuffled data:")
+print(f"  Data directory: data/processed/shuffled")
 print(f"  Training samples: {MAX_SAMPLES:,} (effective: {MAX_SAMPLES * 4:,} with augmentation)")
 print(f"  Validation samples: {MAX_VALIDATION_SAMPLES:,}")
 print(f"  Data augmentation: {'Enabled' if AUGMENTATION_CONFIG['enable_augmentation'] else 'Disabled'}")
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     print(f"Total runs to launch: {len(all_configs)}")
     experiments = []
     for i, config in enumerate(all_configs):
-        exp_name = f"sweep_run_{i}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        exp_name = f"shuffled_sweep_run_{i}_" + "_".join(f"{k}{v}" for k, v in config.items()) + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         experiments.append({
             'experiment_name': exp_name,
             'hyperparameters': config
@@ -82,7 +83,7 @@ if __name__ == "__main__":
     # Run hyperparameter tuning
     results = run_hyperparameter_tuning_current_data(
         experiments=experiments,
-        data_dir="data/processed",
+        data_dir="data/processed/shuffled",
         results_dir="checkpoints/hyperparameter_tuning",
         train_ratio=0.8,
         num_epochs=EPOCHS,

@@ -92,6 +92,8 @@ scripts/test_value_head_regularization.py
 write_ups/constants_migration_complete.md
 write_ups/trmph_parsing_code_paths_analysis.md
 write_ups/trmph_processor_issues_and_fixes.md
+write_ups/update_training_for_shuffled_TMP.md
+write_ups/shuffled_data_integration_summary.md
 
 # VSCode
 .vscode/
