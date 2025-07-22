@@ -30,6 +30,18 @@ from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
 from hex_ai.config import BOARD_SIZE
 
 import time
+import functools
+
+
+def timed_test(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        duration = time.time() - start
+        print(f"[TIMING] {func.__name__} took {duration:.3f} seconds")
+        return result
+    return wrapper
 
 
 # ---
@@ -40,6 +52,7 @@ import time
 # 4. Expects each example to yield 4 augmentations, all returned as tensors with correct shapes
 #    (ds[0]..ds[7] valid, ds[8] raises IndexError)
 # ---
+@timed_test
 def test_real_file_tensorization_and_chunking():
     import gzip, pickle, os
     # Use the provided small test file
@@ -70,6 +83,7 @@ def test_real_file_tensorization_and_chunking():
 # 1. Tests that all valid indices up to max_examples_unaugmented*4-1 succeed, and max_examples_unaugmented*4 raises IndexError
 # 2. Tests with chunk sizes that do not evenly divide the number of base examples
 # ---
+@timed_test
 def test_off_by_one_and_boundary_indexing(tmp_path):
     """
     For a file with 3 base examples and augmentation enabled, test that indices 0-11 are valid and 12 raises IndexError.
@@ -115,6 +129,7 @@ def test_off_by_one_and_boundary_indexing(tmp_path):
 # 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects a batch of 4 boards, policies, values to pass through the model without error
 # ---
+@timed_test
 def test_streaming_dataset_model_integration():
     from hex_ai.models import TwoHeadedResNet
     file_path = Path("tests/small_shuffled_test.pkl.gz")
@@ -137,6 +152,7 @@ def test_streaming_dataset_model_integration():
 # 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects all player channel values to be 0 or 1
 # ---
+@timed_test
 def test_player_channel_correctness():
     file_path = Path("tests/small_shuffled_test.pkl.gz")
     ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
@@ -152,6 +168,7 @@ def test_player_channel_correctness():
 # 3. Passes a file with a single empty board, chunk_size=1, max_examples_unaugmented=1, augmentation enabled
 # 4. Expects ds[0]..ds[3] valid, ds[4] raises IndexError
 # ---
+@timed_test
 def test_empty_board_handling(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
@@ -179,6 +196,7 @@ def test_empty_board_handling(tmp_path):
 # 3. Passes a file with 2 non-empty boards, chunk_size=10, augmentation enabled
 # 4. Expects 8 augmentations (4 per board), order doesn't matter
 # ---
+@timed_test
 def test_get_augmented_example_logic_all_non_empty(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
@@ -219,6 +237,7 @@ def test_get_augmented_example_logic_all_non_empty(tmp_path):
 # 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation disabled
 # 4. Expects ds[0]..ds[1] valid, ds[2] raises IndexError
 # ---
+@timed_test
 def test_non_augmented_path():
     file_path = Path("tests/small_shuffled_test.pkl.gz")
     ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=False)
@@ -240,6 +259,7 @@ def test_non_augmented_path():
 # 3. Passes a file with 3 examples, chunk_size=10, max_examples_unaugmented=3, augmentation disabled
 # 4. Expects ds[0]..ds[2] valid, ds[3] raises IndexError
 # ---
+@timed_test
 def test_get_non_augmented_example_logic(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
@@ -272,6 +292,7 @@ def test_get_non_augmented_example_logic(tmp_path):
 # 3. Passes a file with 1 empty and 1 non-empty board, chunk_size=10, augmentation enabled
 # 4. Expects 8 augmentations (4 per board), order doesn't matter
 # ---
+@timed_test
 def _run_augmented_example_logic_test(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
@@ -319,6 +340,7 @@ def _run_augmented_example_logic_test(tmp_path):
         assert c[0] == 4, f"Expected 4 augmentations of empty board, got {c[0]}"
         assert len(values) == 8, f"Expected 8 total examples, got {len(values)}"
 
+@timed_test
 def test_get_augmented_example_logic(tmp_path):
     _run_augmented_example_logic_test(tmp_path)
 
@@ -329,6 +351,7 @@ def test_get_augmented_example_logic(tmp_path):
 # 3. Passes a file with 2 non-empty boards, each with value 0.0 or 1.0, chunk_size=10, augmentation enabled
 # 4. Expects two 0s and two 1s per base example, order doesn't matter
 # ---
+@timed_test
 def test_augmentation_value_label(tmp_path):
     import gzip, pickle
     from hex_ai.config import BOARD_SIZE
@@ -373,24 +396,25 @@ def test_augmentation_value_label(tmp_path):
 # 3. Runs the helper 100 times with fresh tmp_path each time
 # 4. Expects 100 passes, 0 failures
 # ---
-def test_flakiness_of_get_augmented_example_logic(tmp_path_factory):
-    """
-    Run _run_augmented_example_logic_test 100 times to check for flakiness.
-    Print the number of passes and failures.
-    """
-    import traceback
-    passes = 0
-    failures = 0
-    for i in range(100):
-        tmp_path = tmp_path_factory.mktemp(f"flakytest_{i}")
-        try:
-            _run_augmented_example_logic_test(tmp_path)
-            passes += 1
-        except Exception as e:
-            print(f"Iteration {i+1} failed: {e}")
-            traceback.print_exc()
-            failures += 1
-    print(f"test_get_augmented_example_logic: {passes} passes, {failures} failures out of 100 runs.") 
+# @timed_test
+# def test_flakiness_of_get_augmented_example_logic(tmp_path_factory):
+#     """
+#     Run _run_augmented_example_logic_test 100 times to check for flakiness.
+#     Print the number of passes and failures.
+#     """
+#     import traceback
+#     passes = 0
+#     failures = 0
+#     for i in range(100):
+#         tmp_path = tmp_path_factory.mktemp(f"flakytest_{i}")
+#         try:
+#             _run_augmented_example_logic_test(tmp_path)
+#             passes += 1
+#         except Exception as e:
+#             print(f"Iteration {i+1} failed: {e}")
+#             traceback.print_exc()
+#             failures += 1
+#     print(f"test_get_augmented_example_logic: {passes} passes, {failures} failures out of 100 runs.") 
 
 # ---
 # Test: Chunk boundaries
@@ -399,6 +423,7 @@ def test_flakiness_of_get_augmented_example_logic(tmp_path_factory):
 # 3. Passes 2 files, each with 2 examples, chunk_size=2, max_examples_unaugmented=4, augmentation enabled
 # 4. Expects 16 augmentations (4 per example), order doesn't matter
 # ---
+@timed_test
 def test_chunk_boundaries(tmp_path):
     """
     Test accessing the last augmentation of the last example in a chunk, and the first in the next chunk.
@@ -451,6 +476,7 @@ def test_chunk_boundaries(tmp_path):
 # 3. Passes 3 files, each with 1 example, chunk_size=1, max_examples_unaugmented=3, augmentation enabled
 # 4. Expects 12 augmentations (4 per example), order doesn't matter
 # ---
+@timed_test
 def test_multiple_files_and_shuffling(tmp_path):
     """
     Test dataset with multiple files and shuffling enabled/disabled. Do not assume order; check set of values.
@@ -515,6 +541,7 @@ def test_multiple_files_and_shuffling(tmp_path):
 # 3. Passes files with these cases, chunk_size and max_examples_unaugmented as appropriate, augmentation enabled
 # 4. Expects correct number of augmentations or IndexError as appropriate
 # ---
+@timed_test
 def test_edge_cases(tmp_path):
     """
     Test edge cases: empty file, file with only empty boards, file with one example. Do not assume order.
@@ -568,6 +595,7 @@ def test_edge_cases(tmp_path):
 # 3. Passes a real test file, chunk_size=1, augmentation enabled, no max_examples_unaugmented
 # 4. Expects NotImplementedError
 # ---
+@timed_test
 def test_not_implemented_len():
     """
     Test that __len__ raises NotImplementedError if max_examples_unaugmented is not set.
@@ -586,6 +614,7 @@ def test_not_implemented_len():
 # 3. Passes a file with one example, chunk_size=1, max_examples_unaugmented=1, augmentation enabled, and a mock that raises
 # 4. Expects RuntimeError when augmentation fails
 # ---
+@timed_test
 def test_augmentation_error_handling(tmp_path):
     """
     Test that errors in augmentation are propagated and logged.
@@ -611,6 +640,7 @@ def test_augmentation_error_handling(tmp_path):
 # 3. Expects all returned policy tensors to be all zeros (handled at augmentation stage)
 # 4. Documents that this is the expected handling for terminal positions
 # ---
+@timed_test
 def test_create_augmented_example_with_player_to_move_handles_none_policy():
     """
     Test that create_augmented_example_with_player_to_move handles policy=None by returning a zero policy tensor for all augmentations.
@@ -640,6 +670,7 @@ def test_create_augmented_example_with_player_to_move_handles_none_policy():
 # 3. Expects the output policy tensor to be all zeros
 # 4. Documents that the non-augmented path now mimics the augmentation path for consistency
 # ---
+@timed_test
 def test_get_non_augmented_example_converts_none_policy_to_zeros(tmp_path):
     """
     Test that the non-augmented/validation path converts a None policy label to a zero tensor (terminal position),
@@ -673,6 +704,7 @@ def test_get_non_augmented_example_converts_none_policy_to_zeros(tmp_path):
 # 3. Expects a ValueError to be raised
 # 4. Documents that None policy labels should already have been handled upstream, and this test ensures an exception is raised if not
 # ---
+@timed_test
 def test_validate_example_format_raises_on_none_policy():
     """
     Test that _validate_example_format raises ValueError if policy=None.

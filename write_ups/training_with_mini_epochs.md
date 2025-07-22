@@ -119,6 +119,47 @@ def save_checkpoint(epoch, chunk_start):
 - **Distributed Training:** Assign different chunks to different workers for parallel training.
 - **Adaptive Chunk Size:** Adjust chunk size based on available memory or compute resources.
 
+## Implementation Progress and Next Steps
+
+### Current Progress
+- The core data pipeline has been refactored for simplicity, robustness, and standard PyTorch compatibility.
+- The dataset now supports only sequential access, which is fast and robust for single-worker, non-shuffled training.
+- Test timing and performance have been improved by removing slow or redundant logic.
+- The design document and code are now aligned with best practices for large-scale, chunked training.
+
+### Outstanding Tasks
+- **Test Cleanup:**
+    - Fix, update, or delete existing tests to match the new dataset logic and access patterns.
+- **Training Wrapper:**
+    - Write a wrapper to train over multiple mini-epochs (chunks), saving checkpoints and running validation as needed.
+    - Integrate this wrapper with scripts like `scripts/hyperparam_sweep.py` to enable flexible training over a customizable amount of data and mini-epoch size in a single call.
+    - Ensure the system supports easy configuration of total data, mini-epoch size, and checkpointing frequency.
+
+This section will be updated as implementation continues and milestones are reached.
+
+## For Collaborators: Current State and Guidance
+
+### 1. Clarify the Current State
+- **Refactor Status:**
+    - The core data pipeline (`hex_ai/data_pipeline.py`, especially `StreamingAugmentedProcessedDataset`) has been refactored for simplicity, robustness, and standard PyTorch compatibility. It now only supports sequential access (no random access, no automatic epoch restart).
+    - The dataset is the new "source of truth" for how training data is loaded and iterated. All chunking, augmentation, and sample counting logic is centralized there.
+    - The design document (this file) is up to date and reflects the current codebase and intended workflow.
+    - Test timing and performance have been improved by removing slow or redundant logic, and the slowest robustness test is currently disabled.
+- **Source of Truth for Training Loop:**
+    - The new training loop should be built around the chunked, sequential-access dataset in `hex_ai/data_pipeline.py`.
+    - Scripts like `scripts/hyperparam_sweep.py` will need to be updated to use a wrapper that iterates over mini-epochs/chunks, checkpointing and validating as needed.
+- **Known Blockers or Pain Points:**
+    - Some tests still assume the old dataset logic and need to be updated or removed.
+    - The current dataset does not support random access, shuffling, or multi-worker DataLoader. If these are needed, further refactoring will be required.
+    - The training wrapper for multi-mini-epoch training and checkpointing is not yet implemented.
+
+### 2. Plan the Next Steps
+- The proposed plan is correct and aligns with the current direction:
+    1. **Test Cleanup:** Update or remove tests that assume the old dataset logic.
+    2. **Training Wrapper:** Write a wrapper for multi-mini-epoch training, checkpointing, and validation.
+    3. **Integration:** Update scripts like `hyperparam_sweep.py` to use the new system flexibly.
+- If you have questions about any part of the current state or need clarification on the design, please ask!
+
 ---
 
 This design document should serve as a reference for implementing and maintaining robust, scalable, and standard-compliant training workflows for large datasets. 

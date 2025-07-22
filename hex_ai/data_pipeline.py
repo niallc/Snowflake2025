@@ -247,14 +247,12 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         Get training examples for the given global index.
         Returns a precomputed augmented example (tensorized).
         """
+        if idx >= self.__len__():
+            raise IndexError("Index out of range for dataset (exhausted)")
+        # Only support sequential access (i.e., next index after previous)
+        if idx != self.total_examples_loaded:
+            raise NotImplementedError("Random access is not supported. This dataset only supports sequential access (next index after previous). If you need random access, refactor the chunking logic.")
         self._handle_epoch_boundary_if_needed()
-        # If chunk is empty or idx is out of range, load next chunk
-        while idx >= len(self.current_chunk):
-            self._load_next_chunk()
-            if len(self.current_chunk) == 0:
-                from time import sleep
-                sleep(0.1)
-                raise IndexError("No more data to load from dataset")
         tensor_example = self.current_chunk[idx]
         self.total_examples_loaded += 1
         return tensor_example
