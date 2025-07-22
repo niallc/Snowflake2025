@@ -68,19 +68,10 @@ def _validate_example_format(example, filename):
 
 
 class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
-    """Streaming dataset that applies data augmentation to create 4x more training examples."""
-    
+    """Streaming dataset that applies data augmentation to create 4x more training examples.
+    Refactored for clean chunked access. See write_ups/chunk_loading_in_torch_dataset.md for design.
+    """
     def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 1024, verbose: bool = False, **kwargs):
-        """
-        Initialize streaming augmented dataset.
-        
-        Args:
-            data_files: List of paths to processed data files
-            enable_augmentation: Whether to apply augmentation (default: True)
-            chunk_size: Number of examples to load per chunk
-            **kwargs: Additional arguments (max_examples_unaugmented, shuffle_files)
-            verbose: If True, print debug info
-        """
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation
@@ -88,175 +79,108 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.max_examples_unaugmented = kwargs.get('max_examples_unaugmented', None)
         self.shuffle_files = kwargs.get('shuffle_files', False)
         self.verbose = verbose
-        # Centralized augmentation factor and sample counting
         self.augmentation_factor = AUGMENTATION_FACTOR if self.enable_augmentation else 1
         self.max_examples_augmented = (
             self.max_examples_unaugmented * self.augmentation_factor
             if self.max_examples_unaugmented is not None else None
         )
-        if self.enable_augmentation:
-            logger.info(
-                f"StreamingAugmentedProcessedDataset: {self.max_examples_unaugmented} unaugmented, "
-                f"{self.max_examples_augmented} augmented (factor={self.augmentation_factor})"
-            )
-        else:
-            logger.info(
-                f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples_unaugmented={self.max_examples_unaugmented})"
-            )
-        # Initialize epoch state
         self.epoch_file_list = self._get_shuffled_file_list()
-        self.current_file_idx = 0  # Index in epoch_file_list
-        self.current_chunk = []
-        self.current_chunk_idx = 0 # Index within current chunk
-        self.total_examples_loaded = 0  # Across epoch (augmented space)
-        self._load_next_chunk()    # Load first chunk
+        self.current_chunk = None
+        self.current_chunk_number = None
+        self.example_index_map = self._build_example_index_map()
         if self.verbose:
-            print(f"[INIT] Loaded first chunk. Files: {self.epoch_file_list}")
+            print(f"[INIT] Ready for chunked access. Files: {self.epoch_file_list}")
 
     def __len__(self):
-        """
-        Return the number of samples (for DataLoader compatibility).
-        Always returns the number of augmented samples (4x unaugmented if augmentation enabled).
-        """
         if self.max_examples_augmented is not None:
             return self.max_examples_augmented
         else:
             raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
 
+    def __getitem__(self, idx):
+        chunk_number, index_in_chunk = self._map_index(idx)
+        if self.current_chunk_number != chunk_number:
+            self.current_chunk = self._load_chunk(chunk_number)
+            self.current_chunk_number = chunk_number
+        return self.current_chunk[index_in_chunk]
+
+    def _map_index(self, idx):
+        chunk_number = idx // self.chunk_size
+        index_in_chunk = idx % self.chunk_size
+        return chunk_number, index_in_chunk
+
     def _get_shuffled_file_list(self):
-        """Return a new shuffled list of files for the epoch."""
         file_list = self.data_files.copy()
         if self.shuffle_files:
             random.shuffle(file_list)
         return file_list
 
-    def _start_new_epoch(self):
-        """Reset counters and reshuffle files for a new epoch."""
-        if self.enable_augmentation and self.max_examples_unaugmented is not None:
-            print(f"Max samples (unaugmented={self.max_examples_unaugmented}, augmented={self.max_examples_augmented}) reached, starting next epoch")
-        else:
-            print(f"Max samples (unaugmented={self.max_examples_unaugmented}) reached, starting next epoch")
-        self.epoch_file_list = self._get_shuffled_file_list()
-        self.current_file_idx = 0
-        self.current_chunk = []
-        self.current_chunk_idx = 0
-        self.total_examples_loaded = 0  # Reset augmented sample counter
-        self._load_next_chunk()
-        self.current_chunk_idx = 0
-        if self.verbose:
-            print(f"[EPOCH RESET] New epoch started. Files: {self.epoch_file_list}")
+    def _build_example_index_map(self):
+        """Build a flat list of (file_idx, example_idx) for all unaugmented examples up to max_examples_unaugmented."""
+        index_map = []
+        total = 0
+        for file_idx, file_path in enumerate(self.epoch_file_list):
+            try:
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                if 'examples' in data:
+                    file_examples = data['examples']
+                    for example_idx in range(len(file_examples)):
+                        if self.max_examples_unaugmented is not None and total >= self.max_examples_unaugmented:
+                            return index_map
+                        index_map.append((file_idx, example_idx))
+                        total += 1
+            except Exception as e:
+                logger.warning(f"Error loading {file_path}: {e}")
+                continue
+        return index_map
 
-    def _handle_epoch_boundary_if_needed(self):
-        """
-        Check if the epoch boundary has been reached (i.e., max_examples_augmented exhausted),
-        and if so, restart the epoch. Handles restart counter, sleep, and logging.
-        Returns when a valid epoch is ready or after too many restarts.
-        """
-        num_restarts = 0
-        exceeded_max_samples = self.total_examples_loaded >= self.max_examples_augmented if self.max_examples_augmented is not None else False
-        start_new_epoch = self.max_examples_augmented is not None and exceeded_max_samples
-        while start_new_epoch:
-            self._start_new_epoch()
-            if num_restarts > 0:
-                logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
-                sleep(0.5)
-            num_restarts += 1
-            if num_restarts > 200:
-                logger.warning("WARNING: Restarting epoch failed too many times. Continuing to avoid infinite loop.")
-                break
-            exceeded_max_samples = self.total_examples_loaded >= self.max_examples_augmented if self.max_examples_augmented is not None else False
-            start_new_epoch = self.max_examples_augmented is not None and exceeded_max_samples
+    def _load_chunk(self, chunk_number):
+        """Load the specified chunk (by chunk_number) as a list of tensorized examples."""
+        start_idx = chunk_number * self.chunk_size
+        end_idx = min(start_idx + self.chunk_size, self.__len__())
+        chunk_examples = []
+        for global_idx in range(start_idx, end_idx):
+            file_idx, example_idx = self.example_index_map[global_idx // self.augmentation_factor]
+            file_path = self.epoch_file_list[file_idx]
+            try:
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                ex = data['examples'][example_idx]
+                # Augmentation: for each unaugmented example, produce N augmented examples
+                if self.enable_augmentation:
+                    from hex_ai.data_utils import create_augmented_example_with_player_to_move
+                    from hex_ai.error_handling import get_board_state_error_tracker
+                    error_tracker = get_board_state_error_tracker()
+                    error_tracker._current_file = str(file_path)
+                    error_tracker._current_sample = f"file_idx={file_idx}, example_idx={example_idx}"
+                    augmented_examples = create_augmented_example_with_player_to_move(
+                        ex['board'][:PLAYER_CHANNEL] if ex['board'].shape[0] > 1 else ex['board'],
+                        ex['policy'], ex['value'], error_tracker)
+                    # Pick the correct augmentation for this global_idx
+                    aug_idx = global_idx % self.augmentation_factor
+                    aug = augmented_examples[aug_idx]
+                    chunk_examples.append(self._transform_example(*aug))
+                else:
+                    chunk_examples.append(self._transform_example(
+                        ex['board'], ex['policy'], ex['value'], None))
+            except Exception as e:
+                logger.warning(f"Error loading {file_path}: {e}")
+                # Optionally: append a dummy or raise
+                raise
+        return chunk_examples
 
-    def _tensorize_example(self, board_2ch, policy, value, player=None):
-        """Convert numpy arrays to torch tensors, adding player channel if needed. Assumes policy is never None."""
+    def _transform_example(self, board_2ch, policy, value, player=None):
+        # Apply tensorization and add player channel if needed
         if player is not None:
             player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), float(player), dtype=np.float32)
             board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
         else:
             board_3ch = board_2ch
         board_tensor = torch.from_numpy(board_3ch).float()
-        # policy should never be None here, should be handled upstream by 
-        # _get_augmented_example and _get_non_augmented_example
-        # To this line will produce an error if policy is None.
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])
         return (board_tensor, policy_tensor, value_tensor)
-
-    def _load_next_chunk(self):
-        """Load the next chunk of examples from files (no repeats within epoch). Precompute all augmentations for each unaugmented example."""
-        if self.verbose:
-            print(f"[_LOAD_NEXT_CHUNK] Loading chunk. current_file_idx={self.current_file_idx}, chunk_size={self.chunk_size}")
-        self.current_chunk = []  # Will hold all augmented examples for this chunk
-        files_attempted = 0
-        files_with_errors = 0
-        error_details = []
-        # Only use files from the current epoch's shuffled list
-        while len(self.current_chunk) < self.chunk_size and self.current_file_idx < len(self.epoch_file_list):
-            file_path = self.epoch_file_list[self.current_file_idx]
-            files_attempted += 1
-            try:
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-                if 'examples' in data:
-                    file_examples = data['examples']
-                    remaining_in_chunk = self.chunk_size - (len(self.current_chunk) // self.augmentation_factor)
-                    examples_to_add = file_examples[:remaining_in_chunk]
-                    # Precompute all augmentations for each unaugmented example
-                    from hex_ai.data_utils import create_augmented_example_with_player_to_move
-                    from hex_ai.error_handling import get_board_state_error_tracker
-                    error_tracker = get_board_state_error_tracker()
-                    for idx, ex in enumerate(examples_to_add):
-                        board = ex['board']
-                        policy = ex['policy']
-                        value = ex['value']
-                        board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
-                        error_tracker._current_file = str(file_path)
-                        error_tracker._current_sample = f"chunk_file_idx={self.current_file_idx}, file_example_idx={idx}"
-                        augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
-                        for aug_board_2ch, aug_policy, aug_value, aug_player in augmented_examples:
-                            tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
-                            self.current_chunk.append(tensor_example)
-                    self.current_file_idx += 1
-                else:
-                    files_with_errors += 1
-                    error_details.append((str(file_path), "Missing 'examples' key"))
-                    self.current_file_idx += 1
-            except Exception as e:
-                logger.warning(f"Error loading {file_path}: {e}")
-                files_with_errors += 1
-                error_details.append((str(file_path), str(e)))
-                self.current_file_idx += 1
-                continue
-        # Shuffle the chunk for better randomization
-        if len(self.current_chunk) > 0:
-            random.shuffle(self.current_chunk)
-        # After loading, check error thresholds
-        if files_attempted > 0:
-            error_log_dir = str(self.data_files[0].parent) if self.data_files else "."
-            check_data_loading_errors(files_attempted, files_with_errors, error_details, error_log_dir)
-        import logging
-        if logging.getLogger().getEffectiveLevel() <= logging.INFO:
-            print(".", end="", flush=True)
-            if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
-                print()  # Newline
-        if self.verbose:
-            print(f"[_LOAD_NEXT_CHUNK] Loaded chunk with {len(self.current_chunk)} augmented examples.")
-
-    def __getitem__(self, idx):
-        """
-        Get training examples for the given global index.
-        Returns a precomputed augmented example (tensorized).
-        """
-        if idx >= self.__len__():
-            raise IndexError("Index out of range for dataset (exhausted)")
-        # Only support sequential access (i.e., next index after previous)
-        if idx != self.total_examples_loaded:
-            raise NotImplementedError("Random access is not supported. This dataset only supports sequential access (next index after previous). If you need random access, refactor the chunking logic.")
-        self._handle_epoch_boundary_if_needed()
-        tensor_example = self.current_chunk[idx]
-        self.total_examples_loaded += 1
-        return tensor_example
-
 
 
 def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:
