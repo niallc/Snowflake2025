@@ -1,38 +1,46 @@
-# Chunk Loading in PyTorch Dataset: Clean Design
+# Chunk Loading in PyTorch Dataset: Clean, Sequential Design
 
 ## Motivation
 
-When working with large datasets, it is efficient to load data in chunks (batches of samples) rather than all at once. This is especially important for streaming or disk-based datasets. The goal is to design a clean, idiomatic, and maintainable chunked dataset for PyTorch, with clear separation of concerns and robust error handling.
+For large datasets stored across multiple files, it is efficient and maintainable to load data in sequential chunks, minimizing memory usage and disk reads. The goal is to design a PyTorch dataset that loads at most two files at a time, supports chunked access, and is easy to extend and test.
 
 ## Requirements
 
 - **Chunked Access:** Map a global index to a chunk number and an index within that chunk.
-- **On-Demand Loading:** Load the appropriate chunk into memory only when needed.
+- **Efficient File Loading:** For each chunk, load only the files needed for that chunk—never more than two at a time.
+- **Sequential Reading:** Read records in order, leveraging the fact that files are already shuffled and can be processed sequentially.
 - **Separation of Concerns:** Keep chunk mapping, chunk loading, and data transformation as separate, testable units.
-- **No Code Smells:** Avoid long functions, mid-function imports, and tightly coupled logic.
-- **Extensible:** Easy to add features like shuffling, prefetching, or multi-worker support.
+- **Extensible:** Easy to add features like shuffling within chunks, prefetching, or multi-worker support.
 
 ## High-Level Design
 
-### 1. Index Mapping
+### 1. File and Example Indexing
+
+- At initialization, record the number of examples in each file.
+- Maintain a mapping from global example index to (file_idx, example_idx) using cumulative counts.
+- No need to build a global index map of all examples.
+
+### 2. Chunk Mapping
 
 - Given a global index `idx`, compute:
   - `chunk_number = idx // chunk_size`
   - `index_in_chunk = idx % chunk_size`
+- For a given chunk, determine which files and which example indices are needed.
+- If a chunk crosses a file boundary, load both files.
 
-### 2. Chunk Loading
+### 3. Chunk Loading
 
-- If the requested chunk is not already loaded, call a utility function to load it.
-- The chunk loader should:
-  - Determine which files and which examples are needed for the chunk.
-  - Load and transform only those examples.
-  - Store the loaded chunk and its number for future accesses.
+- When a chunk is requested:
+  - Identify the files and the range of examples needed from each.
+  - Load each file only once per chunk.
+  - Extract all required examples from each file and concatenate them to form the chunk.
+- At most two files are loaded into memory at any time.
 
-### 3. Data Transformation
+### 4. Data Transformation
 
-- All data transformation (e.g., augmentation, tensorization) should be handled in a dedicated function, not inline in the chunk loader.
+- All data transformation (e.g., augmentation, tensorization) is handled in a dedicated function, not inline in the chunk loader.
 
-### 4. Error Handling
+### 5. Error Handling
 
 - Handle missing/corrupted files gracefully.
 - If a chunk cannot be loaded, raise a clear error or return a fallback.
@@ -44,8 +52,8 @@ class ChunkedDataset(torch.utils.data.Dataset):
     def __init__(self, data_files, chunk_size, ...):
         self.data_files = data_files
         self.chunk_size = chunk_size
-        self.current_chunk = None
-        self.current_chunk_number = None
+        self.file_example_counts = [count_examples(f) for f in data_files]
+        self.cumulative_counts = ... # cumulative sum for fast lookup
         # ... other init ...
 
     def __len__(self):
@@ -66,7 +74,7 @@ class ChunkedDataset(torch.utils.data.Dataset):
 
     def _load_chunk(self, chunk_number):
         # Determine which files/examples are needed for this chunk
-        # Load and transform only those examples
+        # Load each file only once, extract all required examples
         # Return a list of samples for this chunk
         ...
 
@@ -81,7 +89,7 @@ class ChunkedDataset(torch.utils.data.Dataset):
 - **Short, focused functions:** Each function should do one thing.
 - **Clear state management:** Track which chunk is loaded and its number.
 - **Testability:** Each utility function should be independently testable.
-- **Extensible:** Easy to add shuffling, prefetching, etc.
+- **Extensible:** Easy to add shuffling within chunks, prefetching, etc.
 
 ## Error Handling
 
@@ -91,20 +99,20 @@ class ChunkedDataset(torch.utils.data.Dataset):
 
 ## Extensibility
 
-- **Shuffling:** Shuffle file list or chunk order at epoch start.
+- **Shuffling:** Shuffle file list at epoch start, or shuffle within chunks if needed.
 - **Prefetching:** Add a background thread or process to pre-load the next chunk.
 - **Multi-worker:** Ensure chunk loading is thread/process safe.
 
 ## Implementation and Testing Progress (July 2024)
 
 ### Multi-file Chunking
-- The dataset now robustly supports multi-file chunking.
+- The dataset supports efficient multi-file chunking, loading at most two files at a time.
 - Tests create temporary .pkl.gz files on the fly (using pytest's `tmp_path`), each with unique examples.
 - The test verifies that all examples are seen in the correct order, even when chunk boundaries cross file boundaries.
 - This approach is memory-efficient, does not pollute the repo, and is robust to future changes in the data format.
 
 ### Handling `policy=None`
-- The dataset now handles `policy=None` by converting it to a zero vector of the correct shape (`(BOARD_SIZE * BOARD_SIZE,)`), matching the real data format on disk.
+- The dataset handles `policy=None` by converting it to a zero vector of the correct shape (`(BOARD_SIZE * BOARD_SIZE,)`), matching the real data format on disk.
 - This is tested with a dedicated test that creates a temporary file with a `policy=None` example and verifies the output tensor is all zeros and the correct shape.
 
 ### Test Suite Best Practices
@@ -121,8 +129,8 @@ class ChunkedDataset(torch.utils.data.Dataset):
 - Added tests for shuffling: with `shuffle_files=False`, the order is stable; with `shuffle_files=True`, the order can change across runs.
 
 ### Current Test Coverage
-- The dataset is now robustly and reasonably tested for:
-  - Multi-file chunking
+- The dataset is robustly tested for:
+  - Multi-file chunking (at most two files in memory)
   - Augmentation (including value label flipping)
   - `policy=None` handling
   - Error handling for corrupted/missing files

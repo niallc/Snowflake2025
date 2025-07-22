@@ -36,6 +36,17 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     Refactored for clean chunked access. See write_ups/chunk_loading_in_torch_dataset.md for design.
     """
     def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 100000, verbose: bool = False, **kwargs):
+        import torch, time, os, psutil
+        start_time = time.time()
+        print("\n[StreamingAugmentedProcessedDataset.__init__] START")
+        print(f"  Number of files: {len(data_files)} | enable_augmentation={enable_augmentation} | chunk_size={chunk_size}")
+        print(f"  PID: {os.getpid()} | RAM used: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB")
+        print(f"  torch.cuda.is_available(): {torch.cuda.is_available()}")
+        if hasattr(torch.backends, 'mps'):
+            print(f"  torch.backends.mps.is_available(): {torch.backends.mps.is_available()}")
+            print(f"  torch.backends.mps.is_built(): {torch.backends.mps.is_built()}")
+        print(f"  torch.get_num_threads(): {torch.get_num_threads()}")
+        print(f"  torch version: {torch.__version__}")
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation
@@ -44,39 +55,58 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.shuffle_files = kwargs.get('shuffle_files', False)
         self.verbose = verbose
         self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
-        self.total_examples = None
+        self.logger = logging.getLogger(__name__)
+        self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
+        self.epoch_file_list = self.data_files.copy()
+        if self.shuffle_files:
+            random.shuffle(self.epoch_file_list)
+        self.file_example_counts = []
+        total_examples = 0
+        file_count = 0
+        file_times = []
+        print("  Scanning files for example counts...")
+        for file_path in self.epoch_file_list:
+            t0 = time.time()
+            try:
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                n_examples = len(data['examples']) if 'examples' in data else 0
+            except Exception as e:
+                print(f"    [WARN] Could not read {file_path}: {e}")
+                n_examples = 0
+            self.file_example_counts.append(n_examples)
+            total_examples += n_examples
+            file_count += 1
+            t1 = time.time()
+            file_times.append(t1-t0)
+            print(f"    File {file_count:4d}/{len(self.epoch_file_list)}: {file_path.name:40s} | {n_examples:6d} examples | {t1-t0:.2f}s | RAM: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB")
+            if file_count % 10 == 0 or file_count == len(self.epoch_file_list):
+                elapsed = time.time() - start_time
+                print(f"      ... Scanned {file_count} files, {total_examples} total examples so far, elapsed {elapsed:.1f}s")
+        self.cumulative_counts = [0]
+        for count in self.file_example_counts:
+            self.cumulative_counts.append(self.cumulative_counts[-1] + count)
+        self.total_unaugmented = sum(self.file_example_counts)
+        if self.max_examples_unaugmented is not None:
+            self.total_unaugmented = min(self.total_unaugmented, self.max_examples_unaugmented)
+        self.max_examples_augmented = self.total_unaugmented * self.augmentation_factor
         self.current_chunk = None
         self.current_chunk_number = None
-        self.current_file_index = 0
-        self.current_file = None
-        self.current_file_examples = None
-        self.current_file_example_index = 0
-        self.logger = logging.getLogger(__name__)
-        # Set policy shape to match real data format
-        from hex_ai.config import BOARD_SIZE
-        self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
-        self.max_examples_augmented = (
-            self.max_examples_unaugmented * self.augmentation_factor
-            if self.max_examples_unaugmented is not None else None
-        )
-        self.epoch_file_list = self._get_shuffled_file_list()
-        self.example_index_map = self._build_example_index_map()
         self._last_accessed_index = None
         self._random_access_warned = False
         if self.verbose:
             print(f"[INIT] Ready for chunked access. Files: {self.epoch_file_list}")
+        end_time = time.time()
+        print(f"[StreamingAugmentedProcessedDataset.__init__] END | Total files: {file_count} | Total examples: {total_examples} | Init time: {end_time-start_time:.2f}s | RAM: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB\n")
 
     def __len__(self):
-        if self.max_examples_augmented is not None:
-            return self.max_examples_augmented
-        else:
-            raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
+        return self.max_examples_augmented
 
     def __getitem__(self, idx):
         # Warn if random access is detected (not strictly sequential)
         if self._last_accessed_index is not None and idx != self._last_accessed_index + 1:
             if not self._random_access_warned:
-                logger.warning("Random access is supported but not as thoroughly tested as sequential access. Please report any issues.")
+                self.logger.warning("Random access is supported but not as thoroughly tested as sequential access. Please report any issues.")
                 self._random_access_warned = True
         self._last_accessed_index = idx
         chunk_number, index_in_chunk = self._map_index(idx)
@@ -90,54 +120,51 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         index_in_chunk = idx % self.chunk_size
         return chunk_number, index_in_chunk
 
-    def _get_shuffled_file_list(self):
-        file_list = self.data_files.copy()
-        if self.shuffle_files:
-            random.shuffle(file_list)
-        return file_list
-
-    def _build_example_index_map(self):
-        """Build a flat list of (file_idx, example_idx) for all unaugmented examples up to max_examples_unaugmented."""
-        index_map = []
-        total = 0
-        for file_idx, file_path in enumerate(self.epoch_file_list):
-            try:
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-                if 'examples' in data:
-                    file_examples = data['examples']
-                    for example_idx in range(len(file_examples)):
-                        if self.max_examples_unaugmented is not None and total >= self.max_examples_unaugmented:
-                            return index_map
-                        index_map.append((file_idx, example_idx))
-                        total += 1
-            except Exception as e:
-                logger.warning(f"Error loading {file_path}: {e}")
-                continue
-        return index_map
+    def _find_file_and_local_index(self, global_example_idx):
+        # Binary search over cumulative_counts to find file
+        left, right = 0, len(self.cumulative_counts) - 1
+        while left < right:
+            mid = (left + right) // 2
+            if self.cumulative_counts[mid+1] <= global_example_idx:
+                left = mid + 1
+            else:
+                right = mid
+        file_idx = left
+        local_idx = global_example_idx - self.cumulative_counts[file_idx]
+        return file_idx, local_idx
 
     def _load_chunk(self, chunk_number):
-        """Load the specified chunk (by chunk_number) as a list of tensorized examples."""
         start_idx = chunk_number * self.chunk_size
         end_idx = min(start_idx + self.chunk_size, self.__len__())
         chunk_examples = []
-        for global_idx in range(start_idx, end_idx):
-            file_idx, example_idx = self.example_index_map[global_idx // self.augmentation_factor]
+        # For each global example index in this chunk, group by file
+        needed = []  # List of (file_idx, local_idx, aug_idx)
+        for global_aug_idx in range(start_idx, end_idx):
+            global_example_idx = global_aug_idx // self.augmentation_factor
+            if global_example_idx >= self.total_unaugmented:
+                break
+            aug_idx = global_aug_idx % self.augmentation_factor
+            file_idx, local_idx = self._find_file_and_local_index(global_example_idx)
+            needed.append((file_idx, local_idx, aug_idx))
+        # Group needed by file_idx
+        from collections import defaultdict
+        file_to_indices = defaultdict(list)
+        for file_idx, local_idx, aug_idx in needed:
+            file_to_indices[file_idx].append((local_idx, aug_idx))
+        # Load each file only once, extract all needed examples
+        for file_idx in sorted(file_to_indices.keys()):
             file_path = self.epoch_file_list[file_idx]
-            try:
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-                ex = data['examples'][example_idx]
+            with gzip.open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            file_examples = data['examples']
+            for local_idx, aug_idx in file_to_indices[file_idx]:
+                ex = file_examples[local_idx]
                 error_tracker = get_board_state_error_tracker()
                 error_tracker._current_file = str(file_path)
-                error_tracker._current_sample = f"file_idx={file_idx}, example_idx={example_idx}"
-                # Use helper for augmentation/tensorization
+                error_tracker._current_sample = f"file_idx={file_idx}, example_idx={local_idx}"
                 tensorized = self.get_augmented_tensor_for_index(
-                    ex, global_idx % self.augmentation_factor, error_tracker)
+                    ex, aug_idx, error_tracker)
                 chunk_examples.append(tensorized)
-            except Exception as e:
-                logger.warning(f"Error loading {file_path}: {e}")
-                raise
         return chunk_examples
 
     def get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
