@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hex_ai.data_pipeline import discover_processed_files, create_train_val_split, StreamingAugmentedProcessedDataset
-from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

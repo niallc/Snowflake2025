@@ -14,7 +14,7 @@ import logging
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

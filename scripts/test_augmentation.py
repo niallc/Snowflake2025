@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
-from hex_ai.training_utils_legacy import augmented_collate_fn
+from hex_ai.training_orchestration import augmented_collate_fn
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.utils.format_conversion import tensor_to_rowcol, tensor_to_trmph
 

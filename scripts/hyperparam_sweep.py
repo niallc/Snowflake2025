@@ -18,7 +18,7 @@ import os
 import hashlib
 import json
 
-from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.system_utils import check_virtual_env
 check_virtual_env("hex_ai_env")
