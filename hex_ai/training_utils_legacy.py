@@ -141,6 +141,114 @@ def create_summary_csv(experiment_results: List[Dict], results_path: Path):
     logger.info(f"Created experiment summary CSV: {summary_file}") 
 
 
+def discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast):
+    """
+    Discover processed files and split into train/val sets.
+    Returns (train_files, val_files, all_files).
+    """
+    from hex_ai.data_pipeline import discover_processed_files, create_train_val_split
+    try:
+        data_files = discover_processed_files(data_dir)
+    except Exception as e:
+        logger.error(f"Failed to discover processed files in {data_dir}: {e}")
+        if fail_fast:
+            raise
+        else:
+            return None, None, None
+    try:
+        logger.info(f"Creating train/val split (no file limit with streaming)")
+        train_files, val_files = create_train_val_split(
+            data_files, train_ratio, random_seed, max_files_per_split=None
+        )
+    except Exception as e:
+        logger.error(f"Failed to create train/val split: {e}")
+        if fail_fast:
+            raise
+        else:
+            return None, None, data_files
+    return train_files, val_files, data_files
+
+def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast):
+    """
+    Create StreamingAugmentedProcessedDataset objects for train and val sets.
+    Returns (train_dataset, val_dataset).
+    """
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    try:
+        train_dataset = StreamingAugmentedProcessedDataset(
+            train_files, 
+            enable_augmentation=True, 
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_examples_unaugmented
+        )
+        val_dataset = StreamingAugmentedProcessedDataset(
+            val_files, 
+            enable_augmentation=False, # Validation dataset is not augmented
+            chunk_size=100000,  # Use fixed chunk size for memory efficiency
+            max_examples=max_validation_examples
+        ) if val_files else None
+    except Exception as e:
+        logger.error(f"Failed to create training/validation datasets: {e}")
+        if fail_fast:
+            raise
+        else:
+            return None, None
+    return train_dataset, val_dataset
+
+def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, num_epochs, mini_epoch_batches, device):
+    """
+    Run a single experiment: instantiate Trainer, Orchestrator, and run training.
+    Returns a result dict (can be expanded later).
+    """
+    from .models import TwoHeadedResNet
+    from .training import Trainer
+    import torch
+    model = TwoHeadedResNet(dropout_prob=exp_config['hyperparameters'].get('dropout_prob', 0.1))
+    trainer = Trainer(
+        model=model,
+        train_loader=torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=exp_config['hyperparameters']['batch_size'],
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
+        ),
+        val_loader=torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=exp_config['hyperparameters']['batch_size'],
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
+        ) if val_dataset else None,
+        learning_rate=exp_config['hyperparameters']['learning_rate'],
+        device=device,
+        enable_system_analysis=True,
+        enable_csv_logging=True,
+        experiment_name=exp_config['experiment_name'],
+        policy_weight=exp_config['hyperparameters'].get('policy_weight', 0.15),
+        value_weight=exp_config['hyperparameters'].get('value_weight', 0.85),
+        weight_decay=exp_config['hyperparameters'].get('weight_decay', 1e-4),
+        max_grad_norm=exp_config['hyperparameters'].get('max_grad_norm', 20.0),
+        value_learning_rate_factor=exp_config['hyperparameters'].get('value_learning_rate_factor', 0.1),
+        value_weight_decay_factor=exp_config['hyperparameters'].get('value_weight_decay_factor', 5.0)
+    )
+    exp_dir = results_path / exp_config['experiment_name']
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    orchestrator = MiniEpochOrchestrator(
+        trainer=trainer,
+        train_loader=trainer.train_loader,
+        val_loader=trainer.val_loader,
+        mini_epoch_batches=mini_epoch_batches,
+        num_epochs=num_epochs,
+        checkpoint_dir=exp_dir,
+        log_interval=1
+    )
+    orchestrator.run()
+    logger.info(f"Experiment {exp_config['experiment_name']} completed.")
+    return {'experiment_name': exp_config['experiment_name']}
+
+# Refactored main function
+
 def run_hyperparameter_tuning_current_data(
     experiments: List[Dict],
     data_dir: str,
@@ -157,131 +265,38 @@ def run_hyperparameter_tuning_current_data(
     mini_epoch_batches: int = 500
 ) -> Dict:
     """
-    Run a complete hyperparameter tuning experiment using current data pipeline and mini-epoch orchestration.
-    Uses MiniEpochOrchestrator to perform validation and checkpointing every mini-epoch.
+    Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
     """
     import time
-    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
-    
+    from pathlib import Path
+    from datetime import datetime
     # Use max_examples_unaugmented for validation if not specified
     if max_validation_examples is None:
         max_validation_examples = max_examples_unaugmented
-    
-    # Setup
     results_path = Path(results_dir)
     results_path.mkdir(parents=True, exist_ok=True)
-    
-    # Use experiment name if provided, otherwise use timestamp
     if experiment_name is None:
         experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    # Discover data files using current pipeline
-    try:
-        data_files = discover_processed_files(data_dir)
-    except Exception as e:
-        logger.error(f"Failed to discover processed files in {data_dir}: {e}")
-        if fail_fast:
-            raise
-        else:
-            return {'error': str(e), 'stage': 'discover_processed_files'}
-    
-    # Create train/val split (no file limit needed with streaming)
-    try:
-        logger.info(f"Creating train/val split (no file limit with streaming)")
-        train_files, val_files = create_train_val_split(
-            data_files, train_ratio, random_seed, max_files_per_split=None
-        )
-    except Exception as e:
-        logger.error(f"Failed to create train/val split: {e}")
-        if fail_fast:
-            raise
-        else:
-            return {'error': str(e), 'stage': 'create_train_val_split'}
-    
-    # If max_examples_unaugmented is specified, limit the data
-    if max_examples_unaugmented is not None:
-        logger.info(f"Limiting training data to ~{max_examples_unaugmented:,} examples for quick exploration")
-    if max_validation_examples is not None:
-        logger.info(f"Limiting validation data to ~{max_validation_examples:,} examples for quick exploration")
-    
-    dataset_info = {
-        'total_files': len(data_files),
-        'train_files': len(train_files),
-        'val_files': len(val_files),
-        'max_training_examples': max_examples_unaugmented,
-        'max_validation_examples': max_validation_examples
-    }
-    
-    logger.info(f"Dataset summary: {len(data_files)} total files, {len(train_files)} train, {len(val_files)} validation")
-    if max_examples_unaugmented:
-        logger.info(f"Training will use streaming with max_examples={max_examples_unaugmented:,}")
-    if max_validation_examples:
-        logger.info(f"Validation will use streaming with max_examples={max_validation_examples:,}")
-    
+    # Data discovery and split
+    train_files, val_files, data_files = discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast)
+    if train_files is None or val_files is None:
+        return {'error': 'Failed to discover or split data'}
+    # Dataset creation
+    train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast)
+    if train_dataset is None:
+        return {'error': 'Failed to create datasets'}
     # Device selection
+    import torch
     if torch.cuda.is_available():
         device = "cuda"
-        device_name = torch.cuda.get_device_name(0)
-        logger.info(f"Using CUDA GPU: {device_name}")
     elif torch.backends.mps.is_available():
         device = "mps"
-        logger.info("Using Apple MPS GPU")
     else:
         device = "cpu"
-        logger.info("Using CPU")
-    
-    # Save overall configuration
-    overall_config = {
-        'experiment_name': experiment_name,
-        'dataset_info': dataset_info,
-        'device': device,
-        'num_experiments': len(experiments),
-        'train_ratio': train_ratio,
-        'num_epochs': num_epochs,
-        'early_stopping_patience': early_stopping_patience,
-        'random_seed': random_seed,
-        'enable_augmentation': enable_augmentation,
-        'max_training_examples': max_examples_unaugmented,
-        'max_validation_examples': max_validation_examples,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    with open(results_path / "overall_config.json", "w") as f:
-        json.dump(overall_config, f, indent=2)
-    
-    # Load data once and reuse across experiments using current pipeline
-    logger.info(f"\nLoading data once for all experiments...")
-    
-    # Create training dataset with optional augmentation
-    try:
-        train_dataset = StreamingAugmentedProcessedDataset(
-            train_files, 
-            enable_augmentation=True, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_examples_unaugmented
-        )
-        # Note: Validation dataset is not augmented
-        val_dataset = StreamingAugmentedProcessedDataset(
-            val_files, 
-            enable_augmentation=False, # Validation dataset is not augmented
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_validation_examples
-        ) if val_files else None
-    except Exception as e:
-        logger.error(f"Failed to create training/validation datasets: {e}")
-        if fail_fast:
-            raise
-        else:
-            return {'error': str(e), 'stage': 'create_datasets'}
-    
-    logger.info(f"Created training dataset")
-    if val_dataset:
-        logger.info(f"Created validation dataset")
-    
+    # Run experiments
     all_results = []
     total_start_time = time.time()
     logger.info(f"\nStarting {len(experiments)} experiments...")
-    
     for i, exp_config in enumerate(experiments):
         logger.info(f"\n{'='*60}")
         logger.info(f"Experiment {i+1}/{len(experiments)}: {exp_config['experiment_name']}")
@@ -293,53 +308,16 @@ def run_hyperparameter_tuning_current_data(
             exp_config['max_validation_examples'] = max_validation_examples
         exp_config['enable_augmentation'] = enable_augmentation
         try:
-            # Instantiate Trainer for this experiment
-            model = TwoHeadedResNet(dropout_prob=exp_config['hyperparameters'].get('dropout_prob', 0.1))
-            trainer = Trainer(
-                model=model,
-                train_loader=torch.utils.data.DataLoader(
-                    train_dataset,
-                    batch_size=exp_config['hyperparameters']['batch_size'],
-                    shuffle=False,
-                    num_workers=0,
-                    pin_memory=False
-                ),
-                val_loader=torch.utils.data.DataLoader(
-                    val_dataset,
-                    batch_size=exp_config['hyperparameters']['batch_size'],
-                    shuffle=False,
-                    num_workers=0,
-                    pin_memory=False
-                ) if val_dataset else None,
-                learning_rate=exp_config['hyperparameters']['learning_rate'],
-                device=device,
-                enable_system_analysis=True,
-                enable_csv_logging=True,
-                experiment_name=exp_config['experiment_name'],
-                policy_weight=exp_config['hyperparameters'].get('policy_weight', 0.15),
-                value_weight=exp_config['hyperparameters'].get('value_weight', 0.85),
-                weight_decay=exp_config['hyperparameters'].get('weight_decay', 1e-4),
-                max_grad_norm=exp_config['hyperparameters'].get('max_grad_norm', 20.0),
-                value_learning_rate_factor=exp_config['hyperparameters'].get('value_learning_rate_factor', 0.1),
-                value_weight_decay_factor=exp_config['hyperparameters'].get('value_weight_decay_factor', 5.0)
+            result = run_single_experiment(
+                exp_config,
+                train_dataset,
+                val_dataset,
+                results_path,
+                num_epochs,
+                mini_epoch_batches,
+                device
             )
-            # Orchestrate mini-epoch training
-            exp_dir = results_path / exp_config['experiment_name']
-            exp_dir.mkdir(parents=True, exist_ok=True)
-            orchestrator = MiniEpochOrchestrator(
-                trainer=trainer,
-                train_loader=trainer.train_loader,
-                val_loader=trainer.val_loader,
-                mini_epoch_batches=mini_epoch_batches,
-                num_epochs=num_epochs,
-                checkpoint_dir=exp_dir,
-                log_interval=1
-            )
-            orchestrator.run()
-            # Optionally, collect results/metrics from trainer or orchestrator
-            # For now, just log completion
-            logger.info(f"Experiment {exp_config['experiment_name']} completed.")
-            all_results.append({'experiment_name': exp_config['experiment_name']})
+            all_results.append(result)
         except Exception as e:
             logger.error(f"Experiment {exp_config['experiment_name']} failed: {e}")
             import traceback
@@ -349,7 +327,6 @@ def run_hyperparameter_tuning_current_data(
                 raise
             else:
                 continue
-    # Save overall results
     total_time = time.time() - total_start_time
     overall_results = {
         'total_training_time': total_time,
