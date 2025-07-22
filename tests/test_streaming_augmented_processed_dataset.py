@@ -696,32 +696,152 @@ def test_validate_example_format_raises_on_none_policy():
     with pytest.raises(ValueError, match="Policy target is None"):
         _validate_example_format(example, filename="<test>") 
 
+# =====================
+# Modern tests for sequential, chunked, single-pass design
+# =====================
+import tempfile
+import shutil
+
+def create_test_file(tmp_path, examples):
+    import gzip, pickle
+    file_path = tmp_path / "test_file.pkl.gz"
+    with gzip.open(file_path, "wb") as f:
+        pickle.dump({"examples": examples}, f)
+    return file_path
+
+DEBUG_TEST = True  # <<< DEBUG: Set to False to disable debug prints
+
 # ---
-# The following tests are removed or skipped because they expect random access, infinite streaming, or old chunking logic that is not compatible with the new sequential, chunked, single-pass design.
+def test_sequential_access_enforced(tmp_path):
+    """
+    Test that only sequential access is allowed; random access raises NotImplementedError.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    # Create a file with 2 examples
+    examples = []
+    for i in range(2):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file_path = create_test_file(tmp_path, examples)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=False)
+    # First access is fine
+    _ = ds[0]
+    # Second access is fine
+    _ = ds[1]
+    # Out of order access should fail
+    import pytest
+    with pytest.raises(NotImplementedError):
+        _ = ds[0]
 
-import pytest
+# ---
+def test_chunk_loading_and_boundaries(tmp_path):
+    """
+    Test that chunk boundaries are handled correctly and all examples are returned.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    # Create 4 examples, chunk_size=2
+    examples = []
+    for i in range(4):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file_path = create_test_file(tmp_path, examples)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=4, enable_augmentation=False)
+    seen = []
+    for i in range(4):
+        board, policy, value = ds[i]
+        val = board[0, 0, 0].item()
+        seen.append(val)
+        if DEBUG_TEST:
+            print(f"[DEBUG-CHUNK-BOUNDARIES] idx={i}, board[0,0,0]={val}")
+    # The dataset should yield the examples in order: 0, 1, 2, 3
+    if DEBUG_TEST:
+        print(f"[DEBUG-CHUNK-BOUNDARIES] seen={seen}")
+    assert seen == [0, 1, 2, 3]
+    import pytest
+    with pytest.raises(IndexError):
+        _ = ds[4]
 
-def skip_incompatible(*args, **kwargs):
-    pytest.skip('Test incompatible with new sequential-only dataset design.')
+# ---
+def test_augmentation_enabled(tmp_path):
+    """
+    Test that with augmentation enabled, each base example yields 4 augmented examples.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from unittest.mock import patch
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    # Create 1 example
+    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
+    file_path = create_test_file(tmp_path, [example])
+    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
+        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
+            (np.array(board), np.array(policy), float(value), 0),
+            (np.array(board), np.array(policy), float(value), 1),
+            (np.array(board), np.array(policy), float(value), 0),
+            (np.array(board), np.array(policy), float(value), 1),
+        ]
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=4, max_examples_unaugmented=1, enable_augmentation=True)
+        for i in range(4):
+            board, policy, value = ds[i]
+            assert isinstance(board, torch.Tensor)
+            assert isinstance(policy, torch.Tensor)
+            assert isinstance(value, torch.Tensor)
+        import pytest
+        with pytest.raises(IndexError):
+            _ = ds[4]
 
-# Remove or skip tests that expect random access or old chunking logic
+# ---
+def test_empty_file_edge_case(tmp_path):
+    """
+    Test that an empty file (no examples) raises IndexError on first access.
+    """
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    file_path = create_test_file(tmp_path, [])
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=0, enable_augmentation=True)
+    import pytest
+    with pytest.raises(IndexError):
+        _ = ds[0]
 
-test_off_by_one_and_boundary_indexing = skip_incompatible
+# ---
+def test_tensorization_and_output_shape(tmp_path):
+    """
+    Test that output is always (board, policy, value) as torch tensors with correct shapes.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    # Create 1 example
+    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
+    file_path = create_test_file(tmp_path, [example])
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
+    board, policy, value = ds[0]
+    assert isinstance(board, torch.Tensor)
+    assert isinstance(policy, torch.Tensor)
+    assert isinstance(value, torch.Tensor)
+    assert board.shape[0] == 2 or board.shape[0] == 3
+    assert policy.shape == (BOARD_SIZE * BOARD_SIZE,)
+    assert value.shape == (1,)
 
-test_get_augmented_example_logic_all_non_empty = skip_incompatible
+# ---
+def test_error_handling_bad_file(tmp_path):
+    """
+    Test that a file with missing 'examples' key is handled gracefully (raises IndexError on access).
+    """
+    import gzip, pickle
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    file_path = tmp_path / "bad_file.pkl.gz"
+    with gzip.open(file_path, "wb") as f:
+        pickle.dump({"not_examples": []}, f)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
+    import pytest
+    with pytest.raises(IndexError):
+        _ = ds[0]
 
-test_get_non_augmented_example_logic = skip_incompatible
-
-test_get_augmented_example_logic = skip_incompatible
-
-test_augmentation_value_label = skip_incompatible
-
-test_chunk_boundaries = skip_incompatible
-
-test_multiple_files_and_shuffling = skip_incompatible
-
-test_edge_cases = skip_incompatible
-
-test_augmentation_error_handling = skip_incompatible
-
-# TODO: Add new tests for sequential chunked access, multi-file handling, and edge cases under the new design. 
+# ===================== 
