@@ -803,7 +803,22 @@ class Trainer:
             'value_loss': [],
             'total_loss': []
         }
-        for boards, policies, values in batch_iterable:
+        # --- Progress logging setup ---
+        start_time = time.time()
+        next_log_batch = 1
+        log_interval_sec = 180  # 3 minutes
+        last_time_log = start_time
+        # Only print device info the first time this method is called per Trainer instance
+        if not hasattr(self, '_train_on_batches_logged_device'):
+            print("[train_on_batches] Device info:")
+            print(f"  self.device = {self.device}")
+            print(f"  torch.cuda.is_available() = {torch.cuda.is_available()}")
+            if hasattr(torch.backends, 'mps'):
+                print(f"  torch.backends.mps.is_available() = {torch.backends.mps.is_available()}")
+                print(f"  torch.backends.mps.is_built() = {torch.backends.mps.is_built()}")
+            print(f"  Model device: {next(self.model.parameters()).device}")
+            self._train_on_batches_logged_device = True
+        for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
             boards = boards.to(self.device)
             policies = policies.to(self.device)
             values = values.to(self.device)
@@ -825,6 +840,18 @@ class Trainer:
             # Track losses for this batch
             for key in mini_epoch_metrics:
                 mini_epoch_metrics[key].append(loss_dict[key])
+            # --- Progress logging ---
+            now = time.time()
+            should_log = (batch_idx + 1 == next_log_batch)
+            # After 3 minutes, switch to time-based logging every log_interval_sec
+            if not should_log and (now - last_time_log > log_interval_sec):
+                should_log = True
+                last_time_log = now
+            if should_log:
+                elapsed = now - start_time
+                print(f"[train_on_batches] Batch {batch_idx+1}: total_loss={loss_dict['total_loss']:.4f} (elapsed {elapsed:.1f}s)")
+                if batch_idx + 1 == next_log_batch:
+                    next_log_batch *= 2  # Exponential backoff
         # Compute averages for the mini-epoch
         mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
         return mini_epoch_avg

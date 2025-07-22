@@ -275,7 +275,7 @@ def run_hyperparameter_tuning_current_data(
     train_files, val_files, data_files = discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast)
     if train_files is None or val_files is None:
         return {'error': 'Failed to discover or split data'}
-    train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast)
+    train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast)
     logger.info(f"\nCollected {len(train_dataset)} training examples and {len(val_dataset)} validation examples.")
     if train_dataset is None:
         return {'error': 'Failed to create datasets'}
