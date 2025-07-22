@@ -247,6 +247,37 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
     logger.info(f"Experiment {exp_config['experiment_name']} completed.")
     return {'experiment_name': exp_config['experiment_name']}
 
+def select_device():
+    """
+    Select the best available device (cuda, mps, or cpu).
+    """
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    else:
+        return "cpu"
+
+def prepare_experiment_config(exp_config, device, max_examples_unaugmented, max_validation_examples, enable_augmentation):
+    """
+    Update experiment config with device, augmentation, and max_examples settings.
+    """
+    exp_config['device'] = device
+    if max_examples_unaugmented is not None:
+        exp_config['max_examples_unaugmented'] = max_examples_unaugmented
+    if max_validation_examples is not None:
+        exp_config['max_validation_examples'] = max_validation_examples
+    exp_config['enable_augmentation'] = enable_augmentation
+    return exp_config
+
+def save_overall_results(results_path, overall_results):
+    """
+    Save the overall results dict to disk as overall_results.json.
+    """
+    with open(results_path / "overall_results.json", "w") as f:
+        json.dump(overall_results, f, indent=2, default=str)
+
 # Refactored main function
 
 def run_hyperparameter_tuning_current_data(
@@ -270,30 +301,19 @@ def run_hyperparameter_tuning_current_data(
     import time
     from pathlib import Path
     from datetime import datetime
-    # Use max_examples_unaugmented for validation if not specified
     if max_validation_examples is None:
         max_validation_examples = max_examples_unaugmented
     results_path = Path(results_dir)
     results_path.mkdir(parents=True, exist_ok=True)
     if experiment_name is None:
         experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    # Data discovery and split
     train_files, val_files, data_files = discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast)
     if train_files is None or val_files is None:
         return {'error': 'Failed to discover or split data'}
-    # Dataset creation
     train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast)
     if train_dataset is None:
         return {'error': 'Failed to create datasets'}
-    # Device selection
-    import torch
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
-    # Run experiments
+    device = select_device()
     all_results = []
     total_start_time = time.time()
     logger.info(f"\nStarting {len(experiments)} experiments...")
@@ -301,12 +321,7 @@ def run_hyperparameter_tuning_current_data(
         logger.info(f"\n{'='*60}")
         logger.info(f"Experiment {i+1}/{len(experiments)}: {exp_config['experiment_name']}")
         logger.info(f"{'='*60}")
-        exp_config['device'] = device
-        if max_examples_unaugmented is not None:
-            exp_config['max_examples_unaugmented'] = max_examples_unaugmented
-        if max_validation_examples is not None:
-            exp_config['max_validation_examples'] = max_validation_examples
-        exp_config['enable_augmentation'] = enable_augmentation
+        exp_config = prepare_experiment_config(exp_config, device, max_examples_unaugmented, max_validation_examples, enable_augmentation)
         try:
             result = run_single_experiment(
                 exp_config,
@@ -334,6 +349,5 @@ def run_hyperparameter_tuning_current_data(
         'successful_experiments': len(all_results),
         'experiments': all_results
     }
-    with open(results_path / "overall_results.json", "w") as f:
-        json.dump(overall_results, f, indent=2, default=str)
+    save_overall_results(results_path, overall_results)
     return overall_results 
