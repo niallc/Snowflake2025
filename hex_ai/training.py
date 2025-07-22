@@ -830,50 +830,6 @@ class Trainer:
         return mini_epoch_avg
 
 # See below Note about this code path not being used in run_training.py
-def create_trainer(model: TwoHeadedResNet, 
-                  train_shard_files: List[Path],
-                  val_shard_files: Optional[List[Path]] = None,
-                  batch_size: int = BATCH_SIZE,
-                  learning_rate: float = LEARNING_RATE,
-                  device: str = DEVICE,
-                  enable_system_analysis: bool = True) -> Trainer:
-    """Create a trainer with data loaders from processed shard files."""
-    # Use StreamingProcessedDataset for all data loading
-    train_dataset = StreamingAugmentedProcessedDataset(train_shard_files)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-    val_loader = None
-    if val_shard_files:
-        val_dataset = StreamingAugmentedProcessedDataset(val_shard_files)
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
-    return trainer
-
-# Note: we call trainer = Trainer(...) directly in hex_ai/training_utils_legacy.py
-# We want only one code path for training, so either delete this or 
-# update it to be sufficient for run_training.py.
-# TODO: Decide the canonical way to train a model.
-def train_model(model: TwoHeadedResNet,
-                train_shard_files: List[Path],
-                val_shard_files: Optional[List[Path]] = None,
-                num_epochs: int = NUM_EPOCHS,
-                batch_size: int = BATCH_SIZE,
-                learning_rate: float = LEARNING_RATE,
-                save_dir: str = "checkpoints",
-                device: str = DEVICE,
-                enable_system_analysis: bool = True,
-                early_stopping_patience: Optional[int] = None) -> Dict:
-    """Convenience function to train a model with processed shard files."""
-    
-    trainer = create_trainer(model, train_shard_files, val_shard_files, batch_size, learning_rate, device, enable_system_analysis)
-    
-    # Set up early stopping if requested
-    early_stopping = None
-    if early_stopping_patience is not None:
-        early_stopping = EarlyStopping(patience=early_stopping_patience)
-    
-    return trainer.train(num_epochs, save_dir, early_stopping=early_stopping) 
-
-
 def resume_training(checkpoint_path: str, 
                    num_epochs: int = 10,
                    save_dir: str = "checkpoints",
@@ -911,7 +867,7 @@ def resume_training(checkpoint_path: str,
     
     # Create trainer with dummy data (will be overridden)
     dummy_shard_files = [Path("dummy_shard.pkl.gz")]
-    trainer = create_trainer(model, dummy_shard_files, enable_system_analysis=False)
+    trainer = Trainer(model, dummy_shard_files, enable_system_analysis=False)
     
     # Load the checkpoint state
     trainer.model.load_state_dict(model_state)
