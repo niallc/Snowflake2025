@@ -120,6 +120,83 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         return board_tensor, policy_tensor, value_tensor
 
 
+class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
+    """
+    Streaming, strictly sequential dataset for pre-shuffled data shards.
+    Loads one shard (file) at a time into memory and yields examples sequentially.
+    Never holds more than one shard in memory at a time.
+    Designed for use with torch DataLoader (batch_size, shuffle=False, num_workers=0).
+    Augmentation is applied on-the-fly if enabled.
+    Fails loudly on any file error.
+    """
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, max_examples_unaugmented: Optional[int] = None, verbose: bool = False):
+        super().__init__()
+        self.data_files = data_files
+        self.enable_augmentation = enable_augmentation
+        self.max_examples_unaugmented = max_examples_unaugmented
+        self.verbose = verbose
+        self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
+        self.logger = logging.getLogger(__name__)
+        self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
+
+    def __iter__(self):
+        """
+        Sequentially iterate over all examples in all shards, applying augmentation if enabled.
+        Yields (board_tensor, policy_tensor, value_tensor) tuples.
+        """
+        total_yielded = 0
+        for file_idx, file_path in enumerate(self.data_files):
+            try:
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+            except Exception as e:
+                self.logger.error(f"Failed to load shard {file_path}: {e}")
+                raise RuntimeError(f"Failed to load shard {file_path}: {e}")
+            file_examples = data['examples'] if 'examples' in data else []
+            if self.verbose:
+                print(f"[StreamingSequentialShardDataset] Loaded {len(file_examples)} examples from {file_path.name} (shard {file_idx+1}/{len(self.data_files)})")
+            for ex_idx, ex in enumerate(file_examples):
+                for aug_idx in range(self.augmentation_factor):
+                    if self.max_examples_unaugmented is not None and total_yielded >= self.max_examples_unaugmented:
+                        return
+                    error_tracker = get_board_state_error_tracker()
+                    error_tracker._current_file = str(file_path)
+                    error_tracker._current_sample = f"example_idx={ex_idx}"
+                    yield self._get_augmented_tensor_for_index(ex, aug_idx, error_tracker)
+                    total_yielded += 1
+
+    def _get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
+        board = ex['board']
+        policy = ex['policy']
+        value = ex['value']
+        board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
+        if self.enable_augmentation:
+            augmented_examples = create_augmented_example_with_player_to_move(
+                board_2ch, policy, value, error_tracker)
+            aug = augmented_examples[aug_idx]
+            return self._transform_example(*aug)
+        else:
+            player = get_player_to_move_from_board(board_2ch)
+            return self._transform_example(board_2ch, policy, value, player)
+
+    def _normalize_policy(self, policy):
+        if policy is None:
+            return np.zeros(self.policy_shape, dtype=np.float32)
+        return policy
+
+    def _transform_example(self, board_2ch, policy, value, player=None):
+        if player is not None:
+            player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), float(player), dtype=np.float32)
+            board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
+        else:
+            board_3ch = board_2ch
+        board_tensor = torch.from_numpy(board_3ch).float()
+        policy = self._normalize_policy(policy)
+        policy_tensor = torch.FloatTensor(policy)
+        value_tensor = torch.FloatTensor([value])
+        return board_tensor, policy_tensor, value_tensor
+
+
 def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:
     """
     Discover all processed data files in the specified directory.
