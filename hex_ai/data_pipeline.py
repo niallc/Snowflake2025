@@ -22,49 +22,13 @@ from datetime import datetime
 import random
 from time import sleep
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, PLAYER_CHANNEL
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
 from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
 
 logger = logging.getLogger(__name__)
 
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
-
-
-def _validate_example_format(example, filename):
-    """Validate example format early to fail fast.
-    For non-augmented (validation) data, policy_target should never be None at this stage.
-    If it is, this indicates a bug in preprocessing or data loading that must be fixed upstream.
-    """
-    if not isinstance(example, dict):
-        raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
-    
-    # Check for required keys
-    if not all(key in example for key in ['board', 'policy', 'value']):
-        raise ValueError(f"Example in {filename} missing required keys: {example.keys()}")
-    
-    board_state = example['board']
-    policy_target = example['policy']
-    value_target = example['value']
-    
-    # Validate board state
-    if not isinstance(board_state, np.ndarray):
-        raise ValueError(f"Board state in {filename} must be numpy array, got {type(board_state)}")
-    # Accept both (BOARD_SIZE, BOARD_SIZE) and (2, BOARD_SIZE, BOARD_SIZE) formats
-    if board_state.shape not in [(BOARD_SIZE, BOARD_SIZE), (2, BOARD_SIZE, BOARD_SIZE)]:
-        raise ValueError(f"Board state in {filename} shape must be ({BOARD_SIZE}, {BOARD_SIZE}) or (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_state.shape}")
-    
-    # Validate policy target (None typed policy labels should already be handled for both augmented and non-augmented data)
-    if policy_target is None:
-        raise ValueError(f"Policy target is None in {filename}. This should have been handled during preprocessing or augmentation. If you see this, there is a bug upstream.")
-    elif not isinstance(policy_target, np.ndarray):
-        raise ValueError(f"Policy target in {filename} must be numpy array, got {type(policy_target)}")
-    elif policy_target.shape != (POLICY_OUTPUT_SIZE,):
-        raise ValueError(f"Policy target in {filename} shape must be ({POLICY_OUTPUT_SIZE},), got {policy_target.shape}")
-    
-    # Validate value target
-    if not isinstance(value_target, (int, float, np.number)):
-        raise ValueError(f"Value target in {filename} must be numeric, got {type(value_target)}")
 
 
 class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):

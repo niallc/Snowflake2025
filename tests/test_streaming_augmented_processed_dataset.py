@@ -308,32 +308,6 @@ def test_create_augmented_example_with_player_to_move_handles_none_policy():
         assert aug_board.shape[1:] == (BOARD_SIZE, BOARD_SIZE)
 
 
-# ---
-# Test: _validate_example_format raises on None policy labels
-# 1. Tests _validate_example_format (function)
-# 2. Passes a mock example with policy=None (should never happen in real data)
-# 3. Expects a ValueError to be raised
-# 4. Documents that None policy labels should already have been handled upstream, and this test ensures an exception is raised if not
-# ---
-@timed_test
-def test_validate_example_format_raises_on_none_policy():
-    """
-    Test that _validate_example_format raises ValueError if policy=None.
-    This should never happen in real data and indicates a bug upstream (should be handled during preprocessing or augmentation).
-    This test ensures that if a None policy label slips through, it is caught and surfaced as an error.
-    """
-    import numpy as np
-    from hex_ai.data_pipeline import _validate_example_format
-    from hex_ai.config import BOARD_SIZE
-    example = {
-        'board': np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32),
-        'policy': None,  # Should trigger error
-        'value': 1.0
-    }
-    import pytest
-    with pytest.raises(ValueError, match="Policy target is None"):
-        _validate_example_format(example, filename="<test>") 
-
 # =====================
 # Modern tests for sequential, chunked, single-pass design
 # =====================

@@ -25,41 +25,9 @@ from .models import TwoHeadedResNet
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
+from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
 
 logger = logging.getLogger(__name__)
-
-
-def _validate_example_format(example, filename):
-    """Validate example format early to fail fast."""
-    if not isinstance(example, dict):
-        raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
-    
-    # Check for required keys
-    if not all(key in example for key in ['board', 'policy', 'value']):
-        raise ValueError(f"Example in {filename} missing required keys: {example.keys()}")
-    
-    board_state = example['board']
-    policy_target = example['policy']
-    value_target = example['value']
-    
-    # Validate board state
-    if not isinstance(board_state, np.ndarray):
-        raise ValueError(f"Board state in {filename} must be numpy array, got {type(board_state)}")
-    # Accept both (BOARD_SIZE, BOARD_SIZE) and (2, BOARD_SIZE, BOARD_SIZE) formats
-    if board_state.shape not in [(BOARD_SIZE, BOARD_SIZE), (2, BOARD_SIZE, BOARD_SIZE)]:
-        raise ValueError(f"Board state in {filename} shape must be ({BOARD_SIZE}, {BOARD_SIZE}) or (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_state.shape}")
-    
-    # Validate policy target (can be None for final moves)
-    if policy_target is not None and not isinstance(policy_target, np.ndarray):
-        raise ValueError(f"Policy target in {filename} must be numpy array or None, got {type(policy_target)}")
-    if policy_target is not None and policy_target.shape != (POLICY_OUTPUT_SIZE,):
-        raise ValueError(f"Policy target in {filename} shape must be ({POLICY_OUTPUT_SIZE},), got {policy_target.shape}")
-    
-    # Validate value target
-    if not isinstance(value_target, (int, float, np.number)):
-        raise ValueError(f"Value target in {filename} must be numeric, got {type(value_target)}")
-
-
 
 
 def create_experiment_config_legacy(experiment_name: str,
@@ -146,7 +114,6 @@ def discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast):
     Discover processed files and split into train/val sets.
     Returns (train_files, val_files, all_files).
     """
-    from hex_ai.data_pipeline import discover_processed_files, create_train_val_split
     try:
         data_files = discover_processed_files(data_dir)
     except Exception as e:
@@ -168,24 +135,21 @@ def discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast):
             return None, None, data_files
     return train_files, val_files, data_files
 
-def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast):
+def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast):
     """
     Create StreamingAugmentedProcessedDataset objects for train and val sets.
     Returns (train_dataset, val_dataset).
     """
-    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
     try:
         train_dataset = StreamingAugmentedProcessedDataset(
             train_files, 
             enable_augmentation=True, 
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_examples_unaugmented
+            max_examples_unaugmented=max_examples_unaugmented
         )
         val_dataset = StreamingAugmentedProcessedDataset(
             val_files, 
             enable_augmentation=False, # Validation dataset is not augmented
-            chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_validation_examples
+            max_examples_unaugmented=max_validation_examples
         ) if val_files else None
     except Exception as e:
         logger.error(f"Failed to create training/validation datasets: {e}")
