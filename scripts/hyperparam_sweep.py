@@ -77,8 +77,8 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 16_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 3_000  # Validation samples (no augmentation)
+MAX_SAMPLES = 160_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 30_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
 EPOCHS = 10
 

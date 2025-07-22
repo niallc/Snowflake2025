@@ -32,146 +32,59 @@ AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotati
 
 
 class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
-    """Streaming dataset that applies data augmentation to create 4x more training examples.
-    Refactored for clean chunked access. See write_ups/chunk_loading_in_torch_dataset.md for design.
-    """
+    """Sequential dataset for pre-shuffled data. Loads as few files as needed to reach max_examples_unaugmented, and returns examples sequentially. Augmentation is applied on-the-fly if enabled."""
     def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 100000, verbose: bool = False, **kwargs):
-        import torch, time, os, psutil
-        start_time = time.time()
-        print("\n[StreamingAugmentedProcessedDataset.__init__] START")
-        print(f"  Number of files: {len(data_files)} | enable_augmentation={enable_augmentation} | chunk_size={chunk_size}")
-        print(f"  PID: {os.getpid()} | RAM used: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB")
-        print(f"  torch.cuda.is_available(): {torch.cuda.is_available()}")
-        if hasattr(torch.backends, 'mps'):
-            print(f"  torch.backends.mps.is_available(): {torch.backends.mps.is_available()}")
-            print(f"  torch.backends.mps.is_built(): {torch.backends.mps.is_built()}")
-        print(f"  torch.get_num_threads(): {torch.get_num_threads()}")
-        print(f"  torch version: {torch.__version__}")
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation
-        self.chunk_size = chunk_size
         self.max_examples_unaugmented = kwargs.get('max_examples_unaugmented', None)
-        self.shuffle_files = kwargs.get('shuffle_files', False)
         self.verbose = verbose
         self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
         self.logger = logging.getLogger(__name__)
         self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
-        self.epoch_file_list = self.data_files.copy()
-        if self.shuffle_files:
-            random.shuffle(self.epoch_file_list)
-        self.file_example_counts = []
-        total_examples = 0
+        self.examples = []
+        total_loaded = 0
         file_count = 0
-        file_times = []
-        print("  Scanning files for example counts...")
-        for file_path in self.epoch_file_list:
-            t0 = time.time()
+        self.logger.info(f"[StreamingAugmentedProcessedDataset] Initializing with {len(self.data_files)} files, enable_augmentation={self.enable_augmentation}, max_examples_unaugmented={self.max_examples_unaugmented}")
+        for file_path in self.data_files:
+            file_count += 1
             try:
                 with gzip.open(file_path, 'rb') as f:
                     data = pickle.load(f)
-                n_examples = len(data['examples']) if 'examples' in data else 0
+                file_examples = data['examples'] if 'examples' in data else []
+                n_to_add = len(file_examples)
+                if self.max_examples_unaugmented is not None:
+                    n_to_add = min(n_to_add, self.max_examples_unaugmented - total_loaded)
+                self.examples.extend(file_examples[:n_to_add])
+                total_loaded += n_to_add
+                self.logger.info(f"  Loaded {n_to_add} examples from {file_path.name} (file {file_count}/{len(self.data_files)}), total loaded: {total_loaded}")
+                if self.max_examples_unaugmented is not None and total_loaded >= self.max_examples_unaugmented:
+                    self.logger.info(f"  Reached max_examples_unaugmented ({self.max_examples_unaugmented}), stopping file loading.")
+                    break
             except Exception as e:
-                print(f"    [WARN] Could not read {file_path}: {e}")
-                n_examples = 0
-            self.file_example_counts.append(n_examples)
-            total_examples += n_examples
-            file_count += 1
-            t1 = time.time()
-            file_times.append(t1-t0)
-            print(f"    File {file_count:4d}/{len(self.epoch_file_list)}: {file_path.name:40s} | {n_examples:6d} examples | {t1-t0:.2f}s | RAM: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB")
-            if file_count % 10 == 0 or file_count == len(self.epoch_file_list):
-                elapsed = time.time() - start_time
-                print(f"      ... Scanned {file_count} files, {total_examples} total examples so far, elapsed {elapsed:.1f}s")
-        self.cumulative_counts = [0]
-        for count in self.file_example_counts:
-            self.cumulative_counts.append(self.cumulative_counts[-1] + count)
-        self.total_unaugmented = sum(self.file_example_counts)
-        if self.max_examples_unaugmented is not None:
-            self.total_unaugmented = min(self.total_unaugmented, self.max_examples_unaugmented)
+                self.logger.warning(f"Error loading {file_path}: {e}")
+                continue
+        self.total_unaugmented = len(self.examples)
         self.max_examples_augmented = self.total_unaugmented * self.augmentation_factor
-        self.current_chunk = None
-        self.current_chunk_number = None
-        self._last_accessed_index = None
-        self._random_access_warned = False
+        self.logger.info(f"[StreamingAugmentedProcessedDataset] Initialization complete: {self.total_unaugmented} examples loaded from {file_count} files (augmentation: {self.enable_augmentation})")
         if self.verbose:
-            print(f"[INIT] Ready for chunked access. Files: {self.epoch_file_list}")
-        end_time = time.time()
-        print(f"[StreamingAugmentedProcessedDataset.__init__] END | Total files: {file_count} | Total examples: {total_examples} | Init time: {end_time-start_time:.2f}s | RAM: {psutil.Process(os.getpid()).memory_info().rss / 1e6:.1f} MB\n")
+            print(f"[INIT] Loaded {self.total_unaugmented} examples from {file_count} files (augmentation: {self.enable_augmentation})")
 
     def __len__(self):
         return self.max_examples_augmented
 
     def __getitem__(self, idx):
-        # Warn if random access is detected (not strictly sequential)
-        if self._last_accessed_index is not None and idx != self._last_accessed_index + 1:
-            if not self._random_access_warned:
-                self.logger.warning("Random access is supported but not as thoroughly tested as sequential access. Please report any issues.")
-                self._random_access_warned = True
-        self._last_accessed_index = idx
-        chunk_number, index_in_chunk = self._map_index(idx)
-        if self.current_chunk_number != chunk_number:
-            self.current_chunk = self._load_chunk(chunk_number)
-            self.current_chunk_number = chunk_number
-        return self.current_chunk[index_in_chunk]
-
-    def _map_index(self, idx):
-        chunk_number = idx // self.chunk_size
-        index_in_chunk = idx % self.chunk_size
-        return chunk_number, index_in_chunk
-
-    def _find_file_and_local_index(self, global_example_idx):
-        # Binary search over cumulative_counts to find file
-        left, right = 0, len(self.cumulative_counts) - 1
-        while left < right:
-            mid = (left + right) // 2
-            if self.cumulative_counts[mid+1] <= global_example_idx:
-                left = mid + 1
-            else:
-                right = mid
-        file_idx = left
-        local_idx = global_example_idx - self.cumulative_counts[file_idx]
-        return file_idx, local_idx
-
-    def _load_chunk(self, chunk_number):
-        start_idx = chunk_number * self.chunk_size
-        end_idx = min(start_idx + self.chunk_size, self.__len__())
-        chunk_examples = []
-        # For each global example index in this chunk, group by file
-        needed = []  # List of (file_idx, local_idx, aug_idx)
-        for global_aug_idx in range(start_idx, end_idx):
-            global_example_idx = global_aug_idx // self.augmentation_factor
-            if global_example_idx >= self.total_unaugmented:
-                break
-            aug_idx = global_aug_idx % self.augmentation_factor
-            file_idx, local_idx = self._find_file_and_local_index(global_example_idx)
-            needed.append((file_idx, local_idx, aug_idx))
-        # Group needed by file_idx
-        from collections import defaultdict
-        file_to_indices = defaultdict(list)
-        for file_idx, local_idx, aug_idx in needed:
-            file_to_indices[file_idx].append((local_idx, aug_idx))
-        # Load each file only once, extract all needed examples
-        for file_idx in sorted(file_to_indices.keys()):
-            file_path = self.epoch_file_list[file_idx]
-            with gzip.open(file_path, 'rb') as f:
-                data = pickle.load(f)
-            file_examples = data['examples']
-            for local_idx, aug_idx in file_to_indices[file_idx]:
-                ex = file_examples[local_idx]
-                error_tracker = get_board_state_error_tracker()
-                error_tracker._current_file = str(file_path)
-                error_tracker._current_sample = f"file_idx={file_idx}, example_idx={local_idx}"
-                tensorized = self.get_augmented_tensor_for_index(
-                    ex, aug_idx, error_tracker)
-                chunk_examples.append(tensorized)
-        return chunk_examples
+        if idx < 0 or idx >= self.max_examples_augmented:
+            raise IndexError(f"Index {idx} out of range for dataset of length {self.max_examples_augmented}")
+        ex_idx = idx // self.augmentation_factor
+        aug_idx = idx % self.augmentation_factor
+        ex = self.examples[ex_idx]
+        error_tracker = get_board_state_error_tracker()
+        error_tracker._current_file = "sequential_in_memory"
+        error_tracker._current_sample = f"example_idx={ex_idx}"
+        return self.get_augmented_tensor_for_index(ex, aug_idx, error_tracker)
 
     def get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
-        """
-        Given a raw example, augmentation index, and error tracker, return the tensorized (board, policy, value).
-        Handles both augmented and non-augmented cases.
-        """
         board = ex['board']
         policy = ex['policy']
         value = ex['value']
@@ -185,20 +98,17 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             return self._transform_example(board_2ch, policy, value, None)
 
     def _normalize_policy(self, policy):
-        """Return a zero vector if policy is None, else return as-is."""
         if policy is None:
             return np.zeros(self.policy_shape, dtype=np.float32)
         return policy
 
     def _transform_example(self, board_2ch, policy, value, player=None):
-        # Apply tensorization and add player channel if needed
         if player is not None:
             player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), float(player), dtype=np.float32)
             board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
         else:
             board_3ch = board_2ch
         board_tensor = torch.from_numpy(board_3ch).float()
-        # Normalize policy before tensorization
         policy = self._normalize_policy(policy)
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])

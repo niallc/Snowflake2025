@@ -849,7 +849,7 @@ class Trainer:
                 last_time_log = now
             if should_log:
                 elapsed = now - start_time
-                print(f"[train_on_batches] Batch {batch_idx+1}: total_loss={loss_dict['total_loss']:.4f} (elapsed {elapsed:.1f}s)")
+                print(f"[train_on_batches] Batch {batch_idx+1}: total_loss={loss_dict['total_loss']:.4f}, policy_loss={loss_dict['policy_loss']:.4f}, value_loss={loss_dict['value_loss']:.4f} (elapsed {elapsed:.1f}s)")
                 if batch_idx + 1 == next_log_batch:
                     next_log_batch *= 2  # Exponential backoff
         # Compute averages for the mini-epoch
