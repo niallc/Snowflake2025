@@ -176,7 +176,7 @@ if __name__ == "__main__":
             num_epochs=EPOCHS,
             early_stopping_patience=None,  # Disable early stopping for now
             random_seed=42,
-            max_examples_per_split=MAX_SAMPLES,
+            max_examples_unaugmented=MAX_SAMPLES,
             max_validation_examples=MAX_VALIDATION_SAMPLES,
             enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation'],
             fail_fast=True

@@ -149,8 +149,8 @@ class TestStreamingProcessedDataset(unittest.TestCase):
                 pickle.dump({"examples": examples}, f)
             files.append(fpath)
         try:
-            # Set max_examples to 6 (all examples from all files)
-            dataset = StreamingProcessedDataset(files, chunk_size=2, shuffle_files=True, max_examples=6)
+            # Set max_examples_unaugmented to 6 (all examples from all files)
+            dataset = StreamingProcessedDataset(files, chunk_size=2, shuffle_files=True, max_examples_unaugmented=6)
             # Collect which files are used in the first epoch
             seen_boards_epoch1 = set()
             for _ in range(6):

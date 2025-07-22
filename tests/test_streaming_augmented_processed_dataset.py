@@ -5,10 +5,10 @@ Tests for StreamingAugmentedProcessedDataset.
 
 Expected behavior:
 - The dataset takes a list of data files, each containing N base examples.
-- If augmentation is enabled, each base example yields 4 augmented examples, so the dataset length is N*4 (where N is the number of base examples, up to max_examples).
+- If augmentation is enabled, each base example yields 4 augmented examples, so the dataset length is N*4 (where N is the number of base examples, up to max_examples_unaugmented).
 - Indexing (ds[i]) returns the i-th augmented example, with 0 <= i < N*4.
 - Accessing ds[i] for i >= N*4 raises IndexError.
-- max_examples limits the number of base (unaugmented) examples, not the number of augmented examples.
+- max_examples_unaugmented limits the number of base (unaugmented) examples, not the number of augmented examples.
 - The dataset supports chunking, shuffling, and multiple files, and should always yield all augmentations for all base examples.
 - Board data should only contain 0s and 1s; any other value is invalid.
 
@@ -32,7 +32,7 @@ import time
 # Test: Integration with real file, tensorization, and chunking
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests integration with real data file, tensorization, chunking, and augmentation
-# 3. Passes a real test file with known examples, chunk_size=2, max_examples=2, augmentation enabled
+# 3. Passes a real test file with known examples, chunk_size=2, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects each example to yield 4 augmentations, all returned as tensors with correct shapes
 #    (ds[0]..ds[7] valid, ds[8] raises IndexError)
 # ---
@@ -49,7 +49,7 @@ def test_real_file_tensorization_and_chunking():
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples=2, enable_augmentation=True, verbose=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True, verbose=True)
         # Each example should yield 4 augmentations, so indices 0-3 for first, 4-7 for second
         for i in range(8):
             board, policy, value = ds[i]
@@ -66,13 +66,13 @@ def test_real_file_tensorization_and_chunking():
 # Test: Epoch restart and chunking
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that exhausting the dataset triggers an epoch restart and raises IndexError
-# 3. Passes a real test file, chunk_size=1, max_examples=2, augmentation enabled
+# 3. Passes a real test file, chunk_size=1, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects ds[0]..ds[7] valid, ds[8] raises IndexError, and epoch restart logic is exercised
 # ---
 def test_epoch_restart_and_chunking(tmp_path):
     """
     Tests that exhausting the dataset triggers an epoch restart and raises IndexError.
-    With max_examples=2 and augmentation enabled, there are 8 valid augmented examples (indices 0-7).
+    With max_examples_unaugmented=2 and augmentation enabled, there are 8 valid augmented examples (indices 0-7).
     Accessing ds[8] should raise IndexError.
     """
     import pytest
@@ -95,7 +95,7 @@ def test_epoch_restart_and_chunking(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=2, enable_augmentation=True, verbose=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=2, enable_augmentation=True, verbose=True)
         # Exhaust the dataset, then trigger an epoch restart
         for i in range(8):  # Only access the valid indices
             _ = ds[i]
@@ -105,7 +105,7 @@ def test_epoch_restart_and_chunking(tmp_path):
 
 # ---
 # Test: Off-by-one and boundary indexing with various chunk sizes
-# 1. Tests that all valid indices up to max_examples*4-1 succeed, and max_examples*4 raises IndexError
+# 1. Tests that all valid indices up to max_examples_unaugmented*4-1 succeed, and max_examples_unaugmented*4 raises IndexError
 # 2. Tests with chunk sizes that do not evenly divide the number of base examples
 # ---
 def test_off_by_one_and_boundary_indexing(tmp_path):
@@ -135,7 +135,7 @@ def test_off_by_one_and_boundary_indexing(tmp_path):
                 (np.array(board), np.array(policy), float(value), 0),
                 (np.array(board), np.array(policy), float(value), 1),
             ]
-            ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=chunk_size, max_examples=3, enable_augmentation=True)
+            ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=chunk_size, max_examples_unaugmented=3, enable_augmentation=True)
             # All valid indices
             for i in range(12):
                 board, policy, value = ds[i]
@@ -177,7 +177,7 @@ def test_epoch_restart_robustness(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=2, enable_augmentation=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=2, enable_augmentation=True)
         print("[TEST] Full exhaustion phase")
         for i in range(8):
             board, policy, value = ds[i]
@@ -206,13 +206,13 @@ def test_epoch_restart_robustness(tmp_path):
 # Test: Model integration
 # 1. Tests StreamingAugmentedProcessedDataset (class) and TwoHeadedResNet (model)
 # 2. Tests that dataset output is compatible with model input
-# 3. Passes a real test file, chunk_size=2, max_examples=2, augmentation enabled
+# 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects a batch of 4 boards, policies, values to pass through the model without error
 # ---
 def test_streaming_dataset_model_integration():
     from hex_ai.models import TwoHeadedResNet
     file_path = Path("tests/small_shuffled_test.pkl.gz")
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples=2, enable_augmentation=True)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
     model = TwoHeadedResNet()
     # Get a batch
     boards, policies, values = zip(*(ds[i] for i in range(4)))
@@ -228,12 +228,12 @@ def test_streaming_dataset_model_integration():
 # Test: Player channel correctness
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that the player channel in the board tensor is always 0 or 1
-# 3. Passes a real test file, chunk_size=2, max_examples=2, augmentation enabled
+# 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation enabled
 # 4. Expects all player channel values to be 0 or 1
 # ---
 def test_player_channel_correctness():
     file_path = Path("tests/small_shuffled_test.pkl.gz")
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples=2, enable_augmentation=True)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
     for i in range(4):
         board, _, _ = ds[i]
         player_channel = board[2]
@@ -243,7 +243,7 @@ def test_player_channel_correctness():
 # Test: Empty board should be augmented (4x)
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that even empty boards yield 4 augmentations
-# 3. Passes a file with a single empty board, chunk_size=1, max_examples=1, augmentation enabled
+# 3. Passes a file with a single empty board, chunk_size=1, max_examples_unaugmented=1, augmentation enabled
 # 4. Expects ds[0]..ds[3] valid, ds[4] raises IndexError
 # ---
 def test_empty_board_handling(tmp_path):
@@ -255,7 +255,7 @@ def test_empty_board_handling(tmp_path):
     example = {'board': empty_board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": [example]}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=1, enable_augmentation=True)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=True)
     # Should return 4 augmentations for ds[0]..ds[3]
     for i in range(4):
         board, policy, value = ds[i]
@@ -293,7 +293,7 @@ def test_get_augmented_example_logic_all_non_empty(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=None, enable_augmentation=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=None, enable_augmentation=True)
         values = []
         i = 0
         while True:
@@ -310,12 +310,12 @@ def test_get_augmented_example_logic_all_non_empty(tmp_path):
 # Test: Augmentation disabled returns only original examples
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that disabling augmentation returns only the original examples
-# 3. Passes a real test file, chunk_size=2, max_examples=2, augmentation disabled
+# 3. Passes a real test file, chunk_size=2, max_examples_unaugmented=2, augmentation disabled
 # 4. Expects ds[0]..ds[1] valid, ds[2] raises IndexError
 # ---
 def test_non_augmented_path():
     file_path = Path("tests/small_shuffled_test.pkl.gz")
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples=2, enable_augmentation=False)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=False)
     # Should return only the original examples (no augmentation)
     for i in range(2):
         board, policy, value = ds[i]
@@ -331,7 +331,7 @@ def test_non_augmented_path():
 # Test: Non-augmented path logic
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that non-augmented path returns all base examples
-# 3. Passes a file with 3 examples, chunk_size=10, max_examples=3, augmentation disabled
+# 3. Passes a file with 3 examples, chunk_size=10, max_examples_unaugmented=3, augmentation disabled
 # 4. Expects ds[0]..ds[2] valid, ds[3] raises IndexError
 # ---
 def test_get_non_augmented_example_logic(tmp_path):
@@ -346,7 +346,7 @@ def test_get_non_augmented_example_logic(tmp_path):
         examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": examples}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=3, enable_augmentation=False)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=3, enable_augmentation=False)
     # Collect all board[0,0,0] values using the public interface
     seen = set()
     i = 0
@@ -391,7 +391,7 @@ def _run_augmented_example_logic_test(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=None, enable_augmentation=True, verbose=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=None, enable_augmentation=True, verbose=True)
         values = []
         boards = []
         i = 0
@@ -447,7 +447,7 @@ def test_augmentation_value_label(tmp_path):
                 (np.array(board), np.array(policy), 1.0, 1),
             ]
         mock_aug.side_effect = aug_fn
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples=None, enable_augmentation=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=None, enable_augmentation=True)
         values = []
         i = 0
         while True:
@@ -512,7 +512,7 @@ def test_index_mapping_trivial():
 # Test: Chunk boundaries
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that all augmentations are accessible across chunk boundaries
-# 3. Passes 2 files, each with 2 examples, chunk_size=2, max_examples=4, augmentation enabled
+# 3. Passes 2 files, each with 2 examples, chunk_size=2, max_examples_unaugmented=4, augmentation enabled
 # 4. Expects 16 augmentations (4 per example), order doesn't matter
 # ---
 def test_chunk_boundaries(tmp_path):
@@ -541,7 +541,7 @@ def test_chunk_boundaries(tmp_path):
             (np.array(board), np.array(policy), float(value), 0),
             (np.array(board), np.array(policy), float(value), 1),
         ]
-        ds = StreamingAugmentedProcessedDataset(files, chunk_size=2, max_examples=4, enable_augmentation=True)
+        ds = StreamingAugmentedProcessedDataset(files, chunk_size=2, max_examples_unaugmented=4, enable_augmentation=True)
         # Collect all values
         values = []
         i = 0
@@ -564,7 +564,7 @@ def test_chunk_boundaries(tmp_path):
 # Test: Multiple files and shuffling
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that all augmentations are accessible across multiple files, with and without shuffling
-# 3. Passes 3 files, each with 1 example, chunk_size=1, max_examples=3, augmentation enabled
+# 3. Passes 3 files, each with 1 example, chunk_size=1, max_examples_unaugmented=3, augmentation enabled
 # 4. Expects 12 augmentations (4 per example), order doesn't matter
 # ---
 def test_multiple_files_and_shuffling(tmp_path):
@@ -592,7 +592,7 @@ def test_multiple_files_and_shuffling(tmp_path):
             (np.array(board), np.array(policy), float(value), 1),
         ]
         # No shuffle
-        ds = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples=3, enable_augmentation=True, shuffle_files=False)
+        ds = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples_unaugmented=3, enable_augmentation=True, shuffle_files=False)
         values = []
         i = 0
         while True:
@@ -608,7 +608,7 @@ def test_multiple_files_and_shuffling(tmp_path):
         assert c[2.0] == 4
         assert len(values) == 12
         # Shuffle
-        ds2 = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples=3, enable_augmentation=True, shuffle_files=True)
+        ds2 = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples_unaugmented=3, enable_augmentation=True, shuffle_files=True)
         values2 = []
         i = 0
         while True:
@@ -628,7 +628,7 @@ def test_multiple_files_and_shuffling(tmp_path):
 # Test: Edge cases (empty file, only empty boards, one example)
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests edge cases: empty file, file with only empty boards, file with one example
-# 3. Passes files with these cases, chunk_size and max_examples as appropriate, augmentation enabled
+# 3. Passes files with these cases, chunk_size and max_examples_unaugmented as appropriate, augmentation enabled
 # 4. Expects correct number of augmentations or IndexError as appropriate
 # ---
 def test_edge_cases(tmp_path):
@@ -642,7 +642,7 @@ def test_edge_cases(tmp_path):
     file_path = tmp_path / "empty_file.pkl.gz"
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": []}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=0, enable_augmentation=True)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=0, enable_augmentation=True)
     with pytest.raises(IndexError):
         _ = ds[0]
     # File with only empty boards
@@ -651,7 +651,7 @@ def test_edge_cases(tmp_path):
     examples = [{'board': empty_board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0} for _ in range(2)]
     with gzip.open(file_path2, "wb") as f:
         pickle.dump({"examples": examples}, f)
-    ds2 = StreamingAugmentedProcessedDataset([file_path2], chunk_size=2, max_examples=2, enable_augmentation=True)
+    ds2 = StreamingAugmentedProcessedDataset([file_path2], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
     values2 = []
     for i in range(8):
         board, policy, value = ds2[i]
@@ -667,7 +667,7 @@ def test_edge_cases(tmp_path):
     example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 42.0}
     with gzip.open(file_path3, "wb") as f:
         pickle.dump({"examples": [example]}, f)
-    ds3 = StreamingAugmentedProcessedDataset([file_path3], chunk_size=1, max_examples=1, enable_augmentation=True)
+    ds3 = StreamingAugmentedProcessedDataset([file_path3], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=True)
     values3 = []
     for i in range(4):
         board, policy, value = ds3[i]
@@ -680,13 +680,13 @@ def test_edge_cases(tmp_path):
 # ---
 # Test: __len__ NotImplementedError
 # 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that __len__ raises NotImplementedError if max_examples is not set
-# 3. Passes a real test file, chunk_size=1, augmentation enabled, no max_examples
+# 2. Tests that __len__ raises NotImplementedError if max_examples_unaugmented is not set
+# 3. Passes a real test file, chunk_size=1, augmentation enabled, no max_examples_unaugmented
 # 4. Expects NotImplementedError
 # ---
 def test_not_implemented_len():
     """
-    Test that __len__ raises NotImplementedError if max_examples is not set.
+    Test that __len__ raises NotImplementedError if max_examples_unaugmented is not set.
     """
     from hex_ai.config import BOARD_SIZE
     file_path = Path("tests/small_shuffled_test.pkl.gz")
@@ -699,7 +699,7 @@ def test_not_implemented_len():
 # Test: Augmentation error handling
 # 1. Tests StreamingAugmentedProcessedDataset (class)
 # 2. Tests that errors in augmentation are propagated and logged
-# 3. Passes a file with one example, chunk_size=1, max_examples=1, augmentation enabled, and a mock that raises
+# 3. Passes a file with one example, chunk_size=1, max_examples_unaugmented=1, augmentation enabled, and a mock that raises
 # 4. Expects RuntimeError when augmentation fails
 # ---
 def test_augmentation_error_handling(tmp_path):
@@ -716,7 +716,7 @@ def test_augmentation_error_handling(tmp_path):
         pickle.dump({"examples": [example]}, f)
     with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
         mock_aug.side_effect = RuntimeError("Augmentation failed!")
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=1, enable_augmentation=True)
+        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=True)
         with pytest.raises(RuntimeError):
             _ = ds[0] 
 
@@ -775,7 +775,7 @@ def test_get_non_augmented_example_converts_none_policy_to_zeros(tmp_path):
     }
     with gzip.open(file_path, "wb") as f:
         pickle.dump({"examples": [example]}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples=1, enable_augmentation=False)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
     board, policy, value = ds[0]
     # Check that the policy tensor is all zeros
     assert np.allclose(policy.numpy(), 0), "Policy tensor should be all zeros for terminal positions"

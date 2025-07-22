@@ -76,7 +76,7 @@ def test_hyperparameter_tuning_integration():
             num_epochs=1,  # Just 1 epoch for testing
             early_stopping_patience=None,
             random_seed=42,
-            max_examples_per_split=1000,  # Very small for testing
+            max_examples_unaugmented=1000,  # Very small for testing
             max_validation_examples=200,
             enable_augmentation=False  # Disable for faster testing
         )

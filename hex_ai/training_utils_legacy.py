@@ -148,7 +148,7 @@ def run_hyperparameter_tuning_current_data(
     num_epochs: int = 10,
     early_stopping_patience: Optional[int] = None,
     random_seed: Optional[int] = None,
-    max_examples_per_split: Optional[int] = None,
+    max_examples_unaugmented: Optional[int] = None,
     max_validation_examples: Optional[int] = None,
     experiment_name: Optional[str] = None,
     enable_augmentation: bool = True,
@@ -165,8 +165,8 @@ def run_hyperparameter_tuning_current_data(
         num_epochs: Number of epochs per experiment
         early_stopping_patience: Early stopping patience
         random_seed: Random seed for reproducibility
-        max_examples_per_split: Maximum examples for training dataset
-        max_validation_examples: Maximum examples for validation dataset (defaults to max_examples_per_split if None)
+        max_examples_unaugmented: Maximum examples for training dataset
+        max_validation_examples: Maximum examples for validation dataset (defaults to max_examples_unaugmented if None)
         enable_augmentation: Whether to use data augmentation for training (default: True)
         fail_fast: If True, any serious failure (e.g., import error, data loading error, experiment failure) will immediately stop the sweep and raise the error. If False, will continue to next experiment. Default: True.
     
@@ -176,9 +176,9 @@ def run_hyperparameter_tuning_current_data(
     import time
     from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
     
-    # Use max_examples_per_split for validation if not specified
+    # Use max_examples_unaugmented for validation if not specified
     if max_validation_examples is None:
-        max_validation_examples = max_examples_per_split
+        max_validation_examples = max_examples_unaugmented
     
     # Setup
     results_path = Path(results_dir)
@@ -211,9 +211,9 @@ def run_hyperparameter_tuning_current_data(
         else:
             return {'error': str(e), 'stage': 'create_train_val_split'}
     
-    # If max_examples_per_split is specified, limit the data
-    if max_examples_per_split is not None:
-        logger.info(f"Limiting training data to ~{max_examples_per_split:,} examples for quick exploration")
+    # If max_examples_unaugmented is specified, limit the data
+    if max_examples_unaugmented is not None:
+        logger.info(f"Limiting training data to ~{max_examples_unaugmented:,} examples for quick exploration")
     if max_validation_examples is not None:
         logger.info(f"Limiting validation data to ~{max_validation_examples:,} examples for quick exploration")
     
@@ -221,13 +221,13 @@ def run_hyperparameter_tuning_current_data(
         'total_files': len(data_files),
         'train_files': len(train_files),
         'val_files': len(val_files),
-        'max_training_examples': max_examples_per_split,
+        'max_training_examples': max_examples_unaugmented,
         'max_validation_examples': max_validation_examples
     }
     
     logger.info(f"Dataset summary: {len(data_files)} total files, {len(train_files)} train, {len(val_files)} validation")
-    if max_examples_per_split:
-        logger.info(f"Training will use streaming with max_examples={max_examples_per_split:,}")
+    if max_examples_unaugmented:
+        logger.info(f"Training will use streaming with max_examples={max_examples_unaugmented:,}")
     if max_validation_examples:
         logger.info(f"Validation will use streaming with max_examples={max_validation_examples:,}")
     
@@ -254,7 +254,7 @@ def run_hyperparameter_tuning_current_data(
         'early_stopping_patience': early_stopping_patience,
         'random_seed': random_seed,
         'enable_augmentation': enable_augmentation,
-        'max_training_examples': max_examples_per_split,
+        'max_training_examples': max_examples_unaugmented,
         'max_validation_examples': max_validation_examples,
         'timestamp': datetime.now().isoformat()
     }
@@ -271,7 +271,7 @@ def run_hyperparameter_tuning_current_data(
             train_files, 
             enable_augmentation=True, 
             chunk_size=100000,  # Use fixed chunk size for memory efficiency
-            max_examples=max_examples_per_split
+            max_examples=max_examples_unaugmented
         )
         # Note: Validation dataset is not augmented
         val_dataset = StreamingAugmentedProcessedDataset(
@@ -302,10 +302,10 @@ def run_hyperparameter_tuning_current_data(
         logger.info(f"Experiment {i+1}/{len(experiments)}: {exp_config['experiment_name']}")
         logger.info(f"{'='*60}")
         
-        # Add device and max_examples_per_split to experiment config
+        # Add device and max_examples_unaugmented to experiment config
         exp_config['device'] = device
-        if max_examples_per_split is not None:
-            exp_config['max_examples_per_split'] = max_examples_per_split
+        if max_examples_unaugmented is not None:
+            exp_config['max_examples_unaugmented'] = max_examples_unaugmented
         if max_validation_examples is not None:
             exp_config['max_validation_examples'] = max_validation_examples
         exp_config['enable_augmentation'] = enable_augmentation
@@ -341,7 +341,7 @@ def run_hyperparameter_tuning_current_data(
         'successful_experiments': len(all_results),
         'device': device,
         'enable_augmentation': enable_augmentation,
-        'max_training_examples': max_examples_per_split,
+        'max_training_examples': max_examples_unaugmented,
         'max_validation_examples': max_validation_examples,
         'experiments': all_results
     }
@@ -360,8 +360,8 @@ def run_hyperparameter_tuning_current_data(
     logger.info(f"Total training time: {total_time:.1f}s")
     logger.info(f"Successful experiments: {len(all_results)}/{len(experiments)}")
     logger.info(f"Data augmentation: {'Enabled' if enable_augmentation else 'Disabled'}")
-    if max_examples_per_split:
-        logger.info(f"Training: streaming with max_examples={max_examples_per_split:,}")
+    if max_examples_unaugmented:
+        logger.info(f"Training: streaming with max_examples={max_examples_unaugmented:,}")
     else:
         logger.info(f"Training: streaming with unlimited examples")
     if max_validation_examples:

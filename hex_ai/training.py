@@ -803,7 +803,7 @@ def create_trainer(model: TwoHeadedResNet,
     trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
     return trainer
 
-# Note: we call trainer = Trainer(...) directly in run_training.py
+# Note: we call trainer = Trainer(...) directly in hex_ai/training_utils_legacy.py
 # We want only one code path for training, so either delete this or 
 # update it to be sufficient for run_training.py.
 # TODO: Decide the canonical way to train a model.
