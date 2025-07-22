@@ -784,6 +784,51 @@ class Trainer:
         
         return keep_epochs
 
+    def train_on_batches(self, batch_iterable) -> Dict[str, float]:
+        """
+        Train the model on a provided iterable of batches (mini-epoch).
+
+        Args:
+            batch_iterable: An iterable yielding (boards, policies, values) batches.
+
+        Returns:
+            Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
+
+        This method is intended for use by mini-epoch orchestration wrappers, allowing validation/checkpointing
+        at arbitrary batch intervals. It does not reset model/optimizer state and can be called repeatedly within an epoch.
+        """
+        self.model.train()
+        mini_epoch_metrics = {
+            'policy_loss': [],
+            'value_loss': [],
+            'total_loss': []
+        }
+        for boards, policies, values in batch_iterable:
+            boards = boards.to(self.device)
+            policies = policies.to(self.device)
+            values = values.to(self.device)
+            # Zero the gradients for this batch (does NOT reset optimizer state; just clears accumulated gradients)
+            self.optimizer.zero_grad()
+            with self.mixed_precision.autocast_context():
+                policy_pred, value_pred = self.model(boards)
+                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+            # Backward pass: compute gradients for this batch
+            scaled_loss = self.mixed_precision.scale_loss(total_loss)
+            scaled_loss.backward()
+            # Clip gradients to avoid exploding gradients (if configured)
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+            # Optimizer step: update model parameters using accumulated gradients
+            self.mixed_precision.step_optimizer(self.optimizer)
+            # Update mixed precision scaler (if used)
+            self.mixed_precision.update_scaler()
+            # Track losses for this batch
+            for key in mini_epoch_metrics:
+                mini_epoch_metrics[key].append(loss_dict[key])
+        # Compute averages for the mini-epoch
+        mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
+        return mini_epoch_avg
+
 # See below Note about this code path not being used in run_training.py
 def create_trainer(model: TwoHeadedResNet, 
                   train_shard_files: List[Path],

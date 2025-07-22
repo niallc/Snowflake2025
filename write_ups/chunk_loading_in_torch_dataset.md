@@ -116,6 +116,20 @@ class ChunkedDataset(torch.utils.data.Dataset):
   - Avoid static test data files unless absolutely necessary.
   - Prefer direct, public interface tests over patching or internal logic tests.
 
+### Error Handling and Shuffling (July 2024)
+- Added tests for error handling: the dataset logs warnings and skips corrupted or missing files, but still yields all valid examples from good files.
+- Added tests for shuffling: with `shuffle_files=False`, the order is stable; with `shuffle_files=True`, the order can change across runs.
+
+### Current Test Coverage
+- The dataset is now robustly and reasonably tested for:
+  - Multi-file chunking
+  - Augmentation (including value label flipping)
+  - `policy=None` handling
+  - Error handling for corrupted/missing files
+  - Shuffling of file order
+- The test suite is idiomatic, robust, and provides strong coverage for real-world usage, even if not every edge case is exhaustively tested.
+- Future contributors are encouraged to extend tests as new features or edge cases arise.
+
 ### Current State
 - The codebase now has a solid, maintainable foundation for chunked dataset loading and augmentation.
 - All key edge cases (multi-file, chunk boundaries, policy=None) are covered by robust, idiomatic tests.

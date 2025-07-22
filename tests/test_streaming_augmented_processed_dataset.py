@@ -650,3 +650,91 @@ def test_real_augmentation_logic(tmp_path):
         actual_order = values[start:end]
         if actual_order != expected_order:
             print(f"[WARN] Augmentation value label order for example {i} is {actual_order}, expected {expected_order}. This is not an error, but order is not stable.")
+
+
+def test_error_handling_corrupted_missing_files(tmp_path, caplog):
+    """
+    Test that the dataset logs a warning and skips corrupted or missing files, but still yields valid examples from good files.
+    """
+    import gzip, pickle, os
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+
+    # Create a valid file
+    examples = []
+    for i in range(3):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    valid_file = tmp_path / "valid.pkl.gz"
+    with gzip.open(valid_file, "wb") as f:
+        pickle.dump({"examples": examples}, f)
+
+    # Create a corrupted file
+    corrupted_file = tmp_path / "corrupted.pkl.gz"
+    with open(corrupted_file, "wb") as f:
+        f.write(b"not a pickle file")
+
+    # Reference a missing file
+    missing_file = tmp_path / "missing.pkl.gz"
+    # Do not create this file
+
+    # Instantiate the dataset with all three files
+    file_list = [valid_file, corrupted_file, missing_file]
+    with caplog.at_level("WARNING"):
+        ds = StreamingAugmentedProcessedDataset(file_list, chunk_size=2, max_examples_unaugmented=3, enable_augmentation=False)
+        # Collect all valid examples
+        seen = [float(ds[i][0][0, 0, 0]) for i in range(len(ds))]
+
+    # Assert that all valid examples are present
+    assert seen == [0.0, 1.0, 2.0], f"Expected [0.0, 1.0, 2.0], got {seen}"
+    # Assert that warnings were logged for corrupted and missing files
+    assert any("Error loading" in rec.message for rec in caplog.records), "Expected warning for corrupted file"
+    assert any("No such file or directory" in rec.message or "not found" in rec.message for rec in caplog.records), "Expected warning for missing file"
+
+
+def test_shuffle_files_effect(tmp_path):
+    """
+    Test that shuffle_files=True can change the order of examples across runs, while shuffle_files=False is stable.
+    """
+    import gzip, pickle
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    import random
+
+    # Create two valid files with unique examples
+    examples1 = []
+    examples2 = []
+    for i in range(3):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples1.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    for i in range(3, 6):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples2.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file1 = tmp_path / "file1.pkl.gz"
+    file2 = tmp_path / "file2.pkl.gz"
+    with gzip.open(file1, "wb") as f:
+        pickle.dump({"examples": examples1}, f)
+    with gzip.open(file2, "wb") as f:
+        pickle.dump({"examples": examples2}, f)
+
+    file_list = [file1, file2]
+
+    # With shuffle_files=False, order should always be the same
+    ds1 = StreamingAugmentedProcessedDataset(file_list, chunk_size=2, max_examples_unaugmented=6, enable_augmentation=False, shuffle_files=False)
+    order1 = [float(ds1[i][0][0, 0, 0]) for i in range(len(ds1))]
+    ds2 = StreamingAugmentedProcessedDataset(file_list, chunk_size=2, max_examples_unaugmented=6, enable_augmentation=False, shuffle_files=False)
+    order2 = [float(ds2[i][0][0, 0, 0]) for i in range(len(ds2))]
+    assert order1 == order2, f"Order should be stable with shuffle_files=False, got {order1} vs {order2}"
+
+    # With shuffle_files=True, order can differ (run multiple times to check)
+    orders = set()
+    for _ in range(5):
+        ds = StreamingAugmentedProcessedDataset(file_list, chunk_size=2, max_examples_unaugmented=6, enable_augmentation=False, shuffle_files=True)
+        order = tuple(float(ds[i][0][0, 0, 0]) for i in range(len(ds)))
+        orders.add(order)
+    assert len(orders) > 1, f"Order did not change with shuffle_files=True, got only {orders}"
