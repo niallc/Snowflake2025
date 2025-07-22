@@ -35,7 +35,7 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     """Streaming dataset that applies data augmentation to create 4x more training examples.
     Refactored for clean chunked access. See write_ups/chunk_loading_in_torch_dataset.md for design.
     """
-    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 1024, verbose: bool = False, **kwargs):
+    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, chunk_size: int = 100000, verbose: bool = False, **kwargs):
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation

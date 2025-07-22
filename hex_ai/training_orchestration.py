@@ -271,16 +271,20 @@ def run_hyperparameter_tuning_current_data(
     results_path.mkdir(parents=True, exist_ok=True)
     if experiment_name is None:
         experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    logger.info(f"\nGrabbing data from {data_dir} with random seed {random_seed}...")
     train_files, val_files, data_files = discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast)
     if train_files is None or val_files is None:
         return {'error': 'Failed to discover or split data'}
     train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, enable_augmentation, fail_fast)
+    logger.info(f"\nCollected {len(train_dataset)} training examples and {len(val_dataset)} validation examples.")
     if train_dataset is None:
         return {'error': 'Failed to create datasets'}
     device = select_device()
+    logger.info(f"\nUsing device {device}...")
+    logger.info(f"\nStarting {len(experiments)} experiments...")
+
     all_results = []
     total_start_time = time.time()
-    logger.info(f"\nStarting {len(experiments)} experiments...")
     for i, exp_config in enumerate(experiments):
         logger.info(f"\n{'='*60}")
         logger.info(f"Experiment {i+1}/{len(experiments)}: {exp_config['experiment_name']}")
@@ -313,5 +317,7 @@ def run_hyperparameter_tuning_current_data(
         'successful_experiments': len(all_results),
         'experiments': all_results
     }
+    logger.info(f"\nSaving overall results to {results_path}...")
     save_overall_results(results_path, overall_results)
+    logger.info(f"\nOverall results saved to {results_path}.")
     return overall_results 
