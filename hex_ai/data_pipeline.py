@@ -58,7 +58,10 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                 self.examples.extend(file_examples[:n_to_add])
                 total_loaded += n_to_add
                 self.logger.info(f"  Loaded {n_to_add} examples from {file_path.name} (file {file_count}/{len(self.data_files)}), total loaded: {total_loaded}")
-                if self.max_examples_unaugmented is not None and total_loaded >= self.max_examples_unaugmented:
+                if (
+                    self.max_examples_unaugmented is not None
+                    and total_loaded >= self.max_examples_unaugmented
+                ):
                     self.logger.info(f"  Reached max_examples_unaugmented ({self.max_examples_unaugmented}), stopping file loading.")
                     break
             except Exception as e:

@@ -57,7 +57,7 @@ SWEEP = {
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
-    "policy_weight": [0.001, 0.0001, 0.7, 0.01],
+    "policy_weight": [0.2, 0.7, 0.001, 0.01],
     # Add more as needed
 }
 
@@ -79,11 +79,11 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 15_000_000  # Training samples (will be 4x larger with augmentation)
+MAX_SAMPLES = 5_000_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 256_000  # Validation samples (no augmentation)
 MINI_EPOCH_BATCHES = math.floor(200000/256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 3
+EPOCHS = 1
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):

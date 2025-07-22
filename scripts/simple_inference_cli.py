@@ -62,9 +62,9 @@ if __name__ == "__main__":
     realGameR="http://www.trmph.com/hex/board#13,a12g5f5f6j4j5h6i4i5h7i7i6g7f9g8g10i9k2h4h8g9f10h9i10h10g12g11f12f11e12e11d12h11h12i11i12j11j12d11c12a13b11a11b10a10b9a9b8a8b7a7b6c11b12a6b5a5b3b4c3c4d3d4e3e4f3g4h2i3j1l2k3i2i1l3k4j2k1l4k6l5l7l6k7l11k12l12k13l13e5f4g2k9l10m7m8m6l8k10e6j3m1j6k5a3a4"
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     
+    modelFile="epoch7_mini3.pt" # or best_model.pt
     boardPos=${blueWin}
-    modelFile="epoch2_mini1.pt"
-
+    
     PYTHONPATH=. python scripts/simple_inference_cli.py \
     --trmph ${boardPos} \
     --model_dir ${resDir} \
