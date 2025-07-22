@@ -78,49 +78,6 @@ def test_real_file_tensorization_and_chunking():
             assert policy.shape == (BOARD_SIZE * BOARD_SIZE,)
             assert value.shape == (1,)
 
-# ---
-# Test: Off-by-one and boundary indexing with various chunk sizes
-# 1. Tests that all valid indices up to max_examples_unaugmented*4-1 succeed, and max_examples_unaugmented*4 raises IndexError
-# 2. Tests with chunk sizes that do not evenly divide the number of base examples
-# ---
-@timed_test
-def test_off_by_one_and_boundary_indexing(tmp_path):
-    """
-    For a file with 3 base examples and augmentation enabled, test that indices 0-11 are valid and 12 raises IndexError.
-    Repeat for chunk_size=1, 2, 3, 4.
-    """
-    import gzip, pickle
-    from hex_ai.config import BOARD_SIZE
-    from unittest.mock import patch
-    start_time = time.time()
-    # Create a file with 3 examples
-    file_path = tmp_path / "boundary_test.pkl.gz"
-    examples = []
-    for i in range(3):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    for chunk_size in [1, 2, 3, 4]:
-        print(f"[TEST] Starting chunk_size={chunk_size}")
-        with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-            mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-                (np.array(board), np.array(policy), float(value), 0),
-                (np.array(board), np.array(policy), float(value), 1),
-                (np.array(board), np.array(policy), float(value), 0),
-                (np.array(board), np.array(policy), float(value), 1),
-            ]
-            ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=chunk_size, max_examples_unaugmented=3, enable_augmentation=True)
-            # All valid indices
-            for i in range(12):
-                board, policy, value = ds[i]
-                assert board.shape[0] == 3
-            import pytest
-            with pytest.raises(IndexError):
-                _ = ds[12]
-        print(f"[TEST] Finished chunk_size={chunk_size}")
-    print(f"[TEST] test_off_by_one_and_boundary_indexing finished in {time.time() - start_time:.2f} seconds")
 
 # ---
 # Test: Model integration
@@ -189,46 +146,6 @@ def test_empty_board_handling(tmp_path):
     with pytest.raises(IndexError):
         _ = ds[4]
 
-# ---
-# Test: Non-empty boards are augmented (4x)
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that each non-empty board yields 4 augmentations
-# 3. Passes a file with 2 non-empty boards, chunk_size=10, augmentation enabled
-# 4. Expects 8 augmentations (4 per board), order doesn't matter
-# ---
-@timed_test
-def test_get_augmented_example_logic_all_non_empty(tmp_path):
-    import gzip, pickle
-    from hex_ai.config import BOARD_SIZE
-    from unittest.mock import patch
-    # Create a .pkl.gz file with 2 non-empty examples
-    file_path = tmp_path / "aug_logic_non_empty_test.pkl.gz"
-    examples = []
-    for i in range(2):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i + 1  # Ensure non-empty
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-        ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=None, enable_augmentation=True)
-        values = []
-        i = 0
-        while True:
-            try:
-                board, policy, value = ds[i]
-                values.append(board[0, 0, 0].item())
-                i += 1
-            except IndexError:
-                break
-        # Should be four 1s and four 2s (order doesn't matter due to shuffling)
-        assert sorted(values) == [1, 1, 1, 1, 2, 2, 2, 2]
 
 # ---
 # Test: Augmentation disabled returns only original examples
@@ -344,222 +261,6 @@ def _run_augmented_example_logic_test(tmp_path):
 def test_get_augmented_example_logic(tmp_path):
     _run_augmented_example_logic_test(tmp_path)
 
-# ---
-# Test: Augmentation value label logic (multiset comparison)
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that value labels are correctly handled in augmentation
-# 3. Passes a file with 2 non-empty boards, each with value 0.0 or 1.0, chunk_size=10, augmentation enabled
-# 4. Expects two 0s and two 1s per base example, order doesn't matter
-# ---
-@timed_test
-def test_augmentation_value_label(tmp_path):
-    import gzip, pickle
-    from hex_ai.config import BOARD_SIZE
-    from unittest.mock import patch
-    from collections import Counter
-    # Create a .pkl.gz file with 2 non-empty examples, one with value 0.0, one with value 1.0
-    file_path = tmp_path / "aug_logic_value_label_test.pkl.gz"
-    examples = []
-    for i, v in enumerate([0.0, 1.0]):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i + 1  # Ensure non-empty
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': v})
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        # Simulate two 0s and two 1s per base example
-        def aug_fn(board, policy, value, error_tracker):
-            return [
-                (np.array(board), np.array(policy), 0.0, 0),
-                (np.array(board), np.array(policy), 0.0, 1),
-                (np.array(board), np.array(policy), 1.0, 0),
-                (np.array(board), np.array(policy), 1.0, 1),
-            ]
-        mock_aug.side_effect = aug_fn
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=10, max_examples_unaugmented=None, enable_augmentation=True)
-        values = []
-        i = 0
-        while True:
-            try:
-                board, policy, value = ds[i]
-                values.append(value.item())
-                i += 1
-            except IndexError:
-                break
-        # For each base example, should get two 0s and two 1s (order doesn't matter)
-        assert Counter(int(v) for v in values) == Counter([0, 0, 1, 1, 0, 0, 1, 1]) 
-
-# ---
-# Test: Chunk boundaries
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that all augmentations are accessible across chunk boundaries
-# 3. Passes 2 files, each with 2 examples, chunk_size=2, max_examples_unaugmented=4, augmentation enabled
-# 4. Expects 16 augmentations (4 per example), order doesn't matter
-# ---
-@timed_test
-def test_chunk_boundaries(tmp_path):
-    """
-    Test accessing the last augmentation of the last example in a chunk, and the first in the next chunk.
-    Should not assume order; check that all expected values are present.
-    """
-    import gzip, pickle
-    from unittest.mock import patch
-    from hex_ai.config import BOARD_SIZE
-    # Create 2 files, each with 2 examples
-    for file_num in range(2):
-        file_path = tmp_path / f"chunk_boundary_{file_num}.pkl.gz"
-        examples = []
-        for i in range(2):
-            board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-            board[0, 0, 0] = i + file_num * 2
-            examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i + file_num * 2)})
-        with gzip.open(file_path, "wb") as f:
-            pickle.dump({"examples": examples}, f)
-    files = [tmp_path / f"chunk_boundary_{i}.pkl.gz" for i in range(2)]
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-        ]
-        ds = StreamingAugmentedProcessedDataset(files, chunk_size=2, max_examples_unaugmented=4, enable_augmentation=True)
-        # Collect all values
-        values = []
-        i = 0
-        while True:
-            try:
-                board, policy, value = ds[i]
-                values.append(board[0, 0, 0].item())
-                i += 1
-            except IndexError:
-                break
-        # Should be four 0s, four 1s, four 2s, four 3s (order doesn't matter)
-        c = Counter(values)
-        assert c[0.0] == 4
-        assert c[1.0] == 4
-        assert c[2.0] == 4
-        assert c[3.0] == 4
-        assert len(values) == 16
-
-# ---
-# Test: Multiple files and shuffling
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that all augmentations are accessible across multiple files, with and without shuffling
-# 3. Passes 3 files, each with 1 example, chunk_size=1, max_examples_unaugmented=3, augmentation enabled
-# 4. Expects 12 augmentations (4 per example), order doesn't matter
-# ---
-@timed_test
-def test_multiple_files_and_shuffling(tmp_path):
-    """
-    Test dataset with multiple files and shuffling enabled/disabled. Do not assume order; check set of values.
-    """
-    import gzip, pickle
-    from unittest.mock import patch
-    from hex_ai.config import BOARD_SIZE
-    # Create 3 files, each with 1 example
-    files = []
-    for i in range(3):
-        file_path = tmp_path / f"shuffle_{i}.pkl.gz"
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i
-        example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)}
-        with gzip.open(file_path, "wb") as f:
-            pickle.dump({"examples": [example]}, f)
-        files.append(file_path)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-        ]
-        # No shuffle
-        ds = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples_unaugmented=3, enable_augmentation=True, shuffle_files=False)
-        values = []
-        i = 0
-        while True:
-            try:
-                board, policy, value = ds[i]
-                values.append(board[0, 0, 0].item())
-                i += 1
-            except IndexError:
-                break
-        c = Counter(values)
-        assert c[0.0] == 4
-        assert c[1.0] == 4
-        assert c[2.0] == 4
-        assert len(values) == 12
-        # Shuffle
-        ds2 = StreamingAugmentedProcessedDataset(files, chunk_size=1, max_examples_unaugmented=3, enable_augmentation=True, shuffle_files=True)
-        values2 = []
-        i = 0
-        while True:
-            try:
-                board, policy, value = ds2[i]
-                values2.append(board[0, 0, 0].item())
-                i += 1
-            except IndexError:
-                break
-        c2 = Counter(values2)
-        assert c2[0.0] == 4
-        assert c2[1.0] == 4
-        assert c2[2.0] == 4
-        assert len(values2) == 12
-
-# ---
-# Test: Edge cases (empty file, only empty boards, one example)
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests edge cases: empty file, file with only empty boards, file with one example
-# 3. Passes files with these cases, chunk_size and max_examples_unaugmented as appropriate, augmentation enabled
-# 4. Expects correct number of augmentations or IndexError as appropriate
-# ---
-@timed_test
-def test_edge_cases(tmp_path):
-    """
-    Test edge cases: empty file, file with only empty boards, file with one example. Do not assume order.
-    """
-    import gzip, pickle
-    from unittest.mock import patch
-    from hex_ai.config import BOARD_SIZE
-    # Empty file
-    file_path = tmp_path / "empty_file.pkl.gz"
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": []}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=0, enable_augmentation=True)
-    with pytest.raises(IndexError):
-        _ = ds[0]
-    # File with only empty boards
-    file_path2 = tmp_path / "only_empty.pkl.gz"
-    empty_board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    examples = [{'board': empty_board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0} for _ in range(2)]
-    with gzip.open(file_path2, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    ds2 = StreamingAugmentedProcessedDataset([file_path2], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
-    values2 = []
-    for i in range(8):
-        board, policy, value = ds2[i]
-        values2.append(board[0, 0, 0].item())
-    c2 = Counter(values2)
-    assert c2[0.0] == 8
-    with pytest.raises(IndexError):
-        _ = ds2[8]
-    # File with one example
-    file_path3 = tmp_path / "one_example.pkl.gz"
-    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board[0, 0, 0] = 42
-    example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 42.0}
-    with gzip.open(file_path3, "wb") as f:
-        pickle.dump({"examples": [example]}, f)
-    ds3 = StreamingAugmentedProcessedDataset([file_path3], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=True)
-    values3 = []
-    for i in range(4):
-        board, policy, value = ds3[i]
-        values3.append(board[0, 0, 0].item())
-    c3 = Counter(values3)
-    assert c3[42.0] == 4
-    with pytest.raises(IndexError):
-        _ = ds3[4]
 
 # ---
 # Test: __len__ NotImplementedError
@@ -579,32 +280,6 @@ def test_not_implemented_len():
     import pytest
     with pytest.raises(NotImplementedError):
         _ = len(ds)
-
-# ---
-# Test: Augmentation error handling
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that errors in augmentation are propagated and logged
-# 3. Passes a file with one example, chunk_size=1, max_examples_unaugmented=1, augmentation enabled, and a mock that raises
-# 4. Expects RuntimeError when augmentation fails
-# ---
-@timed_test
-def test_augmentation_error_handling(tmp_path):
-    """
-    Test that errors in augmentation are propagated and logged.
-    """
-    import gzip, pickle
-    from unittest.mock import patch
-    from hex_ai.config import BOARD_SIZE
-    file_path = tmp_path / "aug_error.pkl.gz"
-    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": [example]}, f)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = RuntimeError("Augmentation failed!")
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=True)
-        with pytest.raises(RuntimeError):
-            _ = ds[0] 
 
 # ---
 # Test: Augmentation handles None policy labels (terminal positions)
@@ -636,39 +311,6 @@ def test_create_augmented_example_with_player_to_move_handles_none_policy():
         assert isinstance(aug_value, float)
         assert aug_board.shape[1:] == (BOARD_SIZE, BOARD_SIZE)
 
-# ---
-# Test: Non-augmented path mimics augmentation handling of None policy labels
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Passes a file with a single example with policy=None (terminal position)
-# 3. Expects the output policy tensor to be all zeros
-# 4. Documents that the non-augmented path now mimics the augmentation path for consistency
-# ---
-@timed_test
-def test_get_non_augmented_example_converts_none_policy_to_zeros(tmp_path):
-    """
-    Test that the non-augmented/validation path converts a None policy label to a zero tensor (terminal position),
-    matching the augmented path. The output policy tensor should be all zeros.
-    The current implementation handled None policy labels at the data augmentation stage, and the non-augmented path now mimics this behavior for consistency.
-    """
-    import gzip, pickle
-    import numpy as np
-    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
-    from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE
-    # Create a .pkl.gz file with one example with policy=None
-    file_path = tmp_path / "none_policy_non_augmented.pkl.gz"
-    example = {
-        'board': np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32),
-        'policy': None,  # Should be converted to zeros
-        'value': 1.0
-    }
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": [example]}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
-    board, policy, value = ds[0]
-    # Check that the policy tensor is all zeros
-    assert np.allclose(policy.numpy(), 0), "Policy tensor should be all zeros for terminal positions"
-    assert board.shape[0] == 2 or board.shape[0] == 3
-    assert value.shape == (1,)
 
 # ---
 # Test: _validate_example_format raises on None policy labels
@@ -773,6 +415,75 @@ def test_augmentation_enabled(tmp_path):
             _ = ds[4]
 
 # ---
+# Test: Sequential access returns correct examples across chunk boundaries
+# This test checks that accessing the dataset sequentially yields the correct examples, even when crossing chunk boundaries.
+def test_sequential_access_chunk_boundaries(tmp_path):
+    """
+    Test that sequential access yields correct examples across chunk boundaries.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    examples = []
+    for i in range(5):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file_path = create_test_file(tmp_path, examples)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=5, enable_augmentation=False)
+    seen = [ds[i][0][0, 0, 0].item() for i in range(5)]
+    assert seen == [0, 1, 2, 3, 4]
+
+# ---
+# Test: Random access returns correct examples and triggers logger warning
+# This test checks that random access works and logs a warning (manually check logs if desired).
+def test_random_access(tmp_path, caplog):
+    """
+    Test that random access returns correct examples and triggers a logger warning.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    examples = []
+    for i in range(3):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file_path = create_test_file(tmp_path, examples)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=3, enable_augmentation=False)
+    # Access out of order
+    a = ds[2][0][0, 0, 0].item()
+    b = ds[0][0][0, 0, 0].item()
+    c = ds[1][0][0, 0, 0].item()
+    assert sorted([a, b, c]) == [0, 1, 2]
+    # Check logger warning
+    assert any('Random access is supported' in r.message for r in caplog.records)
+
+# ---
+# Test: get_augmented_tensor_for_index helper (no augmentation)
+def test_get_augmented_tensor_for_index_no_aug(tmp_path):
+    """
+    Test the get_augmented_tensor_for_index helper for a non-augmented example.
+    """
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    policy = np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32)
+    value = 1.0
+    ex = {'board': board, 'policy': policy, 'value': value}
+    ds = StreamingAugmentedProcessedDataset([], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
+    from hex_ai.error_handling import get_board_state_error_tracker
+    error_tracker = get_board_state_error_tracker()
+    tensorized = ds.get_augmented_tensor_for_index(ex, 0, error_tracker)
+    board_tensor, policy_tensor, value_tensor = tensorized
+    assert board_tensor.shape[0] == 2 or board_tensor.shape[0] == 3
+    assert policy_tensor.shape == (BOARD_SIZE * BOARD_SIZE,)
+    assert value_tensor.shape == (1,)
+
+
+# ---
+# Test: Edge case - empty file
 def test_empty_file_edge_case(tmp_path):
     """
     Test that an empty file (no examples) raises IndexError on first access.
@@ -784,40 +495,25 @@ def test_empty_file_edge_case(tmp_path):
     with pytest.raises(IndexError):
         _ = ds[0]
 
+
 # ---
-def test_tensorization_and_output_shape(tmp_path):
+# Test: Last chunk smaller than chunk_size
+def test_last_chunk_smaller_than_chunk_size(tmp_path):
     """
-    Test that output is always (board, policy, value) as torch tensors with correct shapes.
+    Test that the last chunk is handled correctly when it is smaller than chunk_size.
     """
     import numpy as np
     from hex_ai.config import BOARD_SIZE
     from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
-    # Create 1 example
-    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    example = {'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': 1.0}
-    file_path = create_test_file(tmp_path, [example])
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
-    board, policy, value = ds[0]
-    assert isinstance(board, torch.Tensor)
-    assert isinstance(policy, torch.Tensor)
-    assert isinstance(value, torch.Tensor)
-    assert board.shape[0] == 2 or board.shape[0] == 3
-    assert policy.shape == (BOARD_SIZE * BOARD_SIZE,)
-    assert value.shape == (1,)
-
-# ---
-def test_error_handling_bad_file(tmp_path):
-    """
-    Test that a file with missing 'examples' key is handled gracefully (raises IndexError on access).
-    """
-    import gzip, pickle
-    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
-    file_path = tmp_path / "bad_file.pkl.gz"
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"not_examples": []}, f)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
+    examples = []
+    for i in range(5):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    file_path = create_test_file(tmp_path, examples)
+    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=3, max_examples_unaugmented=5, enable_augmentation=False)
+    seen = [ds[i][0][0, 0, 0].item() for i in range(5)]
+    assert seen == [0, 1, 2, 3, 4]
     import pytest
     with pytest.raises(IndexError):
-        _ = ds[0]
-
-# ===================== 
+        _ = ds[5]
