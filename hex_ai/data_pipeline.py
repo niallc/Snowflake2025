@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_example_format(example, filename):
-    """Validate example format early to fail fast."""
+    """Validate example format early to fail fast.
+    For non-augmented (validation) data, policy_target should never be None at this stage.
+    If it is, this indicates a bug in preprocessing or data loading that must be fixed upstream.
+    """
     if not isinstance(example, dict):
         raise ValueError(f"Example in {filename} must be dictionary, got {type(example)}")
     
@@ -49,10 +52,12 @@ def _validate_example_format(example, filename):
     if board_state.shape not in [(BOARD_SIZE, BOARD_SIZE), (2, BOARD_SIZE, BOARD_SIZE)]:
         raise ValueError(f"Board state in {filename} shape must be ({BOARD_SIZE}, {BOARD_SIZE}) or (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_state.shape}")
     
-    # Validate policy target (can be None for final moves)
-    if policy_target is not None and not isinstance(policy_target, np.ndarray):
-        raise ValueError(f"Policy target in {filename} must be numpy array or None, got {type(policy_target)}")
-    if policy_target is not None and policy_target.shape != (POLICY_OUTPUT_SIZE,):
+    # Validate policy target (None typed policy labels should already be handled for both augmented and non-augmented data)
+    if policy_target is None:
+        raise ValueError(f"Policy target is None in {filename}. This should have been handled during preprocessing or augmentation. If you see this, there is a bug upstream.")
+    elif not isinstance(policy_target, np.ndarray):
+        raise ValueError(f"Policy target in {filename} must be numpy array, got {type(policy_target)}")
+    elif policy_target.shape != (POLICY_OUTPUT_SIZE,):
         raise ValueError(f"Policy target in {filename} shape must be ({POLICY_OUTPUT_SIZE},), got {policy_target.shape}")
     
     # Validate value target
@@ -155,6 +160,7 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         """
         Non-augmented path: returns the original example tensorized.
         Handles chunk loading and index mapping.
+        If policy is None (terminal position), convert to zeros here (to match augmented path).
         """
         # --- Chunk loading and index mapping ---
         chunk_start = 0
@@ -175,10 +181,17 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             chunk_end = chunk_start + len(self.current_chunk)
         local_idx = idx - chunk_start
         example = self.current_chunk[local_idx]
-        _validate_example_format(example, filename="<stream>")
         board_state = example['board']
         policy = example['policy']
         value = example['value']
+        # If policy is None (terminal position), convert to zeros here (to match augmented path)
+        if policy is None:
+            # This is expected for terminal positions and matches the augmentation path
+            from hex_ai.config import POLICY_OUTPUT_SIZE
+            policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
+        # Now validate
+        example_checked = {'board': board_state, 'policy': policy, 'value': value}
+        _validate_example_format(example_checked, filename="<stream>")
         # Always tensorize, but do not augment
         tensor_example = self._tensorize_example(board_state, policy, value)
         self.total_examples_loaded += 1
@@ -194,8 +207,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         exceeded_max_samples = self.total_examples_loaded >= self.max_examples if self.max_examples is not None else False
         start_new_epoch = self.max_examples is not None and exceeded_max_samples
         while start_new_epoch:
-            if self.verbose:
-                print(f"[GETITEM] Epoch boundary detected. Restarting epoch.")
+            # if self.verbose:
+            #     print(f"[GETITEM] Epoch boundary detected. Restarting epoch.")
             self._start_new_epoch()
             if num_restarts > 0:
                 logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
@@ -219,10 +232,10 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         chunk_size = len(self.current_chunk)
         # Each chunk has chunk_size * 4 augmented examples
         while not (chunk_start * 4 <= idx < (chunk_start + chunk_size) * 4):
-            print(f"[AUG DEBUG] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}, chunk_size={chunk_size}")
+            # print(f"[AUG DEBUG] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}, chunk_size={chunk_size}")
             self._load_next_chunk()
             if len(self.current_chunk) == 0:
-                print("[AUG DEBUG] No more data to load from dataset. Raising IndexError.")
+                # print("[AUG DEBUG] No more data to load from dataset. Raising IndexError.")
                 from time import sleep
                 sleep(0.1)
                 raise IndexError("No more data to load from dataset")
@@ -231,18 +244,21 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             chunk_start += chunk_size
             chunk_end = chunk_start + len(self.current_chunk)
             chunk_size = len(self.current_chunk)
-            print(f"[AUG DEBUG] After loading: chunk_start={chunk_start}, chunk_end={chunk_end}, chunk_size={chunk_size}")
+            # print(f"[AUG DEBUG] After loading: chunk_start={chunk_start}, chunk_end={chunk_end}, chunk_size={chunk_size}")
         # Trivial index mapping
         local_idx = (idx - chunk_start * 4) // 4
         aug_idx = (idx - chunk_start * 4) % 4
-        print(f"[AUG DEBUG] idx={idx}, chunk_start={chunk_start}, local_idx={local_idx}, aug_idx={aug_idx}, current_chunk_len={len(self.current_chunk)}")
+        # print(f"[AUG DEBUG] idx={idx}, chunk_start={chunk_start}, local_idx={local_idx}, aug_idx={aug_idx}, current_chunk_len={len(self.current_chunk)}")
         example = self.current_chunk[local_idx]
-        print(f"[AUG DEBUG] Processing example at local_idx={local_idx}, aug_idx={aug_idx}, value={example['value']}")
+        # print(f"[AUG DEBUG] Processing example at local_idx={local_idx}, aug_idx={aug_idx}, value={example['value']}")
         _validate_example_format(example, filename="<stream>")
         board_state = example['board']
         policy = example['policy']
         value = example['value']
         board_2ch = board_state[:PLAYER_CHANNEL] if board_state.shape[0] > 1 else board_state
+        # TODO: Tidy up this mid-function import, feels hacky and hard to read, test, and maintain.
+        # NOTE: create_augmented_example_with_player_to_move also converts None policy targets 
+        #       to (currently all-zero) tensors here.
         from hex_ai.data_utils import create_augmented_example_with_player_to_move
         try:
             from hex_ai.error_handling import get_board_state_error_tracker
@@ -252,12 +268,12 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             error_tracker._current_file = str(current_file)
             error_tracker._current_sample = sample_info
             augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
-            print(f"[AUG DEBUG] Augmented {len(augmented_examples)} examples for idx={idx}, aug_idx={aug_idx}")
+            # print(f"[AUG DEBUG] Augmented {len(augmented_examples)} examples for idx={idx}, aug_idx={aug_idx}")
         except Exception as e:
             logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
             raise
         if aug_idx >= len(augmented_examples):
-            print(f"[AUG DEBUG] IndexError: Requested augmentation {aug_idx} but only {len(augmented_examples)} available at idx={idx}")
+            # print(f"[AUG DEBUG] IndexError: Requested augmentation {aug_idx} but only {len(augmented_examples)} available at idx={idx}")
             raise IndexError(f"Requested augmentation {aug_idx} but only {len(augmented_examples)} available.")
         aug_board_2ch, aug_policy, aug_value, aug_player = augmented_examples[aug_idx]
         tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
@@ -265,13 +281,16 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         return tensor_example
 
     def _tensorize_example(self, board_2ch, policy, value, player=None):
-        """Convert numpy arrays to torch tensors, adding player channel if needed."""
+        """Convert numpy arrays to torch tensors, adding player channel if needed. Assumes policy is never None."""
         if player is not None:
             player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), float(player), dtype=np.float32)
             board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
         else:
             board_3ch = board_2ch
         board_tensor = torch.from_numpy(board_3ch).float()
+        # policy should never be None here, should be handled upstream by 
+        # _get_augmented_example and _get_non_augmented_example
+        # To this line will produce an error if policy is None.
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])
         return (board_tensor, policy_tensor, value_tensor)
@@ -298,10 +317,10 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                     self.current_chunk.extend(examples_to_add)
                     self.current_file_idx += 1
                     # Print loaded examples for debug
-                    print(f"[DATASET DEBUG] Loaded examples from {file_path}:")
+                    # print(f"[DATASET DEBUG] Loaded examples from {file_path}:")
                     for idx, ex in enumerate(examples_to_add):
                         board = ex['board']
-                        print(f"  Example {idx}: board sum={board.sum()}, board[0,0,0]={board[0,0,0]}, value={ex['value']}")
+                        # print(f"  Example {idx}: board sum={board.sum()}, board[0,0,0]={board[0,0,0]}, value={ex['value']}")
                 else:
                     files_with_errors += 1
                     error_details.append((str(file_path), "Missing 'examples' key"))

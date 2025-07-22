@@ -51,7 +51,7 @@ SWEEP = {
     "learning_rate": [0.001],
     "batch_size": [256],
     "max_grad_norm": [20],
-    "dropout_prob": [0],
+    "dropout_prob": [0, 0.005],
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
@@ -80,7 +80,7 @@ VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 MAX_SAMPLES = 320_000  # Training samples (will be 4x larger with augmentation)
 MAX_VALIDATION_SAMPLES = 200_000  # Validation samples (no augmentation)
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 6
+EPOCHS = 10
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
