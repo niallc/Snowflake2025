@@ -28,6 +28,8 @@ from hex_ai.error_handling import check_data_loading_errors
 
 logger = logging.getLogger(__name__)
 
+AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
+
 
 def _validate_example_format(example, filename):
     """Validate example format early to fail fast.
@@ -86,21 +88,27 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.max_examples_unaugmented = kwargs.get('max_examples_unaugmented', None)
         self.shuffle_files = kwargs.get('shuffle_files', False)
         self.verbose = verbose
-        # Effective number of examples after augmentation (for reporting and __len__)
-        if self.enable_augmentation and self.max_examples_unaugmented is not None:
-            self.effective_max_examples = self.max_examples_unaugmented * 4
+        # Centralized augmentation factor and sample counting
+        self.augmentation_factor = AUGMENTATION_FACTOR if self.enable_augmentation else 1
+        self.max_examples_augmented = (
+            self.max_examples_unaugmented * self.augmentation_factor
+            if self.max_examples_unaugmented is not None else None
+        )
+        if self.enable_augmentation:
+            logger.info(
+                f"StreamingAugmentedProcessedDataset: {self.max_examples_unaugmented} unaugmented, "
+                f"{self.max_examples_augmented} augmented (factor={self.augmentation_factor})"
+            )
         else:
-            self.effective_max_examples = self.max_examples_unaugmented
-        if enable_augmentation:
-            logger.info(f"StreamingAugmentedProcessedDataset: Will create 4x training examples through augmentation (max_examples_unaugmented={self.max_examples_unaugmented}, effective={self.effective_max_examples})")
-        else:
-            logger.info(f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples_unaugmented={self.max_examples_unaugmented})")
+            logger.info(
+                f"StreamingAugmentedProcessedDataset: Augmentation disabled, using original examples (max_examples_unaugmented={self.max_examples_unaugmented})"
+            )
         # Initialize epoch state
         self.epoch_file_list = self._get_shuffled_file_list()
         self.current_file_idx = 0  # Index in epoch_file_list
-        self.current_chunk = []    # List of raw examples in current chunk
+        self.current_chunk = []
         self.current_chunk_idx = 0 # Index within current chunk
-        self.total_examples_loaded = 0  # Across epoch
+        self.total_examples_loaded = 0  # Across epoch (augmented space)
         self._load_next_chunk()    # Load first chunk
         if self.verbose:
             print(f"[INIT] Loaded first chunk. Files: {self.epoch_file_list}")
@@ -108,19 +116,12 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     def __len__(self):
         """
         Return the number of samples (for DataLoader compatibility).
-        For augmented datasets, this should return 4x the number of base examples.
-        For non-augmented datasets, return the number of original examples.
+        Always returns the number of augmented samples (4x unaugmented if augmentation enabled).
         """
-        if self.enable_augmentation:
-            if self.max_examples_unaugmented is not None:
-                return self.max_examples_unaugmented * 4
-            else:
-                raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
+        if self.max_examples_augmented is not None:
+            return self.max_examples_augmented
         else:
-            if self.max_examples_unaugmented is not None:
-                return self.max_examples_unaugmented
-            else:
-                raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
+            raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
 
     def _get_shuffled_file_list(self):
         """Return a new shuffled list of files for the epoch."""
@@ -132,14 +133,14 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
     def _start_new_epoch(self):
         """Reset counters and reshuffle files for a new epoch."""
         if self.enable_augmentation and self.max_examples_unaugmented is not None:
-            print(f"Max samples ({self.max_examples_unaugmented}, effective {self.effective_max_examples} with augmentation) reached, starting next epoch")
+            print(f"Max samples (unaugmented={self.max_examples_unaugmented}, augmented={self.max_examples_augmented}) reached, starting next epoch")
         else:
-            print(f"Max samples ({self.max_examples_unaugmented}) reached, starting next epoch")
+            print(f"Max samples (unaugmented={self.max_examples_unaugmented}) reached, starting next epoch")
         self.epoch_file_list = self._get_shuffled_file_list()
         self.current_file_idx = 0
         self.current_chunk = []
         self.current_chunk_idx = 0
-        self.total_examples_loaded = 0
+        self.total_examples_loaded = 0  # Reset augmented sample counter
         self._load_next_chunk()
         self.current_chunk_idx = 0
         if self.verbose:
@@ -199,16 +200,14 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
 
     def _handle_epoch_boundary_if_needed(self):
         """
-        Check if the epoch boundary has been reached (i.e., max_examples_unaugmented exhausted),
+        Check if the epoch boundary has been reached (i.e., max_examples_augmented exhausted),
         and if so, restart the epoch. Handles restart counter, sleep, and logging.
         Returns when a valid epoch is ready or after too many restarts.
         """
         num_restarts = 0
-        exceeded_max_samples = self.total_examples_loaded >= self.max_examples_unaugmented if self.max_examples_unaugmented is not None else False
-        start_new_epoch = self.max_examples_unaugmented is not None and exceeded_max_samples
+        exceeded_max_samples = self.total_examples_loaded >= self.max_examples_augmented if self.max_examples_augmented is not None else False
+        start_new_epoch = self.max_examples_augmented is not None and exceeded_max_samples
         while start_new_epoch:
-            # if self.verbose:
-            #     print(f"[GETITEM] Epoch boundary detected. Restarting epoch.")
             self._start_new_epoch()
             if num_restarts > 0:
                 logger.info(f"Restarting epoch, take {num_restarts} / max=100. Sleeping for 1 second.")
@@ -217,8 +216,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             if num_restarts > 200:
                 logger.warning("WARNING: Restarting epoch failed too many times. Continuing to avoid infinite loop.")
                 break
-            exceeded_max_samples = self.total_examples_loaded >= self.max_examples_unaugmented if self.max_examples_unaugmented is not None else False
-            start_new_epoch = self.max_examples_unaugmented is not None and exceeded_max_samples
+            exceeded_max_samples = self.total_examples_loaded >= self.max_examples_augmented if self.max_examples_augmented is not None else False
+            start_new_epoch = self.max_examples_augmented is not None and exceeded_max_samples
 
     def _get_augmented_example(self, idx):
         """
