@@ -146,58 +146,6 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         if self.verbose:
             print(f"[EPOCH RESET] New epoch started. Files: {self.epoch_file_list}")
 
-    def __getitem__(self, idx):
-        """
-        Get training examples for the given global index.
-        If augmentation is enabled, returns an augmented example.
-        If not, returns the original example (tensorized).
-        """
-        if self.enable_augmentation:
-            return self._get_augmented_example(idx)
-        else:
-            return self._get_non_augmented_example(idx)
-
-    def _get_non_augmented_example(self, idx):
-        """
-        Non-augmented path: returns the original example tensorized.
-        Handles chunk loading and index mapping.
-        If policy is None (terminal position), convert to zeros here (to match augmented path).
-        """
-        # --- Chunk loading and index mapping ---
-        chunk_start = 0
-        chunk_end = len(self.current_chunk)
-        while not (chunk_start <= idx < chunk_end):
-            if self.verbose:
-                print(f"[GETITEM] (non-aug) Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}")
-            self._load_next_chunk()
-            if len(self.current_chunk) == 0:
-                if self.verbose:
-                    print("[GETITEM] (non-aug) No more data to load from dataset. Raising IndexError.")
-                from time import sleep
-                sleep(0.1)
-                raise IndexError("No more data to load from dataset")
-            from time import sleep
-            sleep(0.1)
-            chunk_start += chunk_end
-            chunk_end = chunk_start + len(self.current_chunk)
-        local_idx = idx - chunk_start
-        example = self.current_chunk[local_idx]
-        board_state = example['board']
-        policy = example['policy']
-        value = example['value']
-        # If policy is None (terminal position), convert to zeros here (to match augmented path)
-        if policy is None:
-            # This is expected for terminal positions and matches the augmentation path
-            from hex_ai.config import POLICY_OUTPUT_SIZE
-            policy = np.zeros(POLICY_OUTPUT_SIZE, dtype=np.float32)
-        # Now validate
-        example_checked = {'board': board_state, 'policy': policy, 'value': value}
-        _validate_example_format(example_checked, filename="<stream>")
-        # Always tensorize, but do not augment
-        tensor_example = self._tensorize_example(board_state, policy, value)
-        self.total_examples_loaded += 1
-        return tensor_example
-
     def _handle_epoch_boundary_if_needed(self):
         """
         Check if the epoch boundary has been reached (i.e., max_examples_augmented exhausted),
@@ -219,66 +167,6 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             exceeded_max_samples = self.total_examples_loaded >= self.max_examples_augmented if self.max_examples_augmented is not None else False
             start_new_epoch = self.max_examples_augmented is not None and exceeded_max_samples
 
-    def _get_augmented_example(self, idx):
-        """
-        Augmented path: returns an augmented example for the given global index.
-        Now, every example (including empty boards) yields 4 augmentations.
-        Index mapping is trivial: local_idx = idx // 4, aug_idx = idx % 4.
-        """
-        self._handle_epoch_boundary_if_needed()
-        chunk_start = 0
-        chunk_end = len(self.current_chunk)
-        chunk_size = len(self.current_chunk)
-        # Each chunk has chunk_size * 4 augmented examples
-        while not (chunk_start * 4 <= idx < (chunk_start + chunk_size) * 4):
-            # print(f"[AUG DEBUG] Loading next chunk. chunk_start={chunk_start}, chunk_end={chunk_end}, idx={idx}, chunk_size={chunk_size}")
-            self._load_next_chunk()
-            if len(self.current_chunk) == 0:
-                # print("[AUG DEBUG] No more data to load from dataset. Raising IndexError.")
-                from time import sleep
-                sleep(0.1)
-                raise IndexError("No more data to load from dataset")
-            from time import sleep
-            sleep(0.1)
-            chunk_start += chunk_size
-            chunk_end = chunk_start + len(self.current_chunk)
-            chunk_size = len(self.current_chunk)
-            # print(f"[AUG DEBUG] After loading: chunk_start={chunk_start}, chunk_end={chunk_end}, chunk_size={chunk_size}")
-        # Trivial index mapping
-        local_idx = (idx - chunk_start * 4) // 4
-        aug_idx = (idx - chunk_start * 4) % 4
-        # print(f"[AUG DEBUG] idx={idx}, chunk_start={chunk_start}, local_idx={local_idx}, aug_idx={aug_idx}, current_chunk_len={len(self.current_chunk)}")
-        example = self.current_chunk[local_idx]
-        # print(f"[AUG DEBUG] Processing example at local_idx={local_idx}, aug_idx={aug_idx}, value={example['value']}")
-        _validate_example_format(example, filename="<stream>")
-        board_state = example['board']
-        policy = example['policy']
-        value = example['value']
-        board_2ch = board_state[:PLAYER_CHANNEL] if board_state.shape[0] > 1 else board_state
-        # TODO: Tidy up this mid-function import, feels hacky and hard to read, test, and maintain.
-        # NOTE: create_augmented_example_with_player_to_move also converts None policy targets 
-        #       to (currently all-zero) tensors here.
-        from hex_ai.data_utils import create_augmented_example_with_player_to_move
-        try:
-            from hex_ai.error_handling import get_board_state_error_tracker
-            error_tracker = get_board_state_error_tracker()
-            current_file = self.epoch_file_list[self.current_file_idx - 1] if self.current_file_idx > 0 else "unknown"
-            sample_info = f"augmented_chunk_idx={local_idx}, total_loaded={self.total_examples_loaded}"
-            error_tracker._current_file = str(current_file)
-            error_tracker._current_sample = sample_info
-            augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
-            # print(f"[AUG DEBUG] Augmented {len(augmented_examples)} examples for idx={idx}, aug_idx={aug_idx}")
-        except Exception as e:
-            logger.error(f"Error in create_augmented_example_with_player_to_move for idx {idx}: {e}")
-            raise
-        if aug_idx >= len(augmented_examples):
-            # print(f"[AUG DEBUG] IndexError: Requested augmentation {aug_idx} but only {len(augmented_examples)} available at idx={idx}")
-            raise IndexError(f"Requested augmentation {aug_idx} but only {len(augmented_examples)} available.")
-        aug_board_2ch, aug_policy, aug_value, aug_player = augmented_examples[aug_idx]
-        tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
-        self.total_examples_loaded += 1
-        return tensor_example
-
     def _tensorize_example(self, board_2ch, policy, value, player=None):
         """Convert numpy arrays to torch tensors, adding player channel if needed. Assumes policy is never None."""
         if player is not None:
@@ -295,10 +183,10 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         return (board_tensor, policy_tensor, value_tensor)
 
     def _load_next_chunk(self):
-        """Load the next chunk of examples from files (no repeats within epoch)."""
+        """Load the next chunk of examples from files (no repeats within epoch). Precompute all augmentations for each unaugmented example."""
         if self.verbose:
             print(f"[_LOAD_NEXT_CHUNK] Loading chunk. current_file_idx={self.current_file_idx}, chunk_size={self.chunk_size}")
-        self.current_chunk = []
+        self.current_chunk = []  # Will hold all augmented examples for this chunk
         files_attempted = 0
         files_with_errors = 0
         error_details = []
@@ -311,15 +199,24 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                     data = pickle.load(f)
                 if 'examples' in data:
                     file_examples = data['examples']
-                    remaining_in_chunk = self.chunk_size - len(self.current_chunk)
+                    remaining_in_chunk = self.chunk_size - (len(self.current_chunk) // self.augmentation_factor)
                     examples_to_add = file_examples[:remaining_in_chunk]
-                    self.current_chunk.extend(examples_to_add)
-                    self.current_file_idx += 1
-                    # Print loaded examples for debug
-                    # print(f"[DATASET DEBUG] Loaded examples from {file_path}:")
+                    # Precompute all augmentations for each unaugmented example
+                    from hex_ai.data_utils import create_augmented_example_with_player_to_move
+                    from hex_ai.error_handling import get_board_state_error_tracker
+                    error_tracker = get_board_state_error_tracker()
                     for idx, ex in enumerate(examples_to_add):
                         board = ex['board']
-                        # print(f"  Example {idx}: board sum={board.sum()}, board[0,0,0]={board[0,0,0]}, value={ex['value']}")
+                        policy = ex['policy']
+                        value = ex['value']
+                        board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
+                        error_tracker._current_file = str(file_path)
+                        error_tracker._current_sample = f"chunk_file_idx={self.current_file_idx}, file_example_idx={idx}"
+                        augmented_examples = create_augmented_example_with_player_to_move(board_2ch, policy, value, error_tracker)
+                        for aug_board_2ch, aug_policy, aug_value, aug_player in augmented_examples:
+                            tensor_example = self._tensorize_example(aug_board_2ch, aug_policy, aug_value, aug_player)
+                            self.current_chunk.append(tensor_example)
+                    self.current_file_idx += 1
                 else:
                     files_with_errors += 1
                     error_details.append((str(file_path), "Missing 'examples' key"))
@@ -343,7 +240,24 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             if (self.total_examples_loaded + len(self.current_chunk)) % (50 * self.chunk_size) == 0:
                 print()  # Newline
         if self.verbose:
-            print(f"[_LOAD_NEXT_CHUNK] Loaded chunk with {len(self.current_chunk)} examples.")
+            print(f"[_LOAD_NEXT_CHUNK] Loaded chunk with {len(self.current_chunk)} augmented examples.")
+
+    def __getitem__(self, idx):
+        """
+        Get training examples for the given global index.
+        Returns a precomputed augmented example (tensorized).
+        """
+        self._handle_epoch_boundary_if_needed()
+        # If chunk is empty or idx is out of range, load next chunk
+        while idx >= len(self.current_chunk):
+            self._load_next_chunk()
+            if len(self.current_chunk) == 0:
+                from time import sleep
+                sleep(0.1)
+                raise IndexError("No more data to load from dataset")
+        tensor_example = self.current_chunk[idx]
+        self.total_examples_loaded += 1
+        return tensor_example
 
 
 
