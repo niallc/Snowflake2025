@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 import sys
+import re
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -532,6 +533,10 @@ class Trainer:
                 val_policy_losses.append(float('inf'))
                 val_value_losses.append(float('inf'))
             
+            # Print validation losses at end of epoch
+            if val_metrics:
+                print(f"[Epoch {epoch}] Validation Losses: policy={val_metrics['policy_loss']:.4f}, value={val_metrics['value_loss']:.4f}, total={val_metrics['total_loss']:.4f}")
+            
             # Learning rate scheduler step (use validation loss if available, else training loss)
             val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
             self.scheduler.step(val_loss_for_scheduler)
@@ -680,109 +685,48 @@ class Trainer:
     def _save_checkpoint_smart(self, save_path: Path, epoch: int, 
                               train_metrics: Dict, val_metrics: Dict,
                               max_checkpoints: int, compress_checkpoints: bool):
-        """Save checkpoint with smart management to control storage usage."""
-        import gzip
-        import pickle
-        
-        # Create checkpoint data
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'train_metrics': train_metrics,
-            'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss,
-            'mixed_precision': self.mixed_precision.use_mixed_precision
-        }
-        
-        # Save current checkpoint
-        checkpoint_file = save_path / f"checkpoint_epoch_{epoch}.pt"
-        if compress_checkpoints:
-            # Save compressed checkpoint
-            with gzip.open(checkpoint_file, 'wb') as f:
-                pickle.dump(checkpoint_data, f)
-        else:
-            # Save uncompressed checkpoint
-            torch.save(checkpoint_data, checkpoint_file)
-        
-        # Clean up old checkpoints
+        # Save regular checkpoint
+        fname = f"epoch{epoch+1}_mini1.pt"
+        path = save_path / fname
+        self.save_checkpoint(path, train_metrics, val_metrics)
+        # Save best model if needed
+        if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
+            best_path = save_path / "best_model.pt"
+            self.save_checkpoint(best_path, train_metrics, val_metrics)
+        # Cleanup old checkpoints
         self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
-    
-    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        """Remove old checkpoints using smart retention strategy."""
-        # Get all checkpoint files
-        if compress_checkpoints:
-            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
-        else:
-            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
-        
-        # Sort by epoch number
-        checkpoint_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
-        
-        if len(checkpoint_files) <= max_checkpoints:
-            return  # No cleanup needed
-        
-        # Get epochs from checkpoint filenames
-        epochs = [int(f.stem.split('_')[-1]) for f in checkpoint_files]
-        max_epoch = max(epochs)
-        
-        # Determine which checkpoints to keep based on smart strategy
-        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
-        
-        # Find checkpoints to delete
-        files_to_delete = []
-        for checkpoint_file in checkpoint_files:
-            epoch = int(checkpoint_file.stem.split('_')[-1])
-            if epoch not in keep_epochs:
-                files_to_delete.append(checkpoint_file)
-        
-        # Delete old checkpoints
-        for file_path in files_to_delete:
-            try:
-                file_path.unlink()
-                logger.debug(f"Deleted checkpoint: {file_path}")
-            except Exception as e:
-                logger.warning(f"Failed to delete {file_path}: {e}")
-        
-        logger.info(f"Smart cleanup: deleted {len(files_to_delete)} checkpoints, keeping epochs {keep_epochs}")
-    
+
     def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
-        """Get the epochs to keep based on smart retention strategy."""
-        if max_checkpoints <= 5:
-            # For small numbers, keep all recent checkpoints
-            return set(range(max(0, max_epoch - max_checkpoints + 1), max_epoch + 1))
-        
-        # Smart strategy for larger numbers
-        keep_epochs = set()
-        
-        # Always keep the latest few
-        keep_epochs.update([max_epoch, max_epoch - 1, max_epoch - 2])
-        
-        # Add strategic samples from earlier epochs
-        if max_epoch >= 20:
-            # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
-            if 4 <= max_epoch:
-                keep_epochs.add(4)
-            if max_epoch == 20:
-                keep_epochs.update([16, 13, 9, 4])
-            else:
-                # Generalize the pattern: recent + strategic samples
-                keep_epochs.update([max_epoch - 4, max_epoch - 7, max_epoch - 11, max_epoch - 16])
+        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
+        keep = set()
+        if max_epoch < 4:
+            keep.update(range(1, max_epoch + 1))
         else:
-            # For smaller numbers, sample more densely
-            step = max(1, max_epoch // max_checkpoints)
-            for i in range(0, max_epoch - 2, step):
-                if len(keep_epochs) < max_checkpoints:
-                    keep_epochs.add(i)
-        
-        # Always keep epoch 0 (baseline)
-        if 0 <= max_epoch:
-            keep_epochs.add(0)
-        
-        # Ensure we don't exceed max_checkpoints
-        keep_epochs = set(sorted(keep_epochs)[-max_checkpoints:])
-        
-        return keep_epochs
+            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
+            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
+                if k <= max_epoch:
+                    keep.add(k)
+        return keep
+
+    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
+        # Find all checkpoint files except best_model.pt
+        all_ckpts = [f for f in os.listdir(save_path) if re.match(r"epoch\d+_mini\d+\.pt", f)]
+        # Extract epoch numbers
+        epoch_nums = []
+        for fname in all_ckpts:
+            m = re.match(r"epoch(\d+)_mini(\d+)\.pt", fname)
+            if m:
+                epoch_nums.append((int(m.group(1)), fname))
+        if not epoch_nums:
+            return
+        max_epoch = max(e for e, _ in epoch_nums)
+        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
+        for e, fname in epoch_nums:
+            if e not in keep_epochs:
+                try:
+                    os.remove(os.path.join(save_path, fname))
+                except Exception:
+                    pass
 
     def train_on_batches(self, batch_iterable) -> Dict[str, float]:
         """
@@ -842,14 +786,28 @@ class Trainer:
                 mini_epoch_metrics[key].append(loss_dict[key])
             # --- Progress logging ---
             now = time.time()
-            should_log = (batch_idx + 1 == next_log_batch)
+            should_log = False
+            if self.current_epoch == 0:
+                # For first epoch, log for all powers of 2
+                if batch_idx + 1 == next_log_batch:
+                    should_log = True
+            else:
+                # For later epochs, only log for batch >= 64
+                if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
+                    should_log = True
             # After 3 minutes, switch to time-based logging every log_interval_sec
             if not should_log and (now - last_time_log > log_interval_sec):
                 should_log = True
                 last_time_log = now
             if should_log:
                 elapsed = now - start_time
-                print(f"[train_on_batches] Batch {batch_idx+1}: total_loss={loss_dict['total_loss']:.4f}, policy_loss={loss_dict['policy_loss']:.4f}, value_loss={loss_dict['value_loss']:.4f} (elapsed {elapsed:.1f}s)")
+                print(
+                    f"[train_on_batches] Batch {batch_idx+1}: "
+                    f"total_loss={loss_dict['total_loss']:.4f}, "
+                    f"policy_loss={loss_dict['policy_loss']:.4f}, "
+                    f"value_loss={loss_dict['value_loss']:.4f} "
+                    f"(elapsed {elapsed:.1f}s)"
+                )
                 if batch_idx + 1 == next_log_batch:
                     next_log_batch *= 2  # Exponential backoff
         # Compute averages for the mini-epoch

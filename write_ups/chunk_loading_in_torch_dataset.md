@@ -1,77 +1,64 @@
-# Chunk Loading in PyTorch Dataset: Sequential, Simple, and Standard
+# Chunk Loading in PyTorch Dataset: Final Sequential Streaming Design
 
 ## Motivation
 
-For datasets that are already shuffled during preprocessing, the simplest, most efficient, and most robust approach is to read data sequentially. This avoids unnecessary complexity, IO, and memory usage, and is fully supported by PyTorch and standard ML practice when the data is already randomized.
+For this project, our data is pre-shuffled and stored in files such that each file is already a random sample of the full dataset. Our goal is to maximize simplicity, efficiency, and maintainability by reading data sequentially, with no runtime shuffling or chunking logic.
 
-## Requirements
+## Final Design
 
-- **Sequential Access:** Read examples in order from one or more files, with no additional shuffling.
-- **Chunked Access (Optional):** If needed, support chunked reading for efficiency, but always in sequential order.
-- **No Unnecessary Complexity:** Do not shuffle files or examples at runtime if the data is already randomized.
-- **Simplicity and Maintainability:** Keep the code as simple, idiomatic, and testable as possible.
-- **Extensible:** If shuffling is ever needed, it can be added as an explicit, optional feature.
+- **Sequential Loading:**
+  - The dataset loads as few files as needed to reach the requested number of unaugmented examples (`max_examples_unaugmented`).
+  - Examples are read in order from the files provided.
+  - All loaded examples are stored in a list in memory.
 
-## High-Level Design
+- **Augmentation:**
+  - If augmentation is enabled, each base example yields 4 augmented examples (rotations/reflections, etc.).
+  - Augmentation is applied on-the-fly in `__getitem__`.
 
-### 1. Sequential Example Loading
+- **Player Channel:**
+  - The player-to-move channel is always added, even when augmentation is disabled, ensuring model compatibility.
 
-- At initialization, select the minimum number of files needed to reach the requested number of examples (`max_examples`).
-- Read examples sequentially from these files, stopping when the limit is reached.
-- Store all loaded examples in a list (or other simple structure).
-- No shuffling is performed at any stage.
+- **Validation and Training:**
+  - Both training and validation datasets use the same loader, with augmentation enabled for training and disabled for validation.
 
-### 2. PyTorch Dataset Interface
+- **Error Handling:**
+  - Corrupted or missing files are skipped with a warning, but valid examples from other files are loaded.
 
-- Implement `__len__` to return the number of loaded examples.
-- Implement `__getitem__` to return the `idx`-th example from the list.
-- Use `DataLoader(..., shuffle=False)` to preserve sequential access.
+- **Testing:**
+  - The test suite ensures correct sequential loading, augmentation, error handling, and model compatibility.
 
-### 3. (Optional) Chunking
-
-- If chunked access is needed for efficiency, implement chunking as a simple slice over the loaded list.
-- Always process chunks in sequential order.
-
-## Pseudocode/Code Sketch
+## Example Usage
 
 ```python
-class SequentialDataset(torch.utils.data.Dataset):
-    def __init__(self, data_files, max_examples=None):
-        self.examples = []
-        for file_path in data_files:
-            with gzip.open(file_path, 'rb') as f:
-                data = pickle.load(f)
-            for ex in data['examples']:
-                if max_examples is not None and len(self.examples) >= max_examples:
-                    break
-                self.examples.append(ex)
-            if max_examples is not None and len(self.examples) >= max_examples:
-                break
-
-    def __len__(self):
-        return len(self.examples)
-
-    def __getitem__(self, idx):
-        return self.examples[idx]  # Sequential access
+# Load up to 16,000 examples from a shuffled data directory
+files = discover_processed_files("data/processed/shuffled")
+ds = StreamingAugmentedProcessedDataset(files, max_examples_unaugmented=16000, enable_augmentation=True)
 ```
 
-## Best Practices
+## What We No Longer Support (and Why)
 
-- **No shuffling unless explicitly requested.**
-- **Short, focused functions:** Each function should do one thing.
-- **Testability:** The dataset can be tested with a few small files and known data.
-- **Extensible:** If shuffling is ever needed, add it as an explicit, opt-in feature.
+- **No Random Access:**
+  - The dataset is optimized for sequential access. While `__getitem__` works for any index, the design and performance are for sequential streaming.
+  - This is a deliberate choice: our training and validation always iterate sequentially, and random access is not needed for our use case.
 
-## Error Handling
+- **No Runtime Shuffling:**
+  - We do not shuffle files or examples at runtime. All shuffling is done during preprocessing, and each file is already a random sample.
+  - This avoids unnecessary complexity and IO, and is safe because our data is pre-randomized.
 
-- If a file is missing or corrupted, log a warning and skip it.
-- If an index is out of range, raise `IndexError`.
+- **No Chunking Logic:**
+  - We do not implement chunked loading or chunk boundaries. All loaded examples are kept in a single list, and batching is handled by the PyTorch DataLoader.
+  - This is efficient for our file sizes and use case, and avoids the complexity of chunk management.
 
-## Extensibility
-
-- **Shuffling:** If needed, add a `shuffle=True` option that shuffles the loaded examples after reading.
-- **Prefetching:** For very large datasets, implement chunked or streaming reading, but always in sequential order unless shuffling is explicitly requested.
+- **No Multi-worker or Prefetching:**
+  - The current design is single-threaded and loads all needed examples into memory at once. For our data sizes, this is fast and simple.
+  - If we ever need to scale to much larger datasets, we can revisit chunking or streaming logic.
 
 ## Summary
 
-For pre-shuffled datasets, the most robust, efficient, and maintainable approach is to read examples sequentially from disk, with no additional shuffling. This is fully supported by PyTorch and is the recommended baseline for all such use cases. Only add shuffling if and when it is truly needed. 
+This design is:
+- Simple, robust, and easy to maintain
+- Efficient for pre-shuffled, file-based datasets
+- Fully compatible with PyTorch DataLoader and model requirements
+- Extensively tested for all relevant edge cases
+
+If future requirements change (e.g., truly massive datasets, or a need for random access or runtime shuffling), the design can be extended. For now, this approach is optimal for our project. 
