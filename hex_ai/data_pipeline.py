@@ -23,8 +23,8 @@ import random
 from time import sleep
 from .models import TwoHeadedResNet
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, PLAYER_CHANNEL
-from hex_ai.data_utils import get_player_to_move_from_board
-from hex_ai.error_handling import check_data_loading_errors
+from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
+from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,8 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.current_chunk = None
         self.current_chunk_number = None
         self.example_index_map = self._build_example_index_map()
+        self._last_accessed_index = None
+        self._random_access_warned = False
         if self.verbose:
             print(f"[INIT] Ready for chunked access. Files: {self.epoch_file_list}")
 
@@ -98,6 +100,12 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             raise NotImplementedError("Length is undefined when max_examples_unaugmented is not set.")
 
     def __getitem__(self, idx):
+        # Warn if random access is detected (not strictly sequential)
+        if self._last_accessed_index is not None and idx != self._last_accessed_index + 1:
+            if not self._random_access_warned:
+                logger.warning("Random access is supported but not as thoroughly tested as sequential access. Please report any issues.")
+                self._random_access_warned = True
+        self._last_accessed_index = idx
         chunk_number, index_in_chunk = self._map_index(idx)
         if self.current_chunk_number != chunk_number:
             self.current_chunk = self._load_chunk(chunk_number)
@@ -147,28 +155,34 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
                 with gzip.open(file_path, 'rb') as f:
                     data = pickle.load(f)
                 ex = data['examples'][example_idx]
-                # Augmentation: for each unaugmented example, produce N augmented examples
-                if self.enable_augmentation:
-                    from hex_ai.data_utils import create_augmented_example_with_player_to_move
-                    from hex_ai.error_handling import get_board_state_error_tracker
-                    error_tracker = get_board_state_error_tracker()
-                    error_tracker._current_file = str(file_path)
-                    error_tracker._current_sample = f"file_idx={file_idx}, example_idx={example_idx}"
-                    augmented_examples = create_augmented_example_with_player_to_move(
-                        ex['board'][:PLAYER_CHANNEL] if ex['board'].shape[0] > 1 else ex['board'],
-                        ex['policy'], ex['value'], error_tracker)
-                    # Pick the correct augmentation for this global_idx
-                    aug_idx = global_idx % self.augmentation_factor
-                    aug = augmented_examples[aug_idx]
-                    chunk_examples.append(self._transform_example(*aug))
-                else:
-                    chunk_examples.append(self._transform_example(
-                        ex['board'], ex['policy'], ex['value'], None))
+                error_tracker = get_board_state_error_tracker()
+                error_tracker._current_file = str(file_path)
+                error_tracker._current_sample = f"file_idx={file_idx}, example_idx={example_idx}"
+                # Use helper for augmentation/tensorization
+                tensorized = self.get_augmented_tensor_for_index(
+                    ex, global_idx % self.augmentation_factor, error_tracker)
+                chunk_examples.append(tensorized)
             except Exception as e:
                 logger.warning(f"Error loading {file_path}: {e}")
-                # Optionally: append a dummy or raise
                 raise
         return chunk_examples
+
+    def get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
+        """
+        Given a raw example, augmentation index, and error tracker, return the tensorized (board, policy, value).
+        Handles both augmented and non-augmented cases.
+        """
+        board = ex['board']
+        policy = ex['policy']
+        value = ex['value']
+        board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
+        if self.enable_augmentation:
+            augmented_examples = create_augmented_example_with_player_to_move(
+                board_2ch, policy, value, error_tracker)
+            aug = augmented_examples[aug_idx]
+            return self._transform_example(*aug)
+        else:
+            return self._transform_example(board_2ch, policy, value, None)
 
     def _transform_example(self, board_2ch, policy, value, player=None):
         # Apply tensorization and add player channel if needed

@@ -712,30 +712,6 @@ def create_test_file(tmp_path, examples):
 DEBUG_TEST = True  # <<< DEBUG: Set to False to disable debug prints
 
 # ---
-def test_sequential_access_enforced(tmp_path):
-    """
-    Test that only sequential access is allowed; random access raises NotImplementedError.
-    """
-    import numpy as np
-    from hex_ai.config import BOARD_SIZE
-    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
-    # Create a file with 2 examples
-    examples = []
-    for i in range(2):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
-    file_path = create_test_file(tmp_path, examples)
-    ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=False)
-    # First access is fine
-    _ = ds[0]
-    # Second access is fine
-    _ = ds[1]
-    # Out of order access should fail
-    import pytest
-    with pytest.raises(NotImplementedError):
-        _ = ds[0]
-
-# ---
 def test_chunk_loading_and_boundaries(tmp_path):
     """
     Test that chunk boundaries are handled correctly and all examples are returned.
