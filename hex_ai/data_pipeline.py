@@ -128,6 +128,17 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
     Designed for use with torch DataLoader (batch_size, shuffle=False, num_workers=0).
     Augmentation is applied on-the-fly if enabled.
     Fails loudly on any file error.
+
+    Args:
+        data_files: List of Path objects for data shards (pre-shuffled files).
+        enable_augmentation: Whether to apply augmentation on-the-fly.
+        max_examples_unaugmented: Stop after yielding this many (unaugmented) examples (including augmentations).
+        verbose: If True, logs detailed progress at INFO level:
+            - When each shard is loaded (file name, number of examples, shard index/total).
+            - Running total of examples yielded after each shard.
+            - When max_examples_unaugmented is reached or dataset is exhausted.
+            - A summary at the end of iteration (total examples, total shards).
+        If False, only logs errors and critical events.
     """
     def __init__(self, data_files: List[Path], enable_augmentation: bool = True, max_examples_unaugmented: Optional[int] = None, verbose: bool = False):
         super().__init__()
@@ -145,6 +156,8 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         Yields (board_tensor, policy_tensor, value_tensor) tuples.
         """
         total_yielded = 0
+        total_shards_loaded = 0
+        num_shards = len(self.data_files)
         for file_idx, file_path in enumerate(self.data_files):
             try:
                 with gzip.open(file_path, 'rb') as f:
@@ -153,17 +166,27 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
                 self.logger.error(f"Failed to load shard {file_path}: {e}")
                 raise RuntimeError(f"Failed to load shard {file_path}: {e}")
             file_examples = data['examples'] if 'examples' in data else []
+            total_shards_loaded += 1
             if self.verbose:
-                print(f"[StreamingSequentialShardDataset] Loaded {len(file_examples)} examples from {file_path.name} (shard {file_idx+1}/{len(self.data_files)})")
+                self.logger.info(f"[StreamingSequentialShardDataset] Loaded {len(file_examples)} examples from {file_path.name} (shard {file_idx+1}/{num_shards})")
+            shard_yielded = 0
             for ex_idx, ex in enumerate(file_examples):
                 for aug_idx in range(self.augmentation_factor):
                     if self.max_examples_unaugmented is not None and total_yielded >= self.max_examples_unaugmented:
+                        if self.verbose:
+                            self.logger.info(f"[StreamingSequentialShardDataset] Reached max_examples_unaugmented ({self.max_examples_unaugmented}), stopping iteration.")
+                            self.logger.info(f"[StreamingSequentialShardDataset] Total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
                         return
                     error_tracker = get_board_state_error_tracker()
                     error_tracker._current_file = str(file_path)
                     error_tracker._current_sample = f"example_idx={ex_idx}"
                     yield self._get_augmented_tensor_for_index(ex, aug_idx, error_tracker)
                     total_yielded += 1
+                    shard_yielded += 1
+            if self.verbose:
+                self.logger.info(f"[StreamingSequentialShardDataset] Finished shard {file_idx+1}/{num_shards}: yielded {shard_yielded} examples (augmented), running total: {total_yielded}")
+        if self.verbose:
+            self.logger.info(f"[StreamingSequentialShardDataset] Iteration complete: total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
 
     def _get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
         board = ex['board']
