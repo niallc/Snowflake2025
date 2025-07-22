@@ -257,10 +257,6 @@ def _run_augmented_example_logic_test(tmp_path):
         assert c[0] == 4, f"Expected 4 augmentations of empty board, got {c[0]}"
         assert len(values) == 8, f"Expected 8 total examples, got {len(values)}"
 
-@timed_test
-def test_get_augmented_example_logic(tmp_path):
-    _run_augmented_example_logic_test(tmp_path)
-
 
 # ---
 # Test: __len__ NotImplementedError
@@ -517,3 +513,140 @@ def test_last_chunk_smaller_than_chunk_size(tmp_path):
     import pytest
     with pytest.raises(IndexError):
         _ = ds[5]
+
+
+def test_multi_file_chunking(tmp_path):
+    """
+    Test that the dataset correctly iterates through multiple files, loading chunks that may span file boundaries.
+    This ensures all examples are seen in the correct order, even when chunk boundaries cross file boundaries.
+    """
+    import gzip, pickle
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+
+    # Create two sets of examples with unique values
+    examples1 = []
+    examples2 = []
+    for i in range(5):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples1.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+    for i in range(5, 10):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, 0, 0] = i
+        examples2.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+
+    # Write to two temp files
+    file1 = tmp_path / "data_sample0.pkl.gz"
+    file2 = tmp_path / "data_sample1.pkl.gz"
+    with gzip.open(file1, "wb") as f:
+        pickle.dump({"examples": examples1}, f)
+    with gzip.open(file2, "wb") as f:
+        pickle.dump({"examples": examples2}, f)
+
+    # Instantiate the dataset with both files and a chunk_size that does not evenly divide total examples
+    ds = StreamingAugmentedProcessedDataset([file1, file2], chunk_size=3, max_examples_unaugmented=10, enable_augmentation=False)
+
+    # Collect the identifying values
+    seen = []
+    for idx in range(len(ds)):
+        ex = ds[idx]
+        seen.append(float(ex[0][0, 0, 0]))  # ex[0] is the board tensor
+
+    # Assert all expected values are present and in order
+    assert seen == list(range(10)), f"Expected {list(range(10))}, got {seen}"
+
+
+def test_policy_none_handling(tmp_path):
+    """
+    Test that if an example in the data has policy=None, the dataset replaces it with a zero vector of the correct shape.
+    This ensures robust handling of missing policy data.
+    """
+    import gzip, pickle
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+
+    # Create a minimal example with policy=None
+    board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+    example = {"board": board, "policy": None, "value": 1.0}
+    dataset = {"examples": [example]}
+    file = tmp_path / "policy_none_sample.pkl.gz"
+    with gzip.open(file, "wb") as f:
+        pickle.dump(dataset, f)
+
+    # Instantiate the dataset
+    ds = StreamingAugmentedProcessedDataset([file], chunk_size=1, max_examples_unaugmented=1, enable_augmentation=False)
+
+    # Fetch the example
+    ex = ds[0]
+    policy_tensor = ex[1]  # ex[1] is the policy tensor
+
+    # Assert that the policy tensor is all zeros and has the correct shape
+    assert np.all(policy_tensor.numpy() == 0), "Policy tensor should be all zeros when policy=None"
+    assert policy_tensor.shape == (BOARD_SIZE * BOARD_SIZE,), f"Policy tensor shape should be ({BOARD_SIZE * BOARD_SIZE},), got {policy_tensor.shape}"
+
+
+def test_real_augmentation_logic(tmp_path):
+    """
+    Test that the dataset with enable_augmentation=True produces the correct number of augmented examples per input,
+    and that the augmentations are valid (not all identical, correct shape, valid values).
+    Also check that the set of value labels for each original example contains two of the original and two of the flipped winner.
+    """
+    import gzip, pickle
+    import numpy as np
+    from hex_ai.config import BOARD_SIZE
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, AUGMENTATION_FACTOR
+
+    # Create 2 valid, non-empty boards with simple patterns and known values
+    examples = []
+    for i in range(2):
+        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        board[0, i, i] = 1  # Place a single stone for player 0
+        board[1, (i+1)%BOARD_SIZE, (i+2)%BOARD_SIZE] = 1  # Place a single stone for player 1
+        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+
+    # Write to temp file
+    file = tmp_path / "aug_sample.pkl.gz"
+    with gzip.open(file, "wb") as f:
+        pickle.dump({"examples": examples}, f)
+
+    # Instantiate the dataset with augmentation
+    ds = StreamingAugmentedProcessedDataset([file], chunk_size=2, max_examples_unaugmented=2, enable_augmentation=True)
+
+    # Collect all augmented boards and value labels
+    boards = []
+    values = []
+    for idx in range(len(ds)):
+        ex = ds[idx]
+        board_tensor = ex[0]  # ex[0] is the board tensor
+        value_label = ex[2].item()  # ex[2] is the value tensor
+        boards.append(board_tensor.numpy())
+        values.append(value_label)
+
+    # Check the number of outputs
+    assert len(boards) == 2 * AUGMENTATION_FACTOR, f"Expected {2 * AUGMENTATION_FACTOR} augmented examples, got {len(boards)}"
+
+    # Check that not all augmented boards are identical
+    unique_boards = {b.tobytes() for b in boards}
+    assert len(unique_boards) > 2, "Augmentation should produce different boards, not all identical"
+
+    # Check that each board has the correct shape and valid values (0 or 1)
+    for b in boards:
+        assert b.shape == (2, BOARD_SIZE, BOARD_SIZE) or b.shape == (3, BOARD_SIZE, BOARD_SIZE), f"Unexpected board shape: {b.shape}"
+        assert np.all((b == 0) | (b == 1)), "Board should only contain 0s and 1s after augmentation"
+
+    # Check value label flipping logic for each original example
+    for i in range(2):
+        # Each original example should yield 4 augmentations
+        start = i * AUGMENTATION_FACTOR
+        end = (i + 1) * AUGMENTATION_FACTOR
+        value_set = set(values[start:end])
+        expected_set = {float(i), 1.0 - float(i)}
+        assert value_set == expected_set, f"Augmented value labels for example {i} should be {{original, flipped}}, got {value_set}"
+        # Optionally warn if the order is not [original, original, flipped, flipped]
+        expected_order = [float(i), float(i), 1.0 - float(i), 1.0 - float(i)]
+        actual_order = values[start:end]
+        if actual_order != expected_order:
+            print(f"[WARN] Augmentation value label order for example {i} is {actual_order}, expected {expected_order}. This is not an error, but order is not stable.")

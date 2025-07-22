@@ -79,14 +79,23 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         self.max_examples_unaugmented = kwargs.get('max_examples_unaugmented', None)
         self.shuffle_files = kwargs.get('shuffle_files', False)
         self.verbose = verbose
-        self.augmentation_factor = AUGMENTATION_FACTOR if self.enable_augmentation else 1
+        self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
+        self.total_examples = None
+        self.current_chunk = None
+        self.current_chunk_number = None
+        self.current_file_index = 0
+        self.current_file = None
+        self.current_file_examples = None
+        self.current_file_example_index = 0
+        self.logger = logging.getLogger(__name__)
+        # Set policy shape to match real data format
+        from hex_ai.config import BOARD_SIZE
+        self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
         self.max_examples_augmented = (
             self.max_examples_unaugmented * self.augmentation_factor
             if self.max_examples_unaugmented is not None else None
         )
         self.epoch_file_list = self._get_shuffled_file_list()
-        self.current_chunk = None
-        self.current_chunk_number = None
         self.example_index_map = self._build_example_index_map()
         self._last_accessed_index = None
         self._random_access_warned = False
@@ -184,6 +193,12 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         else:
             return self._transform_example(board_2ch, policy, value, None)
 
+    def _normalize_policy(self, policy):
+        """Return a zero vector if policy is None, else return as-is."""
+        if policy is None:
+            return np.zeros(self.policy_shape, dtype=np.float32)
+        return policy
+
     def _transform_example(self, board_2ch, policy, value, player=None):
         # Apply tensorization and add player channel if needed
         if player is not None:
@@ -192,9 +207,11 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         else:
             board_3ch = board_2ch
         board_tensor = torch.from_numpy(board_3ch).float()
+        # Normalize policy before tensorization
+        policy = self._normalize_policy(policy)
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])
-        return (board_tensor, policy_tensor, value_tensor)
+        return board_tensor, policy_tensor, value_tensor
 
 
 def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:

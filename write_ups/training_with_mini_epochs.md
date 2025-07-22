@@ -162,4 +162,10 @@ This section will be updated as implementation continues and milestones are reac
 
 ---
 
+## July 2024 Update: Data Pipeline and Testing Progress
+
+- The chunked dataset now robustly supports multi-file chunking and policy=None handling, with dedicated, memory-efficient tests using temporary files.
+- This provides a solid, maintainable foundation for the mini-epoch training workflow.
+- Future work will focus on integrating this dataset into the training loop and ensuring the training workflow leverages these robust data loading guarantees.
+
 This design document should serve as a reference for implementing and maintaining robust, scalable, and standard-compliant training workflows for large datasets. 

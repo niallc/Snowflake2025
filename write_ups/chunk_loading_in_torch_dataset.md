@@ -95,6 +95,32 @@ class ChunkedDataset(torch.utils.data.Dataset):
 - **Prefetching:** Add a background thread or process to pre-load the next chunk.
 - **Multi-worker:** Ensure chunk loading is thread/process safe.
 
+## Implementation and Testing Progress (July 2024)
+
+### Multi-file Chunking
+- The dataset now robustly supports multi-file chunking.
+- Tests create temporary .pkl.gz files on the fly (using pytest's `tmp_path`), each with unique examples.
+- The test verifies that all examples are seen in the correct order, even when chunk boundaries cross file boundaries.
+- This approach is memory-efficient, does not pollute the repo, and is robust to future changes in the data format.
+
+### Handling `policy=None`
+- The dataset now handles `policy=None` by converting it to a zero vector of the correct shape (`(BOARD_SIZE * BOARD_SIZE,)`), matching the real data format on disk.
+- This is tested with a dedicated test that creates a temporary file with a `policy=None` example and verifies the output tensor is all zeros and the correct shape.
+
+### Test Suite Best Practices
+- All tests use temporary files and valid data, avoiding patching/mocking and error threshold triggers.
+- Tests are robust, memory-efficient, and easy to maintain.
+- For future contributors:
+  - Use `tmp_path` or `TemporaryDirectory` for test data.
+  - Always match the real data format (e.g., numpy arrays, correct shapes).
+  - Avoid static test data files unless absolutely necessary.
+  - Prefer direct, public interface tests over patching or internal logic tests.
+
+### Current State
+- The codebase now has a solid, maintainable foundation for chunked dataset loading and augmentation.
+- All key edge cases (multi-file, chunk boundaries, policy=None) are covered by robust, idiomatic tests.
+- This design and test approach should be used as a reference for future extensions or refactors.
+
 ## Summary
 
 This design provides a clean, idiomatic, and maintainable approach to chunked data loading in PyTorch. By separating index mapping, chunk loading, and data transformation, and by following best practices, we ensure robust, testable, and extensible code. 
