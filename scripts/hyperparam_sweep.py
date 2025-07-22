@@ -17,10 +17,12 @@ import sys
 import os
 import hashlib
 import json
+import math
 
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.system_utils import check_virtual_env
+from hex_ai.error_handling import GracefulShutdownRequested
 check_virtual_env("hex_ai_env")
 
 ###### Logging setup ######
@@ -77,10 +79,11 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 160_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 30_000  # Validation samples (no augmentation)
+MAX_SAMPLES = 15_000_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 256_000  # Validation samples (no augmentation)
+MINI_EPOCH_BATCHES = math.floor(200000/256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 10
+EPOCHS = 3
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -175,15 +178,54 @@ if __name__ == "__main__":
             train_ratio=0.8,
             num_epochs=EPOCHS,
             early_stopping_patience=None,  # Disable early stopping for now
+            mini_epoch_batches=MINI_EPOCH_BATCHES,
             random_seed=42,
             max_examples_unaugmented=MAX_SAMPLES,
             max_validation_examples=MAX_VALIDATION_SAMPLES,
             enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation'],
-            fail_fast=True
+            fail_fast=True,
+            shutdown_handler=shutdown_handler
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
         print_sweep_summary(results, results_dir, interrupted=False)
+    except GracefulShutdownRequested:
+        print("\n" + "="*60)
+        print("GRACEFUL SHUTDOWN REQUESTED")
+        print("="*60)
+        interrupted = True
+        # Enhanced summary output
+        if results is not None and isinstance(results, dict):
+            completed = results.get('experiments', [])
+            completed_names = [exp.get('experiment_name', 'UNKNOWN') for exp in completed]
+            num_completed = len(completed_names)
+            num_total = results.get('num_experiments', len(experiments))
+            print(f"Experiments completed: {num_completed}/{num_total}")
+            for name in completed_names:
+                print(f"  - {name}")
+            # Incomplete experiments
+            all_names = [exp['experiment_name'] for exp in experiments]
+            incomplete_names = [name for name in all_names if name not in completed_names]
+            num_incomplete = len(incomplete_names)
+            if num_incomplete > 0:
+                print(f"Experiments not completed: {num_incomplete}/{num_total}")
+                for name in incomplete_names:
+                    print(f"  - {name}")
+            # Best validation loss so far
+            if completed:
+                best_exp = min(
+                    (exp for exp in completed if 'best_val_loss' in exp),
+                    key=lambda x: x['best_val_loss'],
+                    default=None
+                )
+                if best_exp is not None:
+                    print(f"\nBest validation loss so far: {best_exp['best_val_loss']:.6f} ({best_exp['experiment_name']})")
+        else:
+            print("No completed experiments to summarize.")
+        print(f"\nAll results saved to: {results_dir}")
+        print(f"Logs saved to: {log_file}")
+        print_sweep_summary(results, results_dir, interrupted=True)
+        sys.exit(0)
     except Exception as e:
         print("\n" + "="*60)
         print("SWEEP FAILED - FAIL FAST MODE")

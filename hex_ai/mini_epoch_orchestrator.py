@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+from hex_ai.error_handling import GracefulShutdownRequested
 
 class MiniEpochOrchestrator:
     """
@@ -21,7 +22,7 @@ class MiniEpochOrchestrator:
         orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500, num_epochs=10)
         orchestrator.run()
     """
-    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_batches=500, num_epochs=1, checkpoint_dir=None, log_interval=1):
+    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_batches=500, num_epochs=1, checkpoint_dir=None, log_interval=1, shutdown_handler=None):
         self.trainer = trainer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -30,6 +31,7 @@ class MiniEpochOrchestrator:
         self.checkpoint_dir = checkpoint_dir
         self.log_interval = log_interval
         self.logger = logging.getLogger(__name__)
+        self.shutdown_handler = shutdown_handler
 
     def run(self):
         """
@@ -69,5 +71,9 @@ class MiniEpochOrchestrator:
                         + f" | Batches processed: {batch_count}"
                     )
                 mini_epoch_idx += 1
+                # Graceful shutdown check
+                if self.shutdown_handler is not None and self.shutdown_handler.shutdown_requested:
+                    self.logger.info("Graceful shutdown requested. Exiting after current mini-epoch.")
+                    raise GracefulShutdownRequested()
                 if len(mini_epoch_batches) < self.mini_epoch_batches:
                     break  # End of epoch 

@@ -159,7 +159,7 @@ def create_datasets(train_files, val_files, max_examples_unaugmented, max_valida
             return None, None
     return train_dataset, val_dataset
 
-def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, num_epochs, mini_epoch_batches, device):
+def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, num_epochs, mini_epoch_batches, device, shutdown_handler=None):
     """
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
     Returns a result dict (can be expanded later).
@@ -205,7 +205,8 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
         mini_epoch_batches=mini_epoch_batches,
         num_epochs=num_epochs,
         checkpoint_dir=exp_dir,
-        log_interval=1
+        log_interval=1,
+        shutdown_handler=shutdown_handler
     )
     orchestrator.run()
     logger.info(f"Experiment {exp_config['experiment_name']} completed.")
@@ -257,7 +258,8 @@ def run_hyperparameter_tuning_current_data(
     experiment_name: Optional[str] = None,
     enable_augmentation: bool = True,
     fail_fast: bool = True,
-    mini_epoch_batches: int = 500
+    mini_epoch_batches: int = 500,
+    shutdown_handler=None
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -280,8 +282,8 @@ def run_hyperparameter_tuning_current_data(
     if train_dataset is None:
         return {'error': 'Failed to create datasets'}
     device = select_device()
-    logger.info(f"\nUsing device {device}...")
-    logger.info(f"\nStarting {len(experiments)} experiments...")
+    logger.info(f"Using device {device}...")
+    logger.info(f"Starting {len(experiments)} experiments...")
 
     all_results = []
     total_start_time = time.time()
@@ -298,7 +300,8 @@ def run_hyperparameter_tuning_current_data(
                 results_path,
                 num_epochs,
                 mini_epoch_batches,
-                device
+                device,
+                shutdown_handler=shutdown_handler
             )
             all_results.append(result)
         except Exception as e:
