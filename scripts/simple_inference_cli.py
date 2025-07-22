@@ -54,7 +54,8 @@ if __name__ == "__main__":
     resDirTag4="loss_weight_sweep_exp0_pw0.001_57e0af_20250721_150933/"
     resDirTag5="loss_weight_sweep_exp1_pw0.0001_6c84d6_20250721_150933/"
     resDirTag6="loss_weight_sweep_exp2_pw0.7_c0cb27_20250721_150933/"
-    resDir=${resCollDir}${resDirTag6}
+    resDirTag7="loss_weight_sweep_exp0_do0_pw0.001_f537d4_20250722_200457"
+    resDir=${resCollDir}${resDirTag7}
     blueWin="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7"
     redWin="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2"
     realGameB="http://www.trmph.com/hex/board#13,a6i2d10d9f8e9g9g10i9h9i8h8i7j4g6g7f7h6g8f10h7i10j10j11h10g4e5e4f4g12i11g2h2g3h4h13g11f12f11e12l11k12h12g13l12k10i12h3j3i4i3h5g5j2k2j12i13h11j9f3d5k1l1"
@@ -62,10 +63,12 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     
     boardPos=${blueWin}
+    modelFile="epoch2_mini1.pt"
+
     PYTHONPATH=. python scripts/simple_inference_cli.py \
     --trmph ${boardPos} \
     --model_dir ${resDir} \
-    --model_file best_model.pt \
+    --model_file ${modelFile} \
     --device mps
         
     """

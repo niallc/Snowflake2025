@@ -95,7 +95,9 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             aug = augmented_examples[aug_idx]
             return self._transform_example(*aug)
         else:
-            return self._transform_example(board_2ch, policy, value, None)
+            # Always add player channel, even if augmentation is off
+            player = get_player_to_move_from_board(board_2ch)
+            return self._transform_example(board_2ch, policy, value, player)
 
     def _normalize_policy(self, policy):
         if policy is None:
