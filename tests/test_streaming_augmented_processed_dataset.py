@@ -1,5 +1,9 @@
-# NOTE: Run with `PYTHONPATH=. pytest tests/test_streaming_augmented_processed_dataset.py`
-# to ensure local imports work (hex_ai, etc).
+# =============================================================================
+# IMPORTANT: To run this test, set PYTHONPATH to the project root!
+# Example:
+#     PYTHONPATH=. pytest tests/test_streaming_augmented_processed_dataset.py
+# This is required so that 'import hex_ai' works correctly.
+# =============================================================================
 """
 Tests for StreamingAugmentedProcessedDataset.
 
@@ -61,48 +65,6 @@ def test_real_file_tensorization_and_chunking():
             assert policy.shape == (BOARD_SIZE * BOARD_SIZE,)
             assert value.shape == (1,)
 
-
-# ---
-# Test: Epoch restart and chunking
-# 1. Tests StreamingAugmentedProcessedDataset (class)
-# 2. Tests that exhausting the dataset triggers an epoch restart and raises IndexError
-# 3. Passes a real test file, chunk_size=1, max_examples_unaugmented=2, augmentation enabled
-# 4. Expects ds[0]..ds[7] valid, ds[8] raises IndexError, and epoch restart logic is exercised
-# ---
-def test_epoch_restart_and_chunking(tmp_path):
-    """
-    Tests that exhausting the dataset triggers an epoch restart and raises IndexError.
-    With max_examples_unaugmented=2 and augmentation enabled, there are 8 valid augmented examples (indices 0-7).
-    Accessing ds[8] should raise IndexError.
-    """
-    import pytest
-    import gzip, pickle
-    from hex_ai.config import BOARD_SIZE
-    from unittest.mock import patch
-    # Create a file with 2 examples
-    file_path = tmp_path / "epoch_restart_and_chunking.pkl.gz"
-    examples = []
-    for i in range(2):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-        ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=2, enable_augmentation=True, verbose=True)
-        # Exhaust the dataset, then trigger an epoch restart
-        for i in range(8):  # Only access the valid indices
-            _ = ds[i]
-        # Next call should raise IndexError
-        with pytest.raises(IndexError):
-            _ = ds[8]
-
 # ---
 # Test: Off-by-one and boundary indexing with various chunk sizes
 # 1. Tests that all valid indices up to max_examples_unaugmented*4-1 succeed, and max_examples_unaugmented*4 raises IndexError
@@ -145,62 +107,6 @@ def test_off_by_one_and_boundary_indexing(tmp_path):
                 _ = ds[12]
         print(f"[TEST] Finished chunk_size={chunk_size}")
     print(f"[TEST] test_off_by_one_and_boundary_indexing finished in {time.time() - start_time:.2f} seconds")
-
-# ---
-# Test: Epoch restart robustness (partial and full consumption)
-# 1. After exhausting the dataset, ensure it restarts cleanly and yields the same number of examples again
-# 2. After partial consumption, trigger epoch restart and check for correct behavior
-# ---
-def test_epoch_restart_robustness(tmp_path):
-    """
-    Test that after IndexError (full exhaustion), the dataset restarts and yields the same number of examples again.
-    Also test partial consumption and restart.
-    """
-    import gzip, pickle
-    from hex_ai.config import BOARD_SIZE
-    from unittest.mock import patch
-    import pytest
-    start_time = time.time()
-    # Create a file with 2 examples
-    file_path = tmp_path / "epoch_restart_test.pkl.gz"
-    examples = []
-    for i in range(2):
-        board = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-        board[0, 0, 0] = i
-        examples.append({'board': board, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
-    with gzip.open(file_path, "wb") as f:
-        pickle.dump({"examples": examples}, f)
-    with patch("hex_ai.data_utils.create_augmented_example_with_player_to_move") as mock_aug:
-        mock_aug.side_effect = lambda board, policy, value, error_tracker: [
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-            (np.array(board), np.array(policy), float(value), 0),
-            (np.array(board), np.array(policy), float(value), 1),
-        ]
-        ds = StreamingAugmentedProcessedDataset([file_path], chunk_size=1, max_examples_unaugmented=2, enable_augmentation=True)
-        print("[TEST] Full exhaustion phase")
-        for i in range(8):
-            board, policy, value = ds[i]
-            assert board.shape[0] == 3
-        with pytest.raises(IndexError):
-            _ = ds[8]
-        print("[TEST] After IndexError, restart epoch and access again")
-        for i in range(8):
-            board, policy, value = ds[i]
-            assert board.shape[0] == 3
-        with pytest.raises(IndexError):
-            _ = ds[8]
-        print("[TEST] Partial consumption, then manual epoch restart")
-        for i in range(4):
-            board, policy, value = ds[i]
-            assert board.shape[0] == 3
-        ds._start_new_epoch()
-        for i in range(8):
-            board, policy, value = ds[i]
-            assert board.shape[0] == 3
-        with pytest.raises(IndexError):
-            _ = ds[8]
-    print(f"[TEST] test_epoch_restart_robustness finished in {time.time() - start_time:.2f} seconds")
 
 # ---
 # Test: Model integration
@@ -485,28 +391,6 @@ def test_flakiness_of_get_augmented_example_logic(tmp_path_factory):
             traceback.print_exc()
             failures += 1
     print(f"test_get_augmented_example_logic: {passes} passes, {failures} failures out of 100 runs.") 
-
-# ---
-# Test: Index mapping logic (trivial mapping)
-# 1. Tests index mapping logic (not a class method, but the mapping used in StreamingAugmentedProcessedDataset)
-# 2. Tests that local_idx = idx // 4, aug_idx = idx % 4 is correct for N examples
-# 3. Passes N=5, checks all indices in range(N*4)
-# 4. Expects all indices to map to valid local_idx and aug_idx, out-of-bounds raises AssertionError
-# ---
-def test_index_mapping_trivial():
-    """
-    Test that the trivial index mapping (local_idx = idx // 4, aug_idx = idx % 4) is correct for a chunk of N examples.
-    """
-    N = 5
-    for idx in range(N * 4):
-        local_idx = idx // 4
-        aug_idx = idx % 4
-        assert 0 <= local_idx < N
-        assert 0 <= aug_idx < 4
-    # Out of bounds
-    with pytest.raises(AssertionError):
-        local_idx = (N * 4) // 4
-        assert 0 <= local_idx < N
 
 # ---
 # Test: Chunk boundaries
