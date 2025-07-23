@@ -242,7 +242,9 @@ def discover_processed_files(data_dir: str = "data/processed") -> List[Path]:
     else:
         # Original processed data: look for *_processed.pkl.gz files
         data_files = list(data_path.glob("*_processed.pkl.gz"))
-        logger.info(f"Found {len(data_files)} processed data files")
+        logger.info(f"WARNING: Failed to find shuffled files. Found {len(data_files)} processed data files")
+        logger.info(f"WARNING: Do you want to quit this run and try again? (Ctrl+C to quit)")
+        sleep(5)
     
     if not data_files:
         raise FileNotFoundError(f"No data files found in {data_dir}")

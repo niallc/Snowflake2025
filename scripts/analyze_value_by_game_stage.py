@@ -24,6 +24,21 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files
 from hex_ai.training_utils import get_device
 
+# CONSTANTS
+MODEL_BASE_DIR = "checkpoints/hyperparameter_tuning"
+# Alternative model names:
+# loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936
+# loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936
+# In general find find recent results from July 23rd directories in MODEL_BASE_DIR
+MODEL_NAME = "loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936"
+MODEL_FILE_BASENAME = "epoch1_mini100.pt"
+FULL_MODEL_PATH = f"{MODEL_BASE_DIR}/{MODEL_NAME}/{MODEL_FILE_BASENAME}"
+DATA_DIR = "data/processed/shuffled/"
+# DATA_FILE = "shuffled_0000.pkl.gz"
+SAVE_DIR = f"analysis/value_by_stage/{MODEL_NAME}"
+NUM_SAMPLES = 10000
+DEVICE = "mps"
+ENABLE_AUGMENTATION = True
 
 def categorize_position(board):
     """Categorize a position as early, mid, or late game based on piece count."""
@@ -180,11 +195,14 @@ def create_visualizations(results, save_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze value head performance by game stage")
-    parser.add_argument('--model_path', type=str, required=True, help='Path to trained model')
-    parser.add_argument('--data_dir', type=str, default="data/processed", help='Data directory')
-    parser.add_argument('--save_dir', type=str, default="analysis/value_by_stage", help='Save directory')
+    parser.add_argument('--model_path', type=str, 
+                        default=FULL_MODEL_PATH,
+                        required=False, help='Path to trained model')
+    parser.add_argument('--data_dir', type=str, default=DATA_DIR, help='Data directory')
+    parser.add_argument('--max_data_files', type=int, default=1, help='Maximum number of data files to use')
+    parser.add_argument('--save_dir', type=str, default=SAVE_DIR, help='Save directory')
     parser.add_argument('--num_samples', type=int, default=10000, help='Number of samples to analyze')
-    parser.add_argument('--device', type=str, default=None, help='Device to use')
+    parser.add_argument('--device', type=str, default=DEVICE, help='Device to use')
     parser.add_argument('--enable_augmentation', action='store_true', help='Enable data augmentation')
     
     args = parser.parse_args()
@@ -199,11 +217,15 @@ def main():
     
     # Load data
     print("Loading data...")
-    data_files = discover_processed_files(args.data_dir)
+    data_files = discover_processed_files(args.data_dir, max_files=args.max_data_files)
+    print(f"Found {len(data_files)} data files")
+    print(f"Using {args.max_data_files} data files (full data, >97million, examples, is far larger than required)")
+    input_data = data_files[:args.max_data_files]
+
     dataset = StreamingSequentialShardDataset(
-        data_files,
+        input_data,
         enable_augmentation=args.enable_augmentation,
-        max_examples_unaugmented=args.num_samples
+        max_examples_unaugmented=args.num_samples,
     )
     
     # Analyze
