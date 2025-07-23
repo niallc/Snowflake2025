@@ -16,6 +16,8 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import gzip
+import pickle
 
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -23,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files
 from hex_ai.training_utils import get_device
+from hex_ai.data_utils import get_player_to_move_from_board, get_valid_policy_target
+from hex_ai.config import PLAYER_CHANNEL, BOARD_SIZE
 
 # CONSTANTS
 MODEL_BASE_DIR = "checkpoints/hyperparameter_tuning"
@@ -193,6 +197,16 @@ def create_visualizations(results, save_dir):
     plt.close()
 
 
+def load_examples_from_file(file_path, max_examples=100000):
+    """Load all examples from a single .pkl.gz file."""
+    with gzip.open(file_path, 'rb') as f:
+        data = pickle.load(f)
+    examples = data['examples'] if 'examples' in data else []
+    if max_examples is not None:
+        examples = examples[:max_examples]
+    return examples
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze value head performance by game stage")
     parser.add_argument('--model_path', type=str, 
@@ -217,16 +231,48 @@ def main():
     
     # Load data
     print("Loading data...")
-    data_files = discover_processed_files(args.data_dir, max_files=args.max_data_files)
+    data_files = discover_processed_files(args.data_dir)
     print(f"Found {len(data_files)} data files")
     print(f"Using {args.max_data_files} data files (full data, >97million, examples, is far larger than required)")
     input_data = data_files[:args.max_data_files]
 
-    dataset = StreamingSequentialShardDataset(
-        input_data,
-        enable_augmentation=args.enable_augmentation,
-        max_examples_unaugmented=args.num_samples,
-    )
+    # Load all examples from the first file (or up to max_data_files)
+    all_examples = []
+    for file_path in input_data:
+        examples = load_examples_from_file(file_path, max_examples=args.num_samples)
+        all_examples.extend(examples)
+        if len(all_examples) >= args.num_samples:
+            all_examples = all_examples[:args.num_samples]
+            break
+    print(f"Loaded {len(all_examples)} examples for analysis.")
+
+    # Convert examples to (board, policy, value) tuples for analysis
+    class ExampleDataset:
+        def __init__(self, examples):
+            self.examples = examples
+        def __len__(self):
+            return len(self.examples)
+        def __getitem__(self, idx):
+            ex = self.examples[idx]
+            # TODO: Replace manual preprocessing with preprocess_example_for_model from hex_ai.data_utils
+            board_2ch = ex['board']
+            # Add player-to-move channel
+            player_to_move = get_player_to_move_from_board(board_2ch)
+            player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=board_2ch.dtype)
+            board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
+            board = torch.tensor(board_3ch, dtype=torch.float32)
+            # Use central utility for policy label
+            policy_numpy = get_valid_policy_target(ex['policy'], use_uniform=False)
+            # Avoid torch warning: 
+            # warning: "To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone()"
+            if isinstance(policy, torch.Tensor):
+                policy = policy_numpy.detach().clone()
+            else:
+                policy = torch.tensor(policy_numpy, dtype=torch.float32)
+            value = torch.tensor(ex['value'], dtype=torch.float32)
+            return board, policy, value
+    
+    dataset = ExampleDataset(all_examples)
     
     # Analyze
     print("Analyzing value predictions by game stage...")

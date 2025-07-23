@@ -1,6 +1,6 @@
 # Value Head Debugging Summary and Next Steps
 
-**Date:** January 2025  
+**Date:** 23rd July 2025
 **Status:** Active Investigation  
 **Priority:** High
 
@@ -148,3 +148,11 @@ The Hex AI value head is experiencing severe performance issues despite extensiv
 - Implemented easy position training script (`train_on_easy_positions.py`)
 - Created monitored training script (`train_with_monitoring.py`)
 - Identified key next steps and success criteria 
+
+## Questions / Follow-ups
+
+- **Policy label for terminal positions:**
+  - Currently, terminal positions (no next move) use an all-zeros policy vector.
+  - Though PolicyValueLoss actually already handles this via masking, with:
+    - policy_loss = torch.tensor(0.0, device=policy_pred.device, requires_grad=True)
+  - So this seems to be ok.

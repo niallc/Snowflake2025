@@ -536,7 +536,6 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     augmented_values = create_augmented_values(value)
     
     # Compute player-to-move from the board, then create augmented versions
-    from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_player_to_move
     player_to_move = get_player_to_move_from_board(board, error_tracker)
     augmented_player_to_move = create_augmented_player_to_move(player_to_move)
     
@@ -1001,3 +1000,52 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
         else:
             # Fall back to original behavior if no error tracker
             raise ValueError(error_msg)
+
+def get_valid_policy_target(policy, use_uniform: bool = False):
+    """
+    Convert a possibly-None policy to a valid vector for training or analysis.
+    If policy is None (terminal position), returns either all zeros or uniform (1/N) vector.
+    Args:
+        policy: np.ndarray, torch.Tensor, or None
+        use_uniform: If True, returns uniform (1/N) vector; else all zeros
+    Returns:
+        np.ndarray of shape (BOARD_SIZE * BOARD_SIZE,)
+    """
+    from .config import BOARD_SIZE
+    N = BOARD_SIZE * BOARD_SIZE
+    if policy is None:
+        if use_uniform:
+            return np.full(N, 1.0 / N, dtype=np.float32)
+        else:
+            return np.zeros(N, dtype=np.float32)
+    # If already a numpy array or tensor, just return as numpy
+    if isinstance(policy, torch.Tensor):
+        return policy.cpu().numpy()
+    return np.array(policy, dtype=np.float32)
+
+def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
+    """
+    Convert a raw example dict to (board, policy, value) tensors for model input.
+    - Adds player-to-move channel to board (from 2ch to 3ch)
+    - Converts policy label using get_valid_policy_target
+    Args:
+        ex: dict with keys 'board', 'policy', 'value'
+        use_uniform_policy: If True, use uniform policy for terminal positions
+    Returns:
+        board: torch.FloatTensor (3, BOARD_SIZE, BOARD_SIZE)
+        policy: torch.FloatTensor (BOARD_SIZE * BOARD_SIZE,)
+        value: torch.FloatTensor (scalar or shape (1,))
+    """
+    from .config import BOARD_SIZE
+    board_2ch = ex['board']
+    player_to_move = get_player_to_move_from_board(board_2ch)
+    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=board_2ch.dtype)
+    board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
+    board = torch.tensor(board_3ch, dtype=torch.float32)
+    policy = get_valid_policy_target(ex['policy'], use_uniform=use_uniform_policy)
+    if isinstance(policy, torch.Tensor):
+        policy = policy.detach().clone()
+    else:
+        policy = torch.tensor(policy, dtype=torch.float32)
+    value = torch.tensor(ex['value'], dtype=torch.float32)
+    return board, policy, value
