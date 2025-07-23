@@ -13,7 +13,7 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
     if board.ndim == 3 and board.shape[0] == 2:
         board = board_2nxn_to_nxn(board)
     N = board.shape[0]
-    symbols = {0: '.', 1: 'B', 2: 'R'}
+    symbols = {0: '.', 1: 'B', 2: 'r'}
     highlight_symbol = '*'  # Symbol for highlighted move
     lines = []
     header = '   ' + ' '.join(str(i) for i in range(N))

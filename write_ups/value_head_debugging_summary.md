@@ -174,3 +174,32 @@ These tools are designed to make value head debugging more systematic, reproduci
   - Though PolicyValueLoss actually already handles this via masking, with:
     - policy_loss = torch.tensor(0.0, device=policy_pred.device, requires_grad=True)
   - So this seems to be ok.
+
+## Latest Analysis Results and Observations (23rd July 2025)
+
+- **Summary of Results:**
+  - None of the recent models (across all tested hyperparameters and checkpoints) are predicting well at any stage of the game.
+  - Value head predictions are poor even on simple/final positions (e.g., fully-connected boards with a clear winner).
+  - This is true even for checkpoints that have seen 5M unaugmented (20M augmented) examples.
+  - This is surprising because:
+    1. The policy network learns much faster and with less data.
+    2. Previous projects achieved reasonable value head performance with less data.
+    3. Intuitively, the network should be able to correlate with very easy/final positions after this much training.
+  - The different models do produce different value predictions, and training loss does decrease somewhat after training starts, indicating that gradients are flowing and some learning is happening—but not in a way that leads to meaningful value prediction.
+
+- **Current Hypothesis:**
+  - There is still a fundamental issue with value head training, data, or architecture that is preventing the network from learning even the simplest value correlations.
+
+- **Next Steps (Proposed):**
+  - **Train on only-final-positions:**
+    - Restrict the training set to only final positions (where the winner is known and the board is fully connected).
+    - This experiment will isolate whether the value head can learn the simplest possible value mapping.
+    - If the value head cannot learn this, the problem is almost certainly in the data pipeline, label assignment, or value head architecture.
+    - If it can learn this, the issue may be with more complex positions, label noise, or the interaction between policy and value heads.
+  - **Why this is promising:**
+    - This is a minimal, controlled diagnostic. It should be easy for the network to achieve high accuracy on final positions if the pipeline is correct.
+    - The outcome will provide a clear signal about where to look next (data/labels vs. model/training dynamics).
+
+- **Action:**
+  - Run the "train on only-final-positions" experiment and analyze the results.
+  - Depending on the outcome, either focus on data/label debugging or move on to more complex diagnostic experiments.

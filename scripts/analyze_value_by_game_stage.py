@@ -35,11 +35,9 @@ MODEL_NAMES = [
     "loss_weight_sweep_exp2_do0_pw0.001_f537d4_20250722_211936",
     "loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936",
     "loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936",
-    "loss_weight_sweep_exp0_do0_pw0.001_f537d4_20250722_200457",
-    "loss_weight_sweep_exp1_do0_pw0.0001_eee783_20250722_200457",
 ]
-CHECKPOINT_EPOCHS = [20, 50, 80, 100]
-CHECKPOINT_TEMPLATE = "epoch{}_mini100.pt"
+CHECKPOINT_MINI_EPOCHS = [15, 30, 60, 85, 100]
+CHECKPOINT_TEMPLATE = "epoch1_mini{}.pt"
 DATA_DIR = "data/processed/shuffled/"
 # DATA_FILE = "shuffled_0000.pkl.gz"
 SAVE_DIR = "analysis/value_by_stage/"
@@ -117,10 +115,26 @@ def analyze_value_predictions(model, dataset, num_samples=10000, device='cpu'):
             
             # Strict accuracy (within 0.3 of target)
             strict_accuracy = np.mean(np.abs(preds - targets) < 0.3)
+            # Inverse strict accuracy: within 0.3 of the *wrong* label
+            inverse_strict_accuracy = np.mean(np.abs(preds - (1 - targets)) < 0.3)
             # Classification accuracy (threshold at 0.5)
             class_preds = (preds >= 0.5).astype(np.float32)
             class_targets = (targets >= 0.5).astype(np.float32)
             class_accuracy = np.mean(class_preds == class_targets)
+            
+            # Confident call accuracy: among predictions with pred > 0.7 or pred < 0.3, fraction correct
+            confident_mask = (preds > 0.7) | (preds < 0.3)
+            if np.any(confident_mask):
+                confident_correct = np.mean(np.abs(preds[confident_mask] - targets[confident_mask]) < 0.3)
+                confident_frac = np.mean(confident_mask)
+            else:
+                confident_correct = float('nan')
+                confident_frac = 0.0
+            # Correlation between predictions and targets
+            if len(preds) > 1 and np.std(preds) > 0 and np.std(targets) > 0:
+                correlation = np.corrcoef(preds, targets)[0, 1]
+            else:
+                correlation = float('nan')
             
             # Calculate bias (mean prediction - mean target)
             bias = np.mean(preds) - np.mean(targets)
@@ -135,7 +149,11 @@ def analyze_value_predictions(model, dataset, num_samples=10000, device='cpu'):
                 'mse': mse,
                 'mae': mae,
                 'strict_accuracy': strict_accuracy,
+                'inverse_strict_accuracy': inverse_strict_accuracy,
                 'classification_accuracy': class_accuracy,
+                'confident_call_accuracy': confident_correct,
+                'confident_call_fraction': confident_frac,
+                'correlation': correlation,
                 'bias': bias,
                 'pred_mean': pred_mean,
                 'pred_std': pred_std,
@@ -291,9 +309,10 @@ def main():
         # Analyze all checkpoints for all model names
         model_paths = []
         for model_name in MODEL_NAMES:
-            for epoch in CHECKPOINT_EPOCHS:
+            for epoch in CHECKPOINT_MINI_EPOCHS:
                 checkpoint_file = CHECKPOINT_TEMPLATE.format(epoch)
                 full_path = f"{MODEL_BASE_DIR}/{model_name}/{checkpoint_file}"
+                print(f"Checking for checkpoint: {full_path}")  # Debug print
                 if os.path.exists(full_path):
                     model_paths.append((model_name, full_path))
     print(f"Analyzing {len(model_paths)} model checkpoints...")
@@ -335,12 +354,17 @@ def main():
     
     # Print metrics table
     print("\n=== Metrics Table (all models/checkpoints) ===")
-    header = ["Model", "Checkpoint", "Stage", "MSE", "MAE", "StrictAcc(0.7)", "ClassAcc", "Bias", "PredMean", "TargetMean", "N"]
+    header = [
+        "Model", "Checkpoint", "Stage", "MSE", "MAE", "StrictAcc(0.7)", "InvStrictAcc(0.7)",
+        "ClassAcc", "ConfCallAcc", "ConfCallFrac", "Correlation", "Bias", "PredMean", "TargetMean", "N"
+    ]
     print("\t".join(header))
     for entry in model_results:
         print(f"{entry['model']}\t{entry['checkpoint']}\t{entry['stage']}\t"
               f"{entry['mse']:.4f}\t{entry['mae']:.4f}\t{entry['strict_accuracy']:.2%}\t"
-              f"{entry['classification_accuracy']:.2%}\t{entry['bias']:.4f}\t"
+              f"{entry['inverse_strict_accuracy']:.2%}\t{entry['classification_accuracy']:.2%}\t"
+              f"{entry['confident_call_accuracy']:.2%}\t{entry['confident_call_fraction']:.2%}\t"
+              f"{entry['correlation']:.3f}\t{entry['bias']:.4f}\t"
               f"{entry['pred_mean']:.4f}\t{entry['target_mean']:.4f}\t{entry['sample_count']}")
     
     # Write CSV of full results
@@ -357,7 +381,11 @@ def main():
                 f"{entry['mse']:.4f}",
                 f"{entry['mae']:.4f}",
                 f"{entry['strict_accuracy']:.4f}",
+                f"{entry['inverse_strict_accuracy']:.4f}",
                 f"{entry['classification_accuracy']:.4f}",
+                f"{entry['confident_call_accuracy']:.4f}",
+                f"{entry['confident_call_fraction']:.4f}",
+                f"{entry['correlation']:.4f}",
                 f"{entry['bias']:.4f}",
                 f"{entry['pred_mean']:.4f}",
                 f"{entry['target_mean']:.4f}",
@@ -380,6 +408,8 @@ def main():
                     print(f"  {k}: {v:.4f}")
                 elif isinstance(v, int):
                     print(f"  {k}: {v}")
+                else:
+                    pass  # Don't print long lists
     
     print("\nAnalysis complete for all models.")
 
