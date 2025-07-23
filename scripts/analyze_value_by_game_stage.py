@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import gzip
 import pickle
+import csv
 
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -30,16 +31,18 @@ from hex_ai.config import PLAYER_CHANNEL, BOARD_SIZE
 
 # CONSTANTS
 MODEL_BASE_DIR = "checkpoints/hyperparameter_tuning"
-# Alternative model names:
-# loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936
-# loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936
-# In general find find recent results from July 23rd directories in MODEL_BASE_DIR
-MODEL_NAME = "loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936"
-MODEL_FILE_BASENAME = "epoch1_mini100.pt"
-FULL_MODEL_PATH = f"{MODEL_BASE_DIR}/{MODEL_NAME}/{MODEL_FILE_BASENAME}"
+MODEL_NAMES = [
+    "loss_weight_sweep_exp2_do0_pw0.001_f537d4_20250722_211936",
+    "loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936",
+    "loss_weight_sweep_exp0_do0_pw0.2_794e88_20250722_211936",
+    "loss_weight_sweep_exp0_do0_pw0.001_f537d4_20250722_200457",
+    "loss_weight_sweep_exp1_do0_pw0.0001_eee783_20250722_200457",
+]
+CHECKPOINT_EPOCHS = [20, 50, 80, 100]
+CHECKPOINT_TEMPLATE = "epoch{}_mini100.pt"
 DATA_DIR = "data/processed/shuffled/"
 # DATA_FILE = "shuffled_0000.pkl.gz"
-SAVE_DIR = f"analysis/value_by_stage/{MODEL_NAME}"
+SAVE_DIR = "analysis/value_by_stage/"
 NUM_SAMPLES = 10000
 DEVICE = "mps"
 ENABLE_AUGMENTATION = True
@@ -224,8 +227,8 @@ def load_examples_from_file(file_path, max_examples=100000):
 def main():
     parser = argparse.ArgumentParser(description="Analyze value head performance by game stage")
     parser.add_argument('--model_path', type=str, 
-                        default=FULL_MODEL_PATH,
-                        required=False, help='Path to trained model')
+                        default=None,
+                        required=False, help='Path to trained model (if set, only this model is analyzed)')
     parser.add_argument('--data_dir', type=str, default=DATA_DIR, help='Data directory')
     parser.add_argument('--max_data_files', type=int, default=1, help='Maximum number of data files to use')
     parser.add_argument('--save_dir', type=str, default=SAVE_DIR, help='Save directory')
@@ -235,22 +238,15 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup
     device = get_device() if args.device is None else torch.device(args.device)
     print(f"Using device: {device}")
     
-    # Load model
-    print(f"Loading model from {args.model_path}")
-    model_wrapper = ModelWrapper(args.model_path, device=device)
-    
-    # Load data
+    # Load data ONCE for all models
     print("Loading data...")
     data_files = discover_processed_files(args.data_dir)
     print(f"Found {len(data_files)} data files")
     print(f"Using {args.max_data_files} data files (full data, >97million, examples, is far larger than required)")
     input_data = data_files[:args.max_data_files]
-
-    # Load all examples from the first file (or up to max_data_files)
     all_examples = []
     for file_path in input_data:
         examples = load_examples_from_file(file_path, max_examples=args.num_samples)
@@ -259,8 +255,6 @@ def main():
             all_examples = all_examples[:args.num_samples]
             break
     print(f"Loaded {len(all_examples)} examples for analysis.")
-
-    # Convert examples to (board, policy, value) tuples for analysis
     class ExampleDataset:
         def __init__(self, examples):
             self.examples = examples
@@ -288,41 +282,106 @@ def main():
     
     dataset = ExampleDataset(all_examples)
     
-    # Analyze
-    print("Analyzing value predictions by game stage...")
-    results = analyze_value_predictions(
-        model_wrapper, 
-        dataset, 
-        num_samples=args.num_samples,
-        device=device
-    )
+    # Model selection logic
+    model_results = []  # List of dicts: {model_name, checkpoint, stage, metrics...}
+    if args.model_path:
+        # Only analyze the provided model_path
+        model_paths = [("custom_model", args.model_path)]
+    else:
+        # Analyze all checkpoints for all model names
+        model_paths = []
+        for model_name in MODEL_NAMES:
+            for epoch in CHECKPOINT_EPOCHS:
+                checkpoint_file = CHECKPOINT_TEMPLATE.format(epoch)
+                full_path = f"{MODEL_BASE_DIR}/{model_name}/{checkpoint_file}"
+                if os.path.exists(full_path):
+                    model_paths.append((model_name, full_path))
+    print(f"Analyzing {len(model_paths)} model checkpoints...")
     
-    # Print summary
-    print("\n=== Analysis Summary ===")
-    for stage in ['early', 'mid', 'late']:
-        if stage in results:
-            r = results[stage]
-            print(f"\n{stage.capitalize()} Game ({r['sample_count']} samples):")
-            print(f"  MSE: {r['mse']:.4f}")
-            print(f"  MAE: {r['mae']:.4f}")
-            print(f"  Strict Accuracy (0.7): {r['strict_accuracy']:.2%}")
-            print(f"  Classification Accuracy: {r['classification_accuracy']:.2%}")
-            print(f"  Bias: {r['bias']:.4f}")
-            print(f"  Pred Mean: {r['pred_mean']:.4f} ± {r['pred_std']:.4f}")
-            print(f"  Target Mean: {r['target_mean']:.4f} ± {r['target_std']:.4f}")
+    # Analyze each model/checkpoint
+    for model_name, model_path in model_paths:
+        print(f"\n--- Analyzing {model_name} | {os.path.basename(model_path)} ---")
+        try:
+            model_wrapper = ModelWrapper(model_path, device=device)
+            results = analyze_value_predictions(
+                model_wrapper, 
+                dataset, 
+                num_samples=args.num_samples,
+                device=device
+            )
+            # Store results for each stage
+            for stage in ['early', 'mid', 'late']:
+                if stage in results:
+                    r = results[stage]
+                    entry = {
+                        'model': model_name,
+                        'checkpoint': os.path.basename(model_path),
+                        'stage': stage,
+                        'mse': r['mse'],
+                        'mae': r['mae'],
+                        'strict_accuracy': r['strict_accuracy'],
+                        'classification_accuracy': r['classification_accuracy'],
+                        'bias': r['bias'],
+                        'pred_mean': r['pred_mean'],
+                        'pred_std': r['pred_std'],
+                        'target_mean': r['target_mean'],
+                        'target_std': r['target_std'],
+                        'sample_count': r['sample_count'],
+                        'full_summary': r
+                    }
+                    model_results.append(entry)
+        except Exception as e:
+            print(f"[ERROR] Failed to analyze {model_name} {model_path}: {e}")
     
-    # Create visualizations
-    print("\nCreating visualizations...")
-    create_visualizations(results, args.save_dir)
+    # Print metrics table
+    print("\n=== Metrics Table (all models/checkpoints) ===")
+    header = ["Model", "Checkpoint", "Stage", "MSE", "MAE", "StrictAcc(0.7)", "ClassAcc", "Bias", "PredMean", "TargetMean", "N"]
+    print("\t".join(header))
+    for entry in model_results:
+        print(f"{entry['model']}\t{entry['checkpoint']}\t{entry['stage']}\t"
+              f"{entry['mse']:.4f}\t{entry['mae']:.4f}\t{entry['strict_accuracy']:.2%}\t"
+              f"{entry['classification_accuracy']:.2%}\t{entry['bias']:.4f}\t"
+              f"{entry['pred_mean']:.4f}\t{entry['target_mean']:.4f}\t{entry['sample_count']}")
     
-    # Save results
-    results_file = Path(args.save_dir) / "analysis_results.json"
-    with open(results_file, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
+    # Write CSV of full results
+    csv_path = os.path.join(args.save_dir, "analysis_results.csv")
+    os.makedirs(args.save_dir, exist_ok=True)
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile, delimiter=',')
+        writer.writerow(header)
+        for entry in model_results:
+            writer.writerow([
+                entry['model'],
+                entry['checkpoint'],
+                entry['stage'],
+                f"{entry['mse']:.4f}",
+                f"{entry['mae']:.4f}",
+                f"{entry['strict_accuracy']:.4f}",
+                f"{entry['classification_accuracy']:.4f}",
+                f"{entry['bias']:.4f}",
+                f"{entry['pred_mean']:.4f}",
+                f"{entry['target_mean']:.4f}",
+                entry['sample_count']
+            ])
+    print(f"\nCSV of results written to: {csv_path}")
     
-    print(f"\nAnalysis complete! Results saved to {args.save_dir}")
-    print(f"  - JSON results: {results_file}")
-    print(f"  - Visualizations: {args.save_dir}/")
+    # Identify top 2 checkpoints for each metric (across all models/stages)
+    metrics_to_check = ['strict_accuracy', 'classification_accuracy', 'mse', 'mae']
+    for metric in metrics_to_check:
+        print(f"\n=== Top 2 Checkpoints for {metric} ===")
+        # For accuracy metrics, higher is better; for mse/mae, lower is better
+        reverse = metric in ['strict_accuracy', 'classification_accuracy']
+        sorted_entries = sorted(model_results, key=lambda x: x[metric], reverse=reverse)
+        for i, entry in enumerate(sorted_entries[:2]):
+            print(f"\n[{i+1}] {entry['model']} | {entry['checkpoint']} | {entry['stage']} | {metric}: {entry[metric]:.4f}")
+            # Print full summary for this entry
+            for k, v in entry['full_summary'].items():
+                if isinstance(v, float):
+                    print(f"  {k}: {v:.4f}")
+                elif isinstance(v, int):
+                    print(f"  {k}: {v}")
+    
+    print("\nAnalysis complete for all models.")
 
 
 if __name__ == "__main__":
