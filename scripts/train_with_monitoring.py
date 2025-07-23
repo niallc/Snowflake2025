@@ -27,6 +27,7 @@ import numpy as np
 import logging
 from datetime import datetime
 
+
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -88,18 +89,13 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
     for epoch in range(num_epochs):
         logging.info(f"\n=== Epoch {epoch + 1}/{num_epochs} ===")
         
-        # Training
-        train_metrics = trainer.train_epoch()
-        
-        # Log gradients and activations during training (focus on value head)
-        for batch_idx, (boards, policies, values) in enumerate(trainer.train_loader):
+        # Define a callback to log gradients/activations during training
+        def monitoring_callback(trainer, batch_idx):
             if batch_idx % 50 == 0:
                 gradient_monitor.log_gradients(batch_idx)
                 activation_monitor.log_activations(batch_idx)
-                # Save value head focused gradient and activation stats
                 grad_norms = gradient_monitor.compute_gradient_norms()
                 activation_stats = {}
-                # Only keep value head activations if available
                 for layer_name, activations in activation_monitor.activation_history.items():
                     if 'value_head' in layer_name and activations:
                         last = activations[-1]
@@ -114,6 +110,9 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
                     'batch_idx': batch_idx,
                     'value_head': activation_stats
                 })
+        
+        # Call train_epoch with the monitoring callback
+        train_metrics = trainer.train_epoch(batch_callback=monitoring_callback)
         
         # Validation
         val_metrics = trainer.validate()
@@ -142,7 +141,8 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
     }
     
     # Save results
-    results_file = save_path / "monitoring_results.json"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    results_file = save_path / f"monitoring_results_{timestamp}.json"
     with open(results_file, 'w') as f:
         json.dump(monitoring_results, f, indent=2, default=str)
     
