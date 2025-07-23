@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
     parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
+    parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
     
     args = parser.parse_args()
     
@@ -60,7 +61,7 @@ def main():
     )
     
     # Process files
-    stats = processor.process_all_files(max_files=args.max_files)
+    stats = processor.process_all_files(max_files=args.max_files, position_selector=args.position_selector)
     
     # Save final progress report
     from hex_ai.file_utils import save_progress_report

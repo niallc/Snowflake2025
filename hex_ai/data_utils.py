@@ -624,7 +624,7 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
         # Test if we can extract training examples from the game without errors
         # Use a dummy game_id for validation since we don't have file context yet
         dummy_game_id = (-1, -1)  # Invalid game_id for validation purposes
-        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, dummy_game_id)
+        training_examples = extract_training_examples_with_selector_from_game(trmph_url, winner_indicator, dummy_game_id)
         return True, ""
     except Exception as e:
         return False, str(e)
@@ -699,91 +699,91 @@ def remove_repeated_moves(moves: List[str]) -> List[str]:
     return clean_moves
 
 
-def extract_training_examples_from_game(
-    trmph_text: str, 
-    winner_from_file: str,
-    game_id: Tuple[int, int],  # (file_idx, line_idx)
-    include_trmph: bool = False,       # Whether to include full TRMPH string
-    shuffle_positions: bool = True
-) -> List[Dict]:
-    """
-    Extract training examples with comprehensive metadata and flexible sampling.
+# def extract_training_examples_from_game(
+#     trmph_text: str, 
+#     winner_from_file: str,
+#     game_id: Tuple[int, int],  # (file_idx, line_idx)
+#     include_trmph: bool = False,       # Whether to include full TRMPH string
+#     shuffle_positions: bool = True
+# ) -> List[Dict]:
+#     """
+#     Extract training examples with comprehensive metadata and flexible sampling.
     
-    Args:
-        trmph_text: Complete TRMPH string
-        winner_from_file: Winner from file data ("1" for blue, "2" for red)
-        game_id: Tuple of (file_index, line_index) for tracking
-        include_trmph: Whether to include full TRMPH string in metadata
-        shuffle_positions: Whether to shuffle position order within game
+#     Args:
+#         trmph_text: Complete TRMPH string
+#         winner_from_file: Winner from file data ("1" for blue, "2" for red)
+#         game_id: Tuple of (file_index, line_index) for tracking
+#         include_trmph: Whether to include full TRMPH string in metadata
+#         shuffle_positions: Whether to shuffle position order within game
         
-    Returns:
-        List of enhanced training examples with metadata
-    """
-    try:
-        # Parse moves and validate
-        bare_moves = strip_trmph_preamble(trmph_text)
-        moves = split_trmph_moves(bare_moves)
+#     Returns:
+#         List of enhanced training examples with metadata
+#     """
+#     try:
+#         # Parse moves and validate
+#         bare_moves = strip_trmph_preamble(trmph_text)
+#         moves = split_trmph_moves(bare_moves)
         
-        # Handle repeated moves
-        moves = remove_repeated_moves(moves)
+#         # Handle repeated moves
+#         moves = remove_repeated_moves(moves)
         
-        if not moves:
-            raise ValueError("Empty game after removing repeated moves")
+#         if not moves:
+#             raise ValueError("Empty game after removing repeated moves")
         
-        # Validate winner and convert to clear format
-        if winner_from_file not in ["1", "2"]:
-            raise ValueError(f"Invalid winner format: {winner_from_file}")
+#         # Validate winner and convert to clear format
+#         if winner_from_file not in ["1", "2"]:
+#             raise ValueError(f"Invalid winner format: {winner_from_file}")
         
-        # Convert winner format: "1"=BLUE, "2"=RED
-        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
-        value_target = 0.0 if winner_from_file == "1" else 1.0  # BLUE=0.0, RED=1.0
+#         # Convert winner format: "1"=BLUE, "2"=RED
+#         winner_clear = "BLUE" if winner_from_file == "1" else "RED"
+#         value_target = 0.0 if winner_from_file == "1" else 1.0  # BLUE=0.0, RED=1.0
         
-        total_positions = len(moves) + 1
+#         total_positions = len(moves) + 1
         
-        # Assign sampling tiers
-        value_sample_tiers = assign_value_sample_tiers(total_positions)
+#         # Assign sampling tiers
+#         value_sample_tiers = assign_value_sample_tiers(total_positions)
         
-        # Create position indices (shuffle if requested)
-        position_indices = list(range(total_positions))
-        if shuffle_positions:
-            random.shuffle(position_indices)
+#         # Create position indices (shuffle if requested)
+#         position_indices = list(range(total_positions))
+#         if shuffle_positions:
+#             random.shuffle(position_indices)
         
-        training_examples = []
+#         training_examples = []
         
-        for i, position in enumerate(position_indices):
-            # Create board state
-            board_state = create_board_from_moves(moves[:position])
+#         for i, position in enumerate(position_indices):
+#             # Create board state
+#             board_state = create_board_from_moves(moves[:position])
             
-            # Create policy target
-            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+#             # Create policy target
+#             policy_target = None if position >= len(moves) else create_policy_target(moves[position])
             
-            # Create metadata
-            metadata = {
-                'game_id': game_id,
-                'position_in_game': position,
-                'total_positions': total_positions,
-                'value_sample_tier': value_sample_tiers[i],
-                'winner': winner_clear  # Store as "BLUE" or "RED"
-            }
+#             # Create metadata
+#             metadata = {
+#                 'game_id': game_id,
+#                 'position_in_game': position,
+#                 'total_positions': total_positions,
+#                 'value_sample_tier': value_sample_tiers[i],
+#                 'winner': winner_clear  # Store as "BLUE" or "RED"
+#             }
             
-            if include_trmph:
-                metadata['trmph_game'] = trmph_text
+#             if include_trmph:
+#                 metadata['trmph_game'] = trmph_text
             
-            # Create example
-            example = {
-                'board': board_state,
-                'policy': policy_target,
-                'value': value_target,
-                'metadata': metadata
-            }
+#             # Create example
+#             example = {
+#                 'board': board_state,
+#                 'policy': policy_target,
+#                 'value': value_target,
+#                 'metadata': metadata
+#             }
             
-            training_examples.append(example)
+#             training_examples.append(example)
         
-        return training_examples
+#         return training_examples
         
-    except Exception as e:
-        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
-        raise ValueError(f"Failed to process game: {e}")
+#     except Exception as e:
+#         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+#         raise ValueError(f"Failed to process game: {e}")
 
 
 def extract_positions_range(
@@ -1051,3 +1051,69 @@ def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
         policy = torch.tensor(policy, dtype=torch.float32)
     value = torch.tensor(ex['value'], dtype=torch.float32)
     return board, policy, value
+
+
+def extract_training_examples_with_selector_from_game(
+    trmph_text: str,
+    winner_from_file: str,
+    game_id: tuple,
+    position_selector: str = "all",
+    include_trmph: bool = False,
+    shuffle_positions: bool = True
+) -> list:
+    """
+    Extract training examples with a selector for position type: 'all', 'final', or 'penultimate'.
+    """
+    try:
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = remove_repeated_moves(split_trmph_moves(bare_moves))
+        if not moves:
+            raise ValueError("Empty game after removing repeated moves")
+        total_positions = len(moves) + 1
+        if winner_from_file not in ["1", "2"]:
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
+        value_target = 0.0 if winner_from_file == "1" else 1.0
+        # Determine which positions to extract
+        if position_selector == "all":
+            position_indices = list(range(total_positions))
+            if shuffle_positions:
+                random.shuffle(position_indices)
+        elif position_selector == "final":
+            position_indices = [total_positions - 1]
+        elif position_selector == "penultimate":
+            if total_positions >= 2:
+                position_indices = [total_positions - 2]
+            else:
+                return []  # No penultimate position
+        else:
+            raise ValueError(f"Unknown position_selector: {position_selector}")
+        # Assign sample tiers (for compatibility, just use 0 for non-all)
+        if position_selector == "all":
+            value_sample_tiers = assign_value_sample_tiers(total_positions)
+        else:
+            value_sample_tiers = [0] * len(position_indices)
+        training_examples = []
+        for i, position in enumerate(position_indices):
+            board_state = create_board_from_moves(moves[:position])
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': value_sample_tiers[i],
+                'winner': winner_clear
+            }
+            if include_trmph:
+                metadata['trmph_game'] = trmph_text
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'metadata': metadata
+            }
+            training_examples.append(example)
+        return training_examples
+    except Exception as e:
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        raise ValueError(f"Failed to process game: {e}")

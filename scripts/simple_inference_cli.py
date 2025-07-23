@@ -48,6 +48,7 @@ if __name__ == "__main__":
     ls -lth checkpoints/hyperparameter_tuning | head -n 3 | less
 
     resCollDir="checkpoints/hyperparameter_tuning/"
+    
     resDirTa1g="shuffled_sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor3.0_20250721_064254/"
     resDirTag2="shuffled_sweep_run_1_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor50.0_20250721_064254/"
     resDirTag3="loss_weight_sweep_exp0_pw0.01_475646_20250721_131001/"
@@ -56,7 +57,9 @@ if __name__ == "__main__":
     resDirTag6="loss_weight_sweep_exp2_pw0.7_c0cb27_20250721_150933/"
     resDirTag7="loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936"
     resDirTag8="loss_weight_sweep_exp2_do0_pw0.001_f537d4_20250722_211936"
-    resDir=${resCollDir}${resDirTag8}
+
+    resDirTag9="loss_weight_sweep_exp0_do0_pw0.2_794e88_20250723_230725"
+    resDir=${resCollDir}${resDirTag9}
     blueFinal="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7"
     redFinal="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2g7"
     blueWin="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7"
@@ -66,7 +69,7 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
-    modelFile="epoch1_mini15.pt"
+    modelFile="epoch1_mini3.pt"
     boardPos=${earlyGameB}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \

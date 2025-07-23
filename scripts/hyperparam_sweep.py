@@ -18,6 +18,7 @@ import os
 import hashlib
 import json
 import math
+import argparse
 
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
@@ -142,6 +143,16 @@ def print_sweep_summary(results, results_dir, interrupted=False):
 # =============================================================
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default="data/processed/shuffled", help="Directory containing processed data files")
+    parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", help="Directory to save experiment results")
+    parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
+    parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, help="Max training samples (unaugmented)")
+    parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, help="Max validation samples (unaugmented)")
+    parser.add_argument("--mini_epoch_batches", type=int, default=MINI_EPOCH_BATCHES, help="Mini-epoch batches per epoch")
+    parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
+    args = parser.parse_args()
+
     shutdown_handler = GracefulShutdown()
 
     all_configs = list(all_param_combinations(SWEEP))
@@ -159,7 +170,7 @@ if __name__ == "__main__":
             'hyperparameters': config
         })
 
-    results_dir = Path("checkpoints/hyperparameter_tuning")
+    results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
@@ -173,16 +184,16 @@ if __name__ == "__main__":
         # Run hyperparameter tuning with fail_fast enabled
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
-            data_dir="data/processed/shuffled",
-            results_dir="checkpoints/hyperparameter_tuning",
+            data_dir=args.data_dir,
+            results_dir=args.results_dir,
             train_ratio=0.8,
-            num_epochs=EPOCHS,
+            num_epochs=args.epochs,
             early_stopping_patience=None,  # Disable early stopping for now
-            mini_epoch_batches=MINI_EPOCH_BATCHES,
+            mini_epoch_batches=args.mini_epoch_batches,
             random_seed=42,
-            max_examples_unaugmented=MAX_SAMPLES,
-            max_validation_examples=MAX_VALIDATION_SAMPLES,
-            enable_augmentation=AUGMENTATION_CONFIG['enable_augmentation'],
+            max_examples_unaugmented=args.max_samples,
+            max_validation_examples=args.max_validation_samples,
+            enable_augmentation=not args.no_augmentation,
             fail_fast=True,
             shutdown_handler=shutdown_handler
         )

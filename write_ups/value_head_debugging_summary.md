@@ -70,7 +70,28 @@ To support value head debugging and analysis, the following tools and scripts ha
 - **train_on_easy_positions.py**: Script to train and evaluate the value head on only final or penultimate positions, to test if the network can learn simple cases.
 - **preprocess_example_for_model**: Central utility in hex_ai/data_utils.py to standardize preprocessing of examples for model input.
 
-These tools are designed to make value head debugging more systematic, reproducible, and insightful.
+## Targeted Value Head Sanity Check: Final Positions Only (2025-07-23)
+
+### Motivation
+The value head should at least be able to learn trivial value targets if the data and architecture are not fundamentally broken. To test this, we constructed a dataset containing only the final positions from each game (where the winner is known and the value target is unambiguous), and trained the value head on this data.
+
+### Implementation
+- **Data Extraction:**
+  - Refactored the data processing pipeline to allow extraction of only the final (or penultimate) positions from each game.
+  - Added a `position_selector` argument to the batch processor and CLI, so we can easily generate datasets of only final positions.
+  - Output files are written to a new directory (e.g., `data/processed/final_only/`).
+
+### Result
+- **Value Loss Drops Rapidly:**
+  - When training on the final-positions-only dataset, the value head loss drops extremely quickly and reaches excellent values (near zero) within a few epochs.
+  - This confirms that the value head and training pipeline are capable of learning trivial value targets when the problem is easy and unambiguous.
+- **Interpretation:**
+  - The value head is not fundamentally broken; it can learn when the data is simple.
+  - The persistent high value loss on the full dataset is likely due to the increased complexity/ambiguity of intermediate positions, not a bug in the value head or data pipeline.
+
+### Next Steps
+- Proceed to test on penultimate positions and more complex subsets to further probe the limits of the value head.
+- Use these results to inform further architectural or data-centric debugging.
 
 ## Proposed Next Steps
 
