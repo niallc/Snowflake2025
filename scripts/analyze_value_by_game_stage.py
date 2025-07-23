@@ -81,7 +81,17 @@ def analyze_value_predictions(model, dataset, num_samples=10000, device='cpu'):
             
             # Get model prediction
             policy_pred, value_pred = model.predict(board)
-            value_prob = torch.sigmoid(torch.tensor(value_pred)).item()
+            # The below line produced the warning:
+            # /Users/niallHome/Documents/programming/Snowflake2025/scripts/analyze_value_by_game_stage.py:84: 
+            # UserWarning: To copy construct from a tensor, it is recommended to use 
+            # sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), 
+            # rather than torch.tensor(sourceTensor).
+            # Fix: use detach().clone() if value_pred is a tensor
+            if isinstance(value_pred, torch.Tensor):
+                value_tensor = value_pred.detach().clone()
+            else:
+                value_tensor = torch.tensor(value_pred)
+            value_prob = torch.sigmoid(value_tensor).item()
             
             # Categorize position
             stage = categorize_position(board[0].cpu().numpy())
@@ -268,8 +278,8 @@ def main():
             # Use central utility for policy label
             policy_numpy = get_valid_policy_target(ex['policy'], use_uniform=False)
             # Avoid torch warning: 
-            # warning: "To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone()"
-            if isinstance(policy, torch.Tensor):
+            # "To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone()"
+            if isinstance(policy_numpy, torch.Tensor):
                 policy = policy_numpy.detach().clone()
             else:
                 policy = torch.tensor(policy_numpy, dtype=torch.float32)

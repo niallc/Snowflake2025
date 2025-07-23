@@ -1,5 +1,7 @@
 # Value Head Debugging Summary and Next Steps
 
+**Note:** See also [value_net_overfitting_plan.md](value_net_overfitting_plan.md) (focused on now resolved overfitting) and [debugging_value_head_performance.md](debugging_value_head_performance.md) (older, detailed debugging log).
+
 **Date:** 23rd July 2025
 **Status:** Active Investigation  
 **Priority:** High
@@ -55,6 +57,20 @@ The Hex AI value head is experiencing severe performance issues despite extensiv
 - Analyzes value predictions across different position types (early/mid/late game)
 - Tests simple known positions (empty board, winning positions)
 - Provides detailed performance breakdown
+
+## Recent Debugging Tools and Scripts (2025-07)
+
+To support value head debugging and analysis, the following tools and scripts have been added:
+
+- **GradientMonitor**: Tracks and logs gradient norms for policy head, value head, and shared layers during training. Helps diagnose vanishing/exploding gradients and imbalance between heads.
+- **ActivationMonitor**: Monitors activations at key layers (value head, policy head, etc.) to detect saturation or dead neurons.
+- **ValueHeadAnalyzer**: Provides methods to analyze value predictions by position type, test on simple positions, and summarize performance.
+- **train_with_monitoring.py**: Training script that integrates gradient and activation monitoring, and saves analysis results.
+- **analyze_value_by_game_stage.py**: Script to analyze value head performance across early, mid, and late game positions, reporting both strict and classification accuracy, and generating visualizations.
+- **train_on_easy_positions.py**: Script to train and evaluate the value head on only final or penultimate positions, to test if the network can learn simple cases.
+- **preprocess_example_for_model**: Central utility in hex_ai/data_utils.py to standardize preprocessing of examples for model input.
+
+These tools are designed to make value head debugging more systematic, reproducible, and insightful.
 
 ## Proposed Next Steps
 
@@ -135,7 +151,9 @@ The Hex AI value head is experiencing severe performance issues despite extensiv
 - **Training Code**: `hex_ai/training.py` - Trainer class with monitoring hooks
 - **Data Pipeline**: `hex_ai/data_pipeline.py` - StreamingSequentialShardDataset
 - **Inference**: `scripts/simple_inference_cli.py` - Manual position testing
-- **Previous Analysis**: `write_ups/value_net_overfitting_plan.md` - Outdated but relevant
+- **Recent Plan & Tools**: `write_ups/value_head_debugging_summary.md` - **(this document, most up-to-date)**
+- **Older Plan**: `write_ups/value_net_overfitting_plan.md`
+- **Older Debugging Log**: `write_ups/debugging_value_head_performance.md`
 
 ---
 

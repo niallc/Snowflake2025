@@ -1,8 +1,13 @@
 # Value Network Overfitting Analysis and Strategic Plan
 
-**Date:** July 2026, ~15th
+**Date:** July 2025, ~15th
 **Status:** Active Investigation  
 **Priority:** High
+
+## References
+
+- **Superseded by**: [write_ups/value_head_debugging_summary.md](value_head_debugging_summary.md) (**most up-to-date**)
+- **Older Debugging Log**: [write_ups/debugging_value_head_performance.md](debugging_value_head_performance.md)
 
 ## 0. Executive Summary
 

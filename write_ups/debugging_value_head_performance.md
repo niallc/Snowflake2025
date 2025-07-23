@@ -1,5 +1,7 @@
 # Debugging Value Head Performance in Hex AI
 
+**Note:** This document is now superseded by [value_head_debugging_summary.md](value_head_debugging_summary.md), which contains the most up-to-date plan and toolset for value head debugging. See also [value_net_overfitting_plan.md](value_net_overfitting_plan.md) for related work.
+
 ## Context
 
 Recent experiments show that the value head of the Hex AI ResNet model is not learning as expected:
@@ -94,6 +96,8 @@ Recent experiments show that the value head of the Hex AI ResNet model is not le
 - Training: `hex_ai/training.py`
 - Inference: `hex_ai/inference/simple_model_inference.py`, `hex_ai/inference/model_wrapper.py`
 - Data format: `hex_ai/data_formats.md`
+- **See also:** [value_net_overfitting_plan.md](value_net_overfitting_plan.md) (**newest, most up-to-date plan**)
+- **See also:** [value_head_debugging_summary.md](value_head_debugging_summary.md) (more recent summary)
 
 ## Next Steps
 - Start with manual inspection (Step 1) and automated checks (Step 2).
