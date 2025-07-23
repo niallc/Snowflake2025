@@ -41,6 +41,74 @@ This document logs known areas of code duplication in the project, with brief no
 
 ---
 
+## Main Training Flows: Monitoring vs. Hyperparameter Sweep
+
+There are two primary entrypoints for training in the current codebase, each following a distinct flow and using different Trainer methods:
+
+### 1. Monitoring Training Flow (`scripts/train_with_monitoring.py`)
+
+- **Entrypoint:** `scripts/train_with_monitoring.py`
+- **Core method:** `Trainer.train_epoch()`
+- **Description:**
+  - Parses command-line arguments, sets up logging, loads data and model.
+  - Instantiates a `Trainer`.
+  - For each epoch:
+    - Calls `trainer.train_epoch()` to run a full epoch of training.
+    - Optionally monitors gradients and activations for debugging.
+    - Calls `trainer.validate()` for validation.
+    - Saves checkpoints and logs metrics.
+  - Repeats for the specified number of epochs.
+
+```mermaid
+flowchart TD
+    A1([train_with_monitoring.py]) --> A2([Parse args, set up logging, data, model])
+    A2 --> A3([Create Trainer instance])
+    A3 --> A4([For each epoch])
+    A4 --> A5([trainer.train_epoch])
+    A5 --> A6([Monitor gradients/activations])
+    A6 --> A7([trainer.validate])
+    A7 --> A8([Save checkpoints, log metrics])
+    A8 --> A4
+    A4 -->|Done| A9([End])
+```
+
+### 2. Hyperparameter Sweep Flow (`scripts/hyperparam_sweep.py`)
+
+- **Entrypoint:** `scripts/hyperparam_sweep.py`
+- **Core method:** `Trainer.train_on_batches()` (via `MiniEpochOrchestrator`)
+- **Description:**
+  - Parses sweep configuration, sets up logging.
+  - For each experiment configuration:
+    - Calls `run_hyperparameter_tuning_current_data`, which:
+      - Loads data, creates a `Trainer` and a `MiniEpochOrchestrator`.
+      - The orchestrator runs training in "mini-epochs" (fixed number of batches per mini-epoch).
+      - For each mini-epoch:
+        - Calls `trainer.train_on_batches(batches)` for a chunk of batches.
+        - Calls `trainer.validate()` for validation.
+        - Saves checkpoints and logs metrics.
+      - Repeats until all data is processed for the epoch, then continues for the specified number of epochs.
+
+```mermaid
+flowchart TD
+    B1([hyperparam_sweep.py]) --> B2([Parse sweep config, set up logging])
+    B2 --> B3([For each experiment config])
+    B3 --> B4([run_hyperparameter_tuning_current_data])
+    B4 --> B5([Create Trainer, MiniEpochOrchestrator])
+    B5 --> B6([MiniEpochOrchestrator.run])
+    B6 --> B7([For each mini-epoch])
+    B7 --> B8([trainer.train_on_batches])
+    B8 --> B9([trainer.validate])
+    B9 --> B10([Save checkpoint, log])
+    B10 --> B7
+    B7 -->|Done| B11([End])
+```
+
+**Key differences:**
+- The monitoring flow is simpler and runs full epochs at a time, using the original `train_epoch` method.
+- The hyperparameter sweep flow is more modular, running in mini-epochs for finer-grained validation/checkpointing, and uses the newer `train_on_batches` method via an orchestrator.
+
+---
+
 ## Other code cleanup
 
 - There are multiple places (e.g. forward in hex_ai/training.py, create_augmented_example_with_player_to_move in hex_ai/data_utils.py) where manual preprocessing of examples (adding player-to-move channel, policy label conversion, etc.) is repeated. Now that preprocess_example_for_model exists in hex_ai/data_utils.py, update all such code to use this utility for consistency and maintainability.

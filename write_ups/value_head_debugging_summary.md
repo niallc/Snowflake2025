@@ -159,13 +159,13 @@ These tools are designed to make value head debugging more systematic, reproduci
 
 ## Updates Log
 
-### 2025-01-XX
-- Added gradient and activation monitoring tools (`GradientMonitor`, `ActivationMonitor`, `ValueHeadAnalyzer`)
-- Created comprehensive analysis plan and summary document
-- Implemented game stage analysis script (`analyze_value_by_game_stage.py`)
-- Implemented easy position training script (`train_on_easy_positions.py`)
-- Created monitored training script (`train_with_monitoring.py`)
-- Identified key next steps and success criteria 
+### 2025-07-23
+- Ran monitoring-enabled training with 500k examples and augmentation
+- Value head still fails to learn, predictions remain near 0.5–0.7
+- Gradients and activations are healthy
+   - [Batch 2450] Gradient norms - Policy: 0.089085, Value: 0.283956, Shared: 0.041630
+- Fallback to StreamingAugmentedProcessedDataset for monitoring
+- Next steps: focus on direct inspection of value labels and predictions
 
 ## Questions / Follow-ups
 

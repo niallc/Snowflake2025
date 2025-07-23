@@ -78,6 +78,7 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
     
     monitoring_results = {
         'gradient_history': [],
+        'activation_history': [],
         'activation_summary': None,
         'value_analysis': None
     }
@@ -90,12 +91,29 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
         # Training
         train_metrics = trainer.train_epoch()
         
-        # Log gradients during training (this happens in train_epoch)
+        # Log gradients and activations during training (focus on value head)
         for batch_idx, (boards, policies, values) in enumerate(trainer.train_loader):
-            # This is a simplified version - in practice, you'd integrate this into the actual training loop
             if batch_idx % 50 == 0:
                 gradient_monitor.log_gradients(batch_idx)
                 activation_monitor.log_activations(batch_idx)
+                # Save value head focused gradient and activation stats
+                grad_norms = gradient_monitor.compute_gradient_norms()
+                activation_stats = {}
+                # Only keep value head activations if available
+                for layer_name, activations in activation_monitor.activation_history.items():
+                    if 'value_head' in layer_name and activations:
+                        last = activations[-1]
+                        activation_stats[layer_name] = last
+                monitoring_results['gradient_history'].append({
+                    'batch_idx': batch_idx,
+                    'value_head': grad_norms.get('value_head', None),
+                    'policy_head': grad_norms.get('policy_head', None),
+                    'shared_layers': grad_norms.get('shared_layers', None)
+                })
+                monitoring_results['activation_history'].append({
+                    'batch_idx': batch_idx,
+                    'value_head': activation_stats
+                })
         
         # Validation
         val_metrics = trainer.validate()
@@ -104,12 +122,7 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
         if (epoch + 1) % 5 == 0:
             gradient_summary = gradient_monitor.get_summary()
             activation_summary = activation_monitor.get_summary()
-            
-            monitoring_results['gradient_history'].append({
-                'epoch': epoch + 1,
-                'gradient_summary': gradient_summary,
-                'activation_summary': activation_summary
-            })
+            monitoring_results['activation_summary'] = activation_summary
             
             logging.info(f"Epoch {epoch + 1} - Gradient Summary:")
             for key, values in gradient_summary.items():
@@ -171,14 +184,17 @@ def main():
     logging.info("Loading data...")
     data_files = discover_processed_files(args.data_dir)
     train_files, val_files = create_train_val_split(data_files, train_ratio=0.8)
-    
-    train_dataset = StreamingSequentialShardDataset(
-        train_files, 
+
+    # Fallback: Use StreamingAugmentedProcessedDataset instead of StreamingSequentialShardDataset
+    # This is less memory efficient but avoids issues with __len__ and is known to work.
+    from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset
+    train_dataset = StreamingAugmentedProcessedDataset(
+        train_files,
         enable_augmentation=args.enable_augmentation,
         max_examples_unaugmented=args.max_examples
     )
-    
-    val_dataset = StreamingSequentialShardDataset(
+
+    val_dataset = StreamingAugmentedProcessedDataset(
         val_files,
         enable_augmentation=args.enable_augmentation,
         max_examples_unaugmented=args.max_examples // 5
