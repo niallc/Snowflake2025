@@ -335,7 +335,7 @@ class Trainer:
         except Exception as e:
             logger.warning(f"System analysis failed: {e}")
     
-    def train_epoch(self) -> Dict[str, float]:
+    def train_epoch(self, batch_callback=None) -> Dict[str, float]:
         print(f"Trainer.train_epoch() called")
         print(f"self.current_epoch = {self.current_epoch}")
         if(self.current_epoch == 0):
@@ -399,6 +399,8 @@ class Trainer:
                 # Backward pass with scaling
                 scaled_loss = self.mixed_precision.scale_loss(total_loss)
                 scaled_loss.backward()
+                if batch_callback is not None:
+                    batch_callback(self, batch_idx)
                 # Gradient clipping (configurable)
                 if self.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)

@@ -167,6 +167,28 @@ These tools are designed to make value head debugging more systematic, reproduci
 - Fallback to StreamingAugmentedProcessedDataset for monitoring
 - Next steps: focus on direct inspection of value labels and predictions
 
+### 2025-07-23: Gradient and Activation Monitoring — Investigation Complete
+
+After fixing the monitoring code to log during the actual training loop, we confirmed:
+- **Value head gradients are dynamic and healthy:**
+    - Example values: 0.31, 1.12, 0.29, 0.51, 0.64, ... (first batch: 50.92, then quickly stabilizes)
+    - Gradients fluctuate batch-to-batch, with no sign of vanishing or exploding
+- **Value head activations are also dynamic:**
+    - Example means: -2.47 (first batch), 0.49, 0.50, 0.51, ...
+    - Activations vary across batches, with plausible mean and std values
+- **No evidence of dead neurons, stuck optimizer, or broken gradient flow**
+
+**Conclusion:**
+- The value head is being updated and is not dead or stuck.
+- The root cause of poor value head learning is almost certainly in the data/label pipeline or loss/target wiring, not in the optimizer, gradients, or network health.
+
+**Next steps:**
+- Focus on direct inspection of value labels, label distribution, and loss/target correctness.
+- Consider running a minimal “sanity check” experiment with a trivial value head and a tiny dataset to confirm the pipeline end-to-end.
+
+**Status:**
+- Gradient and activation monitoring investigation is complete and marked as resolved.
+
 ## Questions / Follow-ups
 
 - **Policy label for terminal positions:**
