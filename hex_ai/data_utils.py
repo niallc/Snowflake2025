@@ -527,6 +527,8 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
         List of 4 tuples: (augmented_board, augmented_policy, augmented_value, player_to_move)
     """
     # Handle None policies (final moves with no next move)
+    # TODO: Replace manual preprocessing with preprocess_example_for_model from hex_ai.data_utils
+    # TODO: Or at least use policy_target = get_valid_policy_target(ex['policy'], use_uniform=False)
     if policy is None:
         policy = np.zeros(169, dtype=np.float32)
     

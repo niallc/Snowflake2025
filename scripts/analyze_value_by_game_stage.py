@@ -102,8 +102,12 @@ def analyze_value_predictions(model, dataset, num_samples=10000, device='cpu'):
             mse = np.mean((preds - targets) ** 2)
             mae = np.mean(np.abs(preds - targets))
             
-            # Calculate accuracy (predictions within 0.3 of target)
-            accuracy = np.mean(np.abs(preds - targets) < 0.3)
+            # Strict accuracy (within 0.3 of target)
+            strict_accuracy = np.mean(np.abs(preds - targets) < 0.3)
+            # Classification accuracy (threshold at 0.5)
+            class_preds = (preds >= 0.5).astype(np.float32)
+            class_targets = (targets >= 0.5).astype(np.float32)
+            class_accuracy = np.mean(class_preds == class_targets)
             
             # Calculate bias (mean prediction - mean target)
             bias = np.mean(preds) - np.mean(targets)
@@ -117,7 +121,8 @@ def analyze_value_predictions(model, dataset, num_samples=10000, device='cpu'):
             results[stage] = {
                 'mse': mse,
                 'mae': mae,
-                'accuracy': accuracy,
+                'strict_accuracy': strict_accuracy,
+                'classification_accuracy': class_accuracy,
                 'bias': bias,
                 'pred_mean': pred_mean,
                 'pred_std': pred_std,
@@ -138,16 +143,16 @@ def create_visualizations(results, save_dir):
     
     # 1. Performance metrics by stage
     stages = list(results.keys())
-    metrics = ['mse', 'mae', 'accuracy']
+    metrics = ['mse', 'mae', 'strict_accuracy', 'classification_accuracy']
+    metric_labels = ['MSE', 'MAE', 'Strict Accuracy (0.7)', 'Classification Accuracy']
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, len(metrics), figsize=(5 * len(metrics), 5))
     
-    for i, metric in enumerate(metrics):
+    for i, (metric, label) in enumerate(zip(metrics, metric_labels)):
         values = [results[stage][metric] for stage in stages]
         axes[i].bar(stages, values)
-        axes[i].set_title(f'{metric.upper()} by Game Stage')
-        axes[i].set_ylabel(metric.upper())
-        
+        axes[i].set_title(f'{label} by Game Stage')
+        axes[i].set_ylabel(label)
         # Add value labels on bars
         for j, v in enumerate(values):
             axes[i].text(j, v + max(values) * 0.01, f'{v:.3f}', 
@@ -157,14 +162,14 @@ def create_visualizations(results, save_dir):
     plt.savefig(save_path / 'performance_by_stage.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    # 2. Prediction vs Target distributions
+    # 2. Prediction vs Target distributions (scatter)
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
     for i, stage in enumerate(stages):
         preds = results[stage]['predictions']
         targets = results[stage]['targets']
-        
-        axes[i].scatter(targets, preds, alpha=0.5, s=1)
+        # Fix: increase marker size and alpha for visibility
+        axes[i].scatter(targets, preds, alpha=0.2, s=10, color='blue', edgecolors='none')
         axes[i].plot([0, 1], [0, 1], 'r--', alpha=0.5)  # Perfect prediction line
         axes[i].set_xlabel('True Value')
         axes[i].set_ylabel('Predicted Value')
@@ -183,7 +188,6 @@ def create_visualizations(results, save_dir):
     for i, stage in enumerate(stages):
         preds = results[stage]['predictions']
         targets = results[stage]['targets']
-        
         axes[i].hist(preds, bins=50, alpha=0.7, label='Predictions', density=True)
         axes[i].hist(targets, bins=50, alpha=0.7, label='Targets', density=True)
         axes[i].set_xlabel('Value')
@@ -291,7 +295,8 @@ def main():
             print(f"\n{stage.capitalize()} Game ({r['sample_count']} samples):")
             print(f"  MSE: {r['mse']:.4f}")
             print(f"  MAE: {r['mae']:.4f}")
-            print(f"  Accuracy: {r['accuracy']:.2%}")
+            print(f"  Strict Accuracy (0.7): {r['strict_accuracy']:.2%}")
+            print(f"  Classification Accuracy: {r['classification_accuracy']:.2%}")
             print(f"  Bias: {r['bias']:.4f}")
             print(f"  Pred Mean: {r['pred_mean']:.4f} ± {r['pred_std']:.4f}")
             print(f"  Target Mean: {r['target_mean']:.4f} ± {r['target_std']:.4f}")
