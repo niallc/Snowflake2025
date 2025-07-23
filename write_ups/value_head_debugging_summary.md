@@ -199,6 +199,7 @@ These tools are designed to make value head debugging more systematic, reproduci
   - **Why this is promising:**
     - This is a minimal, controlled diagnostic. It should be easy for the network to achieve high accuracy on final positions if the pipeline is correct.
     - The outcome will provide a clear signal about where to look next (data/labels vs. model/training dynamics).
+    - The winner of final does not depend on whose move it is, so it helps us confirm whether model training problems are related to the network knowing whose turn it is (likely not, as you'd get some predictive power not even knowin whose turn it is).
 
 - **Action:**
   - Run the "train on only-final-positions" experiment and analyze the results.

@@ -2,6 +2,17 @@
 """
 Training script with integrated monitoring for value head debugging.
 
+USAGE:
+  python scripts/train_with_monitoring.py \
+    --data_dir data/processed/shuffled \
+    --save_dir checkpoints/monitored_training \
+    --batch_size 256 \
+    --learning_rate 0.001 \
+    --num_epochs 5 \
+    --enable_augmentation
+
+Recommended: Use the same data directory and batch size as in scripts/hyperparam_sweep.py for comparable results.
+
 This script adds gradient and activation monitoring to the training process
 to help diagnose value head performance issues.
 """
@@ -13,6 +24,8 @@ from pathlib import Path
 import json
 import torch
 import numpy as np
+import logging
+from datetime import datetime
 
 # Add the project root to the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -23,6 +36,23 @@ from hex_ai.training_utils import GradientMonitor, ActivationMonitor, ValueHeadA
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split
 from hex_ai.training_utils import get_device
 
+# ========== Logging Setup (copied from hyperparam_sweep.py) ==========
+log_dir = Path('logs')
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / ('monitored_training_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.log')
+
+file_handler = logging.FileHandler(log_file, mode='a')
+formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
+file_handler.setFormatter(formatter)
+
+root_logger = logging.getLogger()
+root_logger.addHandler(file_handler)
+root_logger.setLevel(logging.INFO)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+root_logger.addHandler(stream_handler)
+# ========== End Logging Setup ==========
 
 def create_monitored_trainer(model, train_loader, val_loader, device, **kwargs):
     """Create a trainer with monitoring capabilities."""
@@ -52,10 +82,10 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
         'value_analysis': None
     }
     
-    print("Starting training with monitoring...")
+    logging.info("Starting training with monitoring...")
     
     for epoch in range(num_epochs):
-        print(f"\n=== Epoch {epoch + 1}/{num_epochs} ===")
+        logging.info(f"\n=== Epoch {epoch + 1}/{num_epochs} ===")
         
         # Training
         train_metrics = trainer.train_epoch()
@@ -81,12 +111,12 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
                 'activation_summary': activation_summary
             })
             
-            print(f"Epoch {epoch + 1} - Gradient Summary:")
+            logging.info(f"Epoch {epoch + 1} - Gradient Summary:")
             for key, values in gradient_summary.items():
-                print(f"  {key}: mean={values['mean']:.6f}, std={values['std']:.6f}")
+                logging.info(f"  {key}: mean={values['mean']:.6f}, std={values['std']:.6f}")
     
     # Final analysis
-    print("\n=== Final Analysis ===")
+    logging.info("\n=== Final Analysis ===")
     
     # Value head analysis
     value_analyzer = ValueHeadAnalyzer(trainer.model, trainer.train_loader.dataset, trainer.device)
@@ -103,16 +133,16 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
     with open(results_file, 'w') as f:
         json.dump(monitoring_results, f, indent=2, default=str)
     
-    print(f"Monitoring results saved to {results_file}")
+    logging.info(f"Monitoring results saved to {results_file}")
     
     # Print summary
-    print("\n=== Value Head Performance Summary ===")
+    logging.info("\n=== Value Head Performance Summary ===")
     for pos_type, results in value_analysis.items():
-        print(f"{pos_type}: MSE={results['mse']:.4f}, Accuracy={results['accuracy']:.2%}")
+        logging.info(f"{pos_type}: MSE={results['mse']:.4f}, Accuracy={results['accuracy']:.2%}")
     
-    print("\n=== Simple Position Results ===")
+    logging.info("\n=== Simple Position Results ===")
     for position, value in simple_position_results.items():
-        print(f"{position}: {value:.4f}")
+        logging.info(f"{position}: {value:.4f}")
     
     # Cleanup
     activation_monitor.cleanup()
@@ -122,23 +152,23 @@ def train_with_monitoring(trainer, gradient_monitor, activation_monitor, num_epo
 
 def main():
     parser = argparse.ArgumentParser(description="Train with monitoring for value head debugging")
-    parser.add_argument('--data_dir', type=str, default="data/processed", help='Data directory')
-    parser.add_argument('--save_dir', type=str, default="checkpoints/monitored_training", help='Save directory')
-    parser.add_argument('--num_epochs', type=int, default=5, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate')
+    parser.add_argument('--data_dir', type=str, default="data/processed/shuffled", help='Data directory (recommended: data/processed/shuffled)')
+    parser.add_argument('--save_dir', type=str, default="checkpoints/monitored_training", help='Save directory (recommended: checkpoints/monitored_training)')
+    parser.add_argument('--num_epochs', type=int, default=5, help='Number of epochs (default: 5)')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size (default: 256, matches sweep)')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate (default: 0.001, matches sweep)')
     parser.add_argument('--device', type=str, default=None, help='Device to use')
-    parser.add_argument('--max_examples', type=int, default=100000, help='Max examples to use')
-    parser.add_argument('--enable_augmentation', action='store_true', help='Enable data augmentation')
+    parser.add_argument('--max_examples', type=int, default=5000000, help='Max examples to use (default: 5,000,000, matches sweep)')
+    parser.add_argument('--enable_augmentation', action='store_true', help='Enable data augmentation (recommended: use for consistency with sweep)')
     
     args = parser.parse_args()
     
     # Setup
     device = get_device() if args.device is None else torch.device(args.device)
-    print(f"Using device: {device}")
+    logging.info(f"Using device: {device}")
     
     # Data loading
-    print("Loading data...")
+    logging.info("Loading data...")
     data_files = discover_processed_files(args.data_dir)
     train_files, val_files = create_train_val_split(data_files, train_ratio=0.8)
     
@@ -169,7 +199,7 @@ def main():
     )
     
     # Model
-    print("Creating model...")
+    logging.info("Creating model...")
     model = TwoHeadedResNet(dropout_prob=0.1)
     
     # Trainer with monitoring
@@ -192,7 +222,7 @@ def main():
         save_dir=args.save_dir
     )
     
-    print(f"\nTraining complete! Results saved to {args.save_dir}")
+    logging.info(f"\nTraining complete! Results saved to {args.save_dir}")
 
 
 if __name__ == "__main__":
