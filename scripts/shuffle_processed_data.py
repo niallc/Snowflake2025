@@ -1,12 +1,11 @@
 """
 Shuffle processed data to address value head fingerprinting issues.
 
-This script implements a two-phase shuffling process:
-1. Distribute games across buckets to break game-level correlations
-2. Consolidate and shuffle each bucket to create final shuffled dataset
-
-The process handles memory constraints by processing data in manageable chunks
-and ensures games are properly distributed across the final shuffled files.
+DATA FLOW & DIRECTORY CONVENTION:
+- Input: data/processed/step1_unshuffled/*.pkl.gz (output of process_all_trmph.py)
+- Output: data/processed/shuffled/*.pkl.gz (shuffled, ready for training)
+- Temp: data/processed/temp_buckets/ (intermediate bucket files)
+- This script expects the input directory to contain processed .pkl.gz files with player_to_move and metadata fields.
 """
 
 import sys
@@ -21,6 +20,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from hex_ai.system_utils import check_virtual_env
 check_virtual_env("hex_ai_env")
@@ -50,7 +50,7 @@ class DataShuffler:
     """Handles the two-phase data shuffling process."""
     
     def __init__(self, 
-                 input_dir: str = "data/processed/data",
+                 input_dir: str = "data/processed/step1_unshuffled",
                  output_dir: str = "data/processed/shuffled",
                  temp_dir: str = "data/processed/temp_buckets",
                  num_buckets: int = DEFAULT_NUM_BUCKETS,
@@ -203,55 +203,38 @@ class DataShuffler:
             logger.error(f"Failed to write shuffled file {bucket_idx}: {e}")
             raise
     
-    def _distribute_to_buckets(self, input_files: List[Path]):
-        """Phase 1: Distribute games from input files across buckets."""
-        logger.info(f"Starting Phase 1: Distribution to {self.num_buckets} buckets")
-        
-        for file_idx, input_file in enumerate(input_files):
-            if self.shutdown_handler.shutdown_requested:
-                logger.info("Shutdown requested, stopping distribution")
-                break
-            
-            if str(input_file) in self.progress['processed_files']:
-                logger.info(f"Skipping already processed file: {input_file.name}")
-                continue
-            
-            logger.info(f"Processing file {file_idx + 1}/{len(input_files)}: {input_file.name}")
-            
-            try:
-                data = self._load_pkl_gz(input_file)
-                examples = data['examples']
-                
-                # Collect examples by bucket for THIS input file only
-                bucket_examples = [[] for _ in range(self.num_buckets)]
-                
-                # Distribute examples directly across buckets
-                # This breaks game-level correlations: with {self.num_buckets} buckets and 
-                # ≤BOARD_SIZE * BOARD_SIZE (likely 169) moves per game,
-                # each bucket contains at most one position from any given game.
-                # During training, the trainer will process ~200k records before seeing another
-                # position from the same game, making fingerprinting extremely difficult.
-                # See write_ups/data_shuffling_specification.md for detailed explanation.
-                for example_idx, example in enumerate(examples):
-                    bucket_idx = example_idx % self.num_buckets
-                    bucket_examples[bucket_idx].append(example)
-                
-                # Write bucket files for THIS input file immediately
-                for bucket_idx, examples_for_bucket in enumerate(bucket_examples):
-                    if examples_for_bucket:  # Only write if we have examples for this bucket
-                        self._write_bucket_file(bucket_idx, examples_for_bucket, [str(input_file)])
-                
-                # Update progress
-                self.progress['processed_files'].append(str(input_file))
-                self.stats['files_processed'] += 1
-                self.stats['total_examples'] += len(examples)
-                self._save_progress()
-                
-            except Exception as e:
-                logger.error(f"Error processing {input_file}: {e}")
-                raise  # Make file processing errors fatal
-        
-        logger.info("Phase 1 completed")
+    def _distribute_single_file(self, input_file):
+        try:
+            data = self._load_pkl_gz(input_file)
+            examples = data['examples']
+            bucket_examples = [[] for _ in range(self.num_buckets)]
+            for example_idx, example in enumerate(examples):
+                bucket_idx = example_idx % self.num_buckets
+                bucket_examples[bucket_idx].append(example)
+            for bucket_idx, examples_for_bucket in enumerate(bucket_examples):
+                if examples_for_bucket:
+                    self._write_bucket_file(bucket_idx, examples_for_bucket, [str(input_file)])
+            return str(input_file), len(examples)
+        except Exception as e:
+            logger.error(f"Error processing {input_file}: {e}")
+            raise
+
+    def _distribute_to_buckets(self, input_files):
+        logger.info(f"Starting Phase 1: Distribution to {self.num_buckets} buckets (parallelized)")
+        with ProcessPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(self._distribute_single_file, input_file): input_file for input_file in input_files}
+            for future in as_completed(futures):
+                input_file = futures[future]
+                try:
+                    file_name, num_examples = future.result()
+                    logger.info(f"Processed {file_name} with {num_examples} examples")
+                    self.progress['processed_files'].append(str(input_file))
+                    self.stats['files_processed'] += 1
+                    self.stats['total_examples'] += num_examples
+                    self._save_progress()
+                except Exception as e:
+                    logger.error(f"Error in parallel processing of {input_file}: {e}")
+                    raise
     
     def _consolidate_and_shuffle_bucket(self, bucket_idx: int):
         """Phase 2: Consolidate and shuffle a single bucket.
@@ -416,7 +399,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Shuffle processed data to address value head fingerprinting")
-    parser.add_argument("--input-dir", default="data/processed/data", 
+    parser.add_argument("--input-dir", default="data/processed/step1_unshuffled", 
                        help="Directory containing processed .pkl.gz files")
     parser.add_argument("--output-dir", default="data/processed/shuffled", 
                        help="Output directory for shuffled files")

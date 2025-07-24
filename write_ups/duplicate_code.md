@@ -133,6 +133,10 @@ Need to decide on a single system.
 
 ---
 
+## 5. We have both
+- extract_training_examples_from_game -- currently a dead code path
+- extract_training_examples_with_selector_from_game -- used to get final_move training set.
+
 ## Other code cleanup
 
 - There are multiple places (e.g. forward in hex_ai/training.py, create_augmented_example_with_player_to_move in hex_ai/data_utils.py) where manual preprocessing of examples (adding player-to-move channel, policy label conversion, etc.) is repeated. Now that preprocess_example_for_model exists in hex_ai/data_utils.py, update all such code to use this utility for consistency and maintainability.
