@@ -300,20 +300,17 @@ class DataShuffler:
                     raise  # Make cleanup errors fatal
     
     def _consolidate_and_shuffle_all_buckets(self):
-        """Phase 2: Consolidate and shuffle all buckets."""
-        logger.info(f"Starting Phase 2: Consolidation and shuffling of {self.num_buckets} buckets")
-        
-        for bucket_idx in range(self.num_buckets):
-            if self.shutdown_handler.shutdown_requested:
-                logger.info("Shutdown requested, stopping consolidation")
-                break
-            
-            if bucket_idx in self.progress['completed_buckets']:
-                logger.info(f"Skipping already completed bucket: {bucket_idx}")
-                continue
-            
-            self._consolidate_and_shuffle_bucket(bucket_idx)
-        
+        logger.info(f"Starting Phase 2: Consolidation and shuffling of {self.num_buckets} buckets (parallelized)")
+        with ProcessPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(self._consolidate_and_shuffle_bucket, bucket_idx): bucket_idx for bucket_idx in range(self.num_buckets)}
+            for future in as_completed(futures):
+                bucket_idx = futures[future]
+                try:
+                    future.result()
+                    logger.info(f"Bucket {bucket_idx} consolidated and shuffled")
+                except Exception as e:
+                    logger.error(f"Error in parallel processing of bucket {bucket_idx}: {e}")
+                    raise
         logger.info("Phase 2 completed")
     
     def _validate_output(self):
