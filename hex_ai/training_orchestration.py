@@ -210,7 +210,19 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
     )
     orchestrator.run()
     logger.info(f"Experiment {exp_config['experiment_name']} completed.")
-    return {'experiment_name': exp_config['experiment_name']}
+    # Collect relevant metrics for sweep summary
+    best_val_loss = trainer.best_val_loss
+    best_train_loss = min(trainer.training_history) if trainer.training_history else None
+    final_val_loss = trainer.best_val_loss  # Could be last val loss if tracked separately
+    final_train_loss = trainer.training_history[-1] if trainer.training_history else None
+    return {
+        'experiment_name': exp_config['experiment_name'],
+        'hyperparameters': exp_config['hyperparameters'],
+        'best_val_loss': best_val_loss,
+        'best_train_loss': best_train_loss,
+        'final_val_loss': final_val_loss,
+        'final_train_loss': final_train_loss,
+    }
 
 def select_device():
     """

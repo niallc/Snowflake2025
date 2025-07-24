@@ -8,7 +8,9 @@ from hex_ai.config import (
     PLAYER_CHANNEL, LEGACY_MODEL_CHANNELS, CURRENT_MODEL_CHANNELS,
     BLUE_PLAYER, RED_PLAYER, BLUE_CHANNEL, RED_CHANNEL,
     BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    TRAINING_BLUE_WIN, TRAINING_RED_WIN
+    TRAINING_BLUE_WIN, TRAINING_RED_WIN,
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
+    trmph_winner_to_training_value, trmph_winner_to_clear_str
 )
 from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
 
@@ -132,7 +134,7 @@ class SimpleModelInference:
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_probs = torch.softmax(policy_logits, dim=0).numpy()
         raw_value = value_logit.item()
-        value = torch.sigmoid(value_logit).item()  # Probability blue wins
+        value = torch.sigmoid(value_logit).item()  # Probability blue wins (matches TRAINING_BLUE_WIN=0.0, TRAINING_RED_WIN=1.0)
         return policy_probs, value, raw_value
 
     def get_top_k_moves(self, policy_probs: np.ndarray, k: int = 3) -> List[Tuple[str, float]]:

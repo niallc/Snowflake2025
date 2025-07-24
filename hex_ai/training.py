@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import math
 import numpy as np
 import os
 import json
@@ -845,7 +846,7 @@ class Trainer:
             # --- Progress logging ---
             now = time.time()
             should_log = False
-            if self.current_epoch == 0:
+            if self.current_epoch == 0 and mini_epoch == 0:
                 # For first epoch, log for all powers of 2
                 if batch_idx + 1 == next_log_batch:
                     should_log = True
@@ -867,10 +868,13 @@ class Trainer:
                     f"(elapsed {elapsed:.1f}s)"
                 )
                 if batch_idx + 1 == next_log_batch:
-                    next_log_batch *= 2  # Exponential backoff
-            # --- DUMP LAST BATCH FOR DETAILED DEBUGGING ---
+                    exp_backoff = 2
+                    if batch_idx > 64:
+                        exp_backoff = 1.5
+                    next_log_batch *= math.floor(exp_backoff)  # Exponential backoff
+            # --- DUMP FINAL BATCH FOR DETAILED DEBUGGING ---
             is_last_batch = (batch_idx == len(batch_iterable) - 1)
-            if (epoch == 0 and mini_epoch == 0 and (batch_idx == 511 or is_last_batch)):
+            if (epoch == 0 and mini_epoch == 0 and is_last_batch):
                 import pickle, os
                 os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
                 from datetime import datetime
@@ -907,7 +911,7 @@ class Trainer:
                 }
                 with open(debug_filename, 'wb') as f:
                     pickle.dump(batch_dict, f)
-                print(f"[DEBUG] Dumped detailed last batch to {debug_filename}")
+                print(f"[DEBUG] Dumped detailed final batch to {debug_filename}")
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()

@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 def main():
     parser = argparse.ArgumentParser(description="Hex AI Simple Inference CLI")
@@ -33,7 +34,7 @@ def main():
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")
-    print(f"\nValue estimate (Probability Blue Wins): {value*100:.1f}%\n")
+    print(f"\nValue estimate (Probability Blue Wins): {value*100:.1f}%\n")  # value is always probability blue wins (TRAINING_BLUE_WIN=0.0, TRAINING_RED_WIN=1.0)
     print(f"Raw value logit: {raw_value}")
 
 if __name__ == "__main__":
@@ -60,7 +61,7 @@ if __name__ == "__main__":
     resDirTag7="loss_weight_sweep_exp1_do0_pw0.7_55b280_20250722_211936"
     resDirTag8="loss_weight_sweep_exp2_do0_pw0.001_f537d4_20250722_211936"
 
-    resDirTag9="loss_weight_sweep_exp0_do0_pw0.2_794e88_20250723_230725"
+    resDirTag9="loss_weight_sweep_exp0__99914b_20250724_112744"
     resDir=${resCollDir}${resDirTag9}
     blueFinal="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7"
     redFinal="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2g7"
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
-    modelFile="epoch1_mini3.pt"
+    modelFile="epoch1_mini1.pt"
     boardPos=${blueFinal}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \

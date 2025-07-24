@@ -88,3 +88,39 @@ LOG_INTERVAL = 100  # Log every N batches
 TRMPH_EXTENSION = ".trmph"
 NUMPY_EXTENSION = ".npy"
 PICKLE_EXTENSION = ".pkl" 
+
+# =============================
+# Winner Mapping Utilities
+# =============================
+def trmph_winner_to_training_value(trmph_winner: str) -> float:
+    """
+    Map TRMPH winner annotation ("1" or "2") to training value (0.0 or 1.0).
+    """
+    if trmph_winner == TRMPH_BLUE_WIN:
+        return TRAINING_BLUE_WIN
+    elif trmph_winner == TRMPH_RED_WIN:
+        return TRAINING_RED_WIN
+    else:
+        raise ValueError(f"Invalid TRMPH winner: {trmph_winner}")
+
+def training_value_to_trmph_winner(training_value: float) -> str:
+    """
+    Map training value (0.0 or 1.0) to TRMPH winner annotation ("1" or "2").
+    """
+    if training_value == TRAINING_BLUE_WIN:
+        return TRMPH_BLUE_WIN
+    elif training_value == TRAINING_RED_WIN:
+        return TRMPH_RED_WIN
+    else:
+        raise ValueError(f"Invalid training value: {training_value}")
+
+def trmph_winner_to_clear_str(trmph_winner: str) -> str:
+    """
+    Map TRMPH winner annotation ("1" or "2") to clear string ("BLUE" or "RED").
+    """
+    if trmph_winner == TRMPH_BLUE_WIN:
+        return "BLUE"
+    elif trmph_winner == TRMPH_RED_WIN:
+        return "RED"
+    else:
+        raise ValueError(f"Invalid TRMPH winner: {trmph_winner}") 

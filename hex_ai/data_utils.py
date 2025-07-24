@@ -27,7 +27,9 @@ import json
 from .config import (
     BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE, 
     BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,
+    trmph_winner_to_training_value, trmph_winner_to_clear_str
 )
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
@@ -819,11 +821,11 @@ def extract_positions_range(
             return [], False
         
         # Validate winner
-        if winner not in ["1", "2"]:
+        if winner not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner}")
         
-        winner_clear = "BLUE" if winner == "1" else "RED"
-        value_target = 0.0 if winner == "1" else 1.0
+        winner_clear = trmph_winner_to_clear_str(winner)
+        value_target = trmph_winner_to_training_value(winner)
         
         total_positions = len(moves) + 1
         examples = []
@@ -1070,10 +1072,10 @@ def extract_training_examples_with_selector_from_game(
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
         total_positions = len(moves) + 1
-        if winner_from_file not in ["1", "2"]:
+        if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
-        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
-        value_target = 0.0 if winner_from_file == "1" else 1.0
+        winner_clear = trmph_winner_to_clear_str(winner_from_file)
+        value_target = trmph_winner_to_training_value(winner_from_file)
         # Determine which positions to extract
         if position_selector == "all":
             position_indices = list(range(total_positions))

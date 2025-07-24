@@ -1,4 +1,26 @@
-# Value Head Debugging Summary and Next Steps
+# Value Head Debugging Summary (2025-07-24)
+
+## Current State and Root Cause (2025-07-24)
+
+**Root Cause:**
+- The value head was being trained with `MSELoss` applied directly to the raw logits (output of the value head), not to probabilities.
+- This caused the network to learn outputs that did not saturate to 0 or 1, even for easy targets, and led to a mismatch between expected and actual value head behavior.
+
+**Fix:**
+- The loss function was updated to apply a sigmoid to the value head output before computing MSELoss:
+  ```python
+  value_loss = self.value_loss(torch.sigmoid(value_pred.squeeze()), value_target.squeeze())
+  ```
+- This ensures the network is trained to output probabilities in [0, 1] matching the targets.
+
+**Current State:**
+- After retraining, the value head now outputs highly confident probabilities (very close to 0 or 1) for easy targets, as expected.
+- Training and inference are now consistent: predictions at inference time match those seen during training, and the loss is near zero for easy batches.
+- The debugging pipeline (batch dumps, inference scripts, and comparison tools) is robust and can be used for future investigations.
+
+---
+
+# Previous Debugging Steps and Results
 
 **Note:** See also [value_net_overfitting_plan.md](value_net_overfitting_plan.md) (focused on now resolved overfitting) and [debugging_value_head_performance.md](debugging_value_head_performance.md) (older, detailed debugging log).
 
