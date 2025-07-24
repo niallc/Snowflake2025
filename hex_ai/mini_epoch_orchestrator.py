@@ -64,12 +64,50 @@ class MiniEpochOrchestrator:
                     self.trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics)
                 # Logging
                 if (mini_epoch_idx % self.log_interval == 0) or (mini_epoch_idx == 0):
-                    self.logger.info(
+                    msg = (
                         f"[Epoch {epoch+1}][Mini-epoch {mini_epoch_idx+1}] "
-                        f"Train Loss: {train_metrics['total_loss']:.4f} "
-                        + (f"| Val Loss: {val_metrics['total_loss']:.4f}" if val_metrics else "")
-                        + f" | Batches processed: {batch_count}"
+                        f"Train Losses: total={train_metrics.get('total_loss', float('nan')):.4f}, "
+                        f"policy={train_metrics.get('policy_loss', float('nan')):.4f}, "
+                        f"value={train_metrics.get('value_loss', float('nan')):.4f} "
                     )
+                    if val_metrics:
+                        msg += (
+                            f"| Val Losses: total={val_metrics.get('total_loss', float('nan')):.4f}, "
+                            f"policy={val_metrics.get('policy_loss', float('nan')):.4f}, "
+                            f"value={val_metrics.get('value_loss', float('nan')):.4f} "
+                        )
+                    msg += f"| Batches processed: {batch_count}"
+                    print(msg)
+                    self.logger.info(msg)
+                    # CSV logging
+                    if hasattr(self.trainer, 'csv_logger') and self.trainer.csv_logger is not None:
+                        # Extract hyperparameters as in Trainer
+                        hp = {
+                            'learning_rate': self.trainer.optimizer.param_groups[0]['lr'],
+                            'batch_size': self.trainer.train_loader.batch_size,
+                            'dataset_size': 'N/A',
+                            'network_structure': f"ResNet{getattr(self.trainer.model, 'resnet_depth', '?')}",
+                            'policy_weight': getattr(self.trainer.criterion, 'policy_weight', ''),
+                            'value_weight': getattr(self.trainer.criterion, 'value_weight', ''),
+                            'total_loss_weight': getattr(self.trainer.criterion, 'policy_weight', 0) + getattr(self.trainer.criterion, 'value_weight', 0),
+                            'dropout_prob': getattr(self.trainer.model, 'dropout', type('dummy', (), {'p': ''})) .p if hasattr(self.trainer.model, 'dropout') else '',
+                            'weight_decay': self.trainer.optimizer.param_groups[0].get('weight_decay', 0.0)
+                        }
+                        epoch_id = f"{epoch+1}_mini{mini_epoch_idx+1}"
+                        self.trainer.csv_logger.log_mini_epoch(
+                            epoch=epoch_id,
+                            train_metrics=train_metrics,
+                            val_metrics=val_metrics,
+                            hyperparams=hp,
+                            training_time=0.0,
+                            epoch_time=0.0,
+                            samples_per_second=0.0,
+                            memory_usage_mb=0.0,
+                            gpu_memory_mb=None,
+                            gradient_norm=None,
+                            weight_stats=None,
+                            notes="mini-epoch"
+                        )
                 mini_epoch_idx += 1
                 # Graceful shutdown check
                 if self.shutdown_handler is not None and self.shutdown_handler.shutdown_requested:

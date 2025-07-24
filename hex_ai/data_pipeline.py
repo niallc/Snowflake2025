@@ -189,6 +189,15 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         if self.verbose:
             self.logger.info(f"[StreamingSequentialShardDataset] Iteration complete: total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
 
+    def __len__(self):
+        # HACK: PyTorch DataLoader sometimes calls __len__ even for IterableDataset. Return a large dummy value.
+        import warnings
+        warnings.warn(
+            "__len__ called on StreamingSequentialShardDataset. Returning a large dummy value. This is a workaround for PyTorch DataLoader compatibility. Remove when possible.",
+            RuntimeWarning
+        )
+        return 10**12
+
     def _get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
         board = ex['board']
         policy = ex['policy']

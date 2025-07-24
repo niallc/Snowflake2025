@@ -12,6 +12,7 @@ analysis/
 scripts/temp
 logs/
 Trash/
+temp/
 
 # Niall's file patterns to ignore
 *.png

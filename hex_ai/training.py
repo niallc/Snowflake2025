@@ -231,7 +231,8 @@ class Trainer:
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 0.1,
-                 value_weight_decay_factor: float = 5.0):
+                 value_weight_decay_factor: float = 5.0,
+                 log_interval_batches: int = 200):
         """
         Args:
             model: The neural network model to train.
@@ -248,6 +249,7 @@ class Trainer:
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 0.1)
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
+            log_interval_batches: How often (in batches) to log progress during training (default: 200)
         """
         logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
@@ -303,13 +305,14 @@ class Trainer:
         if enable_system_analysis:
             self._run_system_analysis()
         
-        logger.info(f"Initialized trainer with {len(train_loader)} training batches")
+        logger.info(f"Initialized trainer with streaming DataLoader (batches unknown)")
         if val_loader:
-            logger.info(f"Validation set with {len(val_loader)} batches")
+            logger.info(f"Validation set with streaming DataLoader (batches unknown)")
         
         # Log parameter group info
         logger.info(f"Value head learning rate: {learning_rate * value_learning_rate_factor:.6f} (factor: {value_learning_rate_factor})")
         logger.info(f"Value head weight decay: {weight_decay * value_weight_decay_factor:.6f} (factor: {value_weight_decay_factor})")
+        self.log_interval_batches = log_interval_batches
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
@@ -367,9 +370,9 @@ class Trainer:
         batch_data_times = []
         epoch_start_time = time.time()
         data_load_start = time.time()
-        n_batches = len(self.train_loader)
-        # Choose k to get ~3-10 outputs per epoch
-        k = max(1, n_batches // 5)
+        n_batches = None  # Unknown for streaming datasets
+        # For streaming datasets, log every self.log_interval_batches batches
+        log_interval = self.log_interval_batches
         special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
         try:
             for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
@@ -418,7 +421,13 @@ class Trainer:
                 for key in epoch_metrics:
                     epoch_metrics[key].append(loss_dict[key])
                 # Enhanced logging: print every k batches, and at special batches for epoch 0
-                should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
+                should_log = (
+                    (batch_idx % log_interval == 0)
+                    or (
+                        self.current_epoch == 0
+                        and batch_idx in special_batches
+                    )
+                )
                 if should_log:
                     cum_epoch_time = time.time() - epoch_start_time
                     batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
@@ -448,7 +457,7 @@ class Trainer:
         epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
         epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
         # Log timing summary
-        samples_per_sec = len(self.train_loader.dataset) / epoch_time if epoch_time > 0 else 0
+        samples_per_sec = float('nan')  # Unknown for streaming datasets
         summary_msg = (f"[Epoch {self.current_epoch}] DONE: epoch_time={epoch_time:.2f}s, "
                        f"batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, "
                        f"batch_time_min={epoch_avg['batch_time_min']:.3f}s, "
@@ -556,8 +565,8 @@ class Trainer:
             total_training_time = (datetime.now() - self.start_time).total_seconds()
             
             # Calculate samples per second
-            total_samples = len(self.train_loader.dataset)
-            samples_per_second = total_samples / epoch_time if epoch_time > 0 else 0
+            total_samples = None  # Unknown for streaming datasets
+            samples_per_second = float('nan')  # Unknown for streaming datasets
             
             # Get memory usage
             from .training_logger import get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
@@ -570,7 +579,7 @@ class Trainer:
             hyperparams = {
                 'learning_rate': self.optimizer.param_groups[0]['lr'],
                 'batch_size': self.train_loader.batch_size,
-                'dataset_size': len(self.train_loader.dataset),
+                'dataset_size': 'streaming',
                 'network_structure': f"ResNet{self.model.resnet_depth}",
                 'policy_weight': self.criterion.policy_weight,
                 'value_weight': self.criterion.value_weight,

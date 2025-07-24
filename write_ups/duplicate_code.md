@@ -145,3 +145,13 @@ Need to decide on a single system.
 
 **Note:**
 - These duplications may be temporary as the codebase is modernized and refactored. This document should be updated as further consolidation or cleanup occurs. 
+
+---
+
+## 3. StreamingSequentialShardDataset __len__ Hack (Technical Debt)
+
+- **File:** hex_ai/data_pipeline.py
+- **What:** The class now implements a dummy __len__ that returns a large value (10**12) and logs a warning.
+- **Why:** PyTorch DataLoader (and/or some library code) calls __len__ on IterableDataset, even though this is not correct for streaming datasets. This hack is a workaround to allow training to proceed.
+- **Risks:** Any code that relies on the dataset length will get a nonsense value. This could affect progress bars, batch counting, or other logic. Remove this hack as soon as PyTorch or the codebase no longer requires it.
+- **Action:** Remove this workaround and restore strict streaming semantics when possible. 

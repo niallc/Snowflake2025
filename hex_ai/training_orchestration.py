@@ -25,7 +25,7 @@ from .models import TwoHeadedResNet
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
-from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files, create_train_val_split
+from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split
 
 logger = logging.getLogger(__name__)
 
@@ -137,16 +137,16 @@ def discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast):
 
 def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast):
     """
-    Create StreamingAugmentedProcessedDataset objects for train and val sets.
+    Create StreamingSequentialShardDataset objects for train and val sets.
     Returns (train_dataset, val_dataset).
     """
     try:
-        train_dataset = StreamingAugmentedProcessedDataset(
+        train_dataset = StreamingSequentialShardDataset(
             train_files, 
             enable_augmentation=True, 
             max_examples_unaugmented=max_examples_unaugmented
         )
-        val_dataset = StreamingAugmentedProcessedDataset(
+        val_dataset = StreamingSequentialShardDataset(
             val_files, 
             enable_augmentation=False, # Validation dataset is not augmented
             max_examples_unaugmented=max_validation_examples
@@ -175,14 +175,14 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
             batch_size=exp_config['hyperparameters']['batch_size'],
             shuffle=False,
             num_workers=0,
-            pin_memory=False
+            drop_last=False
         ),
         val_loader=torch.utils.data.DataLoader(
             val_dataset,
             batch_size=exp_config['hyperparameters']['batch_size'],
             shuffle=False,
             num_workers=0,
-            pin_memory=False
+            drop_last=False
         ) if val_dataset else None,
         learning_rate=exp_config['hyperparameters']['learning_rate'],
         device=device,
@@ -194,7 +194,8 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
         weight_decay=exp_config['hyperparameters'].get('weight_decay', 1e-4),
         max_grad_norm=exp_config['hyperparameters'].get('max_grad_norm', 20.0),
         value_learning_rate_factor=exp_config['hyperparameters'].get('value_learning_rate_factor', 0.1),
-        value_weight_decay_factor=exp_config['hyperparameters'].get('value_weight_decay_factor', 5.0)
+        value_weight_decay_factor=exp_config['hyperparameters'].get('value_weight_decay_factor', 5.0),
+        log_interval_batches=exp_config['hyperparameters'].get('log_interval_batches', 200)
     )
     exp_dir = results_path / exp_config['experiment_name']
     exp_dir.mkdir(parents=True, exist_ok=True)
@@ -290,7 +291,8 @@ def run_hyperparameter_tuning_current_data(
     if train_files is None or val_files is None:
         return {'error': 'Failed to discover or split data'}
     train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast)
-    logger.info(f"\nCollected {len(train_dataset)} training examples and {len(val_dataset)} validation examples.")
+    # Remove or guard len() usage for streaming datasets
+    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples.")
     if train_dataset is None:
         return {'error': 'Failed to create datasets'}
     device = select_device()

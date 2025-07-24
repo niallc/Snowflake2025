@@ -51,7 +51,7 @@ root_logger.addHandler(stream_handler)
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "batch_size": [256],
+    "batch_size": [256, 1024],
     "max_grad_norm": [20],
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
@@ -82,11 +82,11 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 500_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 65_536  # Validation samples (no augmentation)
-MINI_EPOCH_BATCHES = math.floor(500000/256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
+MAX_SAMPLES = 35_000_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 925_000  # Validation samples (no augmentation)
+MINI_EPOCH_BATCHES = math.floor(500000 * 2 /256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 1
+EPOCHS = 2
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
