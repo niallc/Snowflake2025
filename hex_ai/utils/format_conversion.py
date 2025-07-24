@@ -20,9 +20,10 @@ from typing import Tuple
 from hex_ai.config import (
     BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,
-    trmph_winner_to_training_value, trmph_winner_to_clear_str
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+
 import string
 import logging
 logger = logging.getLogger(__name__)

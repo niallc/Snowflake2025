@@ -13,6 +13,7 @@ from hex_ai.config import (
     trmph_winner_to_training_value, trmph_winner_to_clear_str
 )
 from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
+from hex_ai.value_utils import model_output_to_prob, ValuePerspective
 
 class SimpleModelInference:
     def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18", model_instance=None):
@@ -134,8 +135,9 @@ class SimpleModelInference:
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_probs = torch.softmax(policy_logits, dim=0).numpy()
         raw_value = value_logit.item()
-        value = torch.sigmoid(value_logit).item()  # Probability blue wins (matches TRAINING_BLUE_WIN=0.0, TRAINING_RED_WIN=1.0)
-        return policy_probs, value, raw_value
+        prob_red_win = torch.sigmoid(torch.tensor(raw_value)).item()
+        value_blue_win = model_output_to_prob(prob_red_win, ValuePerspective.BLUE_WIN_PROB)
+        return policy_probs, value_blue_win, raw_value
 
     def get_top_k_moves(self, policy_probs: np.ndarray, k: int = 3) -> List[Tuple[str, float]]:
         """

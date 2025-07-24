@@ -561,6 +561,43 @@ def test_validation_disabled():
         shutil.rmtree(temp_dir)
 
 
+def test_player_to_move_retention():
+    """Test that player_to_move field is retained in all shuffled examples."""
+    print("Testing player_to_move retention in shuffled data...")
+    temp_dir = create_test_data(num_files=1, examples_per_file=20, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+
+    # Inject player_to_move field into all examples in input files
+    for file_path in input_dir.glob("*.pkl.gz"):
+        with gzip.open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            ex['player_to_move'] = 0  # Arbitrary, just for test
+        with gzip.open(file_path, 'wb') as f:
+            pickle.dump(data, f)
+
+    shuffler = DataShuffler(
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        temp_dir=str(temp_bucket_dir),
+        num_buckets=3,
+        resume_enabled=False,
+        cleanup_temp=True,
+        validation_enabled=False
+    )
+    shuffler.shuffle_data()
+
+    # Check all output files for player_to_move field
+    for shuffled_file in output_dir.glob("shuffled_*.pkl.gz"):
+        with gzip.open(shuffled_file, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            assert 'player_to_move' in ex, f"Missing player_to_move in example in {shuffled_file}"
+    print("All shuffled examples retain player_to_move field.")
+
+
 def main():
     """Run all tests."""
     print("Running data shuffling tests...")
@@ -577,7 +614,8 @@ def main():
         test_empty_input,
         test_large_bucket_count,
         test_corrupted_input_file,
-        test_validation_disabled
+        test_validation_disabled,
+        test_player_to_move_retention
     ]
     
     passed = 0

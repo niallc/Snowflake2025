@@ -20,6 +20,7 @@ from tqdm import tqdm
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from .data_utils import validate_game
 from hex_ai.utils.format_conversion import parse_trmph_game_record
+from hex_ai.value_utils import trmph_winner_to_training_value
 
 logger = logging.getLogger(__name__)
 
@@ -90,57 +91,39 @@ class DataProcessor:
         
         return valid_games, corrupted_games
     
-    def _convert_games_to_tensors(self, games: List[Tuple[str, str]], file_idx: int) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """Convert games to tensor format for training."""
+    def _convert_games_to_tensors(self, games: List[Tuple[str, str]], file_idx: int) -> List[Dict]:
+        """Convert games to dict format for training, including player_to_move."""
         processed_games = []
-        
         for game_idx, (trmph_url, winner_indicator) in enumerate(tqdm(games, desc="Converting games to tensors")):
             try:
-                # Extract multiple training examples from each game
                 from .data_utils import extract_training_examples_from_game
-                # Create game_id with file_idx and line_idx (game_idx+1 for 1-based line numbers)
                 game_id = (file_idx, game_idx+1)
                 training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, game_id)
-                
-                # Override value targets based on actual winner
-                if winner_indicator == "1":
-                    value_override = 1.0  # Blue wins
-                elif winner_indicator == "2":
-                    value_override = 0.0  # Red wins
-                else:
-                    assert False, "Error (2nd) in data_processing.py, _convert_games_to_tensors: Unknown winner - cannot use game without a winner."
-                
+                value_override = trmph_winner_to_training_value(winner_indicator)
                 for example in training_examples:
-                    # Extract components from dictionary format
                     board_state = example['board']
                     policy_target = example['policy']
                     value_target = example['value']
-                    
-                    # Override value if we have explicit winner info
+                    player_to_move = example['player_to_move']
                     if value_override is not None:
                         value_target = value_override
-                    
-                    # Convert to tensors
                     board_tensor = torch.FloatTensor(board_state)
                     if policy_target is not None:
                         policy_tensor = torch.FloatTensor(policy_target)
                     else:
-                        # Final positions have no next move to predict
-                        # TODO(semi-urgent): Though we need to have some tensor here to make
-                        #  training work, we should check whether all zeroes could lead to 
-                        # infinite or NaN loss, which might confuse training.
-                        # Hopefully not an issue as total_loss is to to value_loss only
-                        # for final moves (the only time the policy label should be None), but
-                        # given that any vector here should work, maybe a uniform label, 1/N^2 is safer.
                         policy_tensor = torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
                     value_tensor = torch.FloatTensor([value_target])
-                    
-                    processed_games.append((board_tensor, policy_tensor, value_tensor))
-                
+                    # Store as dict to include player_to_move
+                    processed_games.append({
+                        'board': board_tensor,
+                        'policy': policy_tensor,
+                        'value': value_tensor,
+                        'player_to_move': player_to_move,
+                        'metadata': example.get('metadata', {})
+                    })
             except Exception as e:
                 logger.warning(f"Failed to process game {trmph_url[:50]}...: {e}")
                 continue
-        
         return processed_games
     
     def _create_shards(self, processed_games: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]], 

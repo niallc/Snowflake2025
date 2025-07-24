@@ -154,6 +154,10 @@ class DataShuffler:
     
     def _write_bucket_file(self, bucket_idx: int, examples: List[Dict], source_files: List[str]):
         """Write examples to a bucket file."""
+        # # Check all examples for player_to_move field
+        # for i, ex in enumerate(examples):
+        #     if 'player_to_move' not in ex:
+        #         raise ValueError(f"Missing 'player_to_move' in example at index {i} in bucket {bucket_idx}. Example: {repr(ex)[:300]}")
         # Use input filename in bucket filename to avoid overwriting
         input_filename = Path(source_files[0]).stem  # Remove .pkl.gz extension
         bucket_file = self.temp_dir / f"{input_filename}_bucket_{bucket_idx:0{BUCKET_ID_FORMAT_WIDTH}d}.pkl.gz"
@@ -175,6 +179,10 @@ class DataShuffler:
     
     def _write_shuffled_file(self, bucket_idx: int, examples: List[Dict], source_files: List[str]):
         """Write shuffled examples to final output file."""
+        # # Check all examples for player_to_move field
+        # for i, ex in enumerate(examples):
+        #     if 'player_to_move' not in ex:
+        #         raise ValueError(f"Missing 'player_to_move' in example at index {i} in shuffled bucket {bucket_idx}. Example: {repr(ex)[:300]}")
         shuffled_file = self.output_dir / f"shuffled_{bucket_idx:0{BUCKET_ID_FORMAT_WIDTH}d}.pkl.gz"
         
         shuffled_data = {

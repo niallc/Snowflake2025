@@ -91,6 +91,7 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
         board = ex['board']
         policy = ex['policy']
         value = ex['value']
+        player_to_move = ex.get('player_to_move', None)
         board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
         if self.enable_augmentation:
             augmented_examples = create_augmented_example_with_player_to_move(
@@ -98,9 +99,9 @@ class StreamingAugmentedProcessedDataset(torch.utils.data.Dataset):
             aug = augmented_examples[aug_idx]
             return self._transform_example(*aug)
         else:
-            # Always add player channel, even if augmentation is off
-            player = get_player_to_move_from_board(board_2ch)
-            return self._transform_example(board_2ch, policy, value, player)
+            if player_to_move is None:
+                raise ValueError("Missing 'player_to_move' in example during data loading. All examples must have this field.")
+            return self._transform_example(board_2ch, policy, value, player_to_move)
 
     def _normalize_policy(self, policy):
         if policy is None:
@@ -192,6 +193,7 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         board = ex['board']
         policy = ex['policy']
         value = ex['value']
+        player_to_move = ex.get('player_to_move', None)
         board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
         if self.enable_augmentation:
             augmented_examples = create_augmented_example_with_player_to_move(
@@ -199,8 +201,9 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
             aug = augmented_examples[aug_idx]
             return self._transform_example(*aug)
         else:
-            player = get_player_to_move_from_board(board_2ch)
-            return self._transform_example(board_2ch, policy, value, player)
+            if player_to_move is None:
+                raise ValueError("Missing 'player_to_move' in example during data loading. All examples must have this field.")
+            return self._transform_example(board_2ch, policy, value, player_to_move)
 
     def _normalize_policy(self, policy):
         if policy is None:

@@ -1,5 +1,6 @@
 from enum import Enum
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN
+
 # =============================
 # Winner Mapping Utilities
 # =============================
@@ -91,3 +92,14 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
         return prob
     else:
         raise ValueError(f"Unknown perspective: {perspective}") 
+
+def get_player_to_move_from_moves(moves: list) -> int:
+    """
+    Given a list of moves (e.g., ['a1', 'b2', ...]), return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
+    Blue always starts, so even number of moves = Blue's turn, odd = Red's turn.
+    """
+    from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+    if len(moves) % 2 == 0:
+        return BLUE_PLAYER
+    else:
+        return RED_PLAYER 
