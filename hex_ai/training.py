@@ -76,8 +76,9 @@ class PolicyValueLoss(nn.Module):
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Value loss is always computed (MSE)
-        value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
+        # Value loss is now computed on probabilities, not logits
+        # This ensures the network is trained to output probabilities in [0,1]
+        value_loss = self.value_loss(torch.sigmoid(value_pred.squeeze()), value_target.squeeze())
         
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:
@@ -867,6 +868,46 @@ class Trainer:
                 )
                 if batch_idx + 1 == next_log_batch:
                     next_log_batch *= 2  # Exponential backoff
+            # --- DUMP LAST BATCH FOR DETAILED DEBUGGING ---
+            is_last_batch = (batch_idx == len(batch_iterable) - 1)
+            if (epoch == 0 and mini_epoch == 0 and (batch_idx == 511 or is_last_batch)):
+                import pickle, os
+                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                from datetime import datetime
+                now = datetime.now()
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H-%M")
+                debug_filename = f'analysis/debugging/value_head_performance/batch{batch_idx}_epoch{epoch}_mini{mini_epoch}_{date_str}_{time_str}_detailed.pkl'
+                batch_dict = {
+                    'boards': boards.cpu(),
+                    'policies': policies.cpu(),
+                    'values': values.cpu(),
+                    'policy_logits': policy_pred.detach().cpu(),
+                    'value_logits': value_pred.detach().cpu(),
+                    'policy_logits_np': policy_pred.detach().cpu().numpy(),
+                    'value_logits_np': value_pred.detach().cpu().numpy(),
+                    'policies_np': policies.cpu().numpy(),
+                    'values_np': values.cpu().numpy(),
+                    'meta': {
+                        'epoch': epoch,
+                        'mini_epoch': mini_epoch,
+                        'batch_idx': batch_idx,
+                        'shape': {
+                            'boards': tuple(boards.shape),
+                            'policies': tuple(policies.shape),
+                            'values': tuple(values.shape),
+                        },
+                        'dtype': {
+                            'boards': str(boards.dtype),
+                            'policies': str(policies.dtype),
+                            'values': str(values.dtype),
+                        },
+                        'loss_dict': loss_dict,
+                    }
+                }
+                with open(debug_filename, 'wb') as f:
+                    pickle.dump(batch_dict, f)
+                print(f"[DEBUG] Dumped detailed last batch to {debug_filename}")
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()

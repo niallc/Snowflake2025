@@ -116,3 +116,18 @@ flowchart TD
 
 **Note:**
 - These duplications may be temporary as the codebase is modernized and refactored. This document should be updated as further consolidation or cleanup occurs. 
+
+---
+
+## 3. Inference and CLI Duplication (2025-07-23)
+
+### Potentially Obsolete or Duplicated Inference Code
+- `hex_ai/inference/simple_model_inference.py` and `scripts/simple_inference_cli.py`:
+  - These files implement custom inference logic and a CLI for model predictions.
+  - With the new batch inference and model loading code (`hex_ai/inference/model_wrapper.py` and `scripts/infer_on_training_batch.py`), these may be redundant or outdated.
+  - The new code provides a more robust, testable, and batch-oriented approach, and is likely to supersede the old scripts.
+  - **TODO:** Review these files for deletion or refactoring after confirming the new pipeline is correct and complete.
+
+### Other Observed Duplication
+- Model loading and inference logic is now centralized in `ModelWrapper`, but older scripts and utilities may still use custom or legacy code paths.
+- Data preprocessing for inference vs. training should be unified; any remaining custom preprocessing in scripts or utilities should be reviewed for consolidation. 
