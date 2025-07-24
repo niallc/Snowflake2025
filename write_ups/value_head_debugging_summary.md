@@ -247,3 +247,64 @@ After fixing the monitoring code to log during the actual training loop, we conf
 - **Action:**
   - Run the "train on only-final-positions" experiment and analyze the results.
   - Depending on the outcome, either focus on data/label debugging or move on to more complex diagnostic experiments.
+
+## Training vs Inference Discrepancy Investigation (2025-07-23, 11pm+)
+
+### Key Finding: Training Loss vs Inference Performance Mismatch
+
+**Observation**: Despite achieving very low training loss (~0.0001) on the final-positions-only dataset, the saved model produces ~50% value estimates during inference on the same types of positions.
+
+**Evidence**:
+- Training loss drops extremely quickly to near-zero values
+- Model checkpoints show excellent training metrics
+- Inference on clear blue-win final positions yields ~49.4% instead of expected ~0%
+- Multiple checkpoints tested with consistent ~50% output
+- Policy head works correctly during inference
+
+### Systematic Investigation Results
+
+**Preprocessing Pipeline Verification**:
+- Refactored `hex_ai/inference/simple_model_inference.py` to use exact same preprocessing as training
+- Replaced magic numbers with constants from `hex_ai/config.py` for clarity
+- Created comprehensive debugging in `scripts/debug_inference.py`
+- Verified that training and inference produce identical input tensors
+- Confirmed that both methods produce identical model outputs
+
+**Player-to-Move Channel Consistency**:
+- Identified and fixed player-to-move channel inconsistency for finished positions
+- Training data has player-to-move set to loser (next player)
+- Modified inference to match training: set player-to-move to loser for finished positions
+- This ensures input consistency between training and inference
+
+**Root Cause Analysis**:
+The issue is **not** in the preprocessing pipeline - we're feeding the model exactly the same input it was trained on, but still getting unexpected outputs.
+
+### Current Hypotheses
+
+1. **Input Replication Issue**: We may not be replicating the network inputs properly despite identical tensors
+2. **Model Saving Issue**: Unlikely, as policy head works fine during inference
+3. **Hidden Corruption**: There may be subtle differences between training and inference environments that we haven't identified
+
+### Next Steps: Systematic Training-to-Inference Debugging
+
+**Plan**: Since the model achieves very low training loss but produces unexpected inference results, we need to:
+
+1. **Capture Training State**: Extract the exact input tensors, model state, and network outputs during training when loss is very low
+2. **Reproduce Training Conditions**: Load the exact model state and feed the exact same inputs that produced the low loss
+3. **Gradual Modification Test**: Systematically change one aspect at a time to identify what breaks the prediction
+4. **Root Cause Identification**: Pinpoint whether the issue is in model architecture, training data, or loss function
+
+**Implementation Strategy**:
+- Add detailed logging to training loop to capture input/output pairs
+- Create debugging utilities to load specific checkpoints and reproduce exact conditions
+- Build systematic testing framework to isolate variables
+- Document findings to prevent similar issues in future
+
+**Expected Outcome**: Identify the exact point where training and inference diverge, providing clear guidance for fixing the value head training or inference pipeline.
+
+## TODO: Clean up temporary batch dumping logic (2025-07-23)
+
+- Temporary debug code has been added to `train_on_batches` in `hex_ai/training.py` to dump the first batch of epoch 0, mini_epoch 0 for value head debugging.
+- This includes device, cpu, and numpy forms of the tensors for maximum flexibility during inference debugging.
+- Once the value head inference/training pipeline is verified, this code should be removed or refactored.
+- See also: inference script and tests to be written for this pipeline.

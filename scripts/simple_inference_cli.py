@@ -48,6 +48,8 @@ if __name__ == "__main__":
     ls -lth checkpoints/hyperparameter_tuning | head -n 3 | less
 
     resCollDir="checkpoints/hyperparameter_tuning/"
+    resCollDir="checkpoints/final_only/"
+    
     
     resDirTa1g="shuffled_sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor3.0_20250721_064254/"
     resDirTag2="shuffled_sweep_run_1_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.2_value_weight_decay_factor50.0_20250721_064254/"
@@ -70,7 +72,7 @@ if __name__ == "__main__":
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
     modelFile="epoch1_mini3.pt"
-    boardPos=${earlyGameB}
+    boardPos=${blueFinal}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \
     --trmph ${boardPos} \

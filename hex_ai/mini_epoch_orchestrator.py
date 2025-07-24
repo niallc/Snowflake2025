@@ -53,7 +53,7 @@ class MiniEpochOrchestrator:
                 if not mini_epoch_batches:
                     break  # No more data
                 # Train on this mini-epoch
-                train_metrics = self.trainer.train_on_batches(mini_epoch_batches)
+                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch, mini_epoch=mini_epoch_idx)
                 # Validation
                 val_metrics = None
                 if self.val_loader is not None:

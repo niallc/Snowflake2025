@@ -375,7 +375,11 @@ class Trainer:
                 if self.current_epoch == 0 and batch_idx == 0:
                     import pickle, os
                     os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                    with open('analysis/debugging/value_head_performance/batch0_epoch0.pkl', 'wb') as f:
+                    now = datetime.now()
+                    date_str = now.strftime("%Y-%m-%d")
+                    time_str = now.strftime("%H-%M")
+                    debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
+                    with open(debug_filename, 'wb') as f:
                         pickle.dump({
                             'boards': boards.cpu(),
                             'policies': policies.cpu(),
@@ -730,12 +734,14 @@ class Trainer:
                 except Exception:
                     pass
 
-    def train_on_batches(self, batch_iterable) -> Dict[str, float]:
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None) -> Dict[str, float]:
         """
         Train the model on a provided iterable of batches (mini-epoch).
 
         Args:
             batch_iterable: An iterable yielding (boards, policies, values) batches.
+            epoch: Current epoch number (int, optional, for debugging/dumping purposes)
+            mini_epoch: Current mini-epoch number (int, optional, for debugging/dumping purposes)
 
         Returns:
             Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
@@ -764,11 +770,60 @@ class Trainer:
                 print(f"  torch.backends.mps.is_built() = {torch.backends.mps.is_built()}")
             print(f"  Model device: {next(self.model.parameters()).device}")
             self._train_on_batches_logged_device = True
+        data_load_start = time.time()
+        batch_data_times = []  # Track data loading times for each batch
+        batch_times = [] # Initialize batch_times here
         for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
+            # --- DEBUG: Dump first batch of epoch 0, mini_epoch 0 ---
+            if (epoch == 0 and mini_epoch == 0 and batch_idx == 0):
+                import pickle, os
+                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                from datetime import datetime
+                now = datetime.now()
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H-%M")
+                debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
+                # Save both device and cpu/numpy forms for debugging
+                batch_dict = {
+                    'boards': boards,
+                    'policies': policies,
+                    'values': values,
+                    'boards_cpu': boards.cpu(),
+                    'policies_cpu': policies.cpu(),
+                    'values_cpu': values.cpu(),
+                    'boards_np': boards.cpu().numpy(),
+                    'policies_np': policies.cpu().numpy(),
+                    'values_np': values.cpu().numpy(),
+                    'meta': {
+                        'epoch': epoch,
+                        'mini_epoch': mini_epoch,
+                        'batch_idx': batch_idx,
+                        'shape': {
+                            'boards': tuple(boards.shape),
+                            'policies': tuple(policies.shape),
+                            'values': tuple(values.shape),
+                        },
+                        'dtype': {
+                            'boards': str(boards.dtype),
+                            'policies': str(policies.dtype),
+                            'values': str(values.dtype),
+                        },
+                    }
+                }
+                with open(debug_filename, 'wb') as f:
+                    pickle.dump(batch_dict, f)
+                print(f"[DEBUG] Dumped first batch of epoch 0, mini_epoch 0 to {debug_filename}")
+                # TODO: Remove or refactor this debug dumping logic after value head debugging is complete.
+            # Time data loading
+            data_load_end = time.time()
+            batch_data_time = data_load_end - data_load_start
+            batch_data_times.append(batch_data_time)
+            batch_start_time = time.time()
+            # Move to device
             boards = boards.to(self.device)
             policies = policies.to(self.device)
             values = values.to(self.device)
-            # Zero the gradients for this batch (does NOT reset optimizer state; just clears accumulated gradients)
+            # Forward pass with mixed precision
             self.optimizer.zero_grad()
             with self.mixed_precision.autocast_context():
                 policy_pred, value_pred = self.model(boards)
@@ -812,6 +867,10 @@ class Trainer:
                 )
                 if batch_idx + 1 == next_log_batch:
                     next_log_batch *= 2  # Exponential backoff
+            # Prepare for next batch data timing
+            data_load_start = time.time()
+            batch_end_time = time.time()
+            batch_times.append(batch_end_time - batch_start_time)
         # Compute averages for the mini-epoch
         mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
         return mini_epoch_avg
