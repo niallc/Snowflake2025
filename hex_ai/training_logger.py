@@ -162,6 +162,70 @@ class TrainingLogger:
         
         logger.debug(f"Logged epoch {epoch} metrics")
     
+    def log_mini_epoch(self, 
+                  epoch: str,
+                  train_metrics: Dict[str, float],
+                  val_metrics: Optional[Dict[str, float]],
+                  hyperparams: Dict[str, Any],
+                  training_time: float = 0.0,
+                  epoch_time: float = 0.0,
+                  samples_per_second: float = 0.0,
+                  memory_usage_mb: float = 0.0,
+                  gpu_memory_mb: Optional[float] = None,
+                  gradient_norm: Optional[float] = None,
+                  weight_stats: Optional[Dict[str, float]] = None,
+                  notes: str = "") -> None:
+        """
+        Log metrics for a single mini-epoch (or chunk).
+        Args are the same as log_epoch, but epoch can be a string.
+        """
+        row = {
+            # Experiment identification
+            'experiment_name': self.experiment_name,
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'timestamp': datetime.now().isoformat(),
+            'epoch': epoch,
+            # Hyperparameters
+            'learning_rate': hyperparams.get('learning_rate', ''),
+            'batch_size': hyperparams.get('batch_size', ''),
+            'dataset_size': hyperparams.get('dataset_size', ''),
+            'network_structure': hyperparams.get('network_structure', ''),
+            'policy_weight': hyperparams.get('policy_weight', ''),
+            'value_weight': hyperparams.get('value_weight', ''),
+            'total_loss_weight': hyperparams.get('total_loss_weight', ''),
+            'dropout_prob': hyperparams.get('dropout_prob', ''),
+            'weight_decay': hyperparams.get('weight_decay', ''),
+            # Training metrics
+            'policy_loss': train_metrics.get('policy_loss', ''),
+            'value_loss': train_metrics.get('value_loss', ''),
+            'total_loss': train_metrics.get('total_loss', ''),
+            'val_policy_loss': val_metrics.get('policy_loss', '') if val_metrics else '',
+            'val_value_loss': val_metrics.get('value_loss', '') if val_metrics else '',
+            'val_total_loss': val_metrics.get('total_loss', '') if val_metrics else '',
+            # Performance metrics
+            'training_time': training_time,
+            'epoch_time': epoch_time,
+            'samples_per_second': samples_per_second,
+            'memory_usage_mb': memory_usage_mb,
+            'gpu_memory_mb': gpu_memory_mb or '',
+            # Training state
+            'early_stopped': False,
+            'best_val_loss': '',
+            'epochs_trained': '',
+            # Model statistics
+            'gradient_norm': gradient_norm or '',
+            'weight_norm_mean': weight_stats.get('mean', '') if weight_stats else '',
+            'weight_norm_std': weight_stats.get('std', '') if weight_stats else '',
+            # Additional info
+            'notes': notes
+        }
+        with open(self.log_file, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self.headers)
+            if self.log_file.stat().st_size == 0:
+                writer.writeheader()
+            writer.writerow(row)
+        logger.debug(f"Logged mini-epoch {epoch} metrics")
+    
     def log_experiment_summary(self, 
                               best_val_loss: float,
                               total_epochs: int,

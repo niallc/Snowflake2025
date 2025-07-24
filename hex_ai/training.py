@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import math
 import numpy as np
 import os
 import json
@@ -18,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 import sys
+import re
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -25,7 +27,7 @@ from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
-from hex_ai.data_pipeline import StreamingProcessedDataset, discover_processed_files
+from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files
 
 from hex_ai.training_utils import get_device
 DEVICE = get_device()
@@ -75,8 +77,9 @@ class PolicyValueLoss(nn.Module):
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Value loss is always computed (MSE)
-        value_loss = self.value_loss(value_pred.squeeze(), value_target.squeeze())
+        # Value loss is now computed on probabilities, not logits
+        # This ensures the network is trained to output probabilities in [0,1]
+        value_loss = self.value_loss(torch.sigmoid(value_pred.squeeze()), value_target.squeeze())
         
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:
@@ -228,7 +231,8 @@ class Trainer:
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 0.1,
-                 value_weight_decay_factor: float = 5.0):
+                 value_weight_decay_factor: float = 5.0,
+                 log_interval_batches: int = 200):
         """
         Args:
             model: The neural network model to train.
@@ -245,6 +249,7 @@ class Trainer:
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 0.1)
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
+            log_interval_batches: How often (in batches) to log progress during training (default: 200)
         """
         logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
@@ -300,13 +305,14 @@ class Trainer:
         if enable_system_analysis:
             self._run_system_analysis()
         
-        logger.info(f"Initialized trainer with {len(train_loader)} training batches")
+        logger.info(f"Initialized trainer with streaming DataLoader (batches unknown)")
         if val_loader:
-            logger.info(f"Validation set with {len(val_loader)} batches")
+            logger.info(f"Validation set with streaming DataLoader (batches unknown)")
         
         # Log parameter group info
         logger.info(f"Value head learning rate: {learning_rate * value_learning_rate_factor:.6f} (factor: {value_learning_rate_factor})")
         logger.info(f"Value head weight decay: {weight_decay * value_weight_decay_factor:.6f} (factor: {value_weight_decay_factor})")
+        self.log_interval_batches = log_interval_batches
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
@@ -334,7 +340,7 @@ class Trainer:
         except Exception as e:
             logger.warning(f"System analysis failed: {e}")
     
-    def train_epoch(self) -> Dict[str, float]:
+    def train_epoch(self, batch_callback=None) -> Dict[str, float]:
         print(f"Trainer.train_epoch() called")
         print(f"self.current_epoch = {self.current_epoch}")
         if(self.current_epoch == 0):
@@ -364,55 +370,82 @@ class Trainer:
         batch_data_times = []
         epoch_start_time = time.time()
         data_load_start = time.time()
-        n_batches = len(self.train_loader)
-        # Choose k to get ~3-10 outputs per epoch
-        k = max(1, n_batches // 5)
+        n_batches = None  # Unknown for streaming datasets
+        # For streaming datasets, log every self.log_interval_batches batches
+        log_interval = self.log_interval_batches
         special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
-        for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
-            # Time data loading
-            data_load_end = time.time()
-            batch_data_time = data_load_end - data_load_start
-            batch_data_times.append(batch_data_time)
-            batch_start_time = time.time()
-            # Move to device
-            boards = boards.to(self.device)
-            policies = policies.to(self.device)
-            values = values.to(self.device)
-            # Forward pass with mixed precision
-            self.optimizer.zero_grad()
-            with self.mixed_precision.autocast_context():
-                policy_pred, value_pred = self.model(boards)
-                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-            # Backward pass with scaling
-            scaled_loss = self.mixed_precision.scale_loss(total_loss)
-            scaled_loss.backward()
-            # Gradient clipping (configurable)
-            if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-            # Optimizer step with scaling
-            self.mixed_precision.step_optimizer(self.optimizer)
-            self.mixed_precision.update_scaler()
-            # Track metrics
-            epoch_losses.append(loss_dict['total_loss'])
-            for key in epoch_metrics:
-                epoch_metrics[key].append(loss_dict[key])
-            # Enhanced logging: print every k batches, and at special batches for epoch 0
-            should_log = (batch_idx % k == 0) or (self.current_epoch == 0 and batch_idx in special_batches)
-            if should_log:
-                cum_epoch_time = time.time() - epoch_start_time
-                batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
-                msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
-                       f"Total Loss: {loss_dict['total_loss']:.4f}, "
-                       f"Policy: {loss_dict['policy_loss']:.4f}, "
-                       f"Value: {loss_dict['value_loss']:.4f}, "
-                       f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
-                       f"Data load: {batch_data_time:.3f}s, "
-                       f"Cumulative epoch time: {cum_epoch_time:.1f}s")
-                log_and_print(msg)
-            # Prepare for next batch data timing
-            data_load_start = time.time()
-            batch_end_time = time.time()
-            batch_times.append(batch_end_time - batch_start_time)
+        try:
+            for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
+                # DEBUG: Dump first batch of epoch 0 for inspection
+                if self.current_epoch == 0 and batch_idx == 0:
+                    import pickle, os
+                    os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                    now = datetime.now()
+                    date_str = now.strftime("%Y-%m-%d")
+                    time_str = now.strftime("%H-%M")
+                    debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
+                    with open(debug_filename, 'wb') as f:
+                        pickle.dump({
+                            'boards': boards.cpu(),
+                            'policies': policies.cpu(),
+                            'values': values.cpu()
+                        }, f)
+                    print("[DEBUG] Dumped first batch of epoch 0 to analysis/debugging/value_head_performance/batch0_epoch0.pkl")
+                # Time data loading
+                data_load_end = time.time()
+                batch_data_time = data_load_end - data_load_start
+                batch_data_times.append(batch_data_time)
+                batch_start_time = time.time()
+                # Move to device
+                boards = boards.to(self.device)
+                policies = policies.to(self.device)
+                values = values.to(self.device)
+                # Forward pass with mixed precision
+                self.optimizer.zero_grad()
+                with self.mixed_precision.autocast_context():
+                    policy_pred, value_pred = self.model(boards)
+                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                # Backward pass with scaling
+                scaled_loss = self.mixed_precision.scale_loss(total_loss)
+                scaled_loss.backward()
+                if batch_callback is not None:
+                    batch_callback(self, batch_idx)
+                # Gradient clipping (configurable)
+                if self.max_grad_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+                # Optimizer step with scaling
+                self.mixed_precision.step_optimizer(self.optimizer)
+                self.mixed_precision.update_scaler()
+                # Track metrics
+                epoch_losses.append(loss_dict['total_loss'])
+                for key in epoch_metrics:
+                    epoch_metrics[key].append(loss_dict[key])
+                # Enhanced logging: print every k batches, and at special batches for epoch 0
+                should_log = (
+                    (batch_idx % log_interval == 0)
+                    or (
+                        self.current_epoch == 0
+                        and batch_idx in special_batches
+                    )
+                )
+                if should_log:
+                    cum_epoch_time = time.time() - epoch_start_time
+                    batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
+                    msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
+                           f"Total Loss: {loss_dict['total_loss']:.4f}, "
+                           f"Policy: {loss_dict['policy_loss']:.4f}, "
+                           f"Value: {loss_dict['value_loss']:.4f}, "
+                           f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
+                           f"Data load: {batch_data_time:.3f}s, "
+                           f"Cumulative epoch time: {cum_epoch_time:.1f}s")
+                    log_and_print(msg)
+                # Prepare for next batch data timing
+                data_load_start = time.time()
+                batch_end_time = time.time()
+                batch_times.append(batch_end_time - batch_start_time)
+        except IndexError:
+            log_and_print("[INFO] No more data in dataset. Ending epoch early.")
+            pass
         epoch_end_time = time.time()
         epoch_time = epoch_end_time - epoch_start_time
         # Compute epoch averages
@@ -424,7 +457,7 @@ class Trainer:
         epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
         epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
         # Log timing summary
-        samples_per_sec = len(self.train_loader.dataset) / epoch_time if epoch_time > 0 else 0
+        samples_per_sec = float('nan')  # Unknown for streaming datasets
         summary_msg = (f"[Epoch {self.current_epoch}] DONE: epoch_time={epoch_time:.2f}s, "
                        f"batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, "
                        f"batch_time_min={epoch_avg['batch_time_min']:.3f}s, "
@@ -517,6 +550,10 @@ class Trainer:
                 val_policy_losses.append(float('inf'))
                 val_value_losses.append(float('inf'))
             
+            # Print validation losses at end of epoch
+            if val_metrics:
+                print(f"[Epoch {epoch}] Validation Losses: policy={val_metrics['policy_loss']:.4f}, value={val_metrics['value_loss']:.4f}, total={val_metrics['total_loss']:.4f}")
+            
             # Learning rate scheduler step (use validation loss if available, else training loss)
             val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
             self.scheduler.step(val_loss_for_scheduler)
@@ -528,8 +565,8 @@ class Trainer:
             total_training_time = (datetime.now() - self.start_time).total_seconds()
             
             # Calculate samples per second
-            total_samples = len(self.train_loader.dataset)
-            samples_per_second = total_samples / epoch_time if epoch_time > 0 else 0
+            total_samples = None  # Unknown for streaming datasets
+            samples_per_second = float('nan')  # Unknown for streaming datasets
             
             # Get memory usage
             from .training_logger import get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
@@ -542,7 +579,7 @@ class Trainer:
             hyperparams = {
                 'learning_rate': self.optimizer.param_groups[0]['lr'],
                 'batch_size': self.train_loader.batch_size,
-                'dataset_size': len(self.train_loader.dataset),
+                'dataset_size': 'streaming',
                 'network_structure': f"ResNet{self.model.resnet_depth}",
                 'policy_weight': self.criterion.policy_weight,
                 'value_weight': self.criterion.value_weight,
@@ -586,11 +623,11 @@ class Trainer:
             if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
                 self.best_val_loss = val_metrics['total_loss']
                 self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
-                logger.info(
-                    f"New best model saved with val loss: {self.best_val_loss:.4f} | "
-                    f"Val Policy Loss: {val_metrics.get('policy_loss', float('nan')):.4f} | "
-                    f"Val Value Loss: {val_metrics.get('value_loss', float('nan')):.4f}"
-                )
+                logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
+            logger.info(
+                f"Validation Policy Loss: {val_metrics.get('policy_loss', float('nan')):.4f} | "
+                f"Validation Value Loss: {val_metrics.get('value_loss', float('nan')):.4f}"
+            )
             
             # Check early stopping
             if early_stopping and val_metrics:
@@ -665,155 +702,234 @@ class Trainer:
     def _save_checkpoint_smart(self, save_path: Path, epoch: int, 
                               train_metrics: Dict, val_metrics: Dict,
                               max_checkpoints: int, compress_checkpoints: bool):
-        """Save checkpoint with smart management to control storage usage."""
-        import gzip
-        import pickle
-        
-        # Create checkpoint data
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'train_metrics': train_metrics,
-            'val_metrics': val_metrics,
-            'best_val_loss': self.best_val_loss,
-            'mixed_precision': self.mixed_precision.use_mixed_precision
-        }
-        
-        # Save current checkpoint
-        checkpoint_file = save_path / f"checkpoint_epoch_{epoch}.pt"
-        if compress_checkpoints:
-            # Save compressed checkpoint
-            with gzip.open(checkpoint_file, 'wb') as f:
-                pickle.dump(checkpoint_data, f)
-        else:
-            # Save uncompressed checkpoint
-            torch.save(checkpoint_data, checkpoint_file)
-        
-        # Clean up old checkpoints
+        # Save regular checkpoint
+        fname = f"epoch{epoch+1}_mini1.pt"
+        path = save_path / fname
+        self.save_checkpoint(path, train_metrics, val_metrics)
+        # Save best model if needed
+        if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
+            best_path = save_path / "best_model.pt"
+            self.save_checkpoint(best_path, train_metrics, val_metrics)
+        # Cleanup old checkpoints
         self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
-    
-    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        """Remove old checkpoints using smart retention strategy."""
-        # Get all checkpoint files
-        if compress_checkpoints:
-            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
-        else:
-            checkpoint_files = list(save_path.glob("checkpoint_epoch_*.pt"))
-        
-        # Sort by epoch number
-        checkpoint_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
-        
-        if len(checkpoint_files) <= max_checkpoints:
-            return  # No cleanup needed
-        
-        # Get epochs from checkpoint filenames
-        epochs = [int(f.stem.split('_')[-1]) for f in checkpoint_files]
-        max_epoch = max(epochs)
-        
-        # Determine which checkpoints to keep based on smart strategy
-        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
-        
-        # Find checkpoints to delete
-        files_to_delete = []
-        for checkpoint_file in checkpoint_files:
-            epoch = int(checkpoint_file.stem.split('_')[-1])
-            if epoch not in keep_epochs:
-                files_to_delete.append(checkpoint_file)
-        
-        # Delete old checkpoints
-        for file_path in files_to_delete:
-            try:
-                file_path.unlink()
-                logger.debug(f"Deleted checkpoint: {file_path}")
-            except Exception as e:
-                logger.warning(f"Failed to delete {file_path}: {e}")
-        
-        logger.info(f"Smart cleanup: deleted {len(files_to_delete)} checkpoints, keeping epochs {keep_epochs}")
-    
+
     def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
-        """Get the epochs to keep based on smart retention strategy."""
-        if max_checkpoints <= 5:
-            # For small numbers, keep all recent checkpoints
-            return set(range(max(0, max_epoch - max_checkpoints + 1), max_epoch + 1))
-        
-        # Smart strategy for larger numbers
-        keep_epochs = set()
-        
-        # Always keep the latest few
-        keep_epochs.update([max_epoch, max_epoch - 1, max_epoch - 2])
-        
-        # Add strategic samples from earlier epochs
-        if max_epoch >= 20:
-            # Your specific scheme for N=20: [20, 19, 18, 16, 13, 9, 4]
-            if 4 <= max_epoch:
-                keep_epochs.add(4)
-            if max_epoch == 20:
-                keep_epochs.update([16, 13, 9, 4])
-            else:
-                # Generalize the pattern: recent + strategic samples
-                keep_epochs.update([max_epoch - 4, max_epoch - 7, max_epoch - 11, max_epoch - 16])
+        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
+        keep = set()
+        if max_epoch < 4:
+            keep.update(range(1, max_epoch + 1))
         else:
-            # For smaller numbers, sample more densely
-            step = max(1, max_epoch // max_checkpoints)
-            for i in range(0, max_epoch - 2, step):
-                if len(keep_epochs) < max_checkpoints:
-                    keep_epochs.add(i)
-        
-        # Always keep epoch 0 (baseline)
-        if 0 <= max_epoch:
-            keep_epochs.add(0)
-        
-        # Ensure we don't exceed max_checkpoints
-        keep_epochs = set(sorted(keep_epochs)[-max_checkpoints:])
-        
-        return keep_epochs
+            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
+            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
+                if k <= max_epoch:
+                    keep.add(k)
+        return keep
+
+    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
+        # Find all checkpoint files except best_model.pt
+        all_ckpts = [f for f in os.listdir(save_path) if re.match(r"epoch\d+_mini\d+\.pt", f)]
+        # Extract epoch numbers
+        epoch_nums = []
+        for fname in all_ckpts:
+            m = re.match(r"epoch(\d+)_mini(\d+)\.pt", fname)
+            if m:
+                epoch_nums.append((int(m.group(1)), fname))
+        if not epoch_nums:
+            return
+        max_epoch = max(e for e, _ in epoch_nums)
+        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
+        for e, fname in epoch_nums:
+            if e not in keep_epochs:
+                try:
+                    os.remove(os.path.join(save_path, fname))
+                except Exception:
+                    pass
+
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None) -> Dict[str, float]:
+        """
+        Train the model on a provided iterable of batches (mini-epoch).
+
+        Args:
+            batch_iterable: An iterable yielding (boards, policies, values) batches.
+            epoch: Current epoch number (int, optional, for debugging/dumping purposes)
+            mini_epoch: Current mini-epoch number (int, optional, for debugging/dumping purposes)
+
+        Returns:
+            Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
+
+        This method is intended for use by mini-epoch orchestration wrappers, allowing validation/checkpointing
+        at arbitrary batch intervals. It does not reset model/optimizer state and can be called repeatedly within an epoch.
+        """
+        self.model.train()
+        mini_epoch_metrics = {
+            'policy_loss': [],
+            'value_loss': [],
+            'total_loss': []
+        }
+        # --- Progress logging setup ---
+        start_time = time.time()
+        next_log_batch = 1
+        log_interval_sec = 180  # 3 minutes
+        last_time_log = start_time
+        # Only print device info the first time this method is called per Trainer instance
+        if not hasattr(self, '_train_on_batches_logged_device'):
+            print("[train_on_batches] Device info:")
+            print(f"  self.device = {self.device}")
+            print(f"  torch.cuda.is_available() = {torch.cuda.is_available()}")
+            if hasattr(torch.backends, 'mps'):
+                print(f"  torch.backends.mps.is_available() = {torch.backends.mps.is_available()}")
+                print(f"  torch.backends.mps.is_built() = {torch.backends.mps.is_built()}")
+            print(f"  Model device: {next(self.model.parameters()).device}")
+            self._train_on_batches_logged_device = True
+        data_load_start = time.time()
+        batch_data_times = []  # Track data loading times for each batch
+        batch_times = [] # Initialize batch_times here
+        for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
+            # --- DEBUG: Dump first batch of epoch 0, mini_epoch 0 ---
+            if (epoch == 0 and mini_epoch == 0 and batch_idx == 0):
+                import pickle, os
+                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                from datetime import datetime
+                now = datetime.now()
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H-%M")
+                debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
+                # Save both device and cpu/numpy forms for debugging
+                batch_dict = {
+                    'boards': boards,
+                    'policies': policies,
+                    'values': values,
+                    'boards_cpu': boards.cpu(),
+                    'policies_cpu': policies.cpu(),
+                    'values_cpu': values.cpu(),
+                    'boards_np': boards.cpu().numpy(),
+                    'policies_np': policies.cpu().numpy(),
+                    'values_np': values.cpu().numpy(),
+                    'meta': {
+                        'epoch': epoch,
+                        'mini_epoch': mini_epoch,
+                        'batch_idx': batch_idx,
+                        'shape': {
+                            'boards': tuple(boards.shape),
+                            'policies': tuple(policies.shape),
+                            'values': tuple(values.shape),
+                        },
+                        'dtype': {
+                            'boards': str(boards.dtype),
+                            'policies': str(policies.dtype),
+                            'values': str(values.dtype),
+                        },
+                    }
+                }
+                with open(debug_filename, 'wb') as f:
+                    pickle.dump(batch_dict, f)
+                print(f"[DEBUG] Dumped first batch of epoch 0, mini_epoch 0 to {debug_filename}")
+                # TODO: Remove or refactor this debug dumping logic after value head debugging is complete.
+            # Time data loading
+            data_load_end = time.time()
+            batch_data_time = data_load_end - data_load_start
+            batch_data_times.append(batch_data_time)
+            batch_start_time = time.time()
+            # Move to device
+            boards = boards.to(self.device)
+            policies = policies.to(self.device)
+            values = values.to(self.device)
+            # Forward pass with mixed precision
+            self.optimizer.zero_grad()
+            with self.mixed_precision.autocast_context():
+                policy_pred, value_pred = self.model(boards)
+                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+            # Backward pass: compute gradients for this batch
+            scaled_loss = self.mixed_precision.scale_loss(total_loss)
+            scaled_loss.backward()
+            # Clip gradients to avoid exploding gradients (if configured)
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+            # Optimizer step: update model parameters using accumulated gradients
+            self.mixed_precision.step_optimizer(self.optimizer)
+            # Update mixed precision scaler (if used)
+            self.mixed_precision.update_scaler()
+            # Track losses for this batch
+            for key in mini_epoch_metrics:
+                mini_epoch_metrics[key].append(loss_dict[key])
+            # --- Progress logging ---
+            now = time.time()
+            should_log = False
+            if self.current_epoch == 0 and mini_epoch == 0:
+                # For first epoch, log for all powers of 2
+                if batch_idx + 1 == next_log_batch:
+                    should_log = True
+            else:
+                # For later epochs, only log for batch >= 64
+                if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
+                    should_log = True
+            # After 3 minutes, switch to time-based logging every log_interval_sec
+            if not should_log and (now - last_time_log > log_interval_sec):
+                should_log = True
+                last_time_log = now
+            if should_log:
+                elapsed = now - start_time
+                print(
+                    f"[train_on_batches] Batch {batch_idx+1}: "
+                    f"total_loss={loss_dict['total_loss']:.4f}, "
+                    f"policy_loss={loss_dict['policy_loss']:.4f}, "
+                    f"value_loss={loss_dict['value_loss']:.4f} "
+                    f"(elapsed {elapsed:.1f}s)"
+                )
+                if batch_idx + 1 == next_log_batch:
+                    exp_backoff = 2
+                    if batch_idx > 64:
+                        exp_backoff = 1.5
+                    next_log_batch *= math.floor(exp_backoff)  # Exponential backoff
+            # --- DUMP FINAL BATCH FOR DETAILED DEBUGGING ---
+            is_last_batch = (batch_idx == len(batch_iterable) - 1)
+            if (epoch == 0 and mini_epoch == 0 and is_last_batch):
+                import pickle, os
+                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
+                from datetime import datetime
+                now = datetime.now()
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H-%M")
+                debug_filename = f'analysis/debugging/value_head_performance/batch{batch_idx}_epoch{epoch}_mini{mini_epoch}_{date_str}_{time_str}_detailed.pkl'
+                batch_dict = {
+                    'boards': boards.cpu(),
+                    'policies': policies.cpu(),
+                    'values': values.cpu(),
+                    'policy_logits': policy_pred.detach().cpu(),
+                    'value_logits': value_pred.detach().cpu(),
+                    'policy_logits_np': policy_pred.detach().cpu().numpy(),
+                    'value_logits_np': value_pred.detach().cpu().numpy(),
+                    'policies_np': policies.cpu().numpy(),
+                    'values_np': values.cpu().numpy(),
+                    'meta': {
+                        'epoch': epoch,
+                        'mini_epoch': mini_epoch,
+                        'batch_idx': batch_idx,
+                        'shape': {
+                            'boards': tuple(boards.shape),
+                            'policies': tuple(policies.shape),
+                            'values': tuple(values.shape),
+                        },
+                        'dtype': {
+                            'boards': str(boards.dtype),
+                            'policies': str(policies.dtype),
+                            'values': str(values.dtype),
+                        },
+                        'loss_dict': loss_dict,
+                    }
+                }
+                with open(debug_filename, 'wb') as f:
+                    pickle.dump(batch_dict, f)
+                print(f"[DEBUG] Dumped detailed final batch to {debug_filename}")
+            # Prepare for next batch data timing
+            data_load_start = time.time()
+            batch_end_time = time.time()
+            batch_times.append(batch_end_time - batch_start_time)
+        # Compute averages for the mini-epoch
+        mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
+        return mini_epoch_avg
 
 # See below Note about this code path not being used in run_training.py
-def create_trainer(model: TwoHeadedResNet, 
-                  train_shard_files: List[Path],
-                  val_shard_files: Optional[List[Path]] = None,
-                  batch_size: int = BATCH_SIZE,
-                  learning_rate: float = LEARNING_RATE,
-                  device: str = DEVICE,
-                  enable_system_analysis: bool = True) -> Trainer:
-    """Create a trainer with data loaders from processed shard files."""
-    # Use StreamingProcessedDataset for all data loading
-    train_dataset = StreamingProcessedDataset(train_shard_files)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-    val_loader = None
-    if val_shard_files:
-        val_dataset = StreamingProcessedDataset(val_shard_files)
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    trainer = Trainer(model, train_loader, val_loader, learning_rate, device, enable_system_analysis)
-    return trainer
-
-# Note: we call trainer = Trainer(...) directly in run_training.py
-# We want only one code path for training, so either delete this or 
-# update it to be sufficient for run_training.py.
-# TODO: Decide the canonical way to train a model.
-def train_model(model: TwoHeadedResNet,
-                train_shard_files: List[Path],
-                val_shard_files: Optional[List[Path]] = None,
-                num_epochs: int = NUM_EPOCHS,
-                batch_size: int = BATCH_SIZE,
-                learning_rate: float = LEARNING_RATE,
-                save_dir: str = "checkpoints",
-                device: str = DEVICE,
-                enable_system_analysis: bool = True,
-                early_stopping_patience: Optional[int] = None) -> Dict:
-    """Convenience function to train a model with processed shard files."""
-    
-    trainer = create_trainer(model, train_shard_files, val_shard_files, batch_size, learning_rate, device, enable_system_analysis)
-    
-    # Set up early stopping if requested
-    early_stopping = None
-    if early_stopping_patience is not None:
-        early_stopping = EarlyStopping(patience=early_stopping_patience)
-    
-    return trainer.train(num_epochs, save_dir, early_stopping=early_stopping) 
-
-
 def resume_training(checkpoint_path: str, 
                    num_epochs: int = 10,
                    save_dir: str = "checkpoints",
@@ -851,7 +967,7 @@ def resume_training(checkpoint_path: str,
     
     # Create trainer with dummy data (will be overridden)
     dummy_shard_files = [Path("dummy_shard.pkl.gz")]
-    trainer = create_trainer(model, dummy_shard_files, enable_system_analysis=False)
+    trainer = Trainer(model, dummy_shard_files, enable_system_analysis=False)
     
     # Load the checkpoint state
     trainer.model.load_state_dict(model_state)

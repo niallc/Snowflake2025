@@ -14,7 +14,7 @@ import logging
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from hex_ai.training_utils_legacy import run_hyperparameter_tuning_current_data
+from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -68,7 +68,7 @@ def test_augmentation_integration():
             num_epochs=1,  # Just 1 epoch for testing
             early_stopping_patience=None,
             random_seed=42,
-            max_examples_per_split=1000,  # Small dataset for testing
+            max_examples_unaugmented=1000,  # Small dataset for testing
             experiment_name="test_augmentation_enabled",
             enable_augmentation=True
         )
@@ -89,7 +89,7 @@ def test_augmentation_integration():
             num_epochs=1,  # Just 1 epoch for testing
             early_stopping_patience=None,
             random_seed=42,
-            max_examples_per_split=1000,  # Small dataset for testing
+            max_examples_unaugmented=1000,  # Small dataset for testing
             experiment_name="test_augmentation_disabled",
             enable_augmentation=False
         )

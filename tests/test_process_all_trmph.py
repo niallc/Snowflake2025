@@ -365,6 +365,76 @@ def test_real_processing_state_lookup():
         raise
 
 
+def test_player_to_move_retention_in_processed_data():
+    """Test that all processed examples have the player_to_move field."""
+    print("Testing player_to_move retention in processed data...")
+    temp_dir = Path(tempfile.mkdtemp())
+    data_dir = temp_dir / "data"
+    data_dir.mkdir()
+    output_dir = temp_dir / "output"
+    # Create test TRMPH files
+    trmph_files = create_test_trmph_files(data_dir, num_files=1)
+    # Run process_all_trmph.py
+    cmd = [
+        sys.executable, "scripts/process_all_trmph.py",
+        "--data-dir", str(data_dir),
+        "--output-dir", str(output_dir),
+        "--max-files", "1"
+    ]
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(Path.cwd())
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=Path.cwd(), env=env)
+    assert result.returncode == 0, f"process_all_trmph.py failed: {result.stderr}"
+    processed_files = list(output_dir.glob("*_processed.pkl.gz"))
+    assert processed_files, "No processed files found"
+    for processed_file in processed_files:
+        with gzip.open(processed_file, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            assert 'player_to_move' in ex, f"Missing player_to_move in example in {processed_file}"
+    print("✓ All processed examples have player_to_move field.")
+
+
+def test_player_to_move_correctness():
+    """Test that player_to_move is correct for a few simple test games (Blue starts, alternates)."""
+    print("Testing player_to_move correctness in processed data...")
+    temp_dir = Path(tempfile.mkdtemp())
+    data_dir = temp_dir / "data"
+    data_dir.mkdir()
+    output_dir = temp_dir / "output"
+    # Write a single test file with a known game
+    trmph_file = data_dir / "test_simple.trmph"
+    with open(trmph_file, 'w') as f:
+        # Blue starts, then Red, then Blue, etc.
+        f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
+        f.write("http://www.trmph.com/hex/board#13,a1b2c3d4 2\n")
+    # Run process_all_trmph.py
+    cmd = [
+        sys.executable, "scripts/process_all_trmph.py",
+        "--data-dir", str(data_dir),
+        "--output-dir", str(output_dir),
+        "--max-files", "1"
+    ]
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(Path.cwd())
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=Path.cwd(), env=env)
+    assert result.returncode == 0, f"process_all_trmph.py failed: {result.stderr}"
+    processed_files = list(output_dir.glob("*_processed.pkl.gz"))
+    assert processed_files, "No processed files found"
+    for processed_file in processed_files:
+        with gzip.open(processed_file, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            # The number of moves in the position is position_in_game
+            n_moves = ex['metadata']['position_in_game']
+            expected_player = 0 if n_moves % 2 == 0 else 1  # Blue starts
+            assert ex['player_to_move'] == expected_player, (
+                f"player_to_move incorrect for position {n_moves} in {processed_file}: "
+                f"expected {expected_player}, got {ex['player_to_move']}"
+            )
+    print("✓ player_to_move values are correct for all test examples.")
+
+
 def main():
     """Run all tests."""
     print("Running process_all_trmph.py tests...")
@@ -375,7 +445,9 @@ def main():
         test_file_lookup_table,
         test_game_id_to_filename_lookup,
         test_integrated_workflow,
-        test_real_processing_state_lookup
+        test_real_processing_state_lookup,
+        test_player_to_move_retention_in_processed_data,
+        test_player_to_move_correctness
     ]
     
     passed = 0

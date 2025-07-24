@@ -13,7 +13,13 @@ class ModelWrapper:
     Designed for easy extension to ensembles and prediction caching.
     Now supports passing a model instance (e.g., for legacy models).
     """
-    def __init__(self, checkpoint_path: str, device: Optional[str] = None, model_type: str = "resnet18", model_instance=None):
+    def __init__(
+        self,
+        checkpoint_path: str,
+        device: Optional[str] = None,
+        model_type: str = "resnet18",
+        model_instance=None
+    ):
         """
         Args:
             checkpoint_path: Path to the model checkpoint (.pt or .pth file, possibly .gz)
@@ -75,6 +81,16 @@ class ModelWrapper:
         else:
             model.load_state_dict(checkpoint)
         return model
+
+    def eval(self):
+        """Set the underlying model to evaluation mode (passthrough)."""
+        self.model.eval()
+        return self
+
+    def train(self, mode: bool = True):
+        """Set the underlying model to train/eval mode (passthrough)."""
+        self.model.train(mode)
+        return self
 
     def predict(self, board_tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """

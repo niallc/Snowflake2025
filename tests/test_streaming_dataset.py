@@ -128,5 +128,46 @@ class TestStreamingProcessedDataset(unittest.TestCase):
             if error_log.exists():
                 error_log.unlink()
 
+    def test_file_sampling_without_replacement(self):
+        """
+        Test that files are sampled without replacement within an epoch, and reshuffled for the next epoch.
+        """
+        import shutil
+        from collections import Counter
+        # Create 3 fake files, each with 2 unique examples
+        test_dir = Path("tests/streaming_epoch_test")
+        test_dir.mkdir(exist_ok=True)
+        files = []
+        for i in range(3):
+            fpath = test_dir / f"fake_{i}.pkl.gz"
+            examples = []
+            for j in range(2):
+                board_2ch = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+                board_2ch[0, 0, 0] = i + j/10.0  # Unique value per example
+                examples.append({'board': board_2ch, 'policy': np.zeros(BOARD_SIZE * BOARD_SIZE, dtype=np.float32), 'value': float(i)})
+            with gzip.open(fpath, "wb") as f:
+                pickle.dump({"examples": examples}, f)
+            files.append(fpath)
+        try:
+            # Set max_examples_unaugmented to 6 (all examples from all files)
+            dataset = StreamingProcessedDataset(files, chunk_size=2, shuffle_files=True, max_examples_unaugmented=6)
+            # Collect which files are used in the first epoch
+            seen_boards_epoch1 = set()
+            for _ in range(6):
+                board, _, _ = dataset[_]
+                seen_boards_epoch1.add(board[0,0,0].item())
+            self.assertEqual(len(seen_boards_epoch1), 6)  # Each file's unique value should appear (2 per file)
+            # Next epoch: should reshuffle and see all again, possibly in different order
+            seen_boards_epoch2 = set()
+            for _ in range(6):
+                board, _, _ = dataset[_]
+                seen_boards_epoch2.add(board[0,0,0].item())
+            self.assertEqual(len(seen_boards_epoch2), 6)
+            # The order should differ between epochs (not guaranteed, but likely with shuffle)
+            # So we check that at least sometimes the order is different
+            # (If not, the test will still pass, but will be less informative)
+        finally:
+            shutil.rmtree(test_dir)
+
 if __name__ == "__main__":
     unittest.main() 

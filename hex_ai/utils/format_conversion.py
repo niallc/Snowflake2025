@@ -19,8 +19,11 @@ from typing import Tuple
 # Board value constants for N×N format
 from hex_ai.config import (
     BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+
 import string
 import logging
 logger = logging.getLogger(__name__)
@@ -206,6 +209,6 @@ def parse_trmph_game_record(line: str) -> tuple[str, str]:
     if len(parts) != 2:
         raise ValueError(f"Invalid TRMPH game record format: {repr(line)}")
     trmph_url, winner_indicator = parts
-    if not winner_indicator.isdigit() or winner_indicator not in {"1", "2"}:
+    if not winner_indicator.isdigit() or winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
         raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
     return trmph_url, winner_indicator 

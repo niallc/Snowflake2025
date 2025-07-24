@@ -1,18 +1,27 @@
-#!/usr/bin/env python3
 """
 Process all .trmph files into sharded .pkl.gz files with network-ready data.
 
-This script:
-1. Finds all .trmph files in the data directory
-2. Processes them into training examples using extract_training_examples_from_game
-3. Saves results in sharded .pkl.gz files with provenance tracking
-4. Handles errors gracefully and provides progress tracking
-5. Can be resumed if interrupted
+DATA FLOW & OUTPUT FORMAT:
+- This script finds all .trmph files in the data directory and processes them into training examples.
+- Each example includes:
+    - board: (2, N, N) numpy array
+    - policy: (N*N,) numpy array or None
+    - value: float
+    - player_to_move: int (0=Blue, 1=Red) [NEW, required for all downstream code]
+    - metadata: dict with game_id, position_in_game, winner, etc.
+- Output files include a 'source_file' field (the original .trmph file) and are tracked in processing_state.json.
+- The game_id in each example's metadata can be mapped back to the original .trmph file using the state file and file lookup utilities in hex_ai/data_utils.py.
+- The player_to_move field is critical for correct model training and inference; its absence will cause downstream failures.
+
 """
 
 import sys
 import logging
+import os
 from pathlib import Path
+
+from hex_ai.system_utils import check_virtual_env
+check_virtual_env("hex_ai_env")
 
 # Add the hex_ai directory to the path
 sys.path.append('hex_ai')
@@ -38,10 +47,11 @@ def main():
     
     parser = argparse.ArgumentParser(description="Process all .trmph files into training data")
     parser.add_argument("--data-dir", default="data", help="Directory containing .trmph files")
-    parser.add_argument("--output-dir", default="data/processed_data", help="Output directory for processed files")
+    parser.add_argument("--output-dir", default="data/processed/step1_unshuffled", help="Output directory for processed files")
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
     parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
+    parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
     
     args = parser.parse_args()
     
@@ -57,7 +67,7 @@ def main():
     )
     
     # Process files
-    stats = processor.process_all_files(max_files=args.max_files)
+    stats = processor.process_all_files(max_files=args.max_files, position_selector=args.position_selector)
     
     # Save final progress report
     from hex_ai.file_utils import save_progress_report

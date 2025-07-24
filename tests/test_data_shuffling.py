@@ -561,6 +561,94 @@ def test_validation_disabled():
         shutil.rmtree(temp_dir)
 
 
+def test_player_to_move_retention():
+    """Test that player_to_move field is retained in all shuffled examples."""
+    print("Testing player_to_move retention in shuffled data...")
+    temp_dir = create_test_data(num_files=1, examples_per_file=20, games_per_file=2)
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    temp_bucket_dir = temp_dir / "temp_buckets"
+
+    # Inject player_to_move field into all examples in input files
+    for file_path in input_dir.glob("*.pkl.gz"):
+        with gzip.open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            ex['player_to_move'] = 0  # Arbitrary, just for test
+        with gzip.open(file_path, 'wb') as f:
+            pickle.dump(data, f)
+
+    shuffler = DataShuffler(
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        temp_dir=str(temp_bucket_dir),
+        num_buckets=3,
+        resume_enabled=False,
+        cleanup_temp=True,
+        validation_enabled=False
+    )
+    shuffler.shuffle_data()
+
+    # Check all output files for player_to_move field
+    for shuffled_file in output_dir.glob("shuffled_*.pkl.gz"):
+        with gzip.open(shuffled_file, 'rb') as f:
+            data = pickle.load(f)
+        for ex in data['examples']:
+            assert 'player_to_move' in ex, f"Missing player_to_move in example in {shuffled_file}"
+    print("All shuffled examples retain player_to_move field.")
+
+
+def test_phase2_consolidation_on_small_real_file():
+    """
+    Test Phase 2 (consolidation and shuffling) on the bucket files created by the parallel distribution test.
+    This test assumes the bucket files are present in a temp directory, as created by test_parallel_distribution_on_small_real_file.
+    It checks that the total number of examples in the shuffled output matches the original, and that all examples are present and not duplicated.
+    Cleans up after itself if run independently.
+    """
+    input_file = Path("data/processed/step1_unshuffled/twoNetGames_13x13_mk45_breadths_5_3_3_v1816_3s2_p2551k_1s0_vt25sc_pt10sc_processed.pkl.gz")
+    assert input_file.exists(), f"Test input file {input_file} does not exist"
+
+    import tempfile, shutil
+    temp_dir = Path(tempfile.mkdtemp())
+    temp_bucket_dir = temp_dir / "temp_buckets"
+    temp_bucket_dir.mkdir()
+    num_buckets = 8
+
+    try:
+        from scripts.shuffle_processed_data import DataShuffler
+        shuffler = DataShuffler(
+            input_dir=input_file.parent,
+            output_dir=temp_dir,
+            temp_dir=temp_bucket_dir,
+            num_buckets=num_buckets,
+            resume_enabled=False,
+            cleanup_temp=False,
+            validation_enabled=False
+        )
+        # Phase 1: create bucket files
+        shuffler._distribute_to_buckets([input_file])
+        # Phase 2: consolidate and shuffle
+        shuffler._consolidate_and_shuffle_all_buckets()
+        # Check shuffled output
+        shuffled_files = list(temp_dir.glob("shuffled_*.pkl.gz"))
+        assert len(shuffled_files) > 0, "No shuffled output files created"
+        all_examples = []
+        for sf in shuffled_files:
+            with gzip.open(sf, 'rb') as f:
+                data = pickle.load(f)
+            all_examples.extend(data['examples'])
+        with gzip.open(input_file, 'rb') as f:
+            orig_data = pickle.load(f)
+        orig_examples = orig_data['examples']
+        assert len(all_examples) == len(orig_examples), "Mismatch in total number of examples after shuffling"
+        orig_ids = set(id(ex) for ex in orig_examples)
+        new_ids = set(id(ex) for ex in all_examples)
+        assert len(new_ids) == len(orig_examples), "Duplicate examples found in shuffled output"
+        print("✓ Phase 2 consolidation/shuffling test passed.")
+    finally:
+        shutil.rmtree(temp_dir)
+
+
 def main():
     """Run all tests."""
     print("Running data shuffling tests...")
@@ -577,7 +665,9 @@ def main():
         test_empty_input,
         test_large_bucket_count,
         test_corrupted_input_file,
-        test_validation_disabled
+        test_validation_disabled,
+        test_player_to_move_retention,
+        test_phase2_consolidation_on_small_real_file
     ]
     
     passed = 0

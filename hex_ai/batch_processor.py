@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
 
-from .data_utils import load_trmph_file, extract_training_examples_from_game
+from .data_utils import load_trmph_file
 from .utils.format_conversion import parse_trmph_game_record
 from .file_utils import (
     GracefulShutdown, atomic_write_pickle_gz, validate_output_directory,
@@ -317,7 +317,7 @@ class BatchProcessor:
         self.state["current_file_started"] = None
         self._save_state()
     
-    def process_single_file(self, file_path: Path, file_idx: int) -> Dict[str, Any]:
+    def process_single_file(self, file_path: Path, file_idx: int, position_selector: str = "all") -> Dict[str, Any]:
         """Process a single .trmph file and return statistics."""
         file_stats = {
             'file_path': str(file_path),
@@ -363,7 +363,8 @@ class BatchProcessor:
                     try:
                         # Create game_id with file_idx and line_idx (i+1 for 1-based line numbers)
                         game_id = (file_idx, i+1)
-                        examples = extract_training_examples_from_game(trmph_url, winner, game_id)
+                        from .data_utils import extract_training_examples_with_selector_from_game
+                        examples = extract_training_examples_with_selector_from_game(trmph_url, winner, game_id, position_selector=position_selector)
                         if examples:
                             # Use dictionary format directly - no conversion needed
                             all_examples.extend(examples)
@@ -435,7 +436,7 @@ class BatchProcessor:
             self._mark_file_failed(file_path, str(e))
             return file_stats
     
-    def process_all_files(self, max_files: Optional[int] = None) -> Dict[str, Any]:
+    def process_all_files(self, max_files: Optional[int] = None, position_selector: str = "all") -> Dict[str, Any]:
         """Process all trmph files and return overall statistics."""
         files_to_process = self.trmph_files[:max_files] if max_files else self.trmph_files
         
@@ -455,7 +456,7 @@ class BatchProcessor:
             self.current_file_index = i
             logger.info(f"Progress: {i+1}/{len(files_to_process)} ({((i+1)/len(files_to_process)*100):.1f}%)")
             
-            file_stats = self.process_single_file(file_path, file_idx=i)
+            file_stats = self.process_single_file(file_path, file_idx=i, position_selector=position_selector)
             
             # Update overall statistics
             self.stats['files_processed'] += 1

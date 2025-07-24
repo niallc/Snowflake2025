@@ -18,6 +18,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def check_virtual_env(expected_env="hex_ai_env"):
+    import os, sys
+    venv_path = os.environ.get("VIRTUAL_ENV", "")
+    if not venv_path or expected_env not in venv_path:
+        sys.stderr.write(
+            f"\nERROR: This script must be run inside the '{expected_env}' virtual environment.\n"
+            f"Please activate it first by running:\n\n"
+            f"    source {expected_env}/bin/activate\n\n"
+            f"Then re-run this script.\n"
+        )
+        sys.exit(1)
+
+
 def get_system_info() -> Dict:
     """Get comprehensive system information."""
     info = {

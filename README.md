@@ -71,3 +71,17 @@ Snowflake2025/
 
 - `WINDOWS_SETUP.md` - Complete Windows setup guide
 - `hex_ai/data_formats.md` - Data format specifications
+
+## Running Tests
+
+To run tests that import from the `hex_ai` package, you must set the `PYTHONPATH` to the project root. This ensures that imports like `from hex_ai...` work correctly.
+
+Example:
+
+    PYTHONPATH=. pytest tests/
+
+Or for a specific test file:
+
+    PYTHONPATH=. pytest tests/test_streaming_augmented_processed_dataset.py
+
+Run these commands from the project root directory.

@@ -5,6 +5,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+class GracefulShutdownRequested(Exception):
+    """Raised to indicate a graceful shutdown was requested."""
+    pass
+
 def check_data_loading_errors(files_attempted: int, files_with_errors: int, error_details: List[Tuple[str, str]], error_log_dir: str):
     """
     Checks error statistics after data loading. If thresholds are exceeded, writes an error log and raises RuntimeError.

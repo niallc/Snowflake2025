@@ -27,12 +27,15 @@ import json
 from .config import (
     BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE, 
     BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,  
 )
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
 )
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, get_player_to_move_from_moves
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +477,86 @@ def augment_board(board: np.ndarray, policy: np.ndarray) -> Tuple[np.ndarray, np
     return augmented_boards[idx], augmented_policies[idx]
 
 
+# =====================
+# Position Augmentation Generators
+# =====================
+def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """
+    Create all 4 augmented examples from a single example.
+    
+    Args:
+        board: 2-channel board state (2, N, N)
+        policy: Policy target (169,)
+        value: Value target (float)
+        
+    Returns:
+        List of 4 tuples: [(board_2ch, policy, value), ...]
+        - Original
+        - 180° rotation (no color swap)
+        - Long diagonal reflection + color swap
+        - Short diagonal reflection + color swap
+    """
+    # Skip empty boards (no pieces to augment)
+    if np.sum(board) == 0:
+        return [(board, policy, value)] * 4
+    
+    # Create augmented components
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    augmented_values = create_augmented_values(value)
+    
+    # Create augmented examples
+    augmented_examples = []
+    for i in range(4):
+        augmented_examples.append((
+            augmented_boards[i],
+            augmented_policies[i],
+            augmented_values[i]
+        ))
+    
+    return augmented_examples
+
+def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
+    """
+    Create 4 augmented examples from a single board position, including player-to-move.
+    
+    Args:
+        board: Board state as (2, 13, 13) array
+        policy: Policy target as (169,) array or None for final moves
+        value: Value target as float
+        error_tracker: Optional BoardStateErrorTracker for handling invalid board states
+        
+    Returns:
+        List of 4 tuples: (augmented_board, augmented_policy, augmented_value, player_to_move)
+    """
+    # Handle None policies (final moves with no next move)
+    # TODO: Replace manual preprocessing with preprocess_example_for_model from hex_ai.data_utils
+    # TODO: Or at least use policy_target = get_valid_policy_target(ex['policy'], use_uniform=False)
+    if policy is None:
+        policy = np.zeros(169, dtype=np.float32)
+    
+    # Create augmented boards, policies, values
+    augmented_boards = create_augmented_boards(board)
+    augmented_policies = create_augmented_policies(policy)
+    augmented_values = create_augmented_values(value)
+    
+    # Compute player-to-move from the board, then create augmented versions
+    player_to_move = get_player_to_move_from_board(board, error_tracker)
+    augmented_player_to_move = create_augmented_player_to_move(player_to_move)
+    
+    # Combine into examples
+    examples = []
+    for i in range(4):
+        examples.append((
+            augmented_boards[i],
+            augmented_policies[i], 
+            augmented_values[i],
+            augmented_player_to_move[i]
+        ))
+    
+    return examples
+
+
 # ============================================================================
 # Training Data Preparation
 # ============================================================================
@@ -544,7 +627,7 @@ def validate_game(trmph_url: str, winner_indicator: str, line_info: str = "") ->
         # Test if we can extract training examples from the game without errors
         # Use a dummy game_id for validation since we don't have file context yet
         dummy_game_id = (-1, -1)  # Invalid game_id for validation purposes
-        training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, dummy_game_id)
+        training_examples = extract_training_examples_with_selector_from_game(trmph_url, winner_indicator, dummy_game_id)
         return True, ""
     except Exception as e:
         return False, str(e)
@@ -622,85 +705,57 @@ def remove_repeated_moves(moves: List[str]) -> List[str]:
 def extract_training_examples_from_game(
     trmph_text: str, 
     winner_from_file: str,
-    game_id: Tuple[int, int],  # (file_idx, line_idx)
+    game_id: tuple,  # (file_idx, line_idx)
     include_trmph: bool = False,       # Whether to include full TRMPH string
     shuffle_positions: bool = True
 ) -> List[Dict]:
     """
     Extract training examples with comprehensive metadata and flexible sampling.
-    
-    Args:
-        trmph_text: Complete TRMPH string
-        winner_from_file: Winner from file data ("1" for blue, "2" for red)
-        game_id: Tuple of (file_index, line_index) for tracking
-        include_trmph: Whether to include full TRMPH string in metadata
-        shuffle_positions: Whether to shuffle position order within game
-        
-    Returns:
-        List of enhanced training examples with metadata
+    Adds explicit player_to_move field to each example.
     """
     try:
         # Parse moves and validate
         bare_moves = strip_trmph_preamble(trmph_text)
         moves = split_trmph_moves(bare_moves)
-        
-        # Handle repeated moves
         moves = remove_repeated_moves(moves)
-        
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
-        
-        # Validate winner and convert to clear format
+        # TODO: Replace magic numbers "1" and "2" with constants from hex_ai/config.py (TRMPH_BLUE_WIN, TRMPH_RED_WIN)
         if winner_from_file not in ["1", "2"]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
-        
-        # Convert winner format: "1"=BLUE, "2"=RED
+        # TODO: Replace magic numbers with utility functions for winner string and value target
+        # winner_clear = trmph_winner_to_clear_str(winner_from_file)
+        # value_target = trmph_winner_to_training_value(winner_from_file)
         winner_clear = "BLUE" if winner_from_file == "1" else "RED"
-        value_target = 0.0 if winner_from_file == "1" else 1.0  # BLUE=0.0, RED=1.0
-        
+        value_target = 0.0 if winner_from_file == "1" else 1.0
         total_positions = len(moves) + 1
-        
-        # Assign sampling tiers
         value_sample_tiers = assign_value_sample_tiers(total_positions)
-        
-        # Create position indices (shuffle if requested)
         position_indices = list(range(total_positions))
         if shuffle_positions:
             random.shuffle(position_indices)
-        
         training_examples = []
-        
         for i, position in enumerate(position_indices):
-            # Create board state
             board_state = create_board_from_moves(moves[:position])
-            
-            # Create policy target
             policy_target = None if position >= len(moves) else create_policy_target(moves[position])
-            
-            # Create metadata
+            player_to_move = get_player_to_move_from_moves(moves[:position])
             metadata = {
                 'game_id': game_id,
                 'position_in_game': position,
                 'total_positions': total_positions,
                 'value_sample_tier': value_sample_tiers[i],
-                'winner': winner_clear  # Store as "BLUE" or "RED"
+                'winner': winner_clear
             }
-            
             if include_trmph:
                 metadata['trmph_game'] = trmph_text
-            
-            # Create example
             example = {
                 'board': board_state,
                 'policy': policy_target,
                 'value': value_target,
+                'player_to_move': player_to_move,
                 'metadata': metadata
             }
-            
             training_examples.append(example)
-        
         return training_examples
-        
     except Exception as e:
         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         raise ValueError(f"Failed to process game: {e}")
@@ -739,11 +794,11 @@ def extract_positions_range(
             return [], False
         
         # Validate winner
-        if winner not in ["1", "2"]:
+        if winner not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner}")
         
-        winner_clear = "BLUE" if winner == "1" else "RED"
-        value_target = 0.0 if winner == "1" else 1.0
+        winner_clear = trmph_winner_to_clear_str(winner)
+        value_target = trmph_winner_to_training_value(winner)
         
         total_positions = len(moves) + 1
         examples = []
@@ -922,3 +977,120 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
         else:
             # Fall back to original behavior if no error tracker
             raise ValueError(error_msg)
+
+def get_valid_policy_target(policy, use_uniform: bool = False):
+    """
+    Convert a possibly-None policy to a valid vector for training or analysis.
+    If policy is None (terminal position), returns either all zeros or uniform (1/N) vector.
+    Args:
+        policy: np.ndarray, torch.Tensor, or None
+        use_uniform: If True, returns uniform (1/N) vector; else all zeros
+    Returns:
+        np.ndarray of shape (BOARD_SIZE * BOARD_SIZE,)
+    """
+    from .config import BOARD_SIZE
+    N = BOARD_SIZE * BOARD_SIZE
+    if policy is None:
+        if use_uniform:
+            return np.full(N, 1.0 / N, dtype=np.float32)
+        else:
+            return np.zeros(N, dtype=np.float32)
+    # If already a numpy array or tensor, just return as numpy
+    if isinstance(policy, torch.Tensor):
+        return policy.cpu().numpy()
+    return np.array(policy, dtype=np.float32)
+
+def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
+    """
+    Convert a raw example dict to (board, policy, value) tensors for model input.
+    - Adds player-to-move channel to board (from 2ch to 3ch)
+    - Converts policy label using get_valid_policy_target
+    Args:
+        ex: dict with keys 'board', 'policy', 'value'
+        use_uniform_policy: If True, use uniform policy for terminal positions
+    Returns:
+        board: torch.FloatTensor (3, BOARD_SIZE, BOARD_SIZE)
+        policy: torch.FloatTensor (BOARD_SIZE * BOARD_SIZE,)
+        value: torch.FloatTensor (scalar or shape (1,))
+    """
+    from .config import BOARD_SIZE
+    board_2ch = ex['board']
+    player_to_move = get_player_to_move_from_board(board_2ch)
+    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=board_2ch.dtype)
+    board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
+    board = torch.tensor(board_3ch, dtype=torch.float32)
+    policy = get_valid_policy_target(ex['policy'], use_uniform=use_uniform_policy)
+    if isinstance(policy, torch.Tensor):
+        policy = policy.detach().clone()
+    else:
+        policy = torch.tensor(policy, dtype=torch.float32)
+    value = torch.tensor(ex['value'], dtype=torch.float32)
+    return board, policy, value
+
+
+def extract_training_examples_with_selector_from_game(
+    trmph_text: str,
+    winner_from_file: str,
+    game_id: tuple,
+    position_selector: str = "all",
+    include_trmph: bool = False,
+    shuffle_positions: bool = True
+) -> list:
+    """
+    Extract training examples with a selector for position type: 'all', 'final', or 'penultimate'.
+    """
+    try:
+        bare_moves = strip_trmph_preamble(trmph_text)
+        moves = remove_repeated_moves(split_trmph_moves(bare_moves))
+        if not moves:
+            raise ValueError("Empty game after removing repeated moves")
+        total_positions = len(moves) + 1
+        if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
+            raise ValueError(f"Invalid winner format: {winner_from_file}")
+        winner_clear = trmph_winner_to_clear_str(winner_from_file)
+        value_target = trmph_winner_to_training_value(winner_from_file)
+        # Determine which positions to extract
+        if position_selector == "all":
+            position_indices = list(range(total_positions))
+            if shuffle_positions:
+                random.shuffle(position_indices)
+        elif position_selector == "final":
+            position_indices = [total_positions - 1]
+        elif position_selector == "penultimate":
+            if total_positions >= 2:
+                position_indices = [total_positions - 2]
+            else:
+                return []  # No penultimate position
+        else:
+            raise ValueError(f"Unknown position_selector: {position_selector}")
+        # Assign sample tiers (for compatibility, just use 0 for non-all)
+        if position_selector == "all":
+            value_sample_tiers = assign_value_sample_tiers(total_positions)
+        else:
+            value_sample_tiers = [0] * len(position_indices)
+        training_examples = []
+        for i, position in enumerate(position_indices):
+            board_state = create_board_from_moves(moves[:position])
+            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            player_to_move = get_player_to_move_from_moves(moves[:position])
+            metadata = {
+                'game_id': game_id,
+                'position_in_game': position,
+                'total_positions': total_positions,
+                'value_sample_tier': value_sample_tiers[i],
+                'winner': winner_clear
+            }
+            if include_trmph:
+                metadata['trmph_game'] = trmph_text
+            example = {
+                'board': board_state,
+                'policy': policy_target,
+                'value': value_target,
+                'player_to_move': player_to_move,
+                'metadata': metadata
+            }
+            training_examples.append(example)
+        return training_examples
+    except Exception as e:
+        logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
+        raise ValueError(f"Failed to process game: {e}")
