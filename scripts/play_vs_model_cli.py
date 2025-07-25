@@ -17,7 +17,7 @@ DEFAULT_TOP_K = 20
 
 all_results_dir="checkpoints/hyperparameter_tuning/"
 this_model_dir="loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-checkpoint_file="epoch1_mini30.pt"
+checkpoint_file="epoch1_mini35.pt"
 DEFAULT_CHKPT_PATH=f"{all_results_dir}/{this_model_dir}/{checkpoint_file}"
 
 def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):

@@ -1,0 +1,64 @@
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f8f8fa;
+  margin: 0;
+  padding: 0;
+}
+
+#app-container {
+  max-width: 700px;
+  margin: 30px auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  padding: 24px 24px 32px 24px;
+}
+
+h1 {
+  text-align: center;
+  margin-top: 0;
+  color: #2a3a4a;
+}
+
+#status-line {
+  text-align: center;
+  font-size: 1.2em;
+  margin-bottom: 18px;
+  min-height: 1.5em;
+}
+
+#board-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+#controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+button {
+  background: #bbeeee;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 1em;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+button:hover {
+  background: #8bd6d6;
+}
+
+#trmph-string {
+  font-family: monospace;
+  font-size: 1em;
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 2px 6px;
+} 

@@ -5,32 +5,36 @@
   - `checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini30.pt`
 - **Board Size**: The model is currently trained for 13x13 Hex. Support for other sizes is possible in the future, but 13x13 is the default.
 - **Simple Inference**: A basic CLI script (`scripts/simple_inference_cli.py`) exists for running inference on static positions. Both policy and value heads are performing well in spot checks.
+- **Interactive Play**: A simple interactive-play mode is now available via `scripts/play_vs_model_cli.py`, allowing a human to play against the model in the terminal.
 
 ## New Plan: Interactive Play
-- **Goal**: Enable interactive play against the trained model, starting with a simple CLI interface and progressing to a browser-based UI.
-- **Initial Implementation**:
-  - CLI script to play human vs model.
+- **Goal**: Enable interactive play against the trained model, starting with a simple CLI interface and progressing to a browser-based, point-and-click UI.
+- **Current Implementation**:
+  - CLI script to play human vs model (`scripts/play_vs_model_cli.py`).
   - Board displayed in ASCII (using `hex_ai/inference/board_display.py`).
   - After each move, output the board's `.trmph` representation (using `hex_ai/utils/format_conversion.py`).
   - Model move selection: take top-k (e.g., 20) policy moves, evaluate with value head, pick the best (with some randomness for variety).
-- **Web UI**: Once CLI is working, move to a simple browser-based UI (Flask recommended for flexibility and future deployment).
+- **Next Step**: Develop a browser-based, point-and-click interface (e.g., using Flask) for easier and more engaging play.
 
 ## Future Directions
-- **Self-Play**: Use the engine to generate new training data via self-play.
-- **Tournament System**: Implement tools to evaluate and compare models.
+- **Point-and-Click Web UI**: Build a browser-based interface for interactive play (not yet implemented).
+- **Tournament System**: Implement a tournament structure to compare different model checkpoints and engine configurations (e.g., different search depths/breadths). Not yet implemented.
+- **MCTS**: Implement Monte Carlo Tree Search for stronger move selection. This is a major planned upgrade, not yet implemented.
+- **Self-Play Pipeline**: Develop a self-play pipeline to generate new training data and enable reinforcement learning. Not yet implemented.
 - **Scalability**: Batch inference, efficient data pipelines, and distributed play for RL.
-- **Advanced Features**: MCTS, Pie rule, support for other board sizes, online deployment, and more.
+- **Advanced Features**: Pie rule, support for other board sizes, online deployment, and more.
 
 ## What Has Changed
 - The codebase has evolved significantly since the original plan. Many utilities and data formats have been consolidated and modernized.
 - The immediate focus is now on usability and interactive play, rather than just batch inference or self-play.
-- The plan is more incremental: start with a simple CLI, then add features and move to a web UI.
+- The plan is more incremental: start with a simple CLI, then add a browser-based UI, then expand to tournaments, MCTS, and self-play.
 
 ## Next Steps
-1. Implement the CLI engine for human vs model play.
-2. Output `.trmph` after each move for compatibility and analysis.
-3. Once stable, develop a browser-based UI for easier access and demonstration.
-4. Expand to self-play, tournaments, and scalable RL infrastructure.
+1. Develop a browser-based, point-and-click interface for interactive play.
+2. Implement a tournament structure to compare models and engine configs.
+3. Implement MCTS for stronger move selection.
+4. Build a self-play pipeline for new data generation and RL.
+5. Continue to expand scalability and advanced features as needed.
 
 ---
 
@@ -469,3 +473,28 @@ Next steps:
 2. Implement basic game engine and model wrapper
 3. Test with existing checkpoints
 4. Iterate and refine based on performance 
+
+# TEMPORARY: Stepwise Plan for Browser-Based Point-and-Click Hex Interface (Flask)
+
+## Rationale
+- Start with a robust, modular backend API using Flask, reusing all existing game and inference logic.
+- Separate backend and frontend concerns for maintainability and extensibility.
+- Enable the "URL = TRMPH" feature for easy interoperability with other tools and representations.
+
+## Step 1: Minimal Flask Backend API
+- Expose endpoints:
+  - `/` (GET): Serves the frontend (can be static HTML for now).
+  - `/api/state` (POST): Accepts a TRMPH string, returns board state, win probabilities, etc.
+  - `/api/move` (POST): Accepts a TRMPH string and a move, returns updated state (board, model move, win probabilities, new TRMPH string).
+- Reuse `HexGameState`, `SimpleModelInference`, and TRMPH utilities for all game/model logic.
+- Keep all game/model logic in backend modules, not in Flask routes.
+
+## Step 2: Minimal HTML/JS Frontend
+- Renders a clickable 13x13 Hex board.
+- Reads/writes the TRMPH string from/to the URL (enabling "URL = TRMPH").
+- Calls the backend API to process moves and update the board.
+
+## Next Steps
+- Scaffold the Flask backend and endpoints, reusing existing code.
+- Once the backend is working, build the frontend to consume the API and implement the point-and-click interface.
+- Iterate and expand features as needed (analysis, model selection, etc.). 
