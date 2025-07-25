@@ -28,6 +28,7 @@ sys.path.append('hex_ai')
 
 from hex_ai.batch_processor import BatchProcessor
 from hex_ai.file_utils import GracefulShutdown
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Configure logging
 logging.basicConfig(
@@ -66,14 +67,41 @@ def main():
         run_tag=args.run_tag
     )
     
-    # Process files
-    stats = processor.process_all_files(max_files=args.max_files, position_selector=args.position_selector)
-    
+    # Find all .trmph files to process
+    trmph_files = processor.trmph_files
+    if args.max_files:
+        trmph_files = trmph_files[:args.max_files]
+
+    # Parallel processing of files
+    def process_file_wrapper(file_idx_file):
+        file_idx, file_path = file_idx_file
+        # Create a new BatchProcessor for each process to avoid shared state issues
+        from hex_ai.batch_processor import BatchProcessor
+        proc = BatchProcessor(
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            shutdown_handler=None,  # Not needed in worker
+            run_tag=args.run_tag
+        )
+        return proc.process_single_file(file_path, file_idx, position_selector=args.position_selector)
+
+    stats_list = []
+    with ProcessPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(process_file_wrapper, (i, file_path)): file_path for i, file_path in enumerate(trmph_files)}
+        for future in as_completed(futures):
+            file_path = futures[future]
+            try:
+                stats = future.result()
+                stats_list.append(stats)
+                logger.info(f"Processed {file_path}")
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+
+    # Combine stats (if needed)
     # Save final progress report
     from hex_ai.file_utils import save_progress_report
-    save_progress_report(stats, Path(args.output_dir), shutdown_handler)
+    save_progress_report(stats_list, Path(args.output_dir), shutdown_handler)
     
-    # Create combined dataset if requested
     if args.combine:
         processor.create_combined_dataset()
     
@@ -81,7 +109,7 @@ def main():
     stats_file = Path(args.output_dir) / "processing_stats.json"
     import json
     with open(stats_file, 'w') as f:
-        json.dump(stats, f, indent=2)
+        json.dump(stats_list, f, indent=2)
     
     logger.info("")
     logger.info("OUTPUT FILES:")

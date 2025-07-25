@@ -126,8 +126,8 @@ flowchart TD
 
 ## 4. Player identification code: BLUE / RED, constants and enums
  - We've tried to make the BLUE / RED distinctions with both
-   - the constants in hex_ai/config.py
-   - and the utilities and enums in hex_ai/value_utils.py
+   - the **constants** in hex_ai/config.py
+   - and the utilities and **enums** in hex_ai/value_utils.py
 
 Need to decide on a single system.
 
