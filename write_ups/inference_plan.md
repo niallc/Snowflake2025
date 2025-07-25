@@ -1,5 +1,35 @@
 # Update 2025-07-25: Inference Plan Progress and Next Steps
 
+## Web-Based Hex UI Progress (July 2025)
+
+### Backend API
+- Flask backend exposes `/api/state` and `/api/move` endpoints for interactive play and model inference.
+- Endpoints use existing Hex game logic, model inference, and TRMPH utilities for robust, maintainable integration.
+- CORS and static file serving are configured for local development and browser-based UI.
+- Automated integration tests verify API correctness and error handling.
+
+### Frontend Implementation
+- Modular vanilla JS frontend (in `hex_ai/web/static/`) renders a 13x13 Hex board using SVG.
+- Board is fully interactive: click-to-move, reset, and TRMPH string copy supported.
+- Board orientation and edge indicators match standard Hex conventions (blue = top/bottom, red = left/right).
+- SVG board is responsive, visually appealing, and uses a color palette inspired by Taerim's nimbus.
+- Edge lines are mathematically calculated for correct angles and vivid color intensity.
+- All game logic and model moves are handled via backend API calls for maintainability and extensibility.
+
+### Static Asset Testing
+- Automated tests verify that all static assets (`index.html`, `style.css`, `app.js`, `favicon.ico`) are served correctly by the backend.
+- This ensures the web UI is robust to deployment and server changes.
+
+### Visual and Usability Improvements
+- Hexes are now flat-topped, tesselate perfectly, and are correctly rotated for classic Hex appearance.
+- Edge indicators are vivid and precisely aligned.
+- SVG area is sized for full board and edge visibility.
+- The UI is modular and ready for future enhancements (coordinate labels, move history, analysis, etc.).
+
+---
+
+# Update 2025-07-25: Inference Plan Progress and Next Steps
+
 ## Current State
 - **Model**: A trained model checkpoint is available at:
   - `checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini30.pt`
@@ -170,23 +200,26 @@ class SelfPlayConfig:
 
 **Purpose**: Evaluate model performance and compare configurations
 
-**Features**:
+**Current Implementation (2025-07-25):**
+- Modular system in `hex_ai/inference/tournament.py` for round-robin tournaments between model checkpoints.
+- Flexible design: easy to extend to compare play configs (e.g., search widths, MCTS, etc.)
+- Uses `HexGameState` and `SimpleModelInference` for game logic and inference.
+- Tracks win rates and (optionally) Elo ratings for each configuration.
+- Alternates colors for fairness (each model plays both as first and second).
+- Example usage provided in the module for quick testing.
+
+**Planned/Documented TODOs:**
+- Batch model inference for efficiency (currently sequential, but code is structured for future batching).
+- Incremental winner detection (UnionFind) to avoid recomputation after every move.
+- Support for additional tournament types (Swiss, knockout, double elimination).
+- Logging and checkpointing for long tournaments.
+- Support for play config/algorithm sweeps (not just checkpoint comparison).
+
+**Features:**
 - Round-robin tournaments
-- Elo rating system
-- Performance metrics
+- Elo rating system (optional, simple version)
+- Performance metrics (win rate, Elo)
 - Model comparison
-
-**Tournament Types**:
-- **Round-robin**: All models play each other
-- **Swiss system**: For large model pools
-- **Knockout**: Single elimination
-- **Double elimination**: More robust ranking
-
-**Metrics**:
-- Win rate
-- Elo rating
-- Average game length
-- Move quality analysis
 
 ### 3. Human Play (`human_play.py`)
 
@@ -498,3 +531,11 @@ Next steps:
 - Scaffold the Flask backend and endpoints, reusing existing code.
 - Once the backend is working, build the frontend to consume the API and implement the point-and-click interface.
 - Iterate and expand features as needed (analysis, model selection, etc.). 
+
+---
+
+## Notes to coding agents
+- Try to reuse existing utilities and avoid code duplication
+- Keep code modular and maintainable
+- Have pipelines fail fast, to avoid silent failures and aid debugging. Don't implement fallbacks for missing or corrupted elements with meaningful impact.
+- Focus on correctness and testability over efficiency

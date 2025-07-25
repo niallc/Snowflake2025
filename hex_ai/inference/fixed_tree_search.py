@@ -28,7 +28,7 @@ def minimax_policy_value_search(
     """
     # Helper: get top-k legal moves by policy
     def get_topk_moves(state, k):
-        policy_probs, _, _ = model.infer(state.board)
+        policy_probs, _ = model.infer(state.board)
         legal_moves = state.get_legal_moves()
         move_indices = [row * state.board.shape[0] + col for row, col in legal_moves]
         legal_policy = np.array([policy_probs[idx] for idx in move_indices])
