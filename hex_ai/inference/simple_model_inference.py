@@ -10,10 +10,9 @@ from hex_ai.config import (
     BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
-    trmph_winner_to_training_value, trmph_winner_to_clear_str
 )
 from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
-from hex_ai.value_utils import model_output_to_prob, ValuePerspective
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 
 class SimpleModelInference:
     def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18", model_instance=None):
