@@ -14,12 +14,20 @@ from hex_ai.config import (
 from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
 from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 
+
 class SimpleModelInference:
-    def __init__(self, checkpoint_path: str, device: str = None, model_type: str = "resnet18", model_instance=None):
+    def __init__(
+        self,
+        checkpoint_path: str,
+        device: str = None,
+        model_type: str = "resnet18",
+        model_instance=None
+    ):
         print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}, model_instance={type(model_instance) if model_instance is not None else None}")
         self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type, model_instance=model_instance)
         self.board_size = fc.BOARD_SIZE
-        
+        self.checkpoint_path = checkpoint_path
+
         # Detect if this is a legacy model (2-channel input) or current model (3-channel input)
         if model_instance is not None:
             # Check the first layer's input channels to determine if it's legacy

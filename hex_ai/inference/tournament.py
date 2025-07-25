@@ -1,6 +1,6 @@
 import os
 import itertools
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
@@ -192,7 +192,7 @@ def play_single_game(model_a: SimpleModelInference,
         model_name_a = os.path.basename(getattr(model_a, 'checkpoint_path', str(model_a)))
         model_name_b = os.path.basename(getattr(model_b, 'checkpoint_path', str(model_b)))
         print("".join([
-            "Winner:", str(winner_char), ",(", str(result), ").Swapped=", str(swap), ".\n",
+            "\n*Winner*:", str(winner_char), "(Model ", str(result), "). Swapped=", str(swap), ".\n",
             "Model_a=", str(model_name_a), ",Model_b=", str(model_name_b)
         ]))
     # --- LOGGING ---
@@ -260,6 +260,69 @@ def model_select_move(model: SimpleModelInference,
         chosen_idx = best_idx
     return topk_moves[chosen_idx]
 
+def play_games_with_each_first(
+    model_a_path: str, 
+    model_b_path: str, 
+    models: Dict[str, SimpleModelInference], 
+    config: TournamentConfig, 
+    play_config: TournamentPlayConfig, 
+    verbose: int, 
+    log_file: Optional[str], 
+    csv_file: Optional[str]
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Play two games between model_a and model_b, with each going first once.
+    Returns a dict with results for both games.
+    
+    Args:
+        model_a_path: Path to first model checkpoint
+        model_b_path: Path to second model checkpoint  
+        models: Dictionary mapping checkpoint paths to model instances
+        config: Tournament configuration
+        play_config: Play configuration (temperature, pie rule, etc.)
+        verbose: Verbosity level
+        log_file: Optional log file path
+        csv_file: Optional CSV file path
+        
+    Returns:
+        Dictionary with results for both games, structured as:
+        {
+            'model_a_first': {winner_position, winner_model, loser_model, trmph_str, winner_char, swap_decision},
+            'model_b_first': {winner_position, winner_model, loser_model, trmph_str, winner_char, swap_decision}
+        }
+    """
+    # Game 1: model_a goes first (blue), model_b second (red)
+    winner_1, trmph_str_1, winner_char_1, swap_decision_1 = play_single_game(
+        models[model_a_path], models[model_b_path], config.board_size,
+        config.search_widths, verbose, log_file, csv_file, play_config
+    )
+    
+    # Game 2: model_b goes first (blue), model_a second (red)  
+    winner_2, trmph_str_2, winner_char_2, swap_decision_2 = play_single_game(
+        models[model_b_path], models[model_a_path], config.board_size,
+        config.search_widths, verbose, log_file, csv_file, play_config
+    )
+    
+    return {
+        'model_a_first': {
+            'winner_position': winner_1,  # "A" or "B" based on position
+            'winner_model': model_a_path if winner_1 == "A" else model_b_path,
+            'loser_model': model_b_path if winner_1 == "A" else model_a_path,
+            'trmph_str': trmph_str_1,
+            'winner_char': winner_char_1,
+            'swap_decision': swap_decision_1
+        },
+        'model_b_first': {
+            'winner_position': winner_2,  # "A" or "B" based on position
+            'winner_model': model_b_path if winner_2 == "A" else model_a_path,
+            'loser_model': model_a_path if winner_2 == "A" else model_b_path,
+            'trmph_str': trmph_str_2,
+            'winner_char': winner_char_2,
+            'swap_decision': swap_decision_2
+        }
+    }
+
+
 def run_round_robin_tournament(
     config: TournamentConfig,
     verbose: int = 1,
@@ -277,35 +340,43 @@ def run_round_robin_tournament(
     """
     if play_config is None:
         play_config = TournamentPlayConfig()
+    
     models = {path: SimpleModelInference(path) for path in config.checkpoint_paths}
     result = TournamentResult(config.checkpoint_paths)
-    for a, b in itertools.combinations(config.checkpoint_paths, 2):
+    
+    for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
         for game_idx in range(config.num_games):
-            # A as blue, B as red
-            winner, trmph_str, winner_char, swap_decision = \
-                play_single_game(models[a], models[b], config.board_size, 
-                                 config.search_widths, verbose, log_file, csv_file, 
-                                 play_config)
-            if winner == "A":
-                result.record_game(a, b)
-            elif winner == "B":
-                result.record_game(b, a)
-            # B as blue, A as red
-            winner, trmph_str, winner_char, swap_decision = play_single_game(models[b], models[a], config.board_size, 
-                                      config.search_widths, verbose, log_file, csv_file, 
-                                      play_config)
-            if winner == "A":
-                result.record_game(b, a)
-            elif winner == "B":
-                result.record_game(a, b)
+            # Play both games (each model goes first once)
+            game_results = play_games_with_each_first(
+                model_a_path, model_b_path, models, config, play_config, 
+                verbose, log_file, csv_file
+            )
+            
+            # Record results for both games
+            result.record_game(
+                game_results['model_a_first']['winner_model'],
+                game_results['model_a_first']['loser_model']
+            )
+            result.record_game(
+                game_results['model_b_first']['winner_model'], 
+                game_results['model_b_first']['loser_model']
+            )
+            
             if verbose >= 1:
-                print(f"Game {game_idx+1} of {config.num_games} between {a} and {b} completed.")
-                print(f"Trmph: {trmph_str}, \nWinner: {winner_char}")
-                print(f"Model_a: {a}, \nModel_b: {b}")
+                print(f"Game {game_idx+1} of {config.num_games} between {model_a_path} and {model_b_path} completed.")
+                
+                # Print details for both games
+                for game_key, game_name in [('model_a_first', f'{model_a_path} first'), 
+                                          ('model_b_first', f'{model_b_path} first')]:
+                    game_data = game_results[game_key]
+                    print(f"  {game_name}:")
+                    print(f"    Trmph: {game_data['trmph_str']}")
+                    print(f"    Winner: {game_data['winner_char']} ({game_data['winner_model']})")
+                    print(f"    Swap: {game_data['swap_decision']}")
+                
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, Random seed: {play_config.random_seed}")
                 print(f"Search widths: {config.search_widths}")
-                print(f"Swap: {swap_decision}")
-                # Done
+    print("Done.")
     return result
 
 # Example usage (to be moved to CLI or script):

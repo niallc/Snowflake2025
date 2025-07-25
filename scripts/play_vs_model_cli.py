@@ -8,7 +8,15 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.file_utils import GracefulShutdown
 import sys
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.value_utils import Winner, ValuePerspective, model_output_to_prob, winner_to_color, get_win_prob_from_model_output, get_policy_probs_from_logits
+from hex_ai.value_utils import (
+    Winner,
+    ValuePerspective,
+    model_output_to_prob,
+    winner_to_color,
+    get_win_prob_from_model_output,
+    get_policy_probs_from_logits,
+    temperature_scaled_softmax,
+)
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
 

@@ -21,8 +21,8 @@ CHECKPOINTS = [
 CHKPT_PATHS = [os.path.join(CHKPT_DIR, fname) for fname in CHECKPOINTS]
 
 
-config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=2)
-play_config = TournamentPlayConfig(temperature=0.1, random_seed=42, pie_rule=False)
+config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=3)
+play_config = TournamentPlayConfig(temperature=0.01, random_seed=42, pie_rule=False)
 
 LOG_DIR = "data/tournament_play"
 LOG_FILE = os.path.join(LOG_DIR, "test2/tournament.log")
@@ -33,7 +33,13 @@ if __name__ == "__main__":
     print(f"Checkpoints: {CHECKPOINTS}")
     print(f"Temperature: {play_config.temperature}, Pie rule: {play_config.pie_rule}, Seed: {play_config.random_seed}")
     print(f"Results: {LOG_FILE}, {CSV_FILE}\n")
-    result = run_round_robin_tournament(config, verbose=2, log_file=LOG_FILE, csv_file=CSV_FILE, play_config=play_config)
+    result = run_round_robin_tournament(
+        config,
+        verbose=2,
+        log_file=LOG_FILE,
+        csv_file=CSV_FILE,
+        play_config=play_config
+    )
     print("\nTournament complete. Win rates:")
     result.print_summary()
     print("Elo ratings:")
