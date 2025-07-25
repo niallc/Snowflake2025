@@ -128,6 +128,38 @@ def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     policy_probs = torch.softmax(torch.tensor(policy_logits), dim=0).numpy()
     return policy_probs
 
+def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.ndarray:
+    """
+    Apply temperature scaling to logits and return softmaxed probabilities.
+    
+    Args:
+        logits: Raw logits (numpy array)
+        temperature: Temperature parameter (higher = more random, lower = more deterministic)
+        
+    Returns:
+        Temperature-scaled softmax probabilities
+        
+    Note:
+        - temperature = 1.0: Standard softmax
+        - temperature < 1.0: More deterministic (sharper distribution)
+        - temperature > 1.0: More random (flatter distribution)
+        - temperature = 0.0: Greedy selection (argmax)
+    """
+    import torch
+    import numpy as np
+    
+    if temperature <= 0:
+        # Greedy selection: return one-hot vector for argmax
+        result = np.zeros_like(logits)
+        result[np.argmax(logits)] = 1.0
+        return result
+    
+    # Apply temperature scaling: logits / temperature
+    scaled_logits = logits / temperature
+    # Apply softmax
+    probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
+    return probs
+
 def get_player_to_move_from_moves(moves: list) -> int:
     """
     Given a list of moves (e.g., ['a1', 'b2', ...]), return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.

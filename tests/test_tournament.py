@@ -251,3 +251,243 @@ def test_log_game_csv():
             rows = list(reader)
         assert rows[0]["model_a"] == "A"
         assert rows[1]["winner"] == "r" 
+
+def test_tournament_winner_attribution():
+    """
+    Simulate a tournament where model A always wins and check that the summary is correct.
+    This catches winner flipping or misattribution bugs.
+    Prints detailed debug output for each game.
+    """
+    from hex_ai.inference.tournament import TournamentConfig, run_round_robin_tournament, TournamentPlayConfig, play_single_game
+    class AlwaysWinModel:
+        def __init__(self, checkpoint_path):
+            self.checkpoint_path = checkpoint_path
+        def infer(self, board):
+            import torch
+            # Policy logits: uniform, value: 10.0 means always blue win
+            return np.zeros(169, dtype=np.float32), 10.0
+    class AlwaysLoseModel:
+        def __init__(self, checkpoint_path):
+            self.checkpoint_path = checkpoint_path
+        def infer(self, board):
+            import torch
+            # Policy logits: uniform, value: -10.0 means always red win
+            return np.zeros(169, dtype=np.float32), -10.0
+    import hex_ai.inference.tournament as tmod
+    orig = tmod.SimpleModelInference
+    def patched_SimpleModelInference(path):
+        if path == "A":
+            return AlwaysWinModel(path)
+        else:
+            return AlwaysLoseModel(path)
+    tmod.SimpleModelInference = patched_SimpleModelInference
+    try:
+        config = TournamentConfig(checkpoint_paths=["A", "B"], num_games=2)
+        play_config = TournamentPlayConfig(random_seed=123, pie_rule=False)
+        # Run tournament with debug output for each game
+        models = {path: patched_SimpleModelInference(path) for path in config.checkpoint_paths}
+        result = tmod.TournamentResult(config.checkpoint_paths)
+        for a, b in [("A", "B")]:
+            for game_idx in range(config.num_games):
+                # A as blue, B as red
+                winner = play_single_game(models[a], models[b], 13, None, 0, None, None, play_config)
+                print(f"Game {game_idx*2+1}: A (blue) vs B (red) -> winner: {winner}")
+                if winner == "A":
+                    result.record_game(a, b)
+                elif winner == "B":
+                    result.record_game(b, a)
+                # B as blue, A as red
+                winner = play_single_game(models[b], models[a], 13, None, 0, None, None, play_config)
+                print(f"Game {game_idx*2+2}: B (blue) vs A (red) -> winner: {winner}")
+                if winner == "A":
+                    result.record_game(b, a)
+                elif winner == "B":
+                    result.record_game(a, b)
+        win_rates = result.win_rates()
+        print(f"Final win rates: {win_rates}")
+        elos = result.elo_ratings()
+        print(f"Final Elo: {elos}")
+        # Model A should win all games
+        assert win_rates["A"] == 1.0
+        assert win_rates["B"] == 0.0
+        assert elos["A"] > elos["B"]
+    finally:
+        tmod.SimpleModelInference = orig 
+
+def test_tournament_forced_blue_wins():
+    """
+    Patch HexGameState._find_winner to always return 'blue', so blue always wins.
+    Check that the tournament summary matches this forced outcome.
+    Print debug output for each game.
+    """
+    from hex_ai.inference.tournament import TournamentConfig, run_round_robin_tournament, TournamentPlayConfig, play_single_game
+    from hex_ai.inference.game_engine import HexGameState
+    import hex_ai.inference.tournament as tmod
+    # Patch _find_winner
+    orig_find_winner = HexGameState._find_winner
+    HexGameState._find_winner = lambda self: "blue"
+    try:
+        config = TournamentConfig(checkpoint_paths=["A", "B"], num_games=2)
+        play_config = TournamentPlayConfig(random_seed=123, pie_rule=False)
+        # Use dummy models (policy doesn't matter, winner is forced)
+        class DummyModel:
+            def __init__(self, checkpoint_path):
+                self.checkpoint_path = checkpoint_path
+            def infer(self, board):
+                return np.zeros(169, dtype=np.float32), 0.0
+        def patched_SimpleModelInference(path):
+            return DummyModel(path)
+        orig = tmod.SimpleModelInference
+        tmod.SimpleModelInference = patched_SimpleModelInference
+        try:
+            models = {path: patched_SimpleModelInference(path) for path in config.checkpoint_paths}
+            result = tmod.TournamentResult(config.checkpoint_paths)
+            for a, b in [("A", "B")]:
+                for game_idx in range(config.num_games):
+                    # A as blue, B as red
+                    winner = play_single_game(models[a], models[b], 13, None, 0, None, None, play_config)
+                    print(f"Game {game_idx*2+1}: A (blue) vs B (red) -> winner: {winner}")
+                    if winner == "A":
+                        result.record_game(a, b)
+                    elif winner == "B":
+                        result.record_game(b, a)
+                    # B as blue, A as red
+                    winner = play_single_game(models[b], models[a], 13, None, 0, None, None, play_config)
+                    print(f"Game {game_idx*2+2}: B (blue) vs A (red) -> winner: {winner}")
+                    if winner == "A":
+                        result.record_game(b, a)
+                    elif winner == "B":
+                        result.record_game(a, b)
+            win_rates = result.win_rates()
+            print(f"Final win rates: {win_rates}")
+            elos = result.elo_ratings()
+            print(f"Final Elo: {elos}")
+            # Blue should always win, so each model should win all games as blue
+            assert win_rates["A"] == 0.5
+            assert win_rates["B"] == 0.5
+        finally:
+            tmod.SimpleModelInference = orig
+    finally:
+        HexGameState._find_winner = orig_find_winner 
+
+def test_tournament_winner_mapping_with_swap_clearer():
+    """
+    For each game, log:
+    - swap: True/False
+    - M1: b/r (color assigned to model1)
+    - M2: b/r
+    - winner_rb: b/r (which color won)
+    - winner_12: M1/M2 (which model won)
+    Use model1/model2 (M1/M2) and blue/red (b/r) terminology for clarity.
+    Write logs to a temp directory for informal inspection.
+    """
+    import tempfile
+    from hex_ai.inference.tournament import TournamentConfig, TournamentPlayConfig, play_single_game
+    from hex_ai.inference.game_engine import HexGameState
+    import hex_ai.inference.tournament as tmod
+    import os
+    # Patch _find_winner to alternate blue/red wins
+    orig_find_winner = HexGameState._find_winner
+    win_sequence = ["blue", "red", "blue", "red"]
+    win_idx = [0]
+    def alt_find_winner(self):
+        idx = win_idx[0]
+        win_idx[0] = (win_idx[0] + 1) % len(win_sequence)
+        return win_sequence[idx]
+    HexGameState._find_winner = alt_find_winner
+    try:
+        config = TournamentConfig(checkpoint_paths=["M1", "M2"], num_games=2)
+        play_config = TournamentPlayConfig(random_seed=123, pie_rule=True)
+        # Use dummy models (policy doesn't matter, winner is forced)
+        class DummyModel:
+            def __init__(self, checkpoint_path):
+                self.checkpoint_path = checkpoint_path
+            def infer(self, board):
+                return np.zeros(169, dtype=np.float32), 0.0
+        def patched_SimpleModelInference(path):
+            return DummyModel(path)
+        orig = tmod.SimpleModelInference
+        tmod.SimpleModelInference = patched_SimpleModelInference
+        try:
+            models = {path: patched_SimpleModelInference(path) for path in config.checkpoint_paths}
+            with tempfile.TemporaryDirectory() as tmpdir:
+                csv_file = os.path.join(tmpdir, "winner_mapping_test_clearer.csv")
+                for m1, m2 in [("M1", "M2")]:
+                    for game_idx in range(config.num_games):
+                        # First game: M1 asked first, M2 second
+                        # Play game, capture swap and winner info
+                        # Patch play_single_game to return swap and color assignment info
+                        from hex_ai.inference.tournament import play_single_game as real_play_single_game
+                        # Patch play_single_game to expose swap and color assignment
+                        # We'll monkeypatch the function to return extra info
+                        # (In production, this would be a refactor, but for test, monkeypatch is fine)
+                        # We'll use the CSV log to extract swap and winner info
+                        real_play_single_game(models[m1], models[m2], 13, None, 0, None, csv_file, play_config)
+                        # Read the last row from the CSV
+                        import csv
+                        with open(csv_file, 'r') as f:
+                            reader = list(csv.DictReader(f))
+                            row = reader[-1]
+                        swap = row['swap'] == 'swap'
+                        winner_rb = row['winner']  # 'b' or 'r'
+                        # Determine color assignment
+                        if not swap:
+                            m1_color = 'b'
+                            m2_color = 'r'
+                        else:
+                            m1_color = 'r'
+                            m2_color = 'b'
+                        # Determine which model won
+                        if winner_rb == m1_color:
+                            winner_12 = 'M1'
+                        else:
+                            winner_12 = 'M2'
+                        info1 = {
+                            'swap': swap,
+                            'M1': m1_color,
+                            'M2': m2_color,
+                            'winner_rb': winner_rb,
+                            'winner_12': winner_12,
+                            'csv_row': row
+                        }
+                        print(f"Game {game_idx*2+1}: swap={info1['swap']} M1={info1['M1']} M2={info1['M2']} winner_rb={info1['winner_rb']} winner_12={info1['winner_12']}")
+                        # B as blue, A as red
+                        real_play_single_game(models[m2], models[m1], 13, None, 0, None, csv_file, play_config)
+                        # Read the last row from the CSV
+                        with open(csv_file, 'r') as f:
+                            reader = list(csv.DictReader(f))
+                            row = reader[-1]
+                        swap = row['swap'] == 'swap'
+                        winner_rb = row['winner']  # 'b' or 'r'
+                        # Determine color assignment
+                        if not swap:
+                            m1_color = 'b'
+                            m2_color = 'r'
+                        else:
+                            m1_color = 'r'
+                            m2_color = 'b'
+                        # Determine which model won
+                        if winner_rb == m1_color:
+                            winner_12 = 'M1'
+                        else:
+                            winner_12 = 'M2'
+                        info2 = {
+                            'swap': swap,
+                            'M1': m1_color,
+                            'M2': m2_color,
+                            'winner_rb': winner_rb,
+                            'winner_12': winner_12,
+                            'csv_row': row
+                        }
+                        print(f"Game {game_idx*2+2}: swap={info2['swap']} M1={info2['M1']} M2={info2['M2']} winner_rb={info2['winner_rb']} winner_12={info2['winner_12']}")
+                # Print the CSV log for inspection
+                import csv
+                with open(csv_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    print("\nCSV log of winner mapping (clearer):")
+                    for row in reader:
+                        print(row)
+        finally:
+            tmod.SimpleModelInference = orig
+    finally:
+        HexGameState._find_winner = orig_find_winner 

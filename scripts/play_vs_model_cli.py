@@ -61,10 +61,9 @@ def model_select_move(model: SimpleModelInference, state: HexGameState, top_k=DE
         move_values.append(value_logit)
     # Pick the best, with some randomness
     best_idx = np.argmax(move_values)
-    # Optionally add some randomness
-    if temperature > 0 and len(move_values) > 1:
-        probs = np.exp(np.array(move_values) / temperature)
-        probs /= probs.sum()
+    # Apply temperature scaling for move selection
+    if len(move_values) > 1:
+        probs = temperature_scaled_softmax(np.array(move_values), temperature)
         chosen_idx = np.random.choice(len(move_values), p=probs)
     else:
         chosen_idx = best_idx
