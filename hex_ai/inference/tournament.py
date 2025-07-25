@@ -9,6 +9,9 @@ from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
 import random
 from hex_ai.value_utils import Winner
+from datetime import datetime
+import csv
+from pathlib import Path
 
 # TODO: In the future, support different play configs (search widths, MCTS, etc.)
 # TODO: Batch model inference for efficiency (currently sequential)
@@ -82,17 +85,27 @@ class TournamentResult:
 class TournamentPlayConfig:
     """
     Configuration for tournament play, including randomness, temperature, pie rule, and reproducibility.
+    If random_seed is None, use a time-based seed for uniqueness.
     """
-    def __init__(self, temperature: float = 0.5, random_seed: Optional[int] = None, pie_rule: bool = False, pie_threshold: tuple = (0.45, 0.55)):
+    def __init__(self, temperature: float = 0.5, random_seed: Optional[int] = None, pie_rule: bool = False, pie_threshold: tuple = (0.45, 0.55), search_widths: Optional[list] = None):
         self.temperature = temperature
+        if random_seed is None:
+            random_seed = int(datetime.now().strftime('%Y%m%d%H%M'))
         self.random_seed = random_seed
         self.pie_rule = pie_rule
         self.pie_threshold = pie_threshold  # (min, max) win prob for swap
-        if random_seed is not None:
-            random.seed(random_seed)
-            np.random.seed(random_seed)
+        self.search_widths = search_widths
+        random.seed(random_seed)
+        np.random.seed(random_seed)
 
-def play_single_game(model_a: SimpleModelInference, model_b: SimpleModelInference, board_size: int, search_widths: Optional[list] = None, verbose: int = 1, log_file: str = None, csv_file: str = None, play_config: Optional[TournamentPlayConfig] = None) -> str:
+def play_single_game(model_a: SimpleModelInference, 
+                     model_b: SimpleModelInference, 
+                     board_size: int, 
+                     search_widths: Optional[list] = None, 
+                     verbose: int = 1, 
+                     log_file: str = None, 
+                     csv_file: str = None, 
+                     play_config: Optional[TournamentPlayConfig] = None) -> str:
     """
     Play a single game between model_a (Blue, first) and model_b (Red, second).
     Supports the pie rule, configurable temperature, and logging.
@@ -166,10 +179,14 @@ def play_single_game(model_a: SimpleModelInference, model_b: SimpleModelInferenc
     else:
         winner_char = 'd'  # draw (if ever possible)
         result = "draw"
+    # --- LOGGING ---
     if log_file:
         append_trmph_winner_line(trmph_str, winner_char, log_file)
     if csv_file:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        # Compose row with all config info
         row = {
+            "timestamp": timestamp,
             "model_a": getattr(model_a, 'checkpoint_path', str(model_a)),
             "model_b": getattr(model_b, 'checkpoint_path', str(model_b)),
             "color_a": "blue",
@@ -177,13 +194,31 @@ def play_single_game(model_a: SimpleModelInference, model_b: SimpleModelInferenc
             "winner": winner_char,
             "pie_rule": play_config.pie_rule,
             "swap": swap_decision,
-            "temperature": play_config.temperature
+            "temperature": play_config.temperature,
+            "search_widths": str(search_widths),
+            "seed": play_config.random_seed
         }
-        log_game_csv(row, csv_file)
+        # Check if CSV exists and has the right columns
+        csv_path = Path(csv_file)
+        write_header = not csv_path.exists()
+        headers = list(row.keys())
+        if not write_header:
+            with open(csv_path, 'r') as f:
+                reader = csv.reader(f)
+                existing_headers = next(reader, None)
+                if existing_headers is None or set(headers) != set(existing_headers):
+                    write_header = True
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
     return result
 
 # Helper: model_select_move (copied from play_vs_model_cli.py for now)
-def model_select_move(model: SimpleModelInference, state: HexGameState, top_k=20, temperature=0.5):
+def model_select_move(model: SimpleModelInference,
+                      state: HexGameState, top_k=20,
+                      temperature=0.5):
     board = state.board
     policy_logits, value_logit = model.infer(board)
     from hex_ai.value_utils import get_policy_probs_from_logits
@@ -225,13 +260,17 @@ def run_round_robin_tournament(config: TournamentConfig, verbose: int = 1, log_f
     for a, b in itertools.combinations(config.checkpoint_paths, 2):
         for game_idx in range(config.num_games):
             # A as blue, B as red
-            winner = play_single_game(models[a], models[b], config.board_size, config.search_widths, verbose, log_file, csv_file, play_config)
+            winner = play_single_game(models[a], models[b], config.board_size, 
+                                      config.search_widths, verbose, log_file, csv_file, 
+                                      play_config)
             if winner == "A":
                 result.record_game(a, b)
             elif winner == "B":
                 result.record_game(b, a)
             # B as blue, A as red
-            winner = play_single_game(models[b], models[a], config.board_size, config.search_widths, verbose, log_file, csv_file, play_config)
+            winner = play_single_game(models[b], models[a], config.board_size, 
+                                      config.search_widths, verbose, log_file, csv_file, 
+                                      play_config)
             if winner == "A":
                 result.record_game(b, a)
             elif winner == "B":
