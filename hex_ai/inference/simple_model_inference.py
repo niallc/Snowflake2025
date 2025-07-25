@@ -89,7 +89,9 @@ class SimpleModelInference:
         """
         Accepts a board in trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor format.
         Uses the same preprocessing pipeline as training to ensure consistency.
-        Returns (policy_probs, value_estimate, raw_value)
+        Returns (policy_logits, value_logit):
+            - policy_logits: np.ndarray, raw policy logits (before softmax)
+            - value_logit: float, raw value logit (before sigmoid)
         """
         # Convert input to the same format used in training
         if isinstance(board, str):
@@ -132,11 +134,10 @@ class SimpleModelInference:
             input_tensor = board_3ch
 
         policy_logits, value_logit = self.model.predict(input_tensor)
-        policy_probs = torch.softmax(policy_logits, dim=0).numpy()
-        raw_value = value_logit.item()
-        prob_red_win = torch.sigmoid(torch.tensor(raw_value)).item()
-        value_blue_win = model_output_to_prob(prob_red_win, ValuePerspective.BLUE_WIN_PROB)
-        return policy_probs, value_blue_win, raw_value
+        policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
+        value_logit_val = value_logit.item() if hasattr(value_logit, 'item') else float(value_logit)
+        # Do not compute win prob or policy probs here; let caller use get_win_prob_from_model_output and get_policy_probs_from_logits
+        return policy_logits_np, value_logit_val
 
     def get_top_k_moves(self, policy_probs: np.ndarray, k: int = 3) -> List[Tuple[str, float]]:
         """

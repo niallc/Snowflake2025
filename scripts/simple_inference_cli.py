@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.value_utils import ValuePerspective
+from hex_ai.value_utils import ValuePerspective, get_win_prob_from_model_output, Winner, get_policy_probs_from_logits
 
 def main():
     parser = argparse.ArgumentParser(description="Hex AI Simple Inference CLI")
@@ -30,14 +30,17 @@ def main():
     infer.display_board(args.trmph)
 
     print("\n--- Model Predictions ---")
-    policy_probs, value, raw_value = infer.infer(args.trmph)
+    policy_logits, value_logit = infer.infer(args.trmph)
+    policy_probs = get_policy_probs_from_logits(policy_logits)
     top_moves = infer.get_top_k_moves(policy_probs, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")
-    # When printing value, clarify that it is probability Blue wins, and use the value returned from infer (already in Blue win perspective)
-    print(f"\nValue estimate (Probability Blue Wins): {value*100:.1f}%\n")  # value is always probability blue wins (TRAINING_BLUE_WIN=0.0, TRAINING_RED_WIN=1.0)
-    print(f"Raw value logit: {raw_value}")
+    print(f"Value head (logit): {value_logit:.3f}")
+    blue_prob = get_win_prob_from_model_output(value_logit, Winner.BLUE)
+    red_prob = get_win_prob_from_model_output(value_logit, Winner.RED)
+    print(f"Value head (probability Blue wins): {blue_prob:.3f}")
+    print(f"Value head (probability Red wins): {red_prob:.3f}")
 
 if __name__ == "__main__":
     # For command line execution, don't forget to run

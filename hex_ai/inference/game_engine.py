@@ -17,7 +17,7 @@ from .board_utils import (
     has_piece_at, is_empty, place_piece, board_to_string
 )
 from ..config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER
-from ..data_utils import rowcol_to_trmph, trmph_move_to_rowcol
+from ..data_utils import rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
 from ..config import BOARD_SIZE
 VERBOSE_LEVEL = 3
 
@@ -292,26 +292,15 @@ class HexGameState:
     
     @classmethod
     def from_trmph(cls, trmph: str) -> 'HexGameState':
-        """Create game state from TRMPH format."""
-        # Parse TRMPH format
+        """Create game state from TRMPH format using split_trmph_moves utility."""
         if not trmph.startswith("#13,"):
             raise ValueError("Invalid TRMPH format")
-        
         moves_str = trmph[4:]  # Remove "#13," prefix
-        moves = []
-        
-        # Parse moves (each move is 2 characters)
-        for i in range(0, len(moves_str), 2):
-            if i + 1 < len(moves_str):
-                move = moves_str[i:i+2]
-                row, col = trmph_move_to_rowcol(move)
-                moves.append((row, col))
-        
-        # Create state and apply moves
+        moves = split_trmph_moves(moves_str)
         state = cls()
-        for row, col in moves:
+        for move in moves:
+            row, col = trmph_move_to_rowcol(move)
             state = state.make_move(row, col)
-        
         return state
 
     def __str__(self) -> str:
