@@ -1,3 +1,39 @@
+# Update 2025-07-25: Inference Plan Progress and Next Steps
+
+## Current State
+- **Model**: A trained model checkpoint is available at:
+  - `checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini30.pt`
+- **Board Size**: The model is currently trained for 13x13 Hex. Support for other sizes is possible in the future, but 13x13 is the default.
+- **Simple Inference**: A basic CLI script (`scripts/simple_inference_cli.py`) exists for running inference on static positions. Both policy and value heads are performing well in spot checks.
+
+## New Plan: Interactive Play
+- **Goal**: Enable interactive play against the trained model, starting with a simple CLI interface and progressing to a browser-based UI.
+- **Initial Implementation**:
+  - CLI script to play human vs model.
+  - Board displayed in ASCII (using `hex_ai/inference/board_display.py`).
+  - After each move, output the board's `.trmph` representation (using `hex_ai/utils/format_conversion.py`).
+  - Model move selection: take top-k (e.g., 20) policy moves, evaluate with value head, pick the best (with some randomness for variety).
+- **Web UI**: Once CLI is working, move to a simple browser-based UI (Flask recommended for flexibility and future deployment).
+
+## Future Directions
+- **Self-Play**: Use the engine to generate new training data via self-play.
+- **Tournament System**: Implement tools to evaluate and compare models.
+- **Scalability**: Batch inference, efficient data pipelines, and distributed play for RL.
+- **Advanced Features**: MCTS, Pie rule, support for other board sizes, online deployment, and more.
+
+## What Has Changed
+- The codebase has evolved significantly since the original plan. Many utilities and data formats have been consolidated and modernized.
+- The immediate focus is now on usability and interactive play, rather than just batch inference or self-play.
+- The plan is more incremental: start with a simple CLI, then add features and move to a web UI.
+
+## Next Steps
+1. Implement the CLI engine for human vs model play.
+2. Output `.trmph` after each move for compatibility and analysis.
+3. Once stable, develop a browser-based UI for easier access and demonstration.
+4. Expand to self-play, tournaments, and scalable RL infrastructure.
+
+---
+
 # Hex AI Inference/Generation Plan
 
 ## Overview

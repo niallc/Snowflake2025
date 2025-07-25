@@ -19,7 +19,7 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
     header = '   ' + ' '.join(str(i) for i in range(N))
     lines.append(header)
     for row in range(N):
-        indent = '  ' * row
+        indent = ' ' * row
         row_str = f"{row:2d} " + indent
         for col in range(N):
             if highlight_move is not None and (row, col) == highlight_move:
