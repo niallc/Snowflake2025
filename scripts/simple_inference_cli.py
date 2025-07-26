@@ -31,8 +31,8 @@ def main():
 
     print("\n--- Model Predictions ---")
     policy_logits, value_logit = infer.infer(args.trmph)
-    policy_probs = get_policy_probs_from_logits(policy_logits)
-    top_moves = infer.get_top_k_moves(policy_probs, k=args.topk)
+    # Use the updated method that accepts logits directly
+    top_moves = infer.get_top_k_moves(policy_logits, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")

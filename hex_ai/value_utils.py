@@ -2,6 +2,7 @@ from enum import Enum
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN
 import torch
 import numpy as np
+from typing import List, Tuple
 
 # =============================
 # Winner Mapping Utilities
@@ -37,8 +38,8 @@ def trmph_winner_to_clear_str(trmph_winner: str) -> str:
     elif trmph_winner == TRMPH_RED_WIN:
         return "RED"
     else:
-        raise ValueError(f"Invalid TRMPH winner: {trmph_winner}") 
-    
+        raise ValueError(f"Invalid TRMPH winner: {trmph_winner}")
+
 # --- Enums for clarity ---
 class Winner(Enum):
     BLUE = 0
@@ -93,7 +94,7 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     elif perspective == ValuePerspective.RED_WIN_PROB:
         return prob
     else:
-        raise ValueError(f"Unknown perspective: {perspective}") 
+        raise ValueError(f"Unknown perspective: {perspective}")
 
 def get_win_prob_from_model_output(model_output: float, player) -> float:
     """
@@ -131,14 +132,14 @@ def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
 def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.ndarray:
     """
     Apply temperature scaling to logits and return softmaxed probabilities.
-    
+
     Args:
         logits: Raw logits (numpy array)
         temperature: Temperature parameter (higher = more random, lower = more deterministic)
-        
+
     Returns:
         Temperature-scaled softmax probabilities
-        
+
     Note:
         - temperature = 1.0: Standard softmax
         - temperature < 1.0: More deterministic (sharper distribution)
@@ -147,13 +148,13 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     """
     import torch
     import numpy as np
-    
+
     if temperature <= 0:
         # Greedy selection: return one-hot vector for argmax
         result = np.zeros_like(logits)
         result[np.argmax(logits)] = 1.0
         return result
-    
+
     # Apply temperature scaling: logits / temperature
     scaled_logits = logits / temperature
     # Apply softmax
@@ -169,7 +170,7 @@ def get_player_to_move_from_moves(moves: list) -> int:
     if len(moves) % 2 == 0:
         return BLUE_PLAYER
     else:
-        return RED_PLAYER 
+        return RED_PLAYER
 
 def winner_to_color(winner):
     """Map Winner enum or player int to color name string ('blue', 'red', or 'reset')."""
@@ -181,4 +182,94 @@ def winner_to_color(winner):
     elif winner == RED_PLAYER:
         return 'red'
     else:
-        return 'reset' 
+        return 'reset'
+
+# =============================
+# Policy Processing & Move Selection Utilities
+# =============================
+
+def policy_logits_to_probs(policy_logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
+    """
+    Convert policy logits to probabilities using temperature-scaled softmax.
+
+    Args:
+        policy_logits: Raw policy logits (numpy array)
+        temperature: Temperature parameter (default 1.0)
+
+    Returns:
+        Temperature-scaled softmax probabilities
+    """
+    return temperature_scaled_softmax(policy_logits, temperature)
+
+def get_legal_policy_probs(policy_probs: np.ndarray, legal_moves: List[Tuple[int, int]], board_size: int) -> np.ndarray:
+    """
+    Extract policy probabilities for legal moves only.
+    Raises ValueError if legal_moves is empty.
+    """
+    if not legal_moves:
+        raise ValueError("No legal moves provided to get_legal_policy_probs.")
+    move_indices = [row * board_size + col for row, col in legal_moves]
+    legal_policy = np.array([policy_probs[idx] for idx in move_indices])
+    return legal_policy
+
+def select_top_k_moves(legal_policy: np.ndarray, legal_moves: List[Tuple[int, int]], k: int) -> List[Tuple[int, int]]:
+    """
+    Select top-k moves based on policy probabilities.
+    Raises ValueError if legal_policy or legal_moves is empty.
+    """
+    if len(legal_policy) == 0 or len(legal_moves) == 0:
+        raise ValueError("No legal moves available for top-k selection.")
+    topk_idx = np.argsort(legal_policy)[::-1][:k]
+    return [legal_moves[i] for i in topk_idx]
+
+def sample_move_by_value(move_values: List[float], temperature: float = 1.0) -> int:
+    """
+    Sample a move index based on value logits using temperature scaling.
+
+    Args:
+        move_values: List of value logits for each move
+        temperature: Temperature parameter for sampling (default 1.0)
+
+    Returns:
+        Index of the selected move
+    """
+    if len(move_values) == 0:
+        raise ValueError("No moves to sample from")
+    elif len(move_values) == 1:
+        return 0
+
+    # Convert value logits to probabilities using temperature scaling
+    probs = temperature_scaled_softmax(np.array(move_values), temperature)
+    chosen_idx = np.random.choice(len(move_values), p=probs)
+    return chosen_idx
+
+def get_top_k_moves_with_probs(policy_logits: np.ndarray,
+                               legal_moves: List[Tuple[int, int]],
+                               board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
+    """
+    Get top-k moves with their probabilities, using centralized policy processing.
+
+    Args:
+        policy_logits: Raw policy logits
+        legal_moves: List of (row, col) tuples for legal moves
+        board_size: Board size
+        k: Number of top moves to return
+        temperature: Temperature for policy sampling
+
+    Returns:
+        List of ((row, col), probability) tuples for top-k moves
+    """
+    # Convert logits to probabilities
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+
+    # Get legal move probabilities
+    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, board_size)
+
+    # Select top-k moves
+    topk_moves = select_top_k_moves(legal_policy, legal_moves, k)
+
+    # Get corresponding probabilities
+    move_indices = [row * board_size + col for row, col in topk_moves]
+    move_probs = [float(policy_probs[idx]) for idx in move_indices]
+
+    return list(zip(topk_moves, move_probs)) 

@@ -3,6 +3,7 @@ from typing import List, Tuple, Optional
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
+from hex_ai.value_utils import temperature_scaled_softmax  # <-- Add this import
 
 
 def minimax_policy_value_search(
@@ -11,6 +12,7 @@ def minimax_policy_value_search(
     widths: List[int],
     batch_size: int = 1000,
     use_alpha_beta: bool = True,
+    temperature: float = 1.0,  # <-- Add temperature argument
 ) -> Tuple[Tuple[int, int], float]:
     """
     Fixed-width, fixed-depth minimax search with alpha-beta pruning and batch evaluation at the leaves.
@@ -21,6 +23,7 @@ def minimax_policy_value_search(
         widths: List of ints, e.g. [20, 10, 10, 5] (width at each ply)
         batch_size: Max batch size for evaluation
         use_alpha_beta: Whether to use alpha-beta pruning
+        temperature: Policy temperature for move selection (default 1.0)
 
     Returns:
         best_move: (row, col) tuple for the best move at the root
@@ -28,7 +31,8 @@ def minimax_policy_value_search(
     """
     # Helper: get top-k legal moves by policy
     def get_topk_moves(state, k):
-        policy_probs, _ = model.infer(state.board)
+        policy_logits, _ = model.infer(state.board)
+        policy_probs = temperature_scaled_softmax(policy_logits, temperature)  # <-- Fix: convert logits to probs
         legal_moves = state.get_legal_moves()
         move_indices = [row * state.board.shape[0] + col for row, col in legal_moves]
         legal_policy = np.array([policy_probs[idx] for idx in move_indices])

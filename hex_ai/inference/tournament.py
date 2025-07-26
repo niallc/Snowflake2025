@@ -5,10 +5,18 @@ import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.value_utils import (
+    Winner, 
+    get_win_prob_from_model_output,
+    # Add new utilities
+    policy_logits_to_probs,
+    get_legal_policy_probs,
+    select_top_k_moves,
+    sample_move_by_value,
+)
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
 import random
-from hex_ai.value_utils import Winner, get_win_prob_from_model_output, temperature_scaled_softmax
 from datetime import datetime
 import csv
 from pathlib import Path
@@ -233,33 +241,36 @@ def play_single_game(model_1: SimpleModelInference,
             writer.writerow(row)
     return result, trmph_str, winner_char, swap_decision
 
-# Helper: model_select_move (copied from play_vs_model_cli.py for now)
+# Helper: model_select_move
 def model_select_move(model: SimpleModelInference,
                       state: HexGameState, top_k=20,
                       temperature=0.5):
+    """
+    Select a move using policy and value heads with centralized utilities.
+    """
     board = state.board
     policy_logits, value_logit = model.infer(board)
-    from hex_ai.value_utils import get_policy_probs_from_logits
-    policy_probs = get_policy_probs_from_logits(policy_logits)
+    
+    # Use centralized utilities for policy processing
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
-    # TODO: Refactor into a utility and put into e.g. hex_ai/utils/format_conversion.py
-    move_indices = [row * state.board.shape[0] + col for row, col in legal_moves]
-    legal_policy = np.array([policy_probs[idx] for idx in move_indices])
+    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+    
     if len(legal_policy) == 0:
         return None
-    topk_idx = np.argsort(legal_policy)[::-1][:top_k]
-    topk_moves = [legal_moves[i] for i in topk_idx]
+    
+    # Get top-k moves using centralized utility
+    topk_moves = select_top_k_moves(legal_policy, legal_moves, top_k)
+    
+    # Evaluate each with value head
     move_values = []
     for move in topk_moves:
         temp_state = state.make_move(*move)
         _, value_logit = model.infer(temp_state.board)
         move_values.append(value_logit)
-    best_idx = np.argmax(move_values)
-    if len(move_values) > 1:
-        probs = temperature_scaled_softmax(np.array(move_values), temperature)
-        chosen_idx = np.random.choice(len(move_values), p=probs)
-    else:
-        chosen_idx = best_idx
+    
+    # Sample move using centralized utility
+    chosen_idx = sample_move_by_value(move_values, temperature)
     return topk_moves[chosen_idx]
 
 def play_games_with_each_first(

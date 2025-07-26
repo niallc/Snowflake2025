@@ -16,6 +16,11 @@ from hex_ai.value_utils import (
     get_win_prob_from_model_output,
     get_policy_probs_from_logits,
     temperature_scaled_softmax,
+    # Add new utilities
+    policy_logits_to_probs,
+    get_legal_policy_probs,
+    select_top_k_moves,
+    sample_move_by_value,
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
@@ -50,32 +55,33 @@ def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
 
 def model_select_move(model: SimpleModelInference, state: HexGameState, 
                       top_k=DEFAULT_TOP_K, temperature=0.5):
+    """
+    Select a move using policy and value heads with centralized utilities.
+    """
     board = state.board
     # Model expects (N,N) np.ndarray or trmph string
     policy_logits, value_logit = model.infer(board)
-    policy_probs = get_policy_probs_from_logits(policy_logits)
+    
+    # Use centralized utilities for policy processing
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
-    move_indices = [row * DEFAULT_BOARD_SIZE + col for row, col in legal_moves]
-    legal_policy = np.array([policy_probs[idx] for idx in move_indices])
+    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, DEFAULT_BOARD_SIZE)
+    
     if len(legal_policy) == 0:
         return None
-    # Get top-k moves
-    topk_idx = np.argsort(legal_policy)[::-1][:top_k]
-    topk_moves = [legal_moves[i] for i in topk_idx]
+    
+    # Get top-k moves using centralized utility
+    topk_moves = select_top_k_moves(legal_policy, legal_moves, top_k)
+    
     # Evaluate each with value head
     move_values = []
     for move in topk_moves:
         temp_state = state.make_move(*move)
         _, value_logit = model.infer(temp_state.board)
         move_values.append(value_logit)
-    # Pick the best, with some randomness
-    best_idx = np.argmax(move_values)
-    # Apply temperature scaling for move selection
-    if len(move_values) > 1:
-        probs = temperature_scaled_softmax(np.array(move_values), temperature)
-        chosen_idx = np.random.choice(len(move_values), p=probs)
-    else:
-        chosen_idx = best_idx
+    
+    # Sample move using centralized utility
+    chosen_idx = sample_move_by_value(move_values, temperature)
     return topk_moves[chosen_idx]
 
 def main():

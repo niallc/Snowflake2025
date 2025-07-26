@@ -13,6 +13,13 @@ from hex_ai.config import (
 )
 from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
 from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
+from hex_ai.value_utils import (
+    # Add new utilities
+    policy_logits_to_probs,
+    get_legal_policy_probs,
+    select_top_k_moves,
+    get_top_k_moves_with_probs,
+)
 
 
 class SimpleModelInference:
@@ -147,13 +154,23 @@ class SimpleModelInference:
         # Do not compute win prob or policy probs here; let caller use get_win_prob_from_model_output and get_policy_probs_from_logits
         return policy_logits_np, value_logit_val
 
-    def get_top_k_moves(self, policy_probs: np.ndarray, k: int = 3) -> List[Tuple[str, float]]:
+    def get_top_k_moves(self, policy_logits: np.ndarray, k: int = 3, temperature: float = 1.0) -> List[Tuple[str, float]]:
         """
         Returns the top-k moves as (trmph_move, probability) tuples.
+        Now accepts policy logits and uses centralized utilities.
         """
+        # Convert logits to probabilities using centralized utility
+        policy_probs = policy_logits_to_probs(policy_logits, temperature)
         topk_indices = np.argsort(policy_probs)[::-1][:k]
         moves = [(fc.tensor_to_trmph(idx, self.board_size), float(policy_probs[idx])) for idx in topk_indices]
         return moves
+
+    def get_top_k_legal_moves(self, policy_logits: np.ndarray, legal_moves: List[Tuple[int, int]], k: int = 3, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
+        """
+        Returns the top-k legal moves as ((row, col), probability) tuples.
+        Uses centralized utilities for policy processing.
+        """
+        return get_top_k_moves_with_probs(policy_logits, legal_moves, self.board_size, k, temperature)
 
     def display_board(self, board: Union[str, np.ndarray, torch.Tensor]):
         """
