@@ -18,6 +18,7 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,  # Add the new public function
+    apply_move_to_state_trmph,  # Add move application utilities
 )
 
 # Model checkpoint defaults
@@ -112,9 +113,8 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
             best_move = select_policy_move(state, model, temperature)
             best_move_trmph = fc.rowcol_to_trmph(*best_move)
         
-        # Apply the move
-        row, col = fc.trmph_move_to_rowcol(best_move_trmph)
-        state = state.make_move(row, col)
+        # Apply the move using centralized utility
+        state = apply_move_to_state_trmph(state, best_move_trmph)
         
         return {
             "success": True,
@@ -194,8 +194,7 @@ def api_move():
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
     
     try:
-        row, col = fc.trmph_move_to_rowcol(move)
-        state = state.make_move(row, col)
+        state = apply_move_to_state_trmph(state, move)
     except Exception as e:
         return jsonify({"error": f"Invalid move: {e}"}), 400
 
@@ -233,9 +232,8 @@ def api_move():
                 best_move = select_policy_move(state, model, temperature)
                 best_move_trmph = fc.rowcol_to_trmph(*best_move)
             
-            # Apply model move
-            row, col = fc.trmph_move_to_rowcol(best_move_trmph)
-            state = state.make_move(row, col)
+            # Apply model move using centralized utility
+            state = apply_move_to_state_trmph(state, best_move_trmph)
             model_move = best_move_trmph
             new_trmph = state.to_trmph()
             board = state.board.tolist()

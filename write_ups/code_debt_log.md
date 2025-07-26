@@ -28,6 +28,29 @@ This document tracks known areas of code duplication, technical debt, and major 
     - Improved testability and maintainability.
     - Consistent move selection behavior across all code paths.
 
+### Move Application Utility Refactoring (**2025-07-23**) **[RESOLVED]**
+
+- **Created core tensor-based function:** `apply_move_to_tensor()` for efficient 3-channel tensor manipulation
+- **Created wrapper functions:** `apply_move_to_state()`, `apply_move_to_state_trmph()`, `apply_move_to_tensor_trmph()`
+- **Updated all call sites:** Web app, CLI scripts, and tournament code now use centralized utilities
+- **Added comprehensive tests:** New test suite in `tests/test_move_application_utilities.py` with 19 test cases
+- **Benefits:**
+    - Eliminated code duplication across move application logic
+    - Improved efficiency with direct tensor manipulation
+    - Better error handling and consistency
+    - Easier to test and maintain
+    - All tests pass (23/23)
+
+### TRMPH Function Duplication (**2025-07-23**) **[RESOLVED]**
+
+- **Problem:** TRMPH conversion functions were duplicated between `hex_ai/data_utils.py` and `hex_ai/utils/format_conversion.py`
+- **Solution:** 
+  - Removed duplicate functions from `data_utils.py` (`strip_trmph_preamble`, `split_trmph_moves`, `trmph_move_to_rowcol`, `rowcol_to_trmph`, `tensor_to_rowcol`, `rowcol_to_tensor`, `tensor_to_trmph`, `trmph_to_tensor`)
+  - Updated imports in `hex_ai/inference/game_engine.py` to use `format_conversion` instead of `data_utils`
+  - Updated imports in `tests/test_advanced_winner_detection.py`
+- **Benefits:** Eliminated circular import issues, single source of truth for TRMPH functions
+- **Files Modified:** `hex_ai/data_utils.py`, `hex_ai/inference/game_engine.py`, `tests/test_advanced_winner_detection.py`
+
 ---
 
 ## Still To Do

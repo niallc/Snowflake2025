@@ -14,6 +14,7 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     sample_move_by_value,
     select_policy_move,  # Add the new public function
+    apply_move_to_state,  # Add move application utilities
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
@@ -148,7 +149,7 @@ def play_single_game(model_1: SimpleModelInference,
         else:
             move = model_select_move(model_1, state, temperature=play_config.temperature)
         move_sequence.append(move)
-        state = state.make_move(*move)
+        state = apply_move_to_state(state, *move)
         move_num += 1
         # Evaluate win prob for blue after first move
         policy_logits, value_logit = model_2.infer(state.board)
@@ -177,7 +178,7 @@ def play_single_game(model_1: SimpleModelInference,
         if move is None:
             break  # No valid moves
         move_sequence.append(move)
-        state = state.make_move(*move)
+        state = apply_move_to_state(state, *move)
         move_num += 1
         if verbose >= 2:
             # print(f"Move {move_num}: Player {state.current_player} played {move}")
@@ -265,7 +266,7 @@ def model_select_move(model: SimpleModelInference,
     # Evaluate each with value head
     move_values = []
     for move in topk_moves:
-        temp_state = state.make_move(*move)
+        temp_state = apply_move_to_state(state, *move)
         _, value_logit = model.infer(temp_state.board)
         move_values.append(value_logit)
     

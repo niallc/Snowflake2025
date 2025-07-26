@@ -17,7 +17,7 @@ from .board_utils import (
     has_piece_at, is_empty, place_piece, board_to_string
 )
 from ..config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER
-from ..data_utils import rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
+from hex_ai.utils.format_conversion import rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
 from ..config import BOARD_SIZE
 VERBOSE_LEVEL = 3
 

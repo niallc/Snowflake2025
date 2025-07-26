@@ -1,5 +1,14 @@
 from enum import Enum
-from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN
+from hex_ai.config import (
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
+    TRAINING_BLUE_WIN, TRAINING_RED_WIN,
+    BLUE_PLAYER, RED_PLAYER,
+    BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
+    BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+)
+from hex_ai.inference.game_engine import HexGameState
+from hex_ai.utils.format_conversion import trmph_move_to_rowcol
+# Remove self-import - these are defined in this file
 import torch
 import numpy as np
 from typing import List, Tuple
@@ -101,7 +110,6 @@ def get_win_prob_from_model_output(model_output: float, player) -> float:
     Given the raw model output (logit) and a player ('blue', 'red', or Winner),
     return the probability that player wins (according to the model's convention).
     """
-    from hex_ai.value_utils import ValuePerspective
     if isinstance(player, str):
         player = player.lower()
         if player == 'blue':
@@ -115,15 +123,12 @@ def get_win_prob_from_model_output(model_output: float, player) -> float:
     else:
         raise ValueError(f"Unknown player: {player}")
     prob_red_win = torch.sigmoid(torch.tensor(model_output)).item()
-    from hex_ai.value_utils import model_output_to_prob
     return model_output_to_prob(prob_red_win, perspective)
 
 def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     """
     Given raw policy logits (numpy array or torch tensor), return softmaxed probabilities as a numpy array.
     """
-    import torch
-    import numpy as np
     if not isinstance(policy_logits, np.ndarray):
         policy_logits = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
     policy_probs = torch.softmax(torch.tensor(policy_logits), dim=0).numpy()
@@ -146,8 +151,6 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
         - temperature > 1.0: More random (flatter distribution)
         - temperature = 0.0: Greedy selection (argmax)
     """
-    import torch
-    import numpy as np
 
     if temperature <= 0:
         # Greedy selection: return one-hot vector for argmax
@@ -166,7 +169,6 @@ def get_player_to_move_from_moves(moves: list) -> int:
     Given a list of moves (e.g., ['a1', 'b2', ...]), return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
     Blue always starts, so even number of moves = Blue's turn, odd = Red's turn.
     """
-    from hex_ai.config import BLUE_PLAYER, RED_PLAYER
     if len(moves) % 2 == 0:
         return BLUE_PLAYER
     else:
@@ -176,7 +178,6 @@ def winner_to_color(winner):
     """Map Winner enum or player int to color name string ('blue', 'red', or 'reset')."""
     if isinstance(winner, Winner):
         return 'blue' if winner == Winner.BLUE else 'red'
-    from hex_ai.config import BLUE_PLAYER, RED_PLAYER
     if winner == BLUE_PLAYER:
         return 'blue'
     elif winner == RED_PLAYER:
@@ -299,3 +300,164 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     # Select the best move (top-1)
     best_moves = select_top_k_moves(legal_policy, legal_moves, 1)
     return best_moves[0] 
+
+# =============================
+# Move Application Utilities
+# =============================
+
+def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance: float = 1e-9) -> bool:
+    """
+    Check if a position is empty in a 3-channel board tensor.
+    
+    Args:
+        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
+        row: Row index (0-(BOARD_SIZE-1))
+        col: Column index (0-(BOARD_SIZE-1))
+        tolerance: Floating-point tolerance for comparisons (default: 1e-9)
+        
+    Returns:
+        True if the position is empty (both blue and red channels are approximately EMPTY_ONEHOT)
+        
+    Raises:
+        ValueError: If the position has an invalid value (not approximately EMPTY_ONEHOT or PIECE_ONEHOT)
+        IndexError: If coordinates are out of bounds
+    """
+    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+        raise IndexError(f"Position ({row}, {col}) is out of bounds")
+    
+    blue_val = board_tensor[BLUE_CHANNEL, row, col].item()
+    red_val = board_tensor[RED_CHANNEL, row, col].item()
+    
+    # Check for invalid values (should only be approximately EMPTY_ONEHOT or PIECE_ONEHOT)
+    if not (abs(blue_val - EMPTY_ONEHOT) < tolerance or abs(blue_val - PIECE_ONEHOT) < tolerance):
+        raise ValueError(f"Invalid blue channel value at ({row}, {col}): {blue_val}")
+    if not (abs(red_val - EMPTY_ONEHOT) < tolerance or abs(red_val - PIECE_ONEHOT) < tolerance):
+        raise ValueError(f"Invalid red channel value at ({row}, {col}): {red_val}")
+    
+    # Position is empty if both channels are approximately EMPTY_ONEHOT
+    return abs(blue_val - EMPTY_ONEHOT) < tolerance and abs(red_val - EMPTY_ONEHOT) < tolerance
+
+
+def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player: int) -> torch.Tensor:
+    """
+    Apply a move to a 3-channel board tensor and return the new tensor.
+    
+    This is the core function that directly manipulates tensors for efficiency.
+    The tensor should be in (3, BOARD_SIZE, BOARD_SIZE) format where:
+    - channels[BLUE_CHANNEL] = blue pieces (0 or 1)
+    - channels[RED_CHANNEL] = red pieces (0 or 1) 
+    - channels[PLAYER_CHANNEL] = player-to-move (BLUE_PLAYER or RED_PLAYER)
+    
+    Args:
+        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
+        row: Row index (0-(BOARD_SIZE-1))
+        col: Column index (0-(BOARD_SIZE-1))
+        player: Player making the move (BLUE_PLAYER or RED_PLAYER)
+        
+    Returns:
+        New board tensor with the move applied and player-to-move channel updated
+        
+    Raises:
+        ValueError: If position is invalid or already occupied
+        IndexError: If coordinates are out of bounds
+    """
+    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+        raise IndexError(f"Position ({row}, {col}) is out of bounds")
+    
+    if board_tensor.shape != (3, BOARD_SIZE, BOARD_SIZE):
+        raise ValueError(f"Expected tensor shape (3, {BOARD_SIZE}, {BOARD_SIZE}), got {board_tensor.shape}")
+    
+    # Check if position is already occupied using utility function
+    if not is_position_empty(board_tensor, row, col):
+        raise ValueError(f"Position ({row}, {col}) is already occupied")
+    
+    # Create new tensor (don't modify original)
+    new_tensor = board_tensor.clone()
+    
+    # Place the piece in the appropriate channel using constant
+    if player == BLUE_PLAYER:
+        new_tensor[BLUE_CHANNEL, row, col] = PIECE_ONEHOT  # Blue channel
+    elif player == RED_PLAYER:
+        new_tensor[RED_CHANNEL, row, col] = PIECE_ONEHOT  # Red channel
+    else:
+        raise ValueError(f"Invalid player: {player}")
+    
+    # Update player-to-move channel (switch to other player)
+    next_player = RED_PLAYER if player == BLUE_PLAYER else BLUE_PLAYER
+    new_tensor[PLAYER_CHANNEL, :, :] = float(next_player)
+    
+    return new_tensor
+
+
+def apply_move_to_state(state, row: int, col: int) -> 'HexGameState':
+    """
+    Apply a move to a HexGameState and return the new state.
+    
+    This is the primary function for applying moves to game states.
+    It handles the move validation and state updates.
+    
+    Args:
+        state: HexGameState instance
+        row: Row index (0-12)
+        col: Column index (0-12)
+        
+    Returns:
+        New HexGameState with the move applied
+        
+    Raises:
+        ValueError: If move is invalid
+    """
+    if not state.is_valid_move(row, col):
+        raise ValueError(f"Invalid move: ({row}, {col})")
+    
+    # Use the existing make_move method which handles all the game logic
+    return state.make_move(row, col)
+
+
+def apply_move_to_state_trmph(state, trmph_move: str) -> 'HexGameState':
+    """
+    Apply a TRMPH move to a HexGameState and return the new state.
+    
+    This is a wrapper that converts TRMPH to row,col coordinates.
+    
+    Args:
+        state: HexGameState instance
+        trmph_move: TRMPH format move (e.g., "a1", "b2")
+        
+    Returns:
+        New HexGameState with the move applied
+        
+    Raises:
+        ValueError: If TRMPH move is invalid or move is invalid
+    """
+    
+    try:
+        row, col = trmph_move_to_rowcol(trmph_move)
+        return apply_move_to_state(state, row, col)
+    except Exception as e:
+        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}")
+
+
+def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, player: int) -> torch.Tensor:
+    """
+    Apply a TRMPH move to a 3-channel board tensor and return the new tensor.
+    
+    This is a wrapper that converts TRMPH to row,col coordinates.
+    
+    Args:
+        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
+        trmph_move: TRMPH format move (e.g., "a1", "b2")
+        player: Player making the move (BLUE_PLAYER=0 or RED_PLAYER=1)
+        
+    Returns:
+        New board tensor with the move applied
+        
+    Raises:
+        ValueError: If TRMPH move is invalid or move is invalid
+    """
+    
+    try:
+        row, col = trmph_move_to_rowcol(trmph_move)
+        return apply_move_to_tensor(board_tensor, row, col, player)
+    except Exception as e:
+        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 

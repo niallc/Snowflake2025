@@ -22,6 +22,7 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     sample_move_by_value,
     select_policy_move,  # Add the new public function
+    apply_move_to_state_trmph, apply_move_to_state,  # Add move application utilities
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
@@ -74,7 +75,7 @@ def model_select_move(model: SimpleModelInference, state: HexGameState,
     # Evaluate each with value head
     move_values = []
     for move in topk_moves:
-        temp_state = state.make_move(*move)
+        temp_state = apply_move_to_state(state, *move)
         _, value_logit = model.infer(temp_state.board)
         move_values.append(value_logit)
     
@@ -155,7 +156,7 @@ def main():
             print(f"Network confidence ({player_str} to play): {value:.3f} (probability {player_str} wins)")
             if state.current_player == human_player:
                 row, col = get_human_move(state, shutdown_handler)
-                state = state.make_move(row, col)
+                state = apply_move_to_state(state, row, col)
             else:
                 print("Model is thinking...")
                 if args.search_widths:
@@ -178,7 +179,7 @@ def main():
                 if move_value is not None:
                     win_prob = get_win_prob_from_model_output(move_value, model_color_enum)
                     print(f"Model's win probability ({model_color_enum.name.capitalize()}): {win_prob:.3f}")
-                state = state.make_move(*move)
+                state = apply_move_to_state(state, *move)
             move_num += 1
     except KeyboardInterrupt:
         print("\nKeyboard interrupt detected. Exiting game.")

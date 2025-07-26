@@ -22,7 +22,8 @@ from hex_ai.config import (
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+# Remove this import to break circular dependency
+# from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
 
 import string
 import logging
