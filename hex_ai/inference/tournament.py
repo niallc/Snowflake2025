@@ -106,8 +106,8 @@ class TournamentPlayConfig:
         random.seed(random_seed)
         np.random.seed(random_seed)
 
-def play_single_game(model_a: SimpleModelInference, 
-                     model_b: SimpleModelInference, 
+def play_single_game(model_1: SimpleModelInference, 
+                     model_2: SimpleModelInference, 
                      board_size: int, 
                      search_widths: Optional[list] = None, 
                      verbose: int = 1, 
@@ -115,9 +115,9 @@ def play_single_game(model_a: SimpleModelInference,
                      csv_file: str = None, 
                      play_config: Optional[TournamentPlayConfig] = None) -> str:
     """
-    Play a single game between model_a (Blue, first) and model_b (Red, second).
+    Play a single game between model_1 (Blue, first) and model_2 (Red, second).
     Supports the pie rule, configurable temperature, and logging.
-    Returns the winner's name ("A" or "B").
+    Returns the winner's name ("1" or "2").
     Uses Winner enums for player identity throughout.
     Verbosity levels:
       0: Silent (no output)
@@ -133,24 +133,24 @@ def play_single_game(model_a: SimpleModelInference,
     swap_decision = None
     # --- PIE RULE LOGIC ---
     if play_config.pie_rule:
-        # First move by model_a (Blue)
+        # First move by model_1 (Blue)
         if search_widths:
-            move, _ = minimax_policy_value_search(state, model_a, search_widths)
+            move, _ = minimax_policy_value_search(state, model_1, search_widths)
         else:
-            move = model_select_move(model_a, state, temperature=play_config.temperature)
+            move = model_select_move(model_1, state, temperature=play_config.temperature)
         move_sequence.append(move)
         state = state.make_move(*move)
         move_num += 1
         # Evaluate win prob for blue after first move
-        policy_logits, value_logit = model_b.infer(state.board)
+        policy_logits, value_logit = model_2.infer(state.board)
         win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
         # Decide whether to swap
         min_thr, max_thr = play_config.pie_threshold
         if min_thr <= win_prob_blue <= max_thr:
             swap = True
             swap_decision = 'swap'
-            # Swap model assignments: model_b becomes blue, model_a becomes red
-            model_a, model_b = model_b, model_a
+            # Swap model assignments: model_2 becomes blue, model_1 becomes red
+            model_1, model_2 = model_2, model_1
         else:
             swap_decision = 'no_swap'
         if verbose >= 1:
@@ -158,9 +158,9 @@ def play_single_game(model_a: SimpleModelInference,
     # --- MAIN GAME LOOP ---
     while not state.game_over:
         if state.current_player == BLUE_PLAYER:
-            model = model_a
+            model = model_1
         else:
-            model = model_b
+            model = model_2
         if search_widths:
             move, _ = minimax_policy_value_search(state, model, search_widths)
         else:
@@ -180,20 +180,22 @@ def play_single_game(model_a: SimpleModelInference,
     # Determine winner for logging: 'b' if blue (first mover after swap) wins, 'r' if red wins
     if state.winner == "blue":
         winner_char = 'b'
-        result = "A" if not swap else "B"
+        # Blue player is the first model (model_1) unless there was a swap
+        result = "1" if not swap else "2"
     elif state.winner == "red":
         winner_char = 'r'
-        result = "B" if not swap else "A"
+        # Red player is the second model (model_2) unless there was a swap
+        result = "2" if not swap else "1"
     else:
         winner_char = 'd'  # draw (if ever possible)
         result = "draw"
     if verbose >= 1:
         # Get the model name (filename) from the checkpoint path
-        model_name_a = os.path.basename(getattr(model_a, 'checkpoint_path', str(model_a)))
-        model_name_b = os.path.basename(getattr(model_b, 'checkpoint_path', str(model_b)))
+        model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
+        model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
         print("".join([
             "\n*Winner*:", str(winner_char), "(Model ", str(result), "). Swapped=", str(swap), ".\n",
-            "Model_a=", str(model_name_a), ",Model_b=", str(model_name_b)
+            "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
         ]))
     # --- LOGGING ---
     if log_file:
@@ -203,9 +205,9 @@ def play_single_game(model_a: SimpleModelInference,
         # Compose row with all config info
         row = {
             "timestamp": timestamp,
-            "model_a": getattr(model_a, 'checkpoint_path', str(model_a)),
-            "model_b": getattr(model_b, 'checkpoint_path', str(model_b)),
-            "color_a": "blue",
+            "model_1": os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1))),
+            "model_2": os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2))),
+            "color_1": "blue",
             "trmph": trmph_str,
             "winner": winner_char,
             "pie_rule": play_config.pie_rule,
