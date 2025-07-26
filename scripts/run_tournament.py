@@ -22,11 +22,11 @@ CHKPT_PATHS = [os.path.join(CHKPT_DIR, fname) for fname in CHECKPOINTS]
 
 
 config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=10)
-play_config = TournamentPlayConfig(temperature=0.01, random_seed=42, pie_rule=False)
+play_config = TournamentPlayConfig(temperature=0.03, random_seed=42, pie_rule=False)
 
 LOG_DIR = "data/tournament_play"
-LOG_FILE = os.path.join(LOG_DIR, "test3/tournament.log")
-CSV_FILE = os.path.join(LOG_DIR, "test3/tournament.csv")
+LOG_FILE = os.path.join(LOG_DIR, "no_swap/tournament.log")
+CSV_FILE = os.path.join(LOG_DIR, "no_swap/tournament.csv")
 
 if __name__ == "__main__":
     print("Quick test tournament: epoch1_mini1.pt vs. epoch2_mini10.pt")

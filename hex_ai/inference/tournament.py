@@ -6,6 +6,7 @@ import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import (
     Winner, 
     get_win_prob_from_model_output,
@@ -151,12 +152,12 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     """
     Handle pie rule logic: first move, evaluation, and potential swap.
     """
-    if not play_config.pie_rule:
-        return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
-    
-    # First move by model_1 (Blue)
+    # Always play the first move by model_1 (Blue) for consistency
     move = select_move(state, model_1, play_config.search_widths, play_config.temperature)
     state = apply_move_to_state(state, *move)
+    
+    if not play_config.pie_rule:
+        return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
     
     # Evaluate win prob for blue after first move
     _, value_logit = model_2.infer(state.board)
@@ -201,14 +202,20 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
         if verbose >= 2:
             print("-", end="", flush=True)
     
-    return move_sequence
+    if verbose >= 0:
+        print(f"Game loop finished after {len(move_sequence)} moves")
+        print(f"Final state: moves={len(state.move_history)}, game_over={state.game_over}, winner={state.winner}")
+        print(f"Move sequence length: {len(move_sequence)}")
+    
+    return move_sequence, state
 
 def determine_winner(state: HexGameState, model_1: SimpleModelInference, 
                     model_2: SimpleModelInference, swap: bool) -> Tuple[str, str]:
     """
     Determine the winner and return (winner_result, winner_char).
     winner_result: "1" or "2" (model identifier)
-    winner_char: 'b', 'r', or 'd' (color/result)
+    winner_char: 'b' or 'r' (color/result)
+    Raises RuntimeError if no winner is found (draws are impossible in Hex).
     """
     if state.winner == "blue":
         winner_char = 'b'
@@ -219,9 +226,7 @@ def determine_winner(state: HexGameState, model_1: SimpleModelInference,
         # Red player is the second model (model_2) unless there was a swap
         result = "2" if not swap else "1"
     else:
-        winner_char = 'd'  # draw (if ever possible)
-        result = "draw"
-    
+        raise RuntimeError("Game ended with no winner, which is impossible in Hex.")
     return result, winner_char
 
 def log_game_result(result: GameResult, model_1: SimpleModelInference, 
@@ -290,10 +295,9 @@ def play_single_game(model_1: SimpleModelInference,
     model_1, model_2 = pie_result.model_1, pie_result.model_2
     
     # Play main game loop
-    move_sequence = play_game_loop(state, model_1, model_2, search_widths, play_config.temperature, verbose)
+    move_sequence, state = play_game_loop(state, model_1, model_2, search_widths, play_config.temperature, verbose)
     
     # Convert move sequence to TRMPH string
-    from hex_ai.utils.format_conversion import rowcol_to_trmph
     trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
     trmph_str = f"#{board_size},{trmph_moves}"
     

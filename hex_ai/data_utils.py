@@ -120,9 +120,6 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
         raise ValueError(f"Unknown format_type: {format_type}")
 
 
-# These functions are now imported from hex_ai.utils.format_conversion
-# Removed duplicate definitions to avoid confusion
-
 
 # ============================================================================
 # Data Augmentation Functions
