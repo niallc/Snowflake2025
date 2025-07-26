@@ -9,7 +9,7 @@ from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output
+from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
@@ -61,7 +61,7 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 # --- Computer move functionality ---
-def make_computer_move(trmph, model_id, search_widths=None):
+def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
     """Make one computer move and return the new state."""
     try:
         state = HexGameState.from_trmph(trmph)
@@ -92,7 +92,8 @@ def make_computer_move(trmph, model_id, search_widths=None):
                 else:
                     # Fallback to policy-based move
                     policy_logits, _ = model.infer(trmph)
-                    policy_probs = get_policy_probs_from_logits(policy_logits)
+                    # Apply temperature scaling to policy
+                    policy_probs = temperature_scaled_softmax(policy_logits, temperature)
                     legal_moves = state.get_legal_moves()
                     legal_indices = [fc.trmph_to_tensor(fc.rowcol_to_trmph(row, col)) for row, col in legal_moves]
                     best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
@@ -101,7 +102,8 @@ def make_computer_move(trmph, model_id, search_widths=None):
                 app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                 # Fallback to policy-based move
                 policy_logits, _ = model.infer(trmph)
-                policy_probs = get_policy_probs_from_logits(policy_logits)
+                # Apply temperature scaling to policy
+                policy_probs = temperature_scaled_softmax(policy_logits, temperature)
                 legal_moves = state.get_legal_moves()
                 legal_indices = [fc.trmph_to_tensor(fc.rowcol_to_trmph(row, col)) for row, col in legal_moves]
                 best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
@@ -109,7 +111,8 @@ def make_computer_move(trmph, model_id, search_widths=None):
         else:
             # Simple policy-based move
             policy_logits, _ = model.infer(trmph)
-            policy_probs = get_policy_probs_from_logits(policy_logits)
+            # Apply temperature scaling to policy
+            policy_probs = temperature_scaled_softmax(policy_logits, temperature)
             legal_moves = state.get_legal_moves()
             legal_indices = [fc.trmph_to_tensor(fc.rowcol_to_trmph(row, col)) for row, col in legal_moves]
             best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
@@ -144,6 +147,7 @@ def api_state():
     data = request.get_json()
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")  # Default to model1
+    temperature = data.get("temperature", 1.0)  # Default temperature
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -159,7 +163,8 @@ def api_state():
     try:
         model = get_model(model_id)
         policy_logits, value_logit = model.infer(trmph)
-        policy_probs = get_policy_probs_from_logits(policy_logits)
+        # Apply temperature scaling to policy
+        policy_probs = temperature_scaled_softmax(policy_logits, temperature)
         # Map policy to trmph moves
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
         # Win probability for current player
@@ -187,6 +192,7 @@ def api_move():
     move = data.get("move")
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
+    temperature = data.get("temperature", 1.0)  # Default temperature
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -222,7 +228,8 @@ def api_move():
                     else:
                         # Fallback to policy-based move
                         policy_logits, _ = model.infer(new_trmph)
-                        policy_probs = get_policy_probs_from_logits(policy_logits)
+                        # Apply temperature scaling to policy
+                        policy_probs = temperature_scaled_softmax(policy_logits, temperature)
                         legal_indices = [fc.trmph_to_tensor(m) for m in legal_moves]
                         best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
                         best_move_trmph = fc.tensor_to_trmph(best_idx)
@@ -230,14 +237,16 @@ def api_move():
                     app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                     # Fallback to policy-based move
                     policy_logits, _ = model.infer(new_trmph)
-                    policy_probs = get_policy_probs_from_logits(policy_logits)
+                    # Apply temperature scaling to policy
+                    policy_probs = temperature_scaled_softmax(policy_logits, temperature)
                     legal_indices = [fc.trmph_to_tensor(m) for m in legal_moves]
                     best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
                     best_move_trmph = fc.tensor_to_trmph(best_idx)
             else:
                 # Simple policy-based move
                 policy_logits, _ = model.infer(new_trmph)
-                policy_probs = get_policy_probs_from_logits(policy_logits)
+                # Apply temperature scaling to policy
+                policy_probs = temperature_scaled_softmax(policy_logits, temperature)
                 legal_indices = [fc.trmph_to_tensor(m) for m in legal_moves]
                 best_idx = max(legal_indices, key=lambda idx: policy_probs[idx])
                 best_move_trmph = fc.tensor_to_trmph(best_idx)
@@ -260,7 +269,8 @@ def api_move():
     try:
         model = get_model(model_id)
         policy_logits, value_logit = model.infer(new_trmph)
-        policy_probs = get_policy_probs_from_logits(policy_logits)
+        # Apply temperature scaling to policy
+        policy_probs = temperature_scaled_softmax(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
         win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
     except Exception as e:
@@ -287,11 +297,12 @@ def api_computer_move():
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
+    temperature = data.get("temperature", 1.0)  # Default temperature
     
     if not trmph:
         return jsonify({"error": "TRMPH required"}), 400
     
-    result = make_computer_move(trmph, model_id, search_widths)
+    result = make_computer_move(trmph, model_id, search_widths, temperature)
     
     if result["success"]:
         return jsonify(result)

@@ -27,11 +27,31 @@ let state = {
   last_move: null,
   blue_model_id: 'model1',
   red_model_id: 'model2',
-  search_widths: [],
+  blue_search_widths: [],
+  red_search_widths: [],
+  blue_temperature: 1.0,
+  red_temperature: 1.0,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: []
 };
+
+// --- Utility: Get per-player settings ---
+function getCurrentPlayerSettings() {
+  if (state.player === 'blue') {
+    return {
+      model_id: state.blue_model_id,
+      search_widths: state.blue_search_widths,
+      temperature: state.blue_temperature
+    };
+  } else {
+    return {
+      model_id: state.red_model_id,
+      search_widths: state.red_search_widths,
+      temperature: state.red_temperature
+    };
+  }
+}
 
 // --- Utility: Convert (row, col) to TRMPH move ---
 function rowcolToTrmph(row, col) {
@@ -48,31 +68,31 @@ async function fetchModels() {
   return await resp.json();
 }
 
-async function fetchState(trmph, model_id = 'model1') {
+async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   const resp = await fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id }),
+    body: JSON.stringify({ trmph, model_id, temperature }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', search_widths = []) {
+async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0) {
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, move, model_id, search_widths }),
+    body: JSON.stringify({ trmph, move, model_id, search_widths, temperature }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = []) {
+async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0) {
   const resp = await fetch('/api/computer_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, search_widths }),
+    body: JSON.stringify({ trmph, model_id, search_widths, temperature }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -227,10 +247,10 @@ async function onCellClick(e) {
   
   const row = parseInt(e.target.getAttribute('data-row'));
   const col = parseInt(e.target.getAttribute('data-col'));
-  const current_model_id = state.player === 'blue' ? state.blue_model_id : state.red_model_id;
+  const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
   
   try {
-    const result = await fetchMove(state.trmph, rowcolToTrmph(row, col), current_model_id, state.search_widths);
+    const result = await fetchMove(state.trmph, rowcolToTrmph(row, col), model_id, search_widths, temperature);
     state.trmph = result.new_trmph;
     state.board = result.board;
     state.player = result.player;
@@ -253,10 +273,10 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const current_model_id = state.player === 'blue' ? state.blue_model_id : state.red_model_id;
+  const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
   
   try {
-    const result = await makeComputerMove(state.trmph, current_model_id, state.search_widths);
+    const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature);
     
     if (result.success) {
       state.trmph = result.new_trmph;
@@ -327,7 +347,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initial state fetch
   try {
-    const result = await fetchState(state.trmph, state.blue_model_id);
+    // Use blue's settings for initial fetch
+    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;
@@ -342,19 +363,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('blue-model').addEventListener('change', (e) => {
     state.blue_model_id = e.target.value;
   });
-  
   document.getElementById('red-model').addEventListener('change', (e) => {
     state.red_model_id = e.target.value;
   });
-  
-  // Search widths handler
-  document.getElementById('search-widths').addEventListener('input', (e) => {
+
+  // Blue search widths
+  document.getElementById('blue-search-widths').addEventListener('input', (e) => {
     const value = e.target.value.trim();
     if (value) {
-      state.search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      state.blue_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
     } else {
-      state.search_widths = [];
+      state.blue_search_widths = [];
     }
+  });
+  // Red search widths
+  document.getElementById('red-search-widths').addEventListener('input', (e) => {
+    const value = e.target.value.trim();
+    if (value) {
+      state.red_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+    } else {
+      state.red_search_widths = [];
+    }
+  });
+  // Blue temperature
+  document.getElementById('blue-temperature').addEventListener('input', (e) => {
+    state.blue_temperature = parseFloat(e.target.value);
+  });
+  // Red temperature
+  document.getElementById('red-temperature').addEventListener('input', (e) => {
+    state.red_temperature = parseFloat(e.target.value);
   });
 
   // Step button handler
@@ -382,7 +419,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     state.trmph = '#13,';
-    const result = await fetchState(state.trmph, state.blue_model_id);
+    // Use blue's settings for reset
+    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;

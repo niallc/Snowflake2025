@@ -8,54 +8,65 @@
 </head>
 <body>
   <div id="app-container">
-    <h1>Hex AI</h1>
-    <div id="status-line">Loading...</div>
-    
-    <!-- Model Selection Controls -->
-    <div id="model-controls" class="control-panel">
-      <h3>Model Selection</h3>
-      <div class="model-row">
-        <label for="blue-model">Blue Player:</label>
-        <select id="blue-model">
-          <option value="model1">Model 1 (epoch1_mini1)</option>
-          <option value="model2">Model 2 (epoch2_mini10)</option>
-        </select>
-      </div>
-      <div class="model-row">
-        <label for="red-model">Red Player:</label>
-        <select id="red-model">
-          <option value="model1">Model 1 (epoch1_mini1)</option>
-          <option value="model2" selected>Model 2 (epoch2_mini10)</option>
-        </select>
+    <div id="board-section">
+      <h1>Hex AI</h1>
+      <div id="status-line">Loading...</div>
+      <div id="board-container"></div>
+      <div id="controls">
+        <button id="reset-btn">Reset</button>
+        <span>TRMPH: <input id="trmph-string" type="text" readonly size="40"></span>
+        <button id="copy-trmph">Copy</button>
       </div>
     </div>
-    
-    <!-- Computer Move Controls -->
-    <div id="computer-move-controls" class="control-panel">
-      <h3>Computer Moves</h3>
-      <div class="computer-move-row">
-        <button id="step-btn" class="btn-primary">Step (Computer Move)</button>
-        <label for="step-delay">Delay (ms):</label>
-        <input id="step-delay" type="number" value="500" min="0" max="5000" step="100">
+    <div id="config-section">
+      <!-- Model Selection Controls -->
+      <div id="model-controls" class="control-panel">
+        <h3>Model Selection</h3>
+        <div class="model-row">
+          <label for="blue-model">Blue Player:</label>
+          <select id="blue-model"></select>
+        </div>
+        <div class="model-row">
+          <label for="red-model">Red Player:</label>
+          <select id="red-model"></select>
+        </div>
       </div>
-      <div class="search-width-row">
-        <label for="search-widths">Search Widths (comma-separated):</label>
-        <input id="search-widths" type="text" placeholder="20,10,5" value="">
-        <small>Leave empty for policy-only moves</small>
+      <!-- Computer Move Controls -->
+      <div id="computer-move-controls" class="control-panel">
+        <h3>Computer Move Settings</h3>
+        <div class="player-settings">
+          <div class="player-label">Blue:</div>
+          <div class="search-width-row">
+            <label for="blue-search-widths">Search Widths:</label>
+            <input id="blue-search-widths" type="text" placeholder="20,10,5" value="">
+          </div>
+          <div class="temperature-row">
+            <label for="blue-temperature">Temperature:</label>
+            <input id="blue-temperature" type="number" value="1.0" min="0.1" max="5.0" step="0.1">
+          </div>
+        </div>
+        <div class="player-settings">
+          <div class="player-label">Red:</div>
+          <div class="search-width-row">
+            <label for="red-search-widths">Search Widths:</label>
+            <input id="red-search-widths" type="text" placeholder="20,10,5" value="">
+          </div>
+          <div class="temperature-row">
+            <label for="red-temperature">Temperature:</label>
+            <input id="red-temperature" type="number" value="1.0" min="0.1" max="5.0" step="0.1">
+          </div>
+        </div>
+        <div class="computer-move-row">
+          <button id="step-btn" class="btn-primary">Step (Computer Move)</button>
+          <label for="step-delay">Delay (ms):</label>
+          <input id="step-delay" type="number" value="500" min="0" max="5000" step="100">
+        </div>
+        <div class="auto-step-row">
+          <label for="auto-step-checkbox">Auto-step:</label>
+          <input id="auto-step-checkbox" type="checkbox">
+          <small>Automatically make computer moves with delay</small>
+        </div>
       </div>
-      <div class="auto-step-row">
-        <label for="auto-step-checkbox">Auto-step:</label>
-        <input id="auto-step-checkbox" type="checkbox">
-        <small>Automatically make computer moves with delay</small>
-      </div>
-    </div>
-    
-    <div id="board-container"></div>
-    
-    <div id="controls">
-      <button id="reset-btn">Reset</button>
-      <span>TRMPH: <input id="trmph-string" type="text" readonly size="40"></span>
-      <button id="copy-trmph">Copy</button>
     </div>
   </div>
   <script src="/static/app.js"></script>
