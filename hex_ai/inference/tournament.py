@@ -13,6 +13,7 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     sample_move_by_value,
+    select_policy_move,  # Add the new public function
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
@@ -242,16 +243,15 @@ def play_single_game(model_1: SimpleModelInference,
     return result, trmph_str, winner_char, swap_decision
 
 # Helper: model_select_move
+# TODO: Check duplication vs. scripts/play_vs_model_cli.py and select_policy_move
 def model_select_move(model: SimpleModelInference,
                       state: HexGameState, top_k=20,
                       temperature=0.5):
     """
     Select a move using policy and value heads with centralized utilities.
     """
-    board = state.board
-    policy_logits, value_logit = model.infer(board)
-    
-    # Use centralized utilities for policy processing
+    # Get top-k moves using centralized utilities
+    policy_logits, _ = model.infer(state.board)
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
     legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])

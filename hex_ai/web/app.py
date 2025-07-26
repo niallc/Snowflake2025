@@ -17,6 +17,7 @@ from hex_ai.value_utils import (
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
+    select_policy_move,  # Add the new public function
 )
 
 # Model checkpoint defaults
@@ -99,16 +100,16 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
                 else:
                     # Fallback to policy-based move using centralized utilities
-                    best_move = _select_policy_move(state, model, temperature)
+                    best_move = select_policy_move(state, model, temperature)
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
             except Exception as e:
                 app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                 # Fallback to policy-based move using centralized utilities
-                best_move = _select_policy_move(state, model, temperature)
+                best_move = select_policy_move(state, model, temperature)
                 best_move_trmph = fc.rowcol_to_trmph(*best_move)
         else:
             # Simple policy-based move using centralized utilities
-            best_move = _select_policy_move(state, model, temperature)
+            best_move = select_policy_move(state, model, temperature)
             best_move_trmph = fc.rowcol_to_trmph(*best_move)
         
         # Apply the move
@@ -129,24 +130,6 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
     except Exception as e:
         app.logger.error(f"Computer move failed: {e}")
         return {"success": False, "error": str(e)}
-
-def _select_policy_move(state: HexGameState, model, temperature: float) -> Tuple[int, int]:
-    """
-    Select a move using policy head with centralized utilities.
-    """
-    policy_logits, _ = model.infer(state.board)
-    
-    # Use centralized utilities for policy processing
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    legal_moves = state.get_legal_moves()
-    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
-    
-    if len(legal_policy) == 0:
-        raise ValueError("No legal moves available")
-    
-    # Select the best move (top-1)
-    best_moves = select_top_k_moves(legal_policy, legal_moves, 1)
-    return best_moves[0]
 
 @app.route("/api/models", methods=["GET"])
 def api_models():
@@ -238,16 +221,16 @@ def api_move():
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
                     else:
                         # Fallback to policy-based move using centralized utilities
-                        best_move = _select_policy_move(state, model, temperature)
+                        best_move = select_policy_move(state, model, temperature)
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
                 except Exception as e:
                     app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                     # Fallback to policy-based move using centralized utilities
-                    best_move = _select_policy_move(state, model, temperature)
+                    best_move = select_policy_move(state, model, temperature)
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
             else:
                 # Simple policy-based move using centralized utilities
-                best_move = _select_policy_move(state, model, temperature)
+                best_move = select_policy_move(state, model, temperature)
                 best_move_trmph = fc.rowcol_to_trmph(*best_move)
             
             # Apply model move

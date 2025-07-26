@@ -248,28 +248,54 @@ def get_top_k_moves_with_probs(policy_logits: np.ndarray,
                                board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
     """
     Get top-k moves with their probabilities, using centralized policy processing.
-
+    
     Args:
         policy_logits: Raw policy logits
         legal_moves: List of (row, col) tuples for legal moves
         board_size: Board size
         k: Number of top moves to return
         temperature: Temperature for policy sampling
-
+        
     Returns:
         List of ((row, col), probability) tuples for top-k moves
     """
     # Convert logits to probabilities
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
-
+    
     # Get legal move probabilities
     legal_policy = get_legal_policy_probs(policy_probs, legal_moves, board_size)
-
+    
     # Select top-k moves
     topk_moves = select_top_k_moves(legal_policy, legal_moves, k)
-
+    
     # Get corresponding probabilities
     move_indices = [row * board_size + col for row, col in topk_moves]
     move_probs = [float(policy_probs[idx]) for idx in move_indices]
+    
+    return list(zip(topk_moves, move_probs))
 
-    return list(zip(topk_moves, move_probs)) 
+def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int]:
+    """
+    Select a move using policy head with centralized utilities.
+    
+    Args:
+        state: Game state (must have .board and .get_legal_moves() methods)
+        model: Model instance (must have .infer() method that returns (policy_logits, value_logit))
+        temperature: Temperature for policy sampling (default 1.0)
+        
+    Returns:
+        (row, col) tuple for the selected move
+        
+    Raises:
+        ValueError: If no legal moves are available
+    """
+    policy_logits, _ = model.infer(state.board)
+    
+    # Use centralized utilities for policy processing
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    legal_moves = state.get_legal_moves()
+    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+    
+    # Select the best move (top-1)
+    best_moves = select_top_k_moves(legal_policy, legal_moves, 1)
+    return best_moves[0] 

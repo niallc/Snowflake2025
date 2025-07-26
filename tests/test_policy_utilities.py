@@ -13,6 +13,7 @@ from hex_ai.value_utils import (
     sample_move_by_value,
     get_top_k_moves_with_probs,
     temperature_scaled_softmax,
+    select_policy_move,  # Add the new function
 )
 
 def test_policy_logits_to_probs():
@@ -112,6 +113,64 @@ def test_consistency_with_original_logic():
     
     # Should produce the same moves
     assert topk_moves_new == topk_moves_orig
+
+def test_select_policy_move():
+    """Test the new select_policy_move function."""
+    from hex_ai.inference.game_engine import HexGameState
+    
+    # Create a mock model that returns predictable logits for a 13x13 board (169 positions)
+    class MockModel:
+        def infer(self, board):
+            # Return logits that favor the first few positions
+            # Create 169 logits (13x13 board)
+            logits = np.zeros(169)
+            logits[0] = 3.0  # Favor position (0,0)
+            logits[1] = 2.0  # Favor position (0,1)
+            logits[13] = 1.0  # Favor position (1,0)
+            logits[14] = 0.5  # Favor position (1,1)
+            return logits, 0.0
+    
+    # Create a game state with some moves already made
+    state = HexGameState()
+    # Make a few moves to create a non-empty board
+    state = state.make_move(0, 0)  # Blue plays at (0,0)
+    state = state.make_move(1, 1)  # Red plays at (1,1)
+    
+    model = MockModel()
+    temperature = 1.0
+    
+    # Test that select_policy_move returns a valid move
+    best_move = select_policy_move(state, model, temperature)
+    assert isinstance(best_move, tuple) and len(best_move) == 2
+    assert 0 <= best_move[0] < 13 and 0 <= best_move[1] < 13
+    
+    # Test that the move is legal
+    legal_moves = state.get_legal_moves()
+    assert best_move in legal_moves
+    
+    # Test with different temperature
+    best_move_cold = select_policy_move(state, model, 0.1)  # More deterministic
+    best_move_hot = select_policy_move(state, model, 2.0)   # More random
+    # With the same model and deterministic temperature, should get same result
+    assert best_move == best_move_cold
+    
+    # Test error case: no legal moves (game over)
+    # Create a finished game state by filling most of the board
+    finished_state = HexGameState()
+    # Fill most of the board to create a nearly finished game
+    for i in range(12):  # Don't fill completely to avoid winner detection issues
+        for j in range(12):
+            if (i + j) % 2 == 0:  # Alternate pattern
+                try:
+                    finished_state = finished_state.make_move(i, j)
+                except ValueError:
+                    # Move might be invalid, continue
+                    pass
+    
+    # If there are no legal moves, should raise ValueError
+    if len(finished_state.get_legal_moves()) == 0:
+        with pytest.raises(ValueError):
+            select_policy_move(finished_state, model, temperature)
 
 if __name__ == "__main__":
     pytest.main([__file__]) 

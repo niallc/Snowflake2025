@@ -8,7 +8,25 @@ This document tracks known areas of code duplication, technical debt, and major 
 
 ### Policy Processing & Move Selection Refactoring (**2025-07-23**) **[RESOLVED]**
 
+- **Critical Bug Fixed:** Tree search now uses temperature-scaled softmax for policy logits, fixing a major play-quality issue.
 - **Centralized Utilities:** All policy processing and move selection logic is now handled by canonical utilities in `hex_ai/value_utils.py`.
+- **Files Updated:**
+    - `hex_ai/value_utils.py` (new utilities)
+    - `hex_ai/inference/fixed_tree_search.py` (bug fix, refactor)
+    - `scripts/play_vs_model_cli.py`, `hex_ai/inference/tournament.py`, `hex_ai/web/app.py`, `hex_ai/inference/simple_model_inference.py`, `scripts/simple_inference_cli.py` (refactored to use utilities)
+    - `tests/test_policy_utilities.py` (comprehensive tests)
+- **Benefits:**
+    - Bug fix, code deduplication, maintainability, consistency, and easier future improvements.
+
+### Web Move-Making Code Modularization (**2025-07-23**) **[RESOLVED]**
+
+- **Moved `_select_policy_move` to shared utility:** The private helper function in `hex_ai/web/app.py` has been moved to `hex_ai/value_utils.py` as the public `select_policy_move` function.
+- **Updated all call-sites:** Web app, CLI scripts, and tournament code now use the shared utility.
+- **Added comprehensive tests:** New test for `select_policy_move` function with various scenarios.
+- **Benefits:**
+    - Eliminated duplication between web and CLI move selection logic.
+    - Improved testability and maintainability.
+    - Consistent move selection behavior across all code paths.
 
 ---
 

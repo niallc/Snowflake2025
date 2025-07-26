@@ -21,6 +21,7 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     sample_move_by_value,
+    select_policy_move,  # Add the new public function
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
@@ -58,11 +59,8 @@ def model_select_move(model: SimpleModelInference, state: HexGameState,
     """
     Select a move using policy and value heads with centralized utilities.
     """
-    board = state.board
-    # Model expects (N,N) np.ndarray or trmph string
-    policy_logits, value_logit = model.infer(board)
-    
-    # Use centralized utilities for policy processing
+    # Get top-k moves using centralized utilities
+    policy_logits, _ = model.infer(state.board)
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
     legal_policy = get_legal_policy_probs(policy_probs, legal_moves, DEFAULT_BOARD_SIZE)
