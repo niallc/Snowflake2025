@@ -48,7 +48,8 @@ def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
         except Exception as e:
             print(f"Invalid input: {e}")
 
-def model_select_move(model: SimpleModelInference, state: HexGameState, top_k=DEFAULT_TOP_K, temperature=0.5):
+def model_select_move(model: SimpleModelInference, state: HexGameState, 
+                      top_k=DEFAULT_TOP_K, temperature=0.5):
     board = state.board
     # Model expects (N,N) np.ndarray or trmph string
     policy_logits, value_logit = model.infer(board)

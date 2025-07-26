@@ -25,6 +25,12 @@ let state = {
   legal_moves: [],
   winner: null,
   last_move: null,
+  blue_model_id: 'model1',
+  red_model_id: 'model2',
+  search_widths: [],
+  auto_step_active: false,
+  auto_step_timeout: null,
+  available_models: []
 };
 
 // --- Utility: Convert (row, col) to TRMPH move ---
@@ -33,21 +39,40 @@ function rowcolToTrmph(row, col) {
 }
 
 // --- API Calls ---
-async function fetchState(trmph) {
-  const resp = await fetch('/api/state', {
-    method: 'POST',
+async function fetchModels() {
+  const resp = await fetch('/api/models', {
+    method: 'GET',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
 }
 
-async function fetchMove(trmph, move) {
+async function fetchState(trmph, model_id = 'model1') {
+  const resp = await fetch('/api/state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trmph, model_id }),
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
+}
+
+async function fetchMove(trmph, move, model_id = 'model1', search_widths = []) {
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, move }),
+    body: JSON.stringify({ trmph, move, model_id, search_widths }),
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
+}
+
+async function makeComputerMove(trmph, model_id, search_widths = []) {
+  const resp = await fetch('/api/computer_move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trmph, model_id, search_widths }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -108,7 +133,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner) {
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
-      if (isLegal && !winner) {
+      if (isLegal && !winner && !state.auto_step_active) {
         hex.classList.add('clickable');
         hex.addEventListener('click', onCellClick);
       }
@@ -162,25 +187,50 @@ function hexCenter(row, col) {
 function updateUI() {
   const boardContainer = document.getElementById('board-container');
   drawBoard(boardContainer, state.board, state.legal_moves, state.last_move, state.winner);
+  
   // Status
   const status = document.getElementById('status-line');
   if (state.winner) {
     status.textContent = `Game over: ${state.winner} wins!`;
     status.style.color = state.winner === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+  } else if (state.auto_step_active) {
+    status.textContent = `Auto-stepping: ${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
+    status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
   } else {
     status.textContent = `${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
     status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
   }
+  
   // TRMPH
   document.getElementById('trmph-string').value = state.trmph;
+  
+  // Update step button
+  const stepBtn = document.getElementById('step-btn');
+  if (state.winner) {
+    stepBtn.textContent = 'Game Over';
+    stepBtn.disabled = true;
+  } else {
+    stepBtn.textContent = 'Step (Computer Move)';
+    stepBtn.disabled = false;
+  }
+  
+  // Disable controls during auto-step (but allow interruption)
+  const controls = document.querySelectorAll('select, input:not(#auto-step-checkbox), button:not(#step-btn)');
+  controls.forEach(control => {
+    control.disabled = state.auto_step_active;
+  });
 }
 
 // --- Event Handlers ---
 async function onCellClick(e) {
+  if (state.auto_step_active || state.winner) return;
+  
   const row = parseInt(e.target.getAttribute('data-row'));
   const col = parseInt(e.target.getAttribute('data-col'));
+  const current_model_id = state.player === 'blue' ? state.blue_model_id : state.red_model_id;
+  
   try {
-    const result = await fetchMove(state.trmph, rowcolToTrmph(row, col));
+    const result = await fetchMove(state.trmph, rowcolToTrmph(row, col), current_model_id, state.search_widths);
     state.trmph = result.new_trmph;
     state.board = result.board;
     state.player = result.player;
@@ -199,11 +249,85 @@ function getLastMove(board, legalMoves) {
   return null;
 }
 
+// --- Computer move functionality ---
+async function stepComputerMove() {
+  if (state.winner) return;
+  
+  const current_model_id = state.player === 'blue' ? state.blue_model_id : state.red_model_id;
+  
+  try {
+    const result = await makeComputerMove(state.trmph, current_model_id, state.search_widths);
+    
+    if (result.success) {
+      state.trmph = result.new_trmph;
+      state.board = result.board;
+      state.player = result.player;
+      state.legal_moves = result.legal_moves;
+      state.winner = result.winner;
+      state.last_move = result.move_made ? getLastMoveFromTrmph(result.move_made) : null;
+      updateUI();
+      
+      // If auto-step is active and game isn't over, schedule next move
+      if (state.auto_step_active && !state.winner) {
+        const delay = parseInt(document.getElementById('step-delay').value);
+        state.auto_step_timeout = setTimeout(stepComputerMove, delay);
+      }
+    } else {
+      alert('Computer move failed: ' + result.error);
+    }
+  } catch (err) {
+    alert('Computer move failed: ' + err.message);
+  }
+}
+
+function getLastMoveFromTrmph(moveTrmph) {
+  // Convert TRMPH move to row, col for highlighting
+  const col = moveTrmph.charCodeAt(0) - 97; // 'a' = 0, 'b' = 1, etc.
+  const row = parseInt(moveTrmph.slice(1)) - 1; // '1' = 0, '2' = 1, etc.
+  return [row, col];
+}
+
+function stopAutoStep() {
+  state.auto_step_active = false;
+  if (state.auto_step_timeout) {
+    clearTimeout(state.auto_step_timeout);
+    state.auto_step_timeout = null;
+  }
+  updateUI();
+}
+
 // --- Controls ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // Load available models
+  try {
+    const modelsResult = await fetchModels();
+    state.available_models = modelsResult.models;
+    
+    // Update model selection dropdowns
+    const blueSelect = document.getElementById('blue-model');
+    const redSelect = document.getElementById('red-model');
+    
+    blueSelect.innerHTML = '';
+    redSelect.innerHTML = '';
+    
+    state.available_models.forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.name;
+      blueSelect.appendChild(option.cloneNode(true));
+      redSelect.appendChild(option);
+    });
+    
+    // Set default selections
+    blueSelect.value = state.blue_model_id;
+    redSelect.value = state.red_model_id;
+  } catch (err) {
+    console.error('Failed to load models:', err);
+  }
+
   // Initial state fetch
   try {
-    const result = await fetchState(state.trmph);
+    const result = await fetchState(state.trmph, state.blue_model_id);
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;
@@ -214,10 +338,51 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('status-line').textContent = 'Failed to load board.';
   }
 
+  // Model selection handlers
+  document.getElementById('blue-model').addEventListener('change', (e) => {
+    state.blue_model_id = e.target.value;
+  });
+  
+  document.getElementById('red-model').addEventListener('change', (e) => {
+    state.red_model_id = e.target.value;
+  });
+  
+  // Search widths handler
+  document.getElementById('search-widths').addEventListener('input', (e) => {
+    const value = e.target.value.trim();
+    if (value) {
+      state.search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+    } else {
+      state.search_widths = [];
+    }
+  });
+
+  // Step button handler
+  document.getElementById('step-btn').addEventListener('click', async () => {
+    await stepComputerMove();
+  });
+
+  // Auto-step checkbox handler
+  document.getElementById('auto-step-checkbox').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      state.auto_step_active = true;
+      updateUI();
+      // Start auto-stepping
+      stepComputerMove();
+    } else {
+      stopAutoStep();
+    }
+  });
+
   // Reset button
   document.getElementById('reset-btn').addEventListener('click', async () => {
+    if (state.auto_step_active) {
+      stopAutoStep();
+      document.getElementById('auto-step-checkbox').checked = false;
+    }
+    
     state.trmph = '#13,';
-    const result = await fetchState(state.trmph);
+    const result = await fetchState(state.trmph, state.blue_model_id);
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;
