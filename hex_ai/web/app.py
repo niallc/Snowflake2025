@@ -291,7 +291,7 @@ def api_computer_move():
 
 @app.route("/favicon.ico")
 def favicon():
-    return send_from_directory(os.path.join(os.path.dirname(__file__)), "favicon2_transp_cropped.png")
+    return send_from_directory(os.path.join(os.path.dirname(__file__)), "favicon3_cropped.png")
 
 @app.route("/static/<path:path>")
 def serve_static(path):

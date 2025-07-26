@@ -1,6 +1,7 @@
 import os
 import itertools
 from typing import List, Dict, Tuple, Optional, Any
+from dataclasses import dataclass
 import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
@@ -23,11 +24,28 @@ from datetime import datetime
 import csv
 from pathlib import Path
 
-# TODO: In the future, support different play configs (search widths, MCTS, etc.)
+# TODO: In the future, support different play configs (search_widths, MCTS, etc.)
 # TODO: Batch model inference for efficiency (currently sequential)
 # TODO: Use incremental winner detection (UnionFind) for efficiency
 # TODO: Add Swiss, knockout, and other tournament types
 # TODO: Add logging and checkpointing for long tournaments
+
+@dataclass
+class GameResult:
+    """Result of a single game."""
+    winner: str  # "1" or "2"
+    trmph_str: str
+    winner_char: str  # 'b', 'r', 'd'
+    swap_decision: Optional[str]
+    move_sequence: List[Tuple[int, int]]
+
+@dataclass
+class PieRuleResult:
+    """Result of pie rule evaluation."""
+    swap: bool
+    swap_decision: str
+    model_1: SimpleModelInference
+    model_2: SimpleModelInference
 
 class TournamentConfig:
     def __init__(self,
@@ -116,78 +134,82 @@ class TournamentPlayConfig:
         random.seed(random_seed)
         np.random.seed(random_seed)
 
-def play_single_game(model_1: SimpleModelInference, 
-                     model_2: SimpleModelInference, 
-                     board_size: int, 
-                     search_widths: Optional[list] = None, 
-                     verbose: int = 1, 
-                     log_file: str = None, 
-                     csv_file: str = None, 
-                     play_config: Optional[TournamentPlayConfig] = None) -> str:
+def select_move(state: HexGameState, model: SimpleModelInference, 
+                search_widths: Optional[list], temperature: float) -> Optional[Tuple[int, int]]:
     """
-    Play a single game between model_1 (Blue, first) and model_2 (Red, second).
-    Supports the pie rule, configurable temperature, and logging.
-    Returns the winner's name ("1" or "2").
-    Uses Winner enums for player identity throughout.
-    Verbosity levels:
-      0: Silent (no output)
-      1: High-level info (pie rule swaps, game results)
-      2: Per-move details
+    Select a move using either tree search or policy-based selection.
     """
-    if play_config is None:
-        play_config = TournamentPlayConfig()
-    state = HexGameState(board=np.zeros((board_size, board_size), dtype=np.int8), current_player=BLUE_PLAYER)
-    move_num = 0
+    if search_widths:
+        move, _ = minimax_policy_value_search(state, model, search_widths)
+        return move
+    else:
+        return select_policy_move(state, model, temperature)
+
+def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference, 
+                   model_2: SimpleModelInference, play_config: TournamentPlayConfig,
+                   verbose: int) -> PieRuleResult:
+    """
+    Handle pie rule logic: first move, evaluation, and potential swap.
+    """
+    if not play_config.pie_rule:
+        return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
+    
+    # First move by model_1 (Blue)
+    move = select_move(state, model_1, play_config.search_widths, play_config.temperature)
+    state = apply_move_to_state(state, *move)
+    
+    # Evaluate win prob for blue after first move
+    _, value_logit = model_2.infer(state.board)
+    win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
+    
+    # Decide whether to swap
+    min_thr, max_thr = play_config.pie_threshold
+    if min_thr <= win_prob_blue <= max_thr:
+        swap = True
+        swap_decision = 'swap'
+        # Swap model assignments: model_2 becomes blue, model_1 becomes red
+        model_1, model_2 = model_2, model_1
+    else:
+        swap = False
+        swap_decision = 'no_swap'
+    
+    if verbose >= 1:
+        print(f"Pie rule: win_prob_blue={win_prob_blue:.3f}, swap={swap}")
+    
+    return PieRuleResult(swap=swap, swap_decision=swap_decision, model_1=model_1, model_2=model_2)
+
+def play_game_loop(state: HexGameState, model_1: SimpleModelInference, 
+                  model_2: SimpleModelInference, search_widths: Optional[list], 
+                  temperature: float, verbose: int) -> List[Tuple[int, int]]:
+    """
+    Play the main game loop, returning the sequence of moves.
+    """
     move_sequence = []
-    swap = False
-    swap_decision = None
-    # --- PIE RULE LOGIC ---
-    if play_config.pie_rule:
-        # First move by model_1 (Blue)
-        if search_widths:
-            move, _ = minimax_policy_value_search(state, model_1, search_widths)
-        else:
-            move = model_select_move(model_1, state, temperature=play_config.temperature)
-        move_sequence.append(move)
-        state = apply_move_to_state(state, *move)
-        move_num += 1
-        # Evaluate win prob for blue after first move
-        policy_logits, value_logit = model_2.infer(state.board)
-        win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
-        # Decide whether to swap
-        min_thr, max_thr = play_config.pie_threshold
-        if min_thr <= win_prob_blue <= max_thr:
-            swap = True
-            swap_decision = 'swap'
-            # Swap model assignments: model_2 becomes blue, model_1 becomes red
-            model_1, model_2 = model_2, model_1
-        else:
-            swap_decision = 'no_swap'
-        if verbose >= 1:
-            print(f"Pie rule: win_prob_blue={win_prob_blue:.3f}, swap={swap}")
-    # --- MAIN GAME LOOP ---
+    
     while not state.game_over:
-        if state.current_player == BLUE_PLAYER:
-            model = model_1
-        else:
-            model = model_2
-        if search_widths:
-            move, _ = minimax_policy_value_search(state, model, search_widths)
-        else:
-            move = model_select_move(model, state, temperature=play_config.temperature)
+        # Determine which model to use
+        model = model_1 if state.current_player == BLUE_PLAYER else model_2
+        
+        # Select and apply move
+        move = select_move(state, model, search_widths, temperature)
         if move is None:
             break  # No valid moves
+        
         move_sequence.append(move)
         state = apply_move_to_state(state, *move)
-        move_num += 1
+        
         if verbose >= 2:
-            # print(f"Move {move_num}: Player {state.current_player} played {move}")
             print("-", end="", flush=True)
-    # Convert move_sequence to trmph string
-    from hex_ai.utils.format_conversion import rowcol_to_trmph
-    trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
-    trmph_str = f"#{board_size},{trmph_moves}"
-    # Determine winner for logging: 'b' if blue (first mover after swap) wins, 'r' if red wins
+    
+    return move_sequence
+
+def determine_winner(state: HexGameState, model_1: SimpleModelInference, 
+                    model_2: SimpleModelInference, swap: bool) -> Tuple[str, str]:
+    """
+    Determine the winner and return (winner_result, winner_char).
+    winner_result: "1" or "2" (model identifier)
+    winner_char: 'b', 'r', or 'd' (color/result)
+    """
     if state.winner == "blue":
         winner_char = 'b'
         # Blue player is the first model (model_1) unless there was a swap
@@ -199,33 +221,34 @@ def play_single_game(model_1: SimpleModelInference,
     else:
         winner_char = 'd'  # draw (if ever possible)
         result = "draw"
-    if verbose >= 1:
-        # Get the model name (filename) from the checkpoint path
-        model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
-        model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
-        print("".join([
-            "\n*Winner*:", str(winner_char), "(Model ", str(result), "). Swapped=", str(swap), ".\n",
-            "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
-        ]))
-    # --- LOGGING ---
+    
+    return result, winner_char
+
+def log_game_result(result: GameResult, model_1: SimpleModelInference, 
+                   model_2: SimpleModelInference, play_config: TournamentPlayConfig,
+                   log_file: Optional[str], csv_file: Optional[str]) -> None:
+    """
+    Log the game result to files.
+    """
     if log_file:
-        append_trmph_winner_line(trmph_str, winner_char, log_file)
+        append_trmph_winner_line(result.trmph_str, result.winner_char, log_file)
+    
     if csv_file:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-        # Compose row with all config info
         row = {
             "timestamp": timestamp,
             "model_1": os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1))),
             "model_2": os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2))),
             "color_1": "blue",
-            "trmph": trmph_str,
-            "winner": winner_char,
+            "trmph": result.trmph_str,
+            "winner": result.winner_char,
             "pie_rule": play_config.pie_rule,
-            "swap": swap_decision,
+            "swap": result.swap_decision,
             "temperature": play_config.temperature,
-            "search_widths": str(search_widths),
+            "search_widths": str(play_config.search_widths),
             "seed": play_config.random_seed
         }
+        
         # Check if CSV exists and has the right columns
         csv_path = Path(csv_file)
         write_header = not csv_path.exists()
@@ -236,43 +259,68 @@ def play_single_game(model_1: SimpleModelInference,
                 existing_headers = next(reader, None)
                 if existing_headers is None or set(headers) != set(existing_headers):
                     write_header = True
+        
         with open(csv_path, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             if write_header:
                 writer.writeheader()
             writer.writerow(row)
-    return result, trmph_str, winner_char, swap_decision
 
-# Helper: model_select_move
-# TODO: Check duplication vs. scripts/play_vs_model_cli.py and select_policy_move
-def model_select_move(model: SimpleModelInference,
-                      state: HexGameState, top_k=20,
-                      temperature=0.5):
+def play_single_game(model_1: SimpleModelInference, 
+                     model_2: SimpleModelInference, 
+                     board_size: int, 
+                     search_widths: Optional[list] = None, 
+                     verbose: int = 1, 
+                     log_file: str = None, 
+                     csv_file: str = None, 
+                     play_config: Optional[TournamentPlayConfig] = None) -> GameResult:
     """
-    Select a move using policy and value heads with centralized utilities.
+    Play a single game between model_1 (Blue, first) and model_2 (Red, second).
+    Supports the pie rule, configurable temperature, and logging.
+    Returns a GameResult with all game information.
     """
-    # Get top-k moves using centralized utilities
-    policy_logits, _ = model.infer(state.board)
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    legal_moves = state.get_legal_moves()
-    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+    if play_config is None:
+        play_config = TournamentPlayConfig()
     
-    if len(legal_policy) == 0:
-        return None
+    # Initialize game state
+    state = HexGameState(board=np.zeros((board_size, board_size), dtype=np.int8), current_player=BLUE_PLAYER)
     
-    # Get top-k moves using centralized utility
-    topk_moves = select_top_k_moves(legal_policy, legal_moves, top_k)
+    # Handle pie rule
+    pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose)
+    model_1, model_2 = pie_result.model_1, pie_result.model_2
     
-    # Evaluate each with value head
-    move_values = []
-    for move in topk_moves:
-        temp_state = apply_move_to_state(state, *move)
-        _, value_logit = model.infer(temp_state.board)
-        move_values.append(value_logit)
+    # Play main game loop
+    move_sequence = play_game_loop(state, model_1, model_2, search_widths, play_config.temperature, verbose)
     
-    # Sample move using centralized utility
-    chosen_idx = sample_move_by_value(move_values, temperature)
-    return topk_moves[chosen_idx]
+    # Convert move sequence to TRMPH string
+    from hex_ai.utils.format_conversion import rowcol_to_trmph
+    trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
+    trmph_str = f"#{board_size},{trmph_moves}"
+    
+    # Determine winner
+    winner_result, winner_char = determine_winner(state, model_1, model_2, pie_result.swap)
+    
+    # Create result
+    result = GameResult(
+        winner=winner_result,
+        trmph_str=trmph_str,
+        winner_char=winner_char,
+        swap_decision=pie_result.swap_decision,
+        move_sequence=move_sequence
+    )
+    
+    # Log results
+    if verbose >= 1:
+        model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
+        model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
+        print("".join([
+            "\n*Winner*:", str(winner_char), "(Model ", str(winner_result), "). Swapped=", str(pie_result.swap), ".\n",
+            "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
+        ]))
+    
+    log_game_result(result, model_1, model_2, play_config, log_file, csv_file)
+    
+    return result
 
 def play_games_with_each_first(
     model_a_path: str, 
@@ -287,55 +335,37 @@ def play_games_with_each_first(
     """
     Play two games between model_a and model_b, with each going first once.
     Returns a dict with results for both games.
-    
-    Args:
-        model_a_path: Path to first model checkpoint
-        model_b_path: Path to second model checkpoint  
-        models: Dictionary mapping checkpoint paths to model instances
-        config: Tournament configuration
-        play_config: Play configuration (temperature, pie rule, etc.)
-        verbose: Verbosity level
-        log_file: Optional log file path
-        csv_file: Optional CSV file path
-        
-    Returns:
-        Dictionary with results for both games, structured as:
-        {
-            'model_a_first': {winner_position, winner_model, loser_model, trmph_str, winner_char, swap_decision},
-            'model_b_first': {winner_position, winner_model, loser_model, trmph_str, winner_char, swap_decision}
-        }
     """
     # Game 1: model_a goes first (blue), model_b second (red)
-    winner_1, trmph_str_1, winner_char_1, swap_decision_1 = play_single_game(
+    result_1 = play_single_game(
         models[model_a_path], models[model_b_path], config.board_size,
         config.search_widths, verbose, log_file, csv_file, play_config
     )
     
     # Game 2: model_b goes first (blue), model_a second (red)  
-    winner_2, trmph_str_2, winner_char_2, swap_decision_2 = play_single_game(
+    result_2 = play_single_game(
         models[model_b_path], models[model_a_path], config.board_size,
         config.search_widths, verbose, log_file, csv_file, play_config
     )
     
     return {
         'model_a_first': {
-            'winner_position': winner_1,  # "A" or "B" based on position
-            'winner_model': model_a_path if winner_1 == "A" else model_b_path,
-            'loser_model': model_b_path if winner_1 == "A" else model_a_path,
-            'trmph_str': trmph_str_1,
-            'winner_char': winner_char_1,
-            'swap_decision': swap_decision_1
+            'winner_position': result_1.winner,  # "1" or "2" based on position
+            'winner_model': model_a_path if result_1.winner == "1" else model_b_path,
+            'loser_model': model_b_path if result_1.winner == "1" else model_a_path,
+            'trmph_str': result_1.trmph_str,
+            'winner_char': result_1.winner_char,
+            'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
-            'winner_position': winner_2,  # "A" or "B" based on position
-            'winner_model': model_b_path if winner_2 == "A" else model_a_path,
-            'loser_model': model_a_path if winner_2 == "A" else model_b_path,
-            'trmph_str': trmph_str_2,
-            'winner_char': winner_char_2,
-            'swap_decision': swap_decision_2
+            'winner_position': result_2.winner,  # "1" or "2" based on position
+            'winner_model': model_b_path if result_2.winner == "1" else model_a_path,
+            'loser_model': model_a_path if result_2.winner == "1" else model_b_path,
+            'trmph_str': result_2.trmph_str,
+            'winner_char': result_2.winner_char,
+            'swap_decision': result_2.swap_decision
         }
     }
-
 
 def run_round_robin_tournament(
     config: TournamentConfig,
@@ -347,10 +377,6 @@ def run_round_robin_tournament(
     """
     For each pair of models, play num_games games with each color assignment.
     Passes play_config to each game for pie rule, temperature, and randomness.
-    Verbosity levels:
-      0: Silent
-      1: High-level info (pie rule swaps, game results)
-      2: Per-move details
     """
     if play_config is None:
         play_config = TournamentPlayConfig()
@@ -390,6 +416,7 @@ def run_round_robin_tournament(
                 
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, Random seed: {play_config.random_seed}")
                 print(f"Search widths: {config.search_widths}")
+    
     print("Done.")
     return result
 

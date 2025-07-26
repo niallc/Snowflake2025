@@ -461,3 +461,55 @@ def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, play
         return apply_move_to_tensor(board_tensor, row, col, player)
     except Exception as e:
         raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 
+
+def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=False):
+    """
+    Given a model and state, return the top-k legal moves (optionally with their probabilities).
+    Args:
+        model: Model instance (must have .infer() method)
+        state: Game state (must have .board and .get_legal_moves())
+        top_k: Number of top moves to return
+        temperature: Temperature for policy softmax
+        return_probs: If True, return list of (move, prob) tuples; else just moves
+    Returns:
+        List of top-k moves [(row, col), ...] or [(row, col), prob] if return_probs
+        Returns None if there are no legal moves.
+    """
+    policy_logits, _ = model.infer(state.board)
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    legal_moves = state.get_legal_moves()
+    if not legal_moves:
+        return None
+    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+    if len(legal_policy) == 0:
+        return None
+    topk_moves = select_top_k_moves(legal_policy, legal_moves, top_k)
+    if return_probs:
+        # Map back to probabilities
+        move_indices = [row * state.board.shape[0] + col for row, col in topk_moves]
+        move_probs = [float(policy_probs[idx]) for idx in move_indices]
+        return list(zip(topk_moves, move_probs))
+    return topk_moves
+
+
+def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
+    """
+    Select a move by evaluating the value head on the top-k policy moves and sampling among them.
+    Args:
+        model: Model instance (must have .infer() method)
+        state: Game state (must have .board and .get_legal_moves())
+        top_k: Number of top moves to consider
+        temperature: Temperature for policy and value sampling
+    Returns:
+        (row, col) tuple for the selected move, or None if no legal moves
+    """
+    topk_moves = get_top_k_legal_moves(model, state, top_k=top_k, temperature=temperature)
+    if not topk_moves:
+        return None
+    move_values = []
+    for move in topk_moves:
+        temp_state = apply_move_to_state(state, *move)
+        _, value_logit = model.infer(temp_state.board)
+        move_values.append(value_logit)
+    chosen_idx = sample_move_by_value(move_values, temperature)
+    return topk_moves[chosen_idx] 

@@ -23,6 +23,7 @@ from hex_ai.value_utils import (
     sample_move_by_value,
     select_policy_move,  # Add the new public function
     apply_move_to_state_trmph, apply_move_to_state,  # Add move application utilities
+    select_top_value_head_move
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
@@ -55,34 +56,6 @@ def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
         except Exception as e:
             print(f"Invalid input: {e}")
 
-def model_select_move(model: SimpleModelInference, state: HexGameState, 
-                      top_k=DEFAULT_TOP_K, temperature=0.5):
-    """
-    Select a move using policy and value heads with centralized utilities.
-    """
-    # Get top-k moves using centralized utilities
-    policy_logits, _ = model.infer(state.board)
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    legal_moves = state.get_legal_moves()
-    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, DEFAULT_BOARD_SIZE)
-    
-    if len(legal_policy) == 0:
-        return None
-    
-    # Get top-k moves using centralized utility
-    topk_moves = select_top_k_moves(legal_policy, legal_moves, top_k)
-    
-    # Evaluate each with value head
-    move_values = []
-    for move in topk_moves:
-        temp_state = apply_move_to_state(state, *move)
-        _, value_logit = model.infer(temp_state.board)
-        move_values.append(value_logit)
-    
-    # Sample move using centralized utility
-    chosen_idx = sample_move_by_value(move_values, temperature)
-    return topk_moves[chosen_idx]
-
 def main():
     parser = argparse.ArgumentParser(description="Play Hex against the trained model (CLI)")
     parser.add_argument('--checkpoint', type=str, default=DEFAULT_CHKPT_PATH, help='Path to model checkpoint')
@@ -92,6 +65,7 @@ def main():
     parser.add_argument('--human-first', action='store_true', help='Human plays first (default: model plays first)')
     parser.add_argument('--search-widths', type=str, default=None, help='Comma-separated list of search widths for tree search (e.g., 20,10,10,5). If provided, use minimax tree search for model moves. WARNING: The number of leaf positions grows rapidly as the product of these numbers! (e.g., 20,10,10,5 = 10,000 leaves). Recommended max: 1,000,000.')
     parser.add_argument('--start-trmph', type=str, default=None, help='Optional starting position in trmph format (must start with "#13,", e.g., "#13,a1b2c3")')
+    parser.add_argument('--use-policy-only', action='store_true', help='Use policy head only for model move selection (default: value head among top-k policy moves)')
     args = parser.parse_args()
 
     print(f"\nWelcome to Hex AI CLI! Board size: {args.board_size}x{args.board_size}")
@@ -164,7 +138,10 @@ def main():
                     num_leaves = np.prod(search_widths)
                     print(f"[Tree search] Evaluated up to {num_leaves} leaf positions (widths: {search_widths})")
                 else:
-                    move = model_select_move(model, state, top_k=args.topk, temperature=args.temperature)
+                    if args.use_policy_only:
+                        move = select_policy_move(state, model, args.temperature)
+                    else:
+                        move = select_top_value_head_move(model, state, top_k=args.topk, temperature=args.temperature)
                     move_value = None
                 if move is None:
                     print("No valid moves left. Game over.")
