@@ -115,7 +115,8 @@ def test_network_outputs_are_logits():
             return policy_logits, 0.0
     state = HexGameState()
     model = DummyModel()
-    move = select_move(state, model, search_widths=None, temperature=1.0)
+    # Use temperature=0.0 for deterministic behavior to test argmax
+    move = select_move(state, model, search_widths=None, temperature=0.0)
     # The move should be the argmax (since logits are increasing)
     assert move == divmod(np.argmax(np.arange(169)), 13)
 

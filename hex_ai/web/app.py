@@ -24,10 +24,8 @@ from hex_ai.value_utils import (
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
 THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-CHECKPOINT_FILE = "epoch1_mini35.pt"
-CHECKPOINT_FILE1 = "epoch1_mini1.pt"
-CHECKPOINT_FILE2 = "epoch2_mini10.pt"
-DEFAULT_CHKPT_PATH = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE}"
+CHECKPOINT_FILE1 = "epoch2_mini4.pt"
+CHECKPOINT_FILE2 = "epoch2_mini26.pt"
 DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
 DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
 

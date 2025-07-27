@@ -297,9 +297,24 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     legal_moves = state.get_legal_moves()
     legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
     
-    # Select the best move (top-1)
-    best_moves = select_top_k_moves(legal_policy, legal_moves, 1)
-    return best_moves[0] 
+    # Sample a move from the policy distribution
+    if temperature == 0.0 or len(legal_moves) == 1:
+        # Deterministic: take the best move
+        best_moves = select_top_k_moves(legal_policy, legal_moves, 1)
+        return best_moves[0]
+    else:
+        # Stochastic: sample a move weighted by policy probabilities
+        # Normalize probabilities to sum to 1
+        legal_policy_sum = np.sum(legal_policy)
+        if legal_policy_sum > 0:
+            legal_policy = legal_policy / legal_policy_sum
+        else:
+            # If all probabilities are 0, use uniform distribution
+            legal_policy = np.ones(len(legal_moves)) / len(legal_moves)
+        
+        # Sample a move
+        chosen_idx = np.random.choice(len(legal_moves), p=legal_policy)
+        return legal_moves[chosen_idx] 
 
 # =============================
 # Move Application Utilities

@@ -173,7 +173,7 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
         swap = False
         swap_decision = 'no_swap'
     
-    if verbose >= 1:
+    if verbose >= 2:
         print(f"Pie rule: win_prob_blue={win_prob_blue:.3f}, swap={swap}")
     
     return PieRuleResult(swap=swap, swap_decision=swap_decision, model_1=model_1, model_2=model_2)
@@ -287,14 +287,19 @@ def play_single_game(model_1: SimpleModelInference,
         play_config = TournamentPlayConfig()
     
     # Initialize game state
-    state = HexGameState(board=np.zeros((board_size, board_size), dtype=np.int8), current_player=BLUE_PLAYER)
+    state = HexGameState(
+        board=np.zeros((board_size, board_size), dtype=np.int8), 
+        current_player=BLUE_PLAYER
+    )
     
     # Handle pie rule
     pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose)
     model_1, model_2 = pie_result.model_1, pie_result.model_2
     
     # Play main game loop
-    move_sequence, state = play_game_loop(state, model_1, model_2, search_widths, play_config.temperature, verbose)
+    move_sequence, state = play_game_loop(
+        state, model_1, model_2, search_widths, play_config.temperature, verbose
+    )
     
     # Convert move sequence to TRMPH string
     trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
@@ -312,16 +317,18 @@ def play_single_game(model_1: SimpleModelInference,
         move_sequence=move_sequence
     )
     
-    # Log results
-    if verbose >= 1:
+    if verbose >= 2:
         model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
         model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
         print("".join([
-            "\n*Winner*:", str(winner_char), "(Model ", str(winner_result),
+            "*Winner*:", str(winner_char), "(Model ", str(winner_result),
             "). Swapped=", str(pie_result.swap), ".\n",
             "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
         ]))
-    
+    # elif verbose >= 1:
+    #     print(".", end="", flush=True)
+
+    # Log results    
     log_game_result(result, model_1, model_2, play_config, log_file, csv_file)
     
     return result
@@ -421,6 +428,7 @@ def run_round_robin_tournament(
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, "
                       f"Random seed: {play_config.random_seed}")
                 print(f"Search widths: {config.search_widths}")
+                print(f"{game_idx+1},", end="", flush=True)
     
     print("Done.")
     return result

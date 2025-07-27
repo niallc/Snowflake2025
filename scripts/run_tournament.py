@@ -16,10 +16,11 @@ CHKPT_DIR="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719
 # List of checkpoints to compare
 CHECKPOINTS = [
     "epoch1_mini1.pt",
+    "epoch1_mini30.pt",
     "epoch1_mini36.pt",
-    "epoch2_mini10.pt",
-    "epoch2_mini20.pt",
-    "epoch2_mini36.pt",
+    "epoch2_mini4.pt",
+    "epoch2_mini18.pt",
+    "epoch2_mini26.pt",
 ]
 CHKPT_PATHS = [os.path.join(CHKPT_DIR, fname) for fname in CHECKPOINTS]
 
@@ -28,8 +29,8 @@ config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=10)
 play_config = TournamentPlayConfig(temperature=0.2, random_seed=42, pie_rule=True)
 
 LOG_DIR = "data/tournament_play"
-LOG_FILE = os.path.join(LOG_DIR, "no_swap_27th_1300_pie/tournament.log")
-CSV_FILE = os.path.join(LOG_DIR, "no_swap_27th_1300_pie/tournament.csv")
+LOG_FILE = os.path.join(LOG_DIR, "no_swap_27th_1400_ran_temp0.2/tournament.log")
+CSV_FILE = os.path.join(LOG_DIR, "no_swap_27th_1400_ran_temp0.2/tournament.csv")
 
 if __name__ == "__main__":
     print("Quick test tournament: epoch1_mini1.pt vs. epoch2_mini10.pt")
