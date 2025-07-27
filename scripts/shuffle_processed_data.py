@@ -39,7 +39,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('data_shuffling.log'),
+        logging.FileHandler('logs/data_shuffling.log'),
         logging.StreamHandler()
     ]
 )

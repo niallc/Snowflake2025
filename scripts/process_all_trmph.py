@@ -35,7 +35,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('trmph_processing.log'),
+        logging.FileHandler('logs/trmph_processing.log'),
         logging.StreamHandler()
     ]
 )
@@ -115,7 +115,7 @@ def main():
     logger.info("OUTPUT FILES:")
     logger.info(f"  Processing statistics: {stats_file}")
     logger.info(f"  Progress report: {Path(args.output_dir) / 'processing_progress.json'}")
-    logger.info(f"  Log file: trmph_processing.log")
+    logger.info(f"  Log file: logs/trmph_processing.log")
     
     # Count processed files
     processed_files = list(Path(args.output_dir).glob("*_processed.pkl.gz"))
@@ -126,7 +126,7 @@ def main():
         if combined_file.exists():
             logger.info(f"  Combined dataset: {combined_file}")
         else:
-            logger.warning(f"  Combined dataset: NOT CREATED (check trmph_processing.log for errors)")
+            logger.warning(f"  Combined dataset: NOT CREATED (check logs/trmph_processing.log for errors)")
     
     logger.info("")
     # Final status report
