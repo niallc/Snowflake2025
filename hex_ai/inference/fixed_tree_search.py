@@ -78,8 +78,8 @@ def build_search_tree(
     return build_node(root_state, 0, [])
 
 
-def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int = 1000) -> None:
-    """Batch evaluate all leaf nodes."""
+def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int = 1000, root_player: int = None) -> None:
+    """Batch evaluate all leaf nodes from the root player's perspective."""
     leaf_nodes = []
     
     def collect_leaves(node: MinimaxSearchNode):
@@ -102,10 +102,20 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int =
         batch_results = [model.infer(board)[1] for board in batch]
         values.extend(batch_results)
     
-    # Assign values to leaf nodes
+    # Assign values to leaf nodes, converting to root player's perspective
     for node, value in zip(leaf_nodes, values):
-        node.value = value
-        logger.debug(f"Leaf node {node.path}: value = {value}")
+        # The model outputs probability of Red winning (1.0 = Red wins, 0.0 = Blue wins)
+        # We need to convert this to a value from the root player's perspective
+        if root_player == 0:  # Root player is Blue
+            # For Blue, positive values are good (Blue wins), negative are bad (Red wins)
+            # Convert from Red's win probability to Blue's perspective
+            node.value = 1.0 - 2.0 * value  # Maps [0,1] to [1,-1]
+        else:  # Root player is Red
+            # For Red, negative values are good (Red wins), positive are bad (Blue wins)
+            # Convert from Red's win probability to Red's perspective
+            node.value = 2.0 * value - 1.0  # Maps [0,1] to [-1,1]
+        
+        logger.debug(f"Leaf node {node.path}: raw_value={value:.4f}, converted_value={node.value:.4f}")
 
 
 def minimax_backup(node: MinimaxSearchNode) -> float:
@@ -123,13 +133,10 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
         child_values.append((move, child_value))
         logger.debug(f"Child {move} of {node.path}: value = {child_value}")
     
-    # Choose best value based on maximizing/minimizing
-    if node.is_maximizing:
-        best_move, best_value = max(child_values, key=lambda x: x[1])
-        logger.debug(f"Maximizing node {node.path}: best move = {best_move}, value = {best_value}")
-    else:
-        best_move, best_value = min(child_values, key=lambda x: x[1])
-        logger.debug(f"Minimizing node {node.path}: best move = {best_move}, value = {best_value}")
+    # Since all values are now from the root player's perspective,
+    # we always maximize (choose the best move for the root player)
+    best_move, best_value = max(child_values, key=lambda x: x[1])
+    logger.debug(f"Node {node.path}: best move = {best_move}, value = {best_value}")
     
     node.value = best_value
     node.best_move = best_move
@@ -217,8 +224,8 @@ def minimax_policy_value_search(
     # Build the search tree
     root = build_search_tree(state, model, widths, temperature)
     
-    # Evaluate all leaf nodes
-    evaluate_leaf_nodes([root], model, batch_size)
+    # Evaluate all leaf nodes from the root player's perspective
+    evaluate_leaf_nodes([root], model, batch_size, state.current_player)
     
     # Backup values to root
     root_value = minimax_backup(root)

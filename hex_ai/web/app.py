@@ -179,6 +179,56 @@ def api_state():
         "trmph": trmph,
     })
 
+@app.route("/api/apply_move", methods=["POST"])
+def api_apply_move():
+    """Apply only a human move without making a computer move."""
+    data = request.get_json()
+    trmph = data.get("trmph")
+    move = data.get("move")
+    model_id = data.get("model_id", "model1")
+    temperature = data.get("temperature", 1.0)  # Default temperature
+    
+    try:
+        state = HexGameState.from_trmph(trmph)
+    except Exception as e:
+        return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
+    
+    try:
+        state = apply_move_to_state_trmph(state, move)
+    except Exception as e:
+        return jsonify({"error": f"Invalid move: {e}"}), 400
+
+    new_trmph = state.to_trmph()
+    board = state.board.tolist()
+    player = state.current_player
+    legal_moves = moves_to_trmph(state.get_legal_moves())
+    winner = state.winner
+
+    # Recompute policy/value for the new state
+    try:
+        model = get_model(model_id)
+        policy_logits, value_logit = model.infer(new_trmph)
+        # Apply temperature scaling to policy using centralized utility
+        policy_probs = policy_logits_to_probs(policy_logits, temperature)
+        policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
+        win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
+    except Exception as e:
+        app.logger.error(f"Final inference failed: {e}")
+        policy_dict = {}
+        win_prob = 0.5
+
+    return jsonify({
+        "new_trmph": new_trmph,
+        "board": board,
+        "player": winner_to_color(player),
+        "legal_moves": legal_moves,
+        "winner": winner,
+        "model_move": None,  # No computer move made
+        "policy": policy_dict,
+        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "win_prob": win_prob,
+    })
+
 @app.route("/api/move", methods=["POST"])
 def api_move():
     data = request.get_json()
@@ -186,7 +236,7 @@ def api_move():
     move = data.get("move")
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
-    temperature = data.get("temperature", 1.0)  # Default temperature
+    temperature = data.get("temperature", 0.15)  # Default temperature
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -208,28 +258,42 @@ def api_move():
     # If game not over and it's model's turn, have model pick a move
     if not state.game_over:
         try:
-            model = get_model(model_id)
+            # Determine which player's settings to use for the computer move
+            # The current player after the human move determines whose settings to use
+            current_player_color = winner_to_color(player)
+            if current_player_color == 'blue':
+                # Use blue's settings for blue's computer move
+                computer_model_id = data.get("blue_model_id", model_id)
+                computer_search_widths = data.get("blue_search_widths", search_widths)
+                computer_temperature = data.get("blue_temperature", temperature)
+            else:  # current_player_color == 'red'
+                # Use red's settings for red's computer move
+                computer_model_id = data.get("red_model_id", model_id)
+                computer_search_widths = data.get("red_search_widths", search_widths)
+                computer_temperature = data.get("red_temperature", temperature)
+            
+            model = get_model(computer_model_id)
             
             # Use tree search if search_widths provided
-            if search_widths and len(search_widths) > 0:
+            if computer_search_widths and len(computer_search_widths) > 0:
                 try:
                     best_move, _ = minimax_policy_value_search(
-                        state, model, search_widths, batch_size=1000, temperature=temperature
+                        state, model, computer_search_widths, batch_size=1000, temperature=computer_temperature
                     )
                     if best_move is not None:
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
                     else:
                         # Fallback to policy-based move using centralized utilities
-                        best_move = select_policy_move(state, model, temperature)
+                        best_move = select_policy_move(state, model, computer_temperature)
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
                 except Exception as e:
                     app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                     # Fallback to policy-based move using centralized utilities
-                    best_move = select_policy_move(state, model, temperature)
+                    best_move = select_policy_move(state, model, computer_temperature)
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
             else:
                 # Simple policy-based move using centralized utilities
-                best_move = select_policy_move(state, model, temperature)
+                best_move = select_policy_move(state, model, computer_temperature)
                 best_move_trmph = fc.rowcol_to_trmph(*best_move)
             
             # Apply model move using centralized utility

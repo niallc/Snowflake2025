@@ -4,14 +4,16 @@ const COLORS = {
   MEDIUM_BLUE: '#bbeeee',
   DARK_BLUE: '#8bd6d6',
   VERY_DARK_BLUE: '#0099ff', // more vivid blue for edge
+  DARKER_BLUE: '#0066cc', // even darker blue for last move
   LIGHT_RED: '#fff4ea',
   MEDIUM_RED: '#ffe1c8',
   DARK_RED: '#ffcea5',
   VERY_DARK_RED: '#ff6600', // more vivid orange-red for edge
+  DARKER_RED: '#cc3300', // even darker red for last move
   LIGHT_GRAY: '#cccccc',
   BOARD_BG: '#f8f8fa',
   GRID: '#bbb',
-  LAST_MOVE: '#222',
+  LAST_MOVE: '#222', // Keep for backward compatibility but won't use
 };
 
 const BOARD_SIZE = 13;
@@ -25,12 +27,13 @@ let state = {
   legal_moves: [],
   winner: null,
   last_move: null,
+  last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
   red_model_id: 'model2',
   blue_search_widths: [],
   red_search_widths: [],
-  blue_temperature: 1.0,
-  red_temperature: 1.0,
+  blue_temperature: 0.2,
+  red_temperature: 0.2,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: []
@@ -78,11 +81,40 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0) {
+async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
+                       blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
+                       red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0) {
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, move, model_id, search_widths, temperature }),
+    body: JSON.stringify({ 
+      trmph, 
+      move, 
+      model_id, 
+      search_widths, 
+      temperature,
+      blue_model_id,
+      blue_search_widths,
+      blue_temperature,
+      red_model_id,
+      red_search_widths,
+      red_temperature
+    }),
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
+}
+
+async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.0) {
+  const resp = await fetch('/api/apply_move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      trmph, 
+      move, 
+      model_id, 
+      temperature
+    }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -99,7 +131,7 @@ async function makeComputerMove(trmph, model_id, search_widths = [], temperature
 }
 
 // --- Board Rendering ---
-function drawBoard(container, board, legalMoves, lastMove, winner) {
+function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlayer) {
   container.innerHTML = '';
   // Math for flat-topped hex grid, blue at top/bottom
   const w = HEX_RADIUS * Math.sqrt(3);
@@ -146,7 +178,16 @@ function drawBoard(container, board, legalMoves, lastMove, winner) {
       let fill = '#fff';
       if (cell === 1) fill = COLORS.DARK_BLUE;
       if (cell === 2) fill = COLORS.DARK_RED;
-      if (lastMove && lastMove[0] === row && lastMove[1] === col) fill = COLORS.LAST_MOVE;
+      
+      // Highlight last move with darker color based on player
+      if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+        if (lastMovePlayer === 'blue') {
+          fill = COLORS.DARKER_BLUE;
+        } else if (lastMovePlayer === 'red') {
+          fill = COLORS.DARKER_RED;
+        }
+      }
+      
       if (winner === 'blue' && cell === 1) fill = COLORS.VERY_DARK_BLUE;
       if (winner === 'red' && cell === 2) fill = COLORS.VERY_DARK_RED;
       const isLegal = legalMoves.includes(rowcolToTrmph(row, col));
@@ -206,7 +247,7 @@ function hexCenter(row, col) {
 // --- UI Update ---
 function updateUI() {
   const boardContainer = document.getElementById('board-container');
-  drawBoard(boardContainer, state.board, state.legal_moves, state.last_move, state.winner);
+  drawBoard(boardContainer, state.board, state.legal_moves, state.last_move, state.winner, state.last_move_player);
   
   // Status
   const status = document.getElementById('status-line');
@@ -249,23 +290,74 @@ async function onCellClick(e) {
   const col = parseInt(e.target.getAttribute('data-col'));
   const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
   
+  // Store the move that was just made
+  const moveMade = [row, col];
+  const currentPlayer = state.player;
+  
   try {
-    const result = await fetchMove(state.trmph, rowcolToTrmph(row, col), model_id, search_widths, temperature);
-    state.trmph = result.new_trmph;
-    state.board = result.board;
-    state.player = result.player;
-    state.legal_moves = result.legal_moves;
-    state.winner = result.winner;
-    state.last_move = getLastMove(result.board, result.legal_moves);
+    // Step 1: Immediately apply the human move and show it
+    const humanResult = await applyHumanMove(
+      state.trmph, 
+      rowcolToTrmph(row, col), 
+      model_id, 
+      temperature
+    );
+    
+    // Update state with human move
+    state.trmph = humanResult.new_trmph;
+    state.board = humanResult.board;
+    state.player = humanResult.player;
+    state.legal_moves = humanResult.legal_moves;
+    state.winner = humanResult.winner;
+    state.last_move = moveMade;
+    state.last_move_player = currentPlayer;
     updateUI();
+    
+    // Step 2: If game is not over, get the computer move
+    if (!state.winner) {
+      // Determine which player's settings to use for the computer move
+      const computerPlayer = state.player; // Current player after human move
+      let computerModelId, computerSearchWidths, computerTemperature;
+      
+      if (computerPlayer === 'blue') {
+        computerModelId = state.blue_model_id;
+        computerSearchWidths = state.blue_search_widths;
+        computerTemperature = state.blue_temperature;
+      } else {
+        computerModelId = state.red_model_id;
+        computerSearchWidths = state.red_search_widths;
+        computerTemperature = state.red_temperature;
+      }
+      
+      // Make computer move
+      const computerResult = await makeComputerMove(
+        state.trmph, 
+        computerModelId, 
+        computerSearchWidths, 
+        computerTemperature
+      );
+      
+      if (computerResult.success) {
+        state.trmph = computerResult.new_trmph;
+        state.board = computerResult.board;
+        state.player = computerResult.player;
+        state.legal_moves = computerResult.legal_moves;
+        state.winner = computerResult.winner;
+        state.last_move = computerResult.move_made ? getLastMoveFromTrmph(computerResult.move_made) : null;
+        state.last_move_player = computerPlayer;
+        updateUI();
+      } else {
+        alert('Computer move failed: ' + computerResult.error);
+      }
+    }
   } catch (err) {
     alert('Move failed: ' + err.message);
   }
 }
 
 function getLastMove(board, legalMoves) {
-  // Find the most recent move by comparing board state and legal moves
-  // (for now, just return null; can be improved with move history)
+  // This function is no longer used since we track the last move directly
+  // in the onCellClick and stepComputerMove functions
   return null;
 }
 
@@ -274,6 +366,7 @@ async function stepComputerMove() {
   if (state.winner) return;
   
   const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
+  const currentPlayer = state.player; // Store current player before the move
   
   try {
     const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature);
@@ -285,6 +378,7 @@ async function stepComputerMove() {
       state.legal_moves = result.legal_moves;
       state.winner = result.winner;
       state.last_move = result.move_made ? getLastMoveFromTrmph(result.move_made) : null;
+      state.last_move_player = currentPlayer; // Use the player who made the move
       updateUI();
       
       // If auto-step is active and game isn't over, schedule next move
@@ -354,6 +448,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.legal_moves = result.legal_moves;
     state.winner = result.winner;
     state.last_move = null;
+    state.last_move_player = null; // Initialize last_move_player
     updateUI();
   } catch (err) {
     document.getElementById('status-line').textContent = 'Failed to load board.';
@@ -426,6 +521,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.legal_moves = result.legal_moves;
     state.winner = result.winner;
     state.last_move = null;
+    state.last_move_player = null; // Reset last_move_player
     updateUI();
   });
 
