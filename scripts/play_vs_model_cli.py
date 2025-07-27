@@ -134,7 +134,7 @@ def main():
             else:
                 print("Model is thinking...")
                 if args.search_widths:
-                    move, move_value = minimax_policy_value_search(state, model, search_widths, batch_size=1000, use_alpha_beta=True)
+                    move, move_value = minimax_policy_value_search(state, model, search_widths, batch_size=1000, use_alpha_beta=True, temperature=args.temperature)
                     num_leaves = np.prod(search_widths)
                     print(f"[Tree search] Evaluated up to {num_leaves} leaf positions (widths: {search_widths})")
                 else:

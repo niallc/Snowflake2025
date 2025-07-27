@@ -131,23 +131,27 @@ def test_handle_pie_rule_swap_and_no_swap():
             import numpy as np
             import torch
             policy_logits = np.ones(169, dtype=np.float32)
-            logit = torch.logit(torch.tensor(self.win_prob_blue)).item()
+            # Convert Blue win probability to the correct logit
+            # get_win_prob_from_model_output expects: sigmoid(logit) = prob_red_win
+            # So if we want Blue to have win_prob_blue, we need sigmoid(logit) = 1.0 - win_prob_blue
+            prob_red_win = 1.0 - self.win_prob_blue
+            logit = torch.logit(torch.tensor(prob_red_win)).item()
             return policy_logits, logit
-    # No swap: win_prob_blue outside threshold
+    # No swap: win_prob_blue below threshold (Blue's position not good enough to swap)
     state = HexGameState()
-    model_1 = DummyModel(0.2)
+    model_1 = DummyModel(0.2)  # This gives win_prob_blue around 0.2
     model_2 = DummyModel(0.2)
-    play_config = TournamentPlayConfig(pie_rule=True, pie_threshold=(0.3, 0.4))
+    play_config = TournamentPlayConfig(pie_rule=True, swap_threshold=0.5)
     result = handle_pie_rule(state, model_1, model_2, play_config, verbose=0)
     assert result.swap == False
     assert result.swap_decision == "no_swap"
     assert result.model_1 == model_1  # model_1 stays as blue
     assert result.model_2 == model_2  # model_2 stays as red
-    # Swap: win_prob_blue within threshold
+    # Swap: win_prob_blue above threshold (Blue's position too good, Red should swap)
     state = HexGameState()
-    model_1 = DummyModel(0.6)  # This should give win_prob_blue around 0.35
-    model_2 = DummyModel(0.6)
-    play_config = TournamentPlayConfig(pie_rule=True, pie_threshold=(0.3, 0.4))
+    model_1 = DummyModel(0.8)  # This gives win_prob_blue around 0.8
+    model_2 = DummyModel(0.8)
+    play_config = TournamentPlayConfig(pie_rule=True, swap_threshold=0.5)
     result = handle_pie_rule(state, model_1, model_2, play_config, verbose=0)
     assert result.swap == True
     assert result.swap_decision == "swap"

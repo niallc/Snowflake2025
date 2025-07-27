@@ -121,7 +121,7 @@ class TournamentPlayConfig:
         temperature: float = 0.5,
         random_seed: Optional[int] = None,
         pie_rule: bool = False,
-        pie_threshold: tuple = (0.495, 0.505),
+        swap_threshold: float = 0.5,
         search_widths: Optional[list] = None
     ):
         self.temperature = temperature
@@ -130,7 +130,7 @@ class TournamentPlayConfig:
             random_seed = int(datetime.now().timestamp() * 1e6) % (2**32)
         self.random_seed = random_seed
         self.pie_rule = pie_rule
-        self.pie_threshold = pie_threshold  # (min, max) win prob for swap
+        self.swap_threshold = swap_threshold  # Red swaps if Blue's win prob >= this threshold
         self.search_widths = search_widths
         random.seed(random_seed)
         np.random.seed(random_seed)
@@ -141,7 +141,7 @@ def select_move(state: HexGameState, model: SimpleModelInference,
     Select a move using either tree search or policy-based selection.
     """
     if search_widths:
-        move, _ = minimax_policy_value_search(state, model, search_widths)
+        move, _ = minimax_policy_value_search(state, model, search_widths, temperature=temperature)
         return move
     else:
         return select_policy_move(state, model, temperature)
@@ -163,9 +163,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     _, value_logit = model_2.infer(state.board)
     win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
     
-    # Decide whether to swap
-    min_thr, max_thr = play_config.pie_threshold
-    if min_thr <= win_prob_blue <= max_thr:
+    # Decide whether to swap: Red swaps if Blue's position is too good (>= threshold)
+    if win_prob_blue >= play_config.swap_threshold:
         swap = True
         swap_decision = 'swap'
         # Swap model assignments: model_2 becomes blue, model_1 becomes red
@@ -202,7 +201,7 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
         if verbose >= 2:
             print("-", end="", flush=True)
     
-    if verbose >= 0:
+    if verbose >= 2:
         print(f"Game loop finished after {len(move_sequence)} moves")
         print(f"Final state: moves={len(state.move_history)}, game_over={state.game_over}, winner={state.winner}")
         print(f"Move sequence length: {len(move_sequence)}")
@@ -318,7 +317,8 @@ def play_single_game(model_1: SimpleModelInference,
         model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
         model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
         print("".join([
-            "\n*Winner*:", str(winner_char), "(Model ", str(winner_result), "). Swapped=", str(pie_result.swap), ".\n",
+            "\n*Winner*:", str(winner_char), "(Model ", str(winner_result),
+            "). Swapped=", str(pie_result.swap), ".\n",
             "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
         ]))
     
@@ -406,7 +406,7 @@ def run_round_robin_tournament(
                 game_results['model_b_first']['loser_model']
             )
             
-            if verbose >= 1:
+            if verbose >= 2:
                 print(f"Game {game_idx+1} of {config.num_games} between {model_a_path} and {model_b_path} completed.")
                 
                 # Print details for both games
@@ -417,8 +417,9 @@ def run_round_robin_tournament(
                     print(f"    Trmph: {game_data['trmph_str']}")
                     print(f"    Winner: {game_data['winner_char']} ({game_data['winner_model']})")
                     print(f"    Swap: {game_data['swap_decision']}")
-                
-                print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, Random seed: {play_config.random_seed}")
+            if verbose >= 1:
+                print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, "
+                      f"Random seed: {play_config.random_seed}")
                 print(f"Search widths: {config.search_widths}")
     
     print("Done.")
