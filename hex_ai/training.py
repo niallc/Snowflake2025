@@ -504,7 +504,23 @@ class Trainer:
     def train(self, num_epochs: int, save_dir: str = "checkpoints", 
               max_checkpoints: int = 5, compress_checkpoints: bool = True,
               early_stopping: Optional[EarlyStopping] = None) -> Dict:
-        """Train the model for specified number of epochs."""
+        """
+        Train the model for specified number of epochs.
+        
+        This is the main training method that handles complete training runs with:
+        - Full epoch-based training loops
+        - Automatic checkpointing and validation
+        - Early stopping support
+        - Comprehensive logging and metrics tracking
+        
+        Use this method for:
+        - Complete training runs from scratch
+        - Standard epoch-based training workflows
+        - When you want automatic checkpointing and validation
+        
+        For more granular control (e.g., mini-epochs), use train_on_batches() directly
+        or use MiniEpochOrchestrator which wraps this Trainer.
+        """
         save_path = Path(save_dir)
         save_path.mkdir(exist_ok=True)
         
@@ -749,6 +765,19 @@ class Trainer:
         """
         Train the model on a provided iterable of batches (mini-epoch).
 
+        This is a lower-level training method that processes a specific set of batches
+        without managing the overall training loop. It's designed for:
+        - Mini-epoch orchestration (see MiniEpochOrchestrator)
+        - Custom training loops that need fine-grained control
+        - Integration with external training frameworks
+        - Debugging and experimentation
+
+        Unlike train(), this method:
+        - Does NOT manage epochs, checkpointing, or validation
+        - Does NOT reset model/optimizer state between calls
+        - Can be called multiple times within a single epoch
+        - Returns metrics for just the processed batches
+
         Args:
             batch_iterable: An iterable yielding (boards, policies, values) batches.
             epoch: Current epoch number (int, optional, for debugging/dumping purposes)
@@ -757,8 +786,11 @@ class Trainer:
         Returns:
             Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
 
-        This method is intended for use by mini-epoch orchestration wrappers, allowing validation/checkpointing
-        at arbitrary batch intervals. It does not reset model/optimizer state and can be called repeatedly within an epoch.
+        Usage:
+            # For standard training, use train() instead
+            # For mini-epoch orchestration:
+            orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500)
+            orchestrator.run()
         """
         self.model.train()
         mini_epoch_metrics = {

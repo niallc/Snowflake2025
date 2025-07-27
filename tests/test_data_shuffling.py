@@ -14,6 +14,7 @@ import gzip
 import pickle
 import random
 import numpy as np
+import pytest
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -606,7 +607,8 @@ def test_phase2_consolidation_on_small_real_file():
     Cleans up after itself if run independently.
     """
     input_file = Path("data/processed/step1_unshuffled/twoNetGames_13x13_mk45_breadths_5_3_3_v1816_3s2_p2551k_1s0_vt25sc_pt10sc_processed.pkl.gz")
-    assert input_file.exists(), f"Test input file {input_file} does not exist"
+    if not input_file.exists():
+        pytest.skip(f"Test input file {input_file} does not exist. This test requires real data files.")
 
     import tempfile, shutil
     temp_dir = Path(tempfile.mkdtemp())

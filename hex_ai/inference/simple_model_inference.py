@@ -93,9 +93,11 @@ class SimpleModelInference:
         else:
             # For non-finished positions, use normal logic
             player_to_move = get_player_to_move_from_board(board_2ch)
+            # Convert Player enum to integer for tensor creation
+            player_to_move = player_to_move.value
         
         # Create player-to-move channel
-        # NOTE: player_to_move is BLUE_PLAYER (0) or RED_PLAYER (1)
+        # NOTE: player_to_move is now an integer (0 for BLUE, 1 for RED)
         player_channel = np.full((1, self.board_size, self.board_size), float(player_to_move), dtype=board_2ch.dtype)
         board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
         return torch.tensor(board_3ch, dtype=torch.float32)

@@ -54,6 +54,23 @@ class Winner(Enum):
     BLUE = 0
     RED = 1
 
+class Player(Enum):
+    """Player constants for game logic and player-to-move channel."""
+    BLUE = 0
+    RED = 1
+
+class Piece(Enum):
+    """Piece constants for N×N board representation."""
+    EMPTY = 0
+    BLUE = 1
+    RED = 2
+
+class Channel(Enum):
+    """Channel indices for one-hot encoded board formats."""
+    BLUE = 0
+    RED = 1
+    PLAYER_TO_MOVE = 2
+
 class ValuePerspective(Enum):
     TRAINING_TARGET = 0  # 0.0 = Blue win, 1.0 = Red win
     BLUE_WIN_PROB = 1    # Probability Blue wins
@@ -77,6 +94,31 @@ def winner_from_value_target(value: float) -> Winner:
         return Winner.RED
     else:
         raise ValueError(f"Invalid value target: {value}")
+
+# --- Backward compatibility functions ---
+def player_to_int(player: Player) -> int:
+    """Convert Player enum to integer for backward compatibility."""
+    return player.value
+
+def int_to_player(player_int: int) -> Player:
+    """Convert integer to Player enum."""
+    return Player(player_int)
+
+def piece_to_int(piece: Piece) -> int:
+    """Convert Piece enum to integer for backward compatibility."""
+    return piece.value
+
+def int_to_piece(piece_int: int) -> Piece:
+    """Convert integer to Piece enum."""
+    return Piece(piece_int)
+
+def channel_to_int(channel: Channel) -> int:
+    """Convert Channel enum to integer for backward compatibility."""
+    return channel.value
+
+def int_to_channel(channel_int: int) -> Channel:
+    """Convert integer to Channel enum."""
+    return Channel(channel_int)
 
 def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
     """
@@ -164,23 +206,25 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
     return probs
 
-def get_player_to_move_from_moves(moves: list) -> int:
+def get_player_to_move_from_moves(moves: list) -> Player:
     """
-    Given a list of moves (e.g., ['a1', 'b2', ...]), return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
+    Given a list of moves (e.g., ['a1', 'b2', ...]), return Player.BLUE if it's blue's move, Player.RED if it's red's move.
     Blue always starts, so even number of moves = Blue's turn, odd = Red's turn.
     """
     if len(moves) % 2 == 0:
-        return BLUE_PLAYER
+        return Player.BLUE
     else:
-        return RED_PLAYER
+        return Player.RED
 
 def winner_to_color(winner):
-    """Map Winner enum or player int to color name string ('blue', 'red', or 'reset')."""
+    """Map Winner enum, Player enum, or player int to color name string ('blue', 'red', or 'reset')."""
     if isinstance(winner, Winner):
         return 'blue' if winner == Winner.BLUE else 'red'
-    if winner == BLUE_PLAYER:
+    if isinstance(winner, Player):
+        return 'blue' if winner == Player.BLUE else 'red'
+    if winner == BLUE_PLAYER:  # Backward compatibility
         return 'blue'
-    elif winner == RED_PLAYER:
+    elif winner == RED_PLAYER:  # Backward compatibility
         return 'red'
     else:
         return 'reset'
@@ -353,21 +397,21 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     return abs(blue_val - EMPTY_ONEHOT) < tolerance and abs(red_val - EMPTY_ONEHOT) < tolerance
 
 
-def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player: int) -> torch.Tensor:
+def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player) -> torch.Tensor:
     """
     Apply a move to a 3-channel board tensor and return the new tensor.
     
     This is the core function that directly manipulates tensors for efficiency.
     The tensor should be in (3, BOARD_SIZE, BOARD_SIZE) format where:
-    - channels[BLUE_CHANNEL] = blue pieces (0 or 1)
-    - channels[RED_CHANNEL] = red pieces (0 or 1) 
-    - channels[PLAYER_CHANNEL] = player-to-move (BLUE_PLAYER or RED_PLAYER)
+    - channels[Channel.BLUE] = blue pieces (0 or 1)
+    - channels[Channel.RED] = red pieces (0 or 1) 
+    - channels[Channel.PLAYER_TO_MOVE] = player-to-move (Player.BLUE or Player.RED)
     
     Args:
         board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
         row: Row index (0-(BOARD_SIZE-1))
         col: Column index (0-(BOARD_SIZE-1))
-        player: Player making the move (BLUE_PLAYER or RED_PLAYER)
+        player: Player making the move (Player enum, or int for backward compatibility)
         
     Returns:
         New board tensor with the move applied and player-to-move channel updated
@@ -386,20 +430,24 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player:
     if not is_position_empty(board_tensor, row, col):
         raise ValueError(f"Position ({row}, {col}) is already occupied")
     
+    # Convert player to Player enum if it's an integer
+    if isinstance(player, int):
+        player = int_to_player(player)
+    
     # Create new tensor (don't modify original)
     new_tensor = board_tensor.clone()
     
-    # Place the piece in the appropriate channel using constant
-    if player == BLUE_PLAYER:
-        new_tensor[BLUE_CHANNEL, row, col] = PIECE_ONEHOT  # Blue channel
-    elif player == RED_PLAYER:
-        new_tensor[RED_CHANNEL, row, col] = PIECE_ONEHOT  # Red channel
+    # Place the piece in the appropriate channel using enum
+    if player == Player.BLUE:
+        new_tensor[Channel.BLUE.value, row, col] = PIECE_ONEHOT  # Blue channel
+    elif player == Player.RED:
+        new_tensor[Channel.RED.value, row, col] = PIECE_ONEHOT  # Red channel
     else:
         raise ValueError(f"Invalid player: {player}")
     
     # Update player-to-move channel (switch to other player)
-    next_player = RED_PLAYER if player == BLUE_PLAYER else BLUE_PLAYER
-    new_tensor[PLAYER_CHANNEL, :, :] = float(next_player)
+    next_player = Player.RED if player == Player.BLUE else Player.BLUE
+    new_tensor[Channel.PLAYER_TO_MOVE.value, :, :] = float(next_player.value)
     
     return new_tensor
 
@@ -528,3 +576,36 @@ def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
         move_values.append(value_logit)
     chosen_idx = sample_move_by_value(move_values, temperature)
     return topk_moves[chosen_idx] 
+
+# --- Utility functions for enum usage ---
+def get_opponent(player: Player) -> Player:
+    """Get the opponent of the given player."""
+    return Player.RED if player == Player.BLUE else Player.BLUE
+
+def is_blue(player) -> bool:
+    """Check if the given player/winner is blue."""
+    if isinstance(player, Player):
+        return player == Player.BLUE
+    if isinstance(player, Winner):
+        return player == Winner.BLUE
+    if isinstance(player, int):
+        return player == BLUE_PLAYER  # Backward compatibility
+    raise ValueError(f"Unknown player type: {type(player)}")
+
+def is_red(player) -> bool:
+    """Check if the given player/winner is red."""
+    if isinstance(player, Player):
+        return player == Player.RED
+    if isinstance(player, Winner):
+        return player == Winner.RED
+    if isinstance(player, int):
+        return player == RED_PLAYER  # Backward compatibility
+    raise ValueError(f"Unknown player type: {type(player)}")
+
+def player_to_winner(player: Player) -> Winner:
+    """Convert Player enum to Winner enum."""
+    return Winner.BLUE if player == Player.BLUE else Winner.RED
+
+def winner_to_player(winner: Winner) -> Player:
+    """Convert Winner enum to Player enum."""
+    return Player.BLUE if winner == Winner.BLUE else Player.RED 

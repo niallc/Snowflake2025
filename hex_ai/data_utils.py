@@ -398,7 +398,9 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     
     # Compute player-to-move from the board, then create augmented versions
     player_to_move = get_player_to_move_from_board(board, error_tracker)
-    augmented_player_to_move = create_augmented_player_to_move(player_to_move)
+    # Convert Player enum to integer for augmentation
+    player_to_move_int = player_to_move.value
+    augmented_player_to_move = create_augmented_player_to_move(player_to_move_int)
     
     # Combine into examples
     examples = []
@@ -576,14 +578,10 @@ def extract_training_examples_from_game(
         moves = remove_repeated_moves(moves)
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
-        # TODO: Replace magic numbers "1" and "2" with constants from hex_ai/config.py (TRMPH_BLUE_WIN, TRMPH_RED_WIN)
-        if winner_from_file not in ["1", "2"]:
+        if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
-        # TODO: Replace magic numbers with utility functions for winner string and value target
-        # winner_clear = trmph_winner_to_clear_str(winner_from_file)
-        # value_target = trmph_winner_to_training_value(winner_from_file)
-        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
-        value_target = 0.0 if winner_from_file == "1" else 1.0
+        winner_clear = trmph_winner_to_clear_str(winner_from_file)
+        value_target = trmph_winner_to_training_value(winner_from_file)
         total_positions = len(moves) + 1
         value_sample_tiers = assign_value_sample_tiers(total_positions)
         position_indices = list(range(total_positions))
@@ -794,17 +792,18 @@ def get_file_info_from_game_id_using_state(game_id: tuple, state_file_path: Path
 # Player-to-move Channel Utility
 # =========================================================================
 
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.value_utils import Player
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER  # Keep for backward compatibility
 
-def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> int:
+def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> Player:
     """
-    Given a (2, N, N) board, return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
+    Given a (2, N, N) board, return Player.BLUE if it's blue's move, Player.RED if it's red's move.
     Uses error tracking to handle invalid board states gracefully.
     Args:
         board_2ch: np.ndarray of shape (2, N, N), blue and red channels
         error_tracker: Optional BoardStateErrorTracker instance
     Returns:
-        int: BLUE_PLAYER or RED_PLAYER
+        Player: Player.BLUE or Player.RED
     """
     if board_2ch.shape[0] != 2:
         raise ValueError(f"Expected board with 2 channels, got shape {board_2ch.shape}")
@@ -813,9 +812,9 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
     red_count = int(np.sum(board_2ch[1]))
     
     if blue_count == red_count:
-        return BLUE_PLAYER
+        return Player.BLUE
     elif blue_count == red_count + 1:
-        return RED_PLAYER
+        return Player.RED
     else:
         # Invalid board state - use error tracking if available
         error_msg = f"Invalid board state: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red."
@@ -829,7 +828,7 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
             )
             # Return a default value to continue processing
             # Assume it's blue's turn if we can't determine
-            return BLUE_PLAYER
+            return Player.BLUE
         else:
             # Fall back to original behavior if no error tracker
             raise ValueError(error_msg)
@@ -872,7 +871,9 @@ def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
     from .config import BOARD_SIZE
     board_2ch = ex['board']
     player_to_move = get_player_to_move_from_board(board_2ch)
-    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=board_2ch.dtype)
+    # Convert Player enum to integer for tensor creation
+    player_to_move_int = player_to_move.value
+    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move_int), dtype=board_2ch.dtype)
     board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
     board = torch.tensor(board_3ch, dtype=torch.float32)
     policy = get_valid_policy_target(ex['policy'], use_uniform=use_uniform_policy)
