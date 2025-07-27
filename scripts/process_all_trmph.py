@@ -20,15 +20,16 @@ import logging
 import os
 from pathlib import Path
 
+# Import hex_ai modules (PYTHONPATH should be set by caller)
 from hex_ai.system_utils import check_virtual_env
 check_virtual_env("hex_ai_env")
 
-# Add the hex_ai directory to the path
-sys.path.append('hex_ai')
-
 from hex_ai.batch_processor import BatchProcessor
 from hex_ai.file_utils import GracefulShutdown
-from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# Import our new processing modules
+from scripts.config import ProcessingConfig
+from scripts.processor import TRMPHProcessor
 
 # Configure logging
 logging.basicConfig(
@@ -53,87 +54,73 @@ def main():
     parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
+    parser.add_argument("--max-workers", type=int, default=6, help="Number of worker processes to use (default: 6)")
+    parser.add_argument("--sequential", action="store_true", help="Process files sequentially (for debugging)")
     
     args = parser.parse_args()
+    
+    # Create configuration
+    config = ProcessingConfig(
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+        max_files=args.max_files,
+        position_selector=args.position_selector,
+        run_tag=args.run_tag,
+        max_workers=1 if args.sequential else args.max_workers,
+        combine_output=args.combine
+    )
+    
+    logger.info(f"Configuration: {config}")
     
     # Create shutdown handler
     shutdown_handler = GracefulShutdown()
     
-    # Create processor
-    processor = BatchProcessor(
-        data_dir=args.data_dir, 
-        output_dir=args.output_dir, 
-        shutdown_handler=shutdown_handler,
-        run_tag=args.run_tag
-    )
-    
-    # Find all .trmph files to process
-    trmph_files = processor.trmph_files
-    if args.max_files:
-        trmph_files = trmph_files[:args.max_files]
-
-    # Parallel processing of files
-    def process_file_wrapper(file_idx_file):
-        file_idx, file_path = file_idx_file
-        # Create a new BatchProcessor for each process to avoid shared state issues
-        from hex_ai.batch_processor import BatchProcessor
-        proc = BatchProcessor(
-            data_dir=args.data_dir,
-            output_dir=args.output_dir,
-            shutdown_handler=None,  # Not needed in worker
-            run_tag=args.run_tag
-        )
-        return proc.process_single_file(file_path, file_idx, position_selector=args.position_selector)
-
-    stats_list = []
-    with ProcessPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(process_file_wrapper, (i, file_path)): file_path for i, file_path in enumerate(trmph_files)}
-        for future in as_completed(futures):
-            file_path = futures[future]
-            try:
-                stats = future.result()
-                stats_list.append(stats)
-                logger.info(f"Processed {file_path}")
-            except Exception as e:
-                logger.error(f"Error processing {file_path}: {e}")
-
-    # Combine stats (if needed)
-    # Save final progress report
-    from hex_ai.file_utils import save_progress_report
-    save_progress_report(stats_list, Path(args.output_dir), shutdown_handler)
-    
-    if args.combine:
-        processor.create_combined_dataset()
-    
-    # Save final statistics
-    stats_file = Path(args.output_dir) / "processing_stats.json"
-    import json
-    with open(stats_file, 'w') as f:
-        json.dump(stats_list, f, indent=2)
-    
-    logger.info("")
-    logger.info("OUTPUT FILES:")
-    logger.info(f"  Processing statistics: {stats_file}")
-    logger.info(f"  Progress report: {Path(args.output_dir) / 'processing_progress.json'}")
-    logger.info(f"  Log file: logs/trmph_processing.log")
-    
-    # Count processed files
-    processed_files = list(Path(args.output_dir).glob("*_processed.pkl.gz"))
-    logger.info(f"  Individual processed files: {len(processed_files)} files in {args.output_dir}/")
-    
-    if args.combine:
-        combined_file = Path(args.output_dir) / "combined_dataset.pkl.gz"
-        if combined_file.exists():
-            logger.info(f"  Combined dataset: {combined_file}")
+    try:
+        # Create processor and process files
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+        
+        # Handle combined dataset creation if requested
+        if args.combine:
+            logger.info("Creating combined dataset...")
+            batch_processor = BatchProcessor(
+                data_dir=args.data_dir,
+                output_dir=args.output_dir,
+                shutdown_handler=shutdown_handler,
+                run_tag=args.run_tag
+            )
+            batch_processor.create_combined_dataset()
+            logger.info("Combined dataset created successfully")
+        
+        # Final status report
+        logger.info("")
+        logger.info("OUTPUT FILES:")
+        logger.info(f"  Processing statistics: {Path(args.output_dir) / 'processing_stats.json'}")
+        logger.info(f"  Log file: logs/trmph_processing.log")
+        
+        # Count processed files
+        processed_files = list(Path(args.output_dir).glob("*_processed.pkl.gz"))
+        logger.info(f"  Individual processed files: {len(processed_files)} files in {args.output_dir}/")
+        
+        if args.combine:
+            combined_file = Path(args.output_dir) / "combined_dataset.pkl.gz"
+            if combined_file.exists():
+                logger.info(f"  Combined dataset: {combined_file}")
+            else:
+                logger.warning(f"  Combined dataset: NOT CREATED (check logs/trmph_processing.log for errors)")
+        
+        logger.info("")
+        if shutdown_handler.shutdown_requested:
+            logger.info("Processing completed with graceful shutdown")
         else:
-            logger.warning(f"  Combined dataset: NOT CREATED (check logs/trmph_processing.log for errors)")
-    
-    logger.info("")
-    # Final status report
-    if shutdown_handler.shutdown_requested:
-        logger.info("Processing completed with graceful shutdown")
-    else:
-        logger.info("Processing completed successfully")
+            logger.info("Processing completed successfully")
+            
+    except KeyboardInterrupt:
+        logger.info("Processing interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Processing failed: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

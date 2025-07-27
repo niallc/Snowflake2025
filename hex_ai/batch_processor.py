@@ -31,11 +31,13 @@ class BatchProcessor:
     VERSION = "1.1"  # Current version of the processor
     
     def __init__(self, data_dir: str = "data", output_dir: str = "processed_data", 
-                 shutdown_handler: Optional[GracefulShutdown] = None, run_tag: Optional[str] = None):
+                 shutdown_handler: Optional[GracefulShutdown] = None, run_tag: Optional[str] = None,
+                 disable_resume_prompt: bool = False):
         self.data_dir = Path(data_dir)
         self.output_dir = Path(output_dir)
         self.shutdown_handler = shutdown_handler
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.disable_resume_prompt = disable_resume_prompt
         
         # Validate output directory
         validate_output_directory(self.output_dir, self.data_dir)
@@ -195,7 +197,12 @@ class BatchProcessor:
             logger.info(f"Currently processing: {self.state['current_file']}")
         
         # Get user input for resume strategy
-        resume_strategy = self._get_resume_strategy()
+        if self.disable_resume_prompt:
+            # For testing, default to fresh start
+            resume_strategy = "fresh_start"
+            logger.info("Resume prompt disabled - using fresh start")
+        else:
+            resume_strategy = self._get_resume_strategy()
         
         if resume_strategy == "abandon":
             logger.info("Processing abandoned by user")

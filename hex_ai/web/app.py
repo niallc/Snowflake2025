@@ -25,7 +25,7 @@ from hex_ai.value_utils import (
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
 THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
 CHECKPOINT_FILE1 = "epoch1_mini30.pt"
-CHECKPOINT_FILE2 = "epoch2_mini26.pt"
+CHECKPOINT_FILE2 = "epoch2_mini20.pt"
 DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
 DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
 
@@ -60,8 +60,8 @@ def get_model(model_id="model1"):
 def get_available_models():
     """Return list of available model configurations."""
     return [
-        {"id": "model1", "name": "Model 1 (epoch1_mini1)", "path": MODEL_PATHS["model1"]},
-        {"id": "model2", "name": "Model 2 (epoch2_mini10)", "path": MODEL_PATHS["model2"]},
+        {"id": "model1", "name": f"Model 1 ({CHECKPOINT_FILE1})", "path": MODEL_PATHS["model1"]},
+        {"id": "model2", "name": f"Model 2 ({CHECKPOINT_FILE2})", "path": MODEL_PATHS["model2"]},
     ]
 
 # --- Utility: Convert (row, col) moves to trmph moves ---

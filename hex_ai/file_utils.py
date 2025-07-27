@@ -64,6 +64,7 @@ def atomic_write_pickle_gz(data: Dict[str, Any], output_file: Path, temp_suffix:
     # Check if target file already exists (race condition check)
     if output_file.exists():
         logger.warning(f"Target file {output_file} already exists - this may indicate a race condition")
+        logger.warning(f"Will attempt to overwrite existing file")
     
     try:
         # Write data
@@ -76,7 +77,13 @@ def atomic_write_pickle_gz(data: Dict[str, Any], output_file: Path, temp_suffix:
         except FileExistsError:
             # Target file exists - this is unexpected and indicates a bug
             temp_file.unlink()  # Clean up temp file
+            logger.error(f"Target file {output_file} already exists - possible race condition or duplicate processing")
             raise RuntimeError(f"Target file {output_file} already exists - possible race condition or duplicate processing")
+        except OSError as e:
+            # Handle other filesystem errors
+            temp_file.unlink()  # Clean up temp file
+            logger.error(f"Filesystem error during atomic move: {e}")
+            raise RuntimeError(f"Filesystem error during atomic move: {e}")
             
     except Exception as e:
         # Clean up temp file if it exists
