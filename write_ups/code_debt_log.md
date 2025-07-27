@@ -82,6 +82,39 @@ This document tracks known areas of code duplication, technical debt, and major 
 ### 7. Test Suite Cleanup
 - The test suite does not fully pass; needs to be cleaned up and modernized.
 
+### 8. Minimax Search Debug Investigation (**2025-01-XX**) **[RESOLVED]**
+
+#### Bug Found and Fixed
+- **Problem**: Legacy minimax implementation had a bug causing incorrect move selection
+- **Root Cause**: Complex two-pass algorithm in legacy code was not correctly implementing minimax
+- **Solution**: Removed legacy implementation, kept the new working implementation
+- **Verification**: Manual verification confirmed new implementation is correct
+
+#### Cleanup Completed
+- **Removed**: Legacy `minimax_policy_value_search_legacy()` function
+- **Removed**: Duplicate `get_topk_moves()` function in legacy code
+- **Removed**: Debug script `scripts/debug_legacy_vs_new.py`
+- **Kept**: `scripts/manual_verification_script.py` for future debugging
+- **Kept**: Helper functions for tree inspection and debugging
+
+#### Function Duplications Resolved
+- **`get_topk_moves` function**: Removed duplicate legacy version
+- **Minimax algorithm logic**: Removed legacy implementation, kept new modular version
+- **Move selection logic**: Standardized on new implementation with temperature parameter
+
+#### Mock Model Code Debt
+- **Location**: `tests/test_minimax_debug.py`
+- **Issue**: Mock models with hardcoded heuristics (center preference, piece counting)
+- **Problem**: These heuristics are not based on real Hex strategy
+- **Debt**: Temporary test code that could mislead about actual performance
+- **Action**: Replace with proper test cases using real game positions
+
+#### Debug Output Debt
+- **Location**: `hex_ai/inference/fixed_tree_search.py`
+- **Issue**: Added extensive debug logging that clutters output
+- **Debt**: Debug code mixed with production code
+- **Action**: Move debug logging to separate debug module or remove after investigation
+
 ---
 
 ## Notes
