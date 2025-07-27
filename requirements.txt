@@ -3,6 +3,7 @@ torch>=2.0.0
 
 # Data processing and scientific computing (required for both training and inference)
 numpy>=1.21.0
+scipy>=1.7.0
 
 # Progress bars (required for both training and inference)
 tqdm>=4.64.0

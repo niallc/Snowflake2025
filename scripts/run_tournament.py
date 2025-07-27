@@ -16,21 +16,24 @@ CHKPT_DIR="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719
 # List of checkpoints to compare
 CHECKPOINTS = [
     "epoch1_mini1.pt",
+    "epoch1_mini27.pt",
     "epoch1_mini30.pt",
     "epoch1_mini36.pt",
     "epoch2_mini4.pt",
+    "epoch2_mini16.pt",
     "epoch2_mini18.pt",
+    "epoch2_mini20.pt",
     "epoch2_mini26.pt",
 ]
 CHKPT_PATHS = [os.path.join(CHKPT_DIR, fname) for fname in CHECKPOINTS]
 
 
-config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=10)
-play_config = TournamentPlayConfig(temperature=0.2, random_seed=42, pie_rule=True)
+config = TournamentConfig(checkpoint_paths=CHKPT_PATHS, num_games=500)
+play_config = TournamentPlayConfig(temperature=0.3, random_seed=42, pie_rule=True)
 
 LOG_DIR = "data/tournament_play"
-LOG_FILE = os.path.join(LOG_DIR, "no_swap_27th_1400_ran_temp0.2/tournament.log")
-CSV_FILE = os.path.join(LOG_DIR, "no_swap_27th_1400_ran_temp0.2/tournament.csv")
+LOG_FILE = os.path.join(LOG_DIR, "no_swap_27th_1416_ran_temp0.3/tournament.log")
+CSV_FILE = os.path.join(LOG_DIR, "no_swap_27th_1416_ran_temp0.3/tournament.csv")
 
 if __name__ == "__main__":
     print("Quick test tournament: epoch1_mini1.pt vs. epoch2_mini10.pt")
@@ -44,11 +47,5 @@ if __name__ == "__main__":
         csv_file=CSV_FILE,
         play_config=play_config
     )
-    print("\nTournament complete. Win rates:")
-    result.print_summary()
-    print("Elo ratings:")
-    elos = result.elo_ratings()
-    for path in CHECKPOINTS:
-        full_path = os.path.join(CHKPT_DIR, path)
-        # rel_elo = 1000 + (elos[full_path] - baseline) if full_path in elos else 'N/A'
-        print(f"  {path:20s} Elo: {elos.get(full_path, 'N/A')}") 
+    print("\nTournament complete!")
+    result.print_detailed_analysis() 
