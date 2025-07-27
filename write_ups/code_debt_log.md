@@ -1,136 +1,46 @@
-# Code Duplication and Refactoring Log
+# Code Debt and Refactoring Log
 
-This document tracks known areas of code duplication, technical debt, and major refactoring efforts in the project. Items are marked as **[RESOLVED]** or **[TODO]** as appropriate.
-
----
-
-## Resolved
-
-### Policy Processing & Move Selection Refactoring (**2025-07-23**) **[RESOLVED]**
-
-- **Critical Bug Fixed:** Tree search now uses temperature-scaled softmax for policy logits, fixing a major play-quality issue.
-- **Centralized Utilities:** All policy processing and move selection logic is now handled by canonical utilities in `hex_ai/value_utils.py`.
-- **Files Updated:**
-    - `hex_ai/value_utils.py` (new utilities)
-    - `hex_ai/inference/fixed_tree_search.py` (bug fix, refactor)
-    - `scripts/play_vs_model_cli.py`, `hex_ai/inference/tournament.py`, `hex_ai/web/app.py`, `hex_ai/inference/simple_model_inference.py`, `scripts/simple_inference_cli.py` (refactored to use utilities)
-    - `tests/test_policy_utilities.py` (comprehensive tests)
-- **Benefits:**
-    - Bug fix, code deduplication, maintainability, consistency, and easier future improvements.
-
-### Web Move-Making Code Modularization (**2025-07-23**) **[RESOLVED]**
-
-- **Moved `_select_policy_move` to shared utility:** The private helper function in `hex_ai/web/app.py` has been moved to `hex_ai/value_utils.py` as the public `select_policy_move` function.
-- **Updated all call-sites:** Web app, CLI scripts, and tournament code now use the shared utility.
-- **Added comprehensive tests:** New test for `select_policy_move` function with various scenarios.
-- **Benefits:**
-    - Eliminated duplication between web and CLI move selection logic.
-    - Improved testability and maintainability.
-    - Consistent move selection behavior across all code paths.
-
-### Move Application Utility Refactoring (**2025-07-23**) **[RESOLVED]**
-
-- **Created core tensor-based function:** `apply_move_to_tensor()` for efficient 3-channel tensor manipulation
-- **Created wrapper functions:** `apply_move_to_state()`, `apply_move_to_state_trmph()`, `apply_move_to_tensor_trmph()`
-- **Updated all call sites:** Web app, CLI scripts, and tournament code now use centralized utilities
-- **Added comprehensive tests:** New test suite in `tests/test_move_application_utilities.py` with 19 test cases
-- **Benefits:**
-    - Eliminated code duplication across move application logic
-    - Improved efficiency with direct tensor manipulation
-    - Better error handling and consistency
-    - Easier to test and maintain
-    - All tests pass (23/23)
-
-### TRMPH Function Duplication (**2025-07-23**) **[RESOLVED]**
-
-- **Problem:** TRMPH conversion functions were duplicated between `hex_ai/data_utils.py` and `hex_ai/utils/format_conversion.py`
-- **Solution:** 
-  - Removed duplicate functions from `data_utils.py` (`strip_trmph_preamble`, `split_trmph_moves`, `trmph_move_to_rowcol`, `rowcol_to_trmph`, `tensor_to_rowcol`, `rowcol_to_tensor`, `tensor_to_trmph`, `trmph_to_tensor`)
-  - Updated imports in `hex_ai/inference/game_engine.py` to use `format_conversion` instead of `data_utils`
-  - Updated imports in `tests/test_advanced_winner_detection.py`
-- **Benefits:** Eliminated circular import issues, single source of truth for TRMPH functions
-- **Files Modified:** `hex_ai/data_utils.py`, `hex_ai/inference/game_engine.py`, `tests/test_advanced_winner_detection.py`
+This document tracks remaining areas of code duplication, technical debt, and refactoring efforts that need attention.
 
 ---
 
-## Still To Do
+## Remaining Work
 
-### 1. Dataset Classes **[RESOLVED]**
-
-#### StreamingAugmentedProcessedDataset vs. StreamingSequentialShardDataset
-- **Problem:** Two dataset classes with overlapping functionality causing confusion and maintenance burden
-- **Solution:** Removed `StreamingAugmentedProcessedDataset` entirely, keeping only `StreamingSequentialShardDataset`
-- **Files Modified:**
-  - Deleted `tests/test_streaming_dataset.py`
-  - Deleted `tests/test_streaming_augmented_processed_dataset.py`
-  - Deleted `tests/test_integration_mini_epoch.py`
-  - Removed import from `hex_ai/training.py`
-  - Removed class definition from `hex_ai/data_pipeline.py`
-- **Benefits:** Simplified codebase, eliminated confusion, reduced maintenance burden
-
-### 2. Trainer Methods
+### 1. Trainer Methods
 
 #### Trainer.train vs. Trainer.train_on_batches
 - **Difference:** Monolithic vs. modular training loop. Consider unifying or clearly documenting intended usage.
 
-### 3. Inference and CLI Duplication
+### 2. Inference and CLI Duplication
 - `hex_ai/inference/simple_model_inference.py` and `scripts/simple_inference_cli.py` may have legacy or redundant code paths. Review for deletion or further refactoring.
 - Model loading and inference logic is now centralized in `ModelWrapper`, but older scripts/utilities may still use custom or legacy code paths.
 - Data preprocessing for inference vs. training should be unified; update all code to use `preprocess_example_for_model` where possible.
 
-### 4. Player Identification Code: BLUE / RED, Constants and Enums
+### 3. Player Identification Code: BLUE / RED, Constants and Enums
 - Both constants (in `hex_ai/config.py`) and enums/utilities (in `hex_ai/value_utils.py`) are used. Decide on a single system for clarity.
 
-### 5. Training Example Extraction
+### 4. Training Example Extraction
 - Both `extract_training_examples_from_game` and `extract_training_examples_with_selector_from_game` exist; one may be dead code.
 
-### 6. StreamingSequentialShardDataset __len__ Hack (**Technical Debt**)
+### 5. StreamingSequentialShardDataset __len__ Hack (**Technical Debt**)
 - Dummy `__len__` returns a huge value for PyTorch compatibility. Remove when possible.
 
-### 7. Test Suite Cleanup **[PARTIALLY RESOLVED]**
-- **Fixed Import Errors:** Updated `tests/test_streaming_dataset.py` to use correct class name `StreamingAugmentedProcessedDataset`
-- **Fixed API Mismatches:** Updated `tests/test_trmph_processor.py` to use `BatchProcessor` instead of non-existent `TrmphProcessor`
-- **Fixed Method Signatures:** Added missing `file_idx` parameter to `process_single_file` calls
-- **Fixed Mock Patches:** Updated mock patches to use correct module paths
+### 6. Test Suite Cleanup
 - **Remaining Issues:** Some tests still fail due to data format changes and API differences that need deeper investigation
+- **Action:** Investigate and fix remaining test failures, particularly in:
+  - `tests/test_data_shuffling.py`
+  - `tests/test_mini_epoch_orchestrator.py`
+  - `tests/test_policy_utilities.py`
 
-### 8. Minimax Search Debug Investigation (**2025-01-XX**) **[RESOLVED]**
-
-#### Bug Found and Fixed
-- **Problem**: Legacy minimax implementation had a bug causing incorrect move selection
-- **Root Cause**: Complex two-pass algorithm in legacy code was not correctly implementing minimax
-- **Solution**: Removed legacy implementation, kept the new working implementation
-- **Verification**: Manual verification confirmed new implementation is correct
-
-#### Cleanup Completed
-- **Removed**: Legacy `minimax_policy_value_search_legacy()` function
-- **Removed**: Duplicate `get_topk_moves()` function in legacy code
-- **Removed**: Debug script `scripts/debug_legacy_vs_new.py`
-- **Kept**: `scripts/manual_verification_script.py` for future debugging
-- **Kept**: Helper functions for tree inspection and debugging
-
-#### Function Duplications Resolved
-- **`get_topk_moves` function**: Removed duplicate legacy version
-- **Minimax algorithm logic**: Removed legacy implementation, kept new modular version
-- **Move selection logic**: Standardized on new implementation with temperature parameter
-
-#### Mock Model Code Debt
+### 7. Mock Model Code Debt
 - **Location**: `tests/test_minimax_debug.py`
 - **Issue**: Mock models with hardcoded heuristics (center preference, piece counting)
 - **Problem**: These heuristics are not based on real Hex strategy
 - **Debt**: Temporary test code that could mislead about actual performance
 - **Action**: Replace with proper test cases using real game positions
 
-#### Debug Output Debt **[RESOLVED]**
-- **Location**: `hex_ai/inference/fixed_tree_search.py`
-- **Issue**: Added extensive debug logging that clutters output
-- **Debt**: Debug code mixed with production code
-- **Action**: Removed debug logging statements from production code
-- **Files Modified**: `hex_ai/inference/fixed_tree_search.py`
-- **Benefits**: Cleaner production output, reduced code clutter
-
 ---
 
 ## Notes
-- As the codebase is modernized, update this document to reflect new refactors, resolved issues, and remaining technical debt.
-- Use this as a living checklist for ongoing code health and cleanup. 
+- Use this as a living checklist for ongoing code health and cleanup.
+- Remove items as they are resolved to keep the document focused on actionable work. 
