@@ -30,7 +30,18 @@ class MinimaxSearchNode:
 
 def get_topk_moves(state: HexGameState, model, k: int, 
                    temperature: float = 1.0) -> List[Tuple[int, int]]:
-    """Get top-k legal moves by policy probability."""
+    """
+    Sample k moves from the policy distribution with temperature scaling.
+    
+    Args:
+        state: Current game state
+        model: Model for inference
+        k: Number of moves to sample
+        temperature: Temperature for sampling (0.0 = deterministic top-k, higher = more random)
+        
+    Returns:
+        List of k sampled moves
+    """
     policy_logits, _ = model.infer(state.board)
     policy_probs = temperature_scaled_softmax(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
@@ -39,12 +50,32 @@ def get_topk_moves(state: HexGameState, model, k: int,
         return []
     
     # Convert moves to indices and get probabilities
+    # TODO: Is legal_policy checking for legal moves? 
+    #       Legal moves have value 0, where is this being checked?
+    # TODO: This logic should be refactored into a reusable utility function.
     move_indices = [row * state.board.shape[0] + col for row, col in legal_moves]
     legal_policy = np.array([policy_probs[idx] for idx in move_indices])
     
-    # Get top-k moves
-    topk_idx = np.argsort(legal_policy)[::-1][:k]
-    return [legal_moves[i] for i in topk_idx]
+    # Normalize legal move probabilities to sum to 1
+    legal_policy_sum = np.sum(legal_policy)
+    if legal_policy_sum > 0:
+        legal_policy = legal_policy / legal_policy_sum
+    else:
+        # If all probabilities are 0, use uniform distribution
+        legal_policy = np.ones(len(legal_moves)) / len(legal_moves)
+    
+    # Sample k moves from the policy distribution
+    if temperature == 0.0 or len(legal_moves) <= k:
+        # Deterministic: take top-k moves
+        topk_idx = np.argsort(legal_policy)[::-1][:k]
+        sampled_moves = [legal_moves[i] for i in topk_idx]
+    else:
+        # Stochastic: sample k moves weighted by policy probabilities
+        sampled_indices = np.random.choice(len(legal_moves), size=k, replace=False, p=legal_policy)
+        sampled_moves = [legal_moves[i] for i in sampled_indices]
+    
+    logger.debug(f"Sampled {len(sampled_moves)} moves with temperature {temperature}")
+    return sampled_moves
 
 
 def build_search_tree(
@@ -118,8 +149,14 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int =
         logger.debug(f"Leaf node {node.path}: raw_value={value:.4f}, converted_value={node.value:.4f}")
 
 
+
+
 def minimax_backup(node: MinimaxSearchNode) -> float:
-    """Backup values from leaves to root using minimax algorithm."""
+    """
+    Backup values from leaves to root using minimax algorithm.
+    Temperature is already applied during move sampling in get_topk_moves(),
+    so we always choose the best move deterministically here.
+    """
     if node.value is not None:  # Leaf node
         return node.value
     
@@ -135,6 +172,7 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
     
     # Since all values are now from the root player's perspective,
     # we always maximize (choose the best move for the root player)
+    # Temperature is already applied during move sampling, so choose best deterministically
     best_move, best_value = max(child_values, key=lambda x: x[1])
     logger.debug(f"Node {node.path}: best move = {best_move}, value = {best_value}")
     
@@ -227,7 +265,7 @@ def minimax_policy_value_search(
     # Evaluate all leaf nodes from the root player's perspective
     evaluate_leaf_nodes([root], model, batch_size, state.current_player)
     
-    # Backup values to root
+    # Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)
     
     logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
