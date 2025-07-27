@@ -27,7 +27,7 @@ from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
 )
-from hex_ai.data_pipeline import StreamingAugmentedProcessedDataset, discover_processed_files
+from hex_ai.data_pipeline import discover_processed_files
 
 from hex_ai.training_utils import get_device
 DEVICE = get_device()

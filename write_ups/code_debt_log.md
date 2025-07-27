@@ -55,10 +55,18 @@ This document tracks known areas of code duplication, technical debt, and major 
 
 ## Still To Do
 
-### 1. Dataset Classes
+### 1. Dataset Classes **[RESOLVED]**
 
 #### StreamingAugmentedProcessedDataset vs. StreamingSequentialShardDataset
-- **Difference:** Random-access/in-memory vs. streaming/sequential. Both exist for different use-cases, but code could be unified or better documented.
+- **Problem:** Two dataset classes with overlapping functionality causing confusion and maintenance burden
+- **Solution:** Removed `StreamingAugmentedProcessedDataset` entirely, keeping only `StreamingSequentialShardDataset`
+- **Files Modified:**
+  - Deleted `tests/test_streaming_dataset.py`
+  - Deleted `tests/test_streaming_augmented_processed_dataset.py`
+  - Deleted `tests/test_integration_mini_epoch.py`
+  - Removed import from `hex_ai/training.py`
+  - Removed class definition from `hex_ai/data_pipeline.py`
+- **Benefits:** Simplified codebase, eliminated confusion, reduced maintenance burden
 
 ### 2. Trainer Methods
 
@@ -79,8 +87,12 @@ This document tracks known areas of code duplication, technical debt, and major 
 ### 6. StreamingSequentialShardDataset __len__ Hack (**Technical Debt**)
 - Dummy `__len__` returns a huge value for PyTorch compatibility. Remove when possible.
 
-### 7. Test Suite Cleanup
-- The test suite does not fully pass; needs to be cleaned up and modernized.
+### 7. Test Suite Cleanup **[PARTIALLY RESOLVED]**
+- **Fixed Import Errors:** Updated `tests/test_streaming_dataset.py` to use correct class name `StreamingAugmentedProcessedDataset`
+- **Fixed API Mismatches:** Updated `tests/test_trmph_processor.py` to use `BatchProcessor` instead of non-existent `TrmphProcessor`
+- **Fixed Method Signatures:** Added missing `file_idx` parameter to `process_single_file` calls
+- **Fixed Mock Patches:** Updated mock patches to use correct module paths
+- **Remaining Issues:** Some tests still fail due to data format changes and API differences that need deeper investigation
 
 ### 8. Minimax Search Debug Investigation (**2025-01-XX**) **[RESOLVED]**
 
@@ -109,11 +121,13 @@ This document tracks known areas of code duplication, technical debt, and major 
 - **Debt**: Temporary test code that could mislead about actual performance
 - **Action**: Replace with proper test cases using real game positions
 
-#### Debug Output Debt
+#### Debug Output Debt **[RESOLVED]**
 - **Location**: `hex_ai/inference/fixed_tree_search.py`
 - **Issue**: Added extensive debug logging that clutters output
 - **Debt**: Debug code mixed with production code
-- **Action**: Move debug logging to separate debug module or remove after investigation
+- **Action**: Removed debug logging statements from production code
+- **Files Modified**: `hex_ai/inference/fixed_tree_search.py`
+- **Benefits**: Cleaner production output, reduced code clutter
 
 ---
 

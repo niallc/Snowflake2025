@@ -1,5 +1,5 @@
 """
-Tests for the TrmphProcessor class and related functionality.
+Tests for the BatchProcessor class and related functionality.
 
 This module tests the large-scale TRMPH file processing pipeline.
 """
@@ -12,11 +12,11 @@ import pickle
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from scripts.process_all_trmph import TrmphProcessor
+from hex_ai.batch_processor import BatchProcessor
 
 
-class TestTrmphProcessor:
-    """Test the TrmphProcessor class."""
+class TestBatchProcessor:
+    """Test the BatchProcessor class."""
     
     def setup_method(self):
         """Set up test fixtures."""
@@ -39,8 +39,8 @@ class TestTrmphProcessor:
         return file_path
     
     def test_initialization(self):
-        """Test TrmphProcessor initialization."""
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        """Test BatchProcessor initialization."""
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         assert processor.data_dir == self.data_dir
         assert processor.output_dir == self.output_dir
@@ -54,7 +54,7 @@ class TestTrmphProcessor:
         self.create_test_trmph_file("test2.trmph", "content2")
         self.create_test_trmph_file("test3.txt", "content3")  # Should be ignored
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         assert len(processor.trmph_files) == 2
         assert all(f.suffix == ".trmph" for f in processor.trmph_files)
@@ -63,10 +63,10 @@ class TestTrmphProcessor:
         """Test processing an empty TRMPH file."""
         self.create_test_trmph_file("empty.trmph", "")
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "empty.trmph"
         
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         # Empty files should be handled gracefully with a file error
         assert stats['file_error'] is not None
@@ -80,10 +80,10 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"  # Simple game with blue winner
         self.create_test_trmph_file("valid.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "valid.trmph"
         
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None
         assert stats['valid_games'] == 1
@@ -99,10 +99,10 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3\n"  # Missing winner
         self.create_test_trmph_file("invalid_format.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "invalid_format.trmph"
         
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None  # File-level error handling
         assert stats['valid_games'] == 0
@@ -114,10 +114,10 @@ class TestTrmphProcessor:
         content = "#13,a1b2a1c3 1\n"  # Duplicate move 'a1'
         self.create_test_trmph_file("duplicate.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "duplicate.trmph"
         
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         # Should handle gracefully due to remove_repeated_moves
         assert stats['file_error'] is None
@@ -132,10 +132,10 @@ class TestTrmphProcessor:
         content += "#13,a1b2c3d4 1\n"  # Valid game
         self.create_test_trmph_file("mixed.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "mixed.trmph"
         
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None
         assert stats['valid_games'] == 3
@@ -144,7 +144,7 @@ class TestTrmphProcessor:
     
     def test_file_not_found(self):
         """Test handling of missing files."""
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         non_existent_file = self.data_dir / "nonexistent.trmph"
         
         stats = processor.process_single_file(non_existent_file)
@@ -157,10 +157,10 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"
         self.create_test_trmph_file("test.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "test.trmph"
         
-        processor.process_single_file(file_path)
+        processor.process_single_file(file_path, 0)
         
         # Check output file
         output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
@@ -181,7 +181,7 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n#13,a1b2 2\n"
         self.create_test_trmph_file("stats_test.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Process files
         stats = processor.process_all_files()
@@ -201,7 +201,7 @@ class TestTrmphProcessor:
         for i in range(5):
             self.create_test_trmph_file(f"test{i}.trmph", "#13,a1b2c3 1\n")
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Process only 3 files
         stats = processor.process_all_files(max_files=3)
@@ -215,7 +215,7 @@ class TestTrmphProcessor:
         for i in range(3):
             self.create_test_trmph_file(f"test{i}.trmph", "#13,a1b2c3 1\n")
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Process all files
         processor.process_all_files()
@@ -242,14 +242,14 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"
         self.create_test_trmph_file("error_test.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Mock extract_training_examples_from_game to raise an exception
-        with patch('scripts.process_all_trmph.extract_training_examples_from_game') as mock_extract:
+        with patch('hex_ai.data_utils.extract_training_examples_from_game') as mock_extract:
             mock_extract.side_effect = Exception("Test error")
             
             file_path = self.data_dir / "error_test.trmph"
-            stats = processor.process_single_file(file_path)
+            stats = processor.process_single_file(file_path, 0)
             
             assert stats['file_error'] is None  # File-level error handling
             assert stats['all_games'] == 1
@@ -265,11 +265,11 @@ class TestTrmphProcessor:
         
         self.create_test_trmph_file("large.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "large.trmph"
         
         # Should process without memory issues
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None
         assert stats['valid_games'] == 1000
@@ -282,11 +282,11 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"
         self.create_test_trmph_file(problematic_name, content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / problematic_name
         
         # Should handle without issues
-        stats = processor.process_single_file(file_path)
+        stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None
         assert stats['valid_games'] == 1
@@ -297,7 +297,7 @@ class TestTrmphProcessor:
         for i in range(5):
             self.create_test_trmph_file(f"concurrent{i}.trmph", "#13,a1b2c3 1\n")
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Process all files
         processor.process_all_files()
@@ -323,7 +323,7 @@ class TestTrmphProcessor:
                 content += f"#13,a1b2c3 1\n"
             self.create_test_trmph_file(f"large{i}.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Get initial memory usage
         process = psutil.Process(os.getpid())
@@ -334,7 +334,7 @@ class TestTrmphProcessor:
         # Process each file and track memory
         for i in range(3):
             file_path = self.data_dir / f"large{i}.trmph"
-            stats = processor.process_single_file(file_path)
+            stats = processor.process_single_file(file_path, 0)
             
             # Check memory after each file
             current_memory = process.memory_info().rss / 1024 / 1024  # MB
@@ -359,7 +359,7 @@ class TestTrmphProcessor:
     def test_output_directory_validation(self):
         """Test output directory validation including permissions and space."""
         # Test with valid directory
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         assert processor.output_dir.exists()
         
         # Test with invalid directory (should raise error)
@@ -370,11 +370,11 @@ class TestTrmphProcessor:
             os.chmod(temp_dir, 0o444)  # Read-only
             
             with pytest.raises(ValueError, match="not writable"):
-                TrmphProcessor(data_dir=str(self.data_dir), output_dir=temp_dir)
+                BatchProcessor(data_dir=str(self.data_dir), output_dir=temp_dir)
     
     def test_filename_sanitization(self):
         """Test filename sanitization for safety."""
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Test various problematic filenames
         test_cases = [
@@ -391,7 +391,8 @@ class TestTrmphProcessor:
         ]
         
         for input_name, expected in test_cases:
-            sanitized = processor._sanitize_filename(input_name)
+            from hex_ai.file_utils import sanitize_filename
+            sanitized = sanitize_filename(input_name)
             assert sanitized == expected
     
     def test_filename_uniqueness(self):
@@ -401,7 +402,7 @@ class TestTrmphProcessor:
             content = f"#13,a1b2c3 1\n"
             self.create_test_trmph_file(f"same_name.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Process files - should create unique output names
         processor.process_all_files()
@@ -421,7 +422,7 @@ class TestTrmphProcessor:
     
     def test_data_integrity_validation(self):
         """Test data integrity validation before saving."""
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
         # Test valid data
         import numpy as np
@@ -458,10 +459,10 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"
         self.create_test_trmph_file("structure_test.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "structure_test.trmph"
         
-        processor.process_single_file(file_path)
+        processor.process_single_file(file_path, 0)
         
         # Check output file
         output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
@@ -506,11 +507,11 @@ class TestTrmphProcessor:
         content = "#13,a1b2c3 1\n"
         self.create_test_trmph_file("atomic_test.trmph", content)
         
-        processor = TrmphProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
+        processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "atomic_test.trmph"
         
         # Process file
-        processor.process_single_file(file_path)
+        processor.process_single_file(file_path, 0)
         
         # Check that no temp files remain
         temp_files = list(self.output_dir.glob("*.tmp"))

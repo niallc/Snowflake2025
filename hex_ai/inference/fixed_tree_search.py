@@ -74,7 +74,7 @@ def get_topk_moves(state: HexGameState, model, k: int,
         sampled_indices = np.random.choice(len(legal_moves), size=k, replace=False, p=legal_policy)
         sampled_moves = [legal_moves[i] for i in sampled_indices]
     
-    logger.debug(f"Sampled {len(sampled_moves)} moves with temperature {temperature}")
+    # Debug logging removed for production code
     return sampled_moves
 
 
@@ -174,7 +174,7 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
     # we always maximize (choose the best move for the root player)
     # Temperature is already applied during move sampling, so choose best deterministically
     best_move, best_value = max(child_values, key=lambda x: x[1])
-    logger.debug(f"Node {node.path}: best move = {best_move}, value = {best_value}")
+    # Debug logging removed for production code
     
     node.value = best_value
     node.best_move = best_move
