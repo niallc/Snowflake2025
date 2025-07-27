@@ -6,9 +6,9 @@ Compare the output of StreamingProcessedDataset to the raw records in a .pkl.gz 
 import argparse
 import numpy as np
 from pathlib import Path
-from scripts.lib.data_loading_utils import load_examples_from_pkl
-from scripts.lib.board_viz_utils import visualize_board_with_policy
-from scripts.lib.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
+from hex_ai.data_utils import load_examples_from_pkl
+from hex_ai.utils.board_visualization import visualize_board_with_policy
+from hex_ai.utils.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
 import torch
 
 

@@ -951,3 +951,86 @@ def extract_training_examples_with_selector_from_game(
     except Exception as e:
         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         raise ValueError(f"Failed to process game: {e}")
+
+
+def load_examples_from_pkl(file_path):
+    """Load examples from a .pkl.gz file with an 'examples' key."""
+    import gzip
+    import pickle
+    
+    with gzip.open(file_path, 'rb') as f:
+        data = pickle.load(f)
+    if 'examples' in data:
+        return data['examples']
+    else:
+        raise ValueError(f"No 'examples' key found in {file_path}")
+
+
+def extract_single_game_to_new_pkl(src_file, game_index=0, num_games_to_extract=1, output_dir="data/exampleData"):
+    """
+    Safely extract one or more games from a .pkl.gz file, checking that each next board is a strict superset (one new piece) or completely empty (new game).
+    Args:
+        src_file: Path to source .pkl.gz file
+        game_index: Index of the first game to extract (0-based)
+        num_games_to_extract: Number of games to extract (default 1)
+        output_dir: Directory to save the new file(s) (default: data/exampleData)
+    Returns:
+        List of paths to the new .pkl.gz file(s)
+    Raises:
+        ValueError if an unexpected board transition is found.
+    """
+    import gzip
+    import pickle
+    import os
+    import numpy as np
+    
+    with gzip.open(src_file, 'rb') as f:
+        data = pickle.load(f)
+    examples = data['examples']
+    n = len(examples)
+    game_starts = [0]
+    games_found = 0
+    target_games = game_index + num_games_to_extract
+    
+    for i in range(1, n):
+        prev_board = examples[i-1][0]
+        curr_board = examples[i][0]
+        # Only consider first two channels for piece placement
+        prev_pieces = (prev_board[:2] > 0)
+        curr_pieces = (curr_board[:2] > 0)
+        prev_count = np.sum(prev_pieces)
+        curr_count = np.sum(curr_pieces)
+        # Check for new game (completely empty board)
+        if np.sum(curr_pieces) == 0:
+            game_starts.append(i)
+            games_found += 1
+            # Stop if we've found enough games
+            if games_found >= target_games:
+                break
+            continue
+        # Check for strict superset (one new piece)
+        diff = curr_pieces.astype(int) - prev_pieces.astype(int)
+        if curr_count == prev_count + 1 and np.all((diff == 0) | (diff == 1)) and np.sum(diff) == 1:
+            continue
+        # If neither, fail
+        raise ValueError(f"Unexpected board transition at index {i}: not a new game, not a strict superset.\nPrev count: {prev_count}, Curr count: {curr_count}")
+    
+    # Add end index for the last game we found
+    if games_found < target_games:
+        game_starts.append(n)
+        games_found += 1
+    
+    # Extract the requested games
+    os.makedirs(output_dir, exist_ok=True)
+    out_files = []
+    for k in range(num_games_to_extract):
+        idx = game_index + k
+        if idx >= len(game_starts) - 1:
+            raise IndexError(f"Requested game_index {idx} out of range (found {len(game_starts)-1} games)")
+        start_idx, end_idx = game_starts[idx], game_starts[idx+1]
+        game_examples = examples[start_idx:end_idx]
+        out_file = os.path.join(output_dir, f"single_game_{idx}_from_{os.path.basename(src_file)}")
+        with gzip.open(out_file, 'wb') as f:
+            pickle.dump({'examples': game_examples}, f)
+        out_files.append(out_file)
+    return out_files

@@ -5,9 +5,9 @@ Extract and display a record from a .pkl.gz file, given the file path and (optio
 
 import argparse
 import numpy as np
-from scripts.lib.data_loading_utils import load_examples_from_pkl
-from scripts.lib.board_viz_utils import visualize_board_with_policy
-from scripts.lib.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
+from hex_ai.data_utils import load_examples_from_pkl
+from hex_ai.utils.board_visualization import visualize_board_with_policy
+from hex_ai.utils.consistency_checks import policy_on_empty_cell, player_to_move_channel_valid
 
 
 def print_example(example, idx=None):

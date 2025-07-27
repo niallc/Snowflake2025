@@ -14,9 +14,9 @@ from typing import List
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from scripts.config import ProcessingConfig
-from scripts.processor import TRMPHProcessor, ParallelProcessor, SequentialProcessor
-from scripts.workers import process_single_file_worker
+from hex_ai.trmph_processing.config import ProcessingConfig
+from hex_ai.trmph_processing.processor import TRMPHProcessor, ParallelProcessor, SequentialProcessor
+from hex_ai.trmph_processing.workers import process_single_file_worker
 
 
 def create_test_trmph_files(temp_dir: Path, num_files: int = 3) -> List[Path]:
@@ -237,7 +237,7 @@ def test_integration_with_real_script():
     # Test that we can import the main script
     # Note: This will fail if not in the right virtual environment, which is expected
     try:
-        from scripts.process_all_trmph import main
+        from hex_ai.trmph_processing.cli import main
         assert callable(main)
     except (ImportError, SystemExit) as e:
         # SystemExit is expected if not in the right virtual environment

@@ -99,101 +99,78 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
     try:
         logger.info(f"Processing {file_path}")
         
-        # Load the trmph file
-        try:
-            games = load_trmph_file(str(file_path))
-            logger.info(f"  Loaded {len(games)} games from {file_path}")
-        except (FileNotFoundError, ValueError) as e:
-            # File-level error - can't process this file at all
-            file_stats['file_error'] = str(e)
-            logger.error(f"File error processing {file_path}: {e}")
-            return file_stats
+        # Load TRMPH file
+        trmph_data = load_trmph_file(file_path)
+        
+        # Parse games from TRMPH data
+        games = parse_trmph_game_record(trmph_data)
+        file_stats['all_games'] = len(games)
         
         # Process each game
         all_examples = []
-        for i, game_line in enumerate(games):
-            file_stats['all_games'] += 1
-            
+        for game_idx, game in enumerate(games):
             try:
-                # Parse the game record
-                try:
-                    trmph_url, winner = parse_trmph_game_record(game_line)
-                except ValueError as e:
-                    logger.warning(f"    Game {i+1} has wrong format: {repr(game_line)}: {e}")
-                    file_stats['skipped_games'] += 1
-                    continue
+                # Extract training examples from this game
+                examples = extract_training_examples_with_selector_from_game(
+                    game, 
+                    position_selector=position_selector
+                )
                 
-                # Extract training examples
-                try:
-                    # Create game_id with file_idx and line_idx (i+1 for 1-based line numbers)
-                    game_id = (file_idx, i+1)
-                    examples = extract_training_examples_with_selector_from_game(trmph_url, winner, game_id, position_selector=position_selector)
-                    if examples:
-                        # Use dictionary format directly - no conversion needed
-                        all_examples.extend(examples)
-                        file_stats['valid_games'] += 1
-                        file_stats['examples_generated'] += len(examples)
-                    else:
-                        logger.warning(f"    Game {i+1} in {file_path.name} produced no examples")
-                        file_stats['skipped_games'] += 1
-                except Exception as e:
-                    logger.warning(f"    Error extracting examples from game {i+1} in {file_path.name}: {e}")
+                if examples:
+                    # Add source file information to each example
+                    for example in examples:
+                        example['metadata']['source_file'] = str(file_path)
+                        example['metadata']['game_id'] = f"{file_path.stem}_{game_idx}"
+                    
+                    all_examples.extend(examples)
+                    file_stats['valid_games'] += 1
+                    file_stats['examples_generated'] += len(examples)
+                else:
                     file_stats['skipped_games'] += 1
-            
+                    
             except Exception as e:
-                logger.warning(f"    Unexpected error processing game {i+1} in {file_path.name}: {e}")
+                logger.warning(f"Failed to process game {game_idx} in {file_path}: {e}")
                 file_stats['skipped_games'] += 1
         
-        # Save processed examples
+        # Save processed examples if any were generated
         if all_examples:
-            # Sanitize filename and ensure uniqueness
-            safe_filename = sanitize_filename(file_path.stem)
-            output_file = output_dir / f"{safe_filename}_processed.pkl.gz"
+            # Validate examples before saving
+            validate_examples_data(all_examples)
+            
+            # Generate output filename
+            base_name = file_path.stem
+            output_filename = f"{base_name}_processed.pkl.gz"
+            output_path = output_dir / output_filename
             
             # Ensure filename uniqueness
             counter = 1
-            while output_file.exists():
-                output_file = output_dir / f"{safe_filename}_processed_{counter}.pkl.gz"
+            while output_path.exists():
+                output_filename = f"{base_name}_processed_{counter}.pkl.gz"
+                output_path = output_dir / output_filename
                 counter += 1
-                if counter > 4:  # Prevent infinite loop
-                    raise ValueError(f"Too many files with similar name: {safe_filename}")
             
-            # Validate data before saving
-            validate_examples_data(all_examples)
-            
-            try:
-                # Save with atomic write
-                data = {
-                    'examples': all_examples,
-                    'source_file': str(file_path),
-                    'processing_stats': file_stats,
-                    'processed_at': datetime.now().isoformat(),
-                    'file_size_bytes': 0  # Will be updated after write
-                }
-                
-                atomic_write_pickle_gz(data, output_file)
-                
-                # Get file size for logging
-                file_size = output_file.stat().st_size
-                logger.info(f"  Saved {len(all_examples)} examples to {output_file} ({file_size} bytes)")
-                
-            except Exception as e:
-                logger.error(f"    Error saving output file {output_file}: {e}")
-                file_stats['file_error'] = f"Failed to save output: {e}"
-        else:
-            logger.info(f"  No valid examples generated from {file_path}")
+            # Save with atomic write
+            atomic_write_pickle_gz(output_path, all_examples)
+            logger.info(f"Saved {len(all_examples)} examples to {output_path}")
         
         return file_stats
         
     except Exception as e:
-        # Catch any other unexpected file-level errors
         file_stats['file_error'] = str(e)
-        logger.error(f"Unexpected error processing {file_path}: {e}")
-        return file_stats
+        logger.error(f"Failed to process file {file_path}: {e}")
+        raise
 
 
 def validate_examples_data(examples: list):
-    """Validate that examples have the correct format."""
+    """
+    Validate that examples have the correct format and required fields.
+    
+    Args:
+        examples: List of training examples to validate
+        
+    Raises:
+        ValueError: If examples don't have required format
+    """
     if not examples:
         return
     
@@ -207,41 +184,32 @@ def validate_examples_data(examples: list):
     
     # Validate board shape
     board = example['board']
-    if not hasattr(board, 'shape') or len(board.shape) != 3 or board.shape[0] != 2:
-        raise ValueError(f"Board must be (2, N, N) array, got shape: {board.shape}")
+    if not hasattr(board, 'shape') or len(board.shape) != 3:
+        raise ValueError(f"Board must be 3D array, got shape: {board.shape}")
+    
+    if board.shape[0] != 2:
+        raise ValueError(f"Board must have 2 channels, got: {board.shape[0]}")
     
     # Validate policy shape
     policy = example['policy']
     if policy is not None:
         board_size = board.shape[1] * board.shape[2]
         if not hasattr(policy, 'shape') or policy.shape[0] != board_size:
-            raise ValueError(f"Policy must be ({board_size},) array, got shape: {policy.shape}")
-    
-    # Validate value
-    value = example['value']
-    if not isinstance(value, (int, float)):
-        raise ValueError(f"Value must be numeric, got: {type(value)}")
+            raise ValueError(f"Policy must have shape ({board_size},), got: {policy.shape}")
     
     # Validate player_to_move
     player_to_move = example['player_to_move']
-    if isinstance(player_to_move, int):
-        if player_to_move not in [0, 1]:
-            raise ValueError(f"player_to_move must be 0 or 1, got: {player_to_move}")
-    else:
-        # Check if it's a Player enum
-        try:
-            from hex_ai.value_utils import Player
-            if player_to_move not in [Player.BLUE, Player.RED]:
-                raise ValueError(f"player_to_move must be Player.BLUE or Player.RED, got: {player_to_move}")
-        except ImportError:
-            raise ValueError(f"player_to_move must be 0, 1, or Player enum, got: {player_to_move}")
+    if player_to_move not in [0, 1]:
+        raise ValueError(f"player_to_move must be 0 or 1, got: {player_to_move}")
     
     # Validate metadata
     metadata = example['metadata']
-    if not isinstance(metadata, dict):
-        raise ValueError(f"Metadata must be dict, got: {type(metadata)}")
-    
     required_metadata = ['game_id', 'position_in_game', 'winner']
     for field in required_metadata:
         if field not in metadata:
-            raise ValueError(f"Metadata missing required field: {field}") 
+            raise ValueError(f"Metadata missing required field: {field}")
+    
+    # Validate winner values
+    winner = metadata['winner']
+    if winner not in [0, 1, None]:
+        raise ValueError(f"Winner must be 0, 1, or None, got: {winner}") 

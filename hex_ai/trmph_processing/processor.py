@@ -109,14 +109,23 @@ class ParallelProcessor:
 
 class SequentialProcessor:
     """
-    Sequential processor for debugging and testing.
+    Handles sequential processing of TRMPH files.
     
-    This provides the same interface as ParallelProcessor but processes
-    files one at a time, making debugging easier.
+    This class provides the same interface as ParallelProcessor but
+    processes files one at a time, useful for debugging.
     """
     
     def process_files(self, trmph_files: List[Path], config: ProcessingConfig) -> List[Dict]:
-        """Process files sequentially."""
+        """
+        Process files sequentially.
+        
+        Args:
+            trmph_files: List of TRMPH file paths to process
+            config: Processing configuration
+            
+        Returns:
+            List of processing results (one per file)
+        """
         results = []
         
         for i, file_path in enumerate(trmph_files):
@@ -129,96 +138,128 @@ class SequentialProcessor:
                 'position_selector': config.position_selector
             }
             
-            result = process_single_file_worker(file_info)
-            results.append(result)
-            
-            if result['success']:
-                logger.info(f"✓ Processed {file_path}")
-            else:
-                logger.error(f"✗ Failed to process {file_path}: {result['error']}")
+            try:
+                result = process_single_file_worker(file_info)
+                results.append(result)
+                
+                if result['success']:
+                    logger.info(f"✓ Processed {file_path}")
+                else:
+                    logger.error(f"✗ Failed to process {file_path}: {result['error']}")
+                    
+            except Exception as e:
+                error_result = {
+                    'success': False,
+                    'error': f"Unexpected error: {str(e)}",
+                    'file_path': str(file_path),
+                    'file_idx': i
+                }
+                results.append(error_result)
+                logger.error(f"✗ Unexpected error processing {file_path}: {e}")
         
         return results
 
 
 class TRMPHProcessor:
     """
-    Main processing orchestrator that handles both sequential and parallel processing.
+    Main orchestrator for TRMPH file processing.
+    
+    This class coordinates the discovery of TRMPH files and delegates
+    processing to either parallel or sequential processors.
     """
     
     def __init__(self, config: ProcessingConfig):
-        self.config = config
+        """
+        Initialize the processor with configuration.
         
-        # Validate configuration
+        Args:
+            config: Processing configuration
+        """
+        self.config = config
         self.config.validate()
         
-        # Ensure output directory exists
-        if not self.config.output_dir.exists():
-            self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        # Create output directory if it doesn't exist
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Choose processor based on configuration
-        if self.config.max_workers > 1:
-            self.processor = ParallelProcessor(self.config.max_workers)
-        else:
+        # Choose processor based on worker count
+        if self.config.max_workers == 1:
             self.processor = SequentialProcessor()
+        else:
+            self.processor = ParallelProcessor(self.config.max_workers)
     
     def process_all_files(self) -> List[Dict]:
         """
-        Process all TRMPH files according to configuration.
+        Process all TRMPH files in the data directory.
         
         Returns:
             List of processing results
         """
-        # Find files to process
+        # Find all TRMPH files
         trmph_files = self._find_trmph_files()
         
         if not trmph_files:
-            logger.warning("No TRMPH files found to process")
+            logger.warning(f"No .trmph files found in {self.config.data_dir}")
             return []
         
-        logger.info(f"Found {len(trmph_files)} files to process")
+        # Limit files if specified
+        if self.config.max_files:
+            trmph_files = trmph_files[:self.config.max_files]
+            logger.info(f"Limited to {len(trmph_files)} files for testing")
+        
+        logger.info(f"Found {len(trmph_files)} .trmph files to process")
         
         # Process files
         results = self.processor.process_files(trmph_files, self.config)
         
-        # Generate summary
+        # Log summary and save results
         self._log_summary(results)
-        
-        # Save results
         self._save_results(results)
         
         return results
     
     def _find_trmph_files(self) -> List[Path]:
-        """Find all TRMPH files to process."""
-        trmph_files = list(self.config.data_dir.rglob("*.trmph"))
-        
-        if self.config.max_files:
-            trmph_files = trmph_files[:self.config.max_files]
-        
+        """Find all .trmph files in the data directory."""
+        trmph_files = list(self.config.data_dir.glob("**/*.trmph"))
+        trmph_files.sort()  # Ensure consistent ordering
         return trmph_files
     
     def _log_summary(self, results: List[Dict]):
-        """Log processing summary."""
-        successful = [r for r in results if r['success']]
-        failed = [r for r in results if not r['success']]
+        """Log a summary of processing results."""
+        total_files = len(results)
+        successful_files = sum(1 for r in results if r['success'])
+        failed_files = total_files - successful_files
+        
+        total_examples = sum(
+            r.get('stats', {}).get('examples_generated', 0) 
+            for r in results if r['success']
+        )
         
         logger.info("")
-        logger.info("Processing Summary:")
-        logger.info(f"  Total files: {len(results)}")
-        logger.info(f"  Successful: {len(successful)}")
-        logger.info(f"  Failed: {len(failed)}")
-        logger.info(f"  Success rate: {len(successful)/len(results)*100:.1f}%")
+        logger.info("PROCESSING SUMMARY:")
+        logger.info(f"  Total files: {total_files}")
+        logger.info(f"  Successful: {successful_files}")
+        logger.info(f"  Failed: {failed_files}")
+        logger.info(f"  Total examples generated: {total_examples}")
         
-        if failed:
-            logger.info("")
-            logger.info("Failed files:")
-            for result in failed:
-                logger.info(f"  - {result['file_path']}: {result['error']}")
+        if failed_files > 0:
+            logger.warning(f"  {failed_files} files failed to process")
     
     def _save_results(self, results: List[Dict]):
-        """Save processing results to file."""
-        stats_file = self.config.output_dir / "processing_stats.json"
-        with open(stats_file, 'w') as f:
-            json.dump(results, f, indent=2)
+        """Save processing results to JSON file."""
+        results_file = self.config.output_dir / "processing_stats.json"
         
-        logger.info(f"Processing statistics saved to: {stats_file}") 
+        # Convert Path objects to strings for JSON serialization
+        serializable_results = []
+        for result in results:
+            serializable_result = result.copy()
+            if 'stats' in serializable_result:
+                # Ensure stats are JSON serializable
+                stats = serializable_result['stats']
+                if 'file_path' in stats:
+                    stats['file_path'] = str(stats['file_path'])
+            serializable_results.append(serializable_result)
+        
+        with open(results_file, 'w') as f:
+            json.dump(serializable_results, f, indent=2)
+        
+        logger.info(f"Processing statistics saved to {results_file}") 

@@ -1,6 +1,9 @@
 """
 Process all .trmph files into sharded .pkl.gz files with network-ready data.
 
+This is a simple CLI wrapper that imports the main processing logic from
+hex_ai.trmph_processing.cli.
+
 DATA FLOW & OUTPUT FORMAT:
 - This script finds all .trmph files in the data directory and processes them into training examples.
 - Each example includes:
@@ -15,113 +18,8 @@ DATA FLOW & OUTPUT FORMAT:
 
 """
 
-import sys
-import logging
-import os
-from pathlib import Path
-
-# Import hex_ai modules (PYTHONPATH should be set by caller)
-from hex_ai.system_utils import check_virtual_env
-check_virtual_env("hex_ai_env")
-
-from hex_ai.batch_processor import BatchProcessor
-from hex_ai.file_utils import GracefulShutdown
-
-# Import our new processing modules
-from scripts.config import ProcessingConfig
-from scripts.processor import TRMPHProcessor
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/trmph_processing.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-
-def main():
-    """Main processing function."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Process all .trmph files into training data")
-    parser.add_argument("--data-dir", default="data", help="Directory containing .trmph files")
-    parser.add_argument("--output-dir", default="data/processed/step1_unshuffled", help="Output directory for processed files")
-    parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
-    parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
-    parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
-    parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
-    parser.add_argument("--max-workers", type=int, default=6, help="Number of worker processes to use (default: 6)")
-    parser.add_argument("--sequential", action="store_true", help="Process files sequentially (for debugging)")
-    
-    args = parser.parse_args()
-    
-    # Create configuration
-    config = ProcessingConfig(
-        data_dir=args.data_dir,
-        output_dir=args.output_dir,
-        max_files=args.max_files,
-        position_selector=args.position_selector,
-        run_tag=args.run_tag,
-        max_workers=1 if args.sequential else args.max_workers,
-        combine_output=args.combine
-    )
-    
-    logger.info(f"Configuration: {config}")
-    
-    # Create shutdown handler
-    shutdown_handler = GracefulShutdown()
-    
-    try:
-        # Create processor and process files
-        processor = TRMPHProcessor(config)
-        results = processor.process_all_files()
-        
-        # Handle combined dataset creation if requested
-        if args.combine:
-            logger.info("Creating combined dataset...")
-            batch_processor = BatchProcessor(
-                data_dir=args.data_dir,
-                output_dir=args.output_dir,
-                shutdown_handler=shutdown_handler,
-                run_tag=args.run_tag
-            )
-            batch_processor.create_combined_dataset()
-            logger.info("Combined dataset created successfully")
-        
-        # Final status report
-        logger.info("")
-        logger.info("OUTPUT FILES:")
-        logger.info(f"  Processing statistics: {Path(args.output_dir) / 'processing_stats.json'}")
-        logger.info(f"  Log file: logs/trmph_processing.log")
-        
-        # Count processed files
-        processed_files = list(Path(args.output_dir).glob("*_processed.pkl.gz"))
-        logger.info(f"  Individual processed files: {len(processed_files)} files in {args.output_dir}/")
-        
-        if args.combine:
-            combined_file = Path(args.output_dir) / "combined_dataset.pkl.gz"
-            if combined_file.exists():
-                logger.info(f"  Combined dataset: {combined_file}")
-            else:
-                logger.warning(f"  Combined dataset: NOT CREATED (check logs/trmph_processing.log for errors)")
-        
-        logger.info("")
-        if shutdown_handler.shutdown_requested:
-            logger.info("Processing completed with graceful shutdown")
-        else:
-            logger.info("Processing completed successfully")
-            
-    except KeyboardInterrupt:
-        logger.info("Processing interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Processing failed: {e}")
-        sys.exit(1)
-
+# Import the main function from the new location
+from hex_ai.trmph_processing.cli import main
 
 if __name__ == "__main__":
     main() 
