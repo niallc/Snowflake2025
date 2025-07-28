@@ -134,7 +134,7 @@ Recent experiments show that the value head of the Hex AI ResNet model is not le
   ```
 - No activation is applied in the model; sigmoid is applied at inference:
   ```python
-  value = torch.sigmoid(value_logit).item()  # Probability blue wins
+  value = torch.sigmoid(value_logit).item()  # Probability red wins
   ```
 - Loss is MSE between value logit and true value:
   ```python

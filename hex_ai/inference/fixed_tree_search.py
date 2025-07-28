@@ -115,6 +115,7 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
     """
     Convert a raw model value logit to a minimax-friendly value from the root player's perspective.
     
+    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     The model outputs raw logits representing log(p/(1-p)) where p is the probability of Red winning.
     This function:
     1. Applies sigmoid to convert logit to probability: sigmoid(logit) = p
@@ -138,8 +139,8 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
         raise ValueError(f"root_player must be BLUE_PLAYER ({BLUE_PLAYER}) or RED_PLAYER ({RED_PLAYER}), got {root_player}")
     
     # Step 1: Convert logit to probability using sigmoid
-    # TODO: Need a more complete explanation of why this gives the probability of *Red* winning.
-    #       The value network was trained, Niall thought, to predict the probability of Blue winning.
+    # The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
+    # sigmoid(value_logit) gives the probability that Red wins.
     prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
     
     # Step 2: Convert to root player's perspective

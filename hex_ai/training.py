@@ -77,7 +77,8 @@ class PolicyValueLoss(nn.Module):
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Value loss is now computed on probabilities, not logits
+        # Value loss is computed on probabilities, not logits
+        # The value head predicts Red's win probability (target 1.0 = Red wins)
         # This ensures the network is trained to output probabilities in [0,1]
         value_loss = self.value_loss(torch.sigmoid(value_pred.squeeze()), value_target.squeeze())
         

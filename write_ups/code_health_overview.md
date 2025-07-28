@@ -100,9 +100,10 @@ This document provides a comprehensive overview of code health issues, technical
 - Some code regenerates value logits instead of using original ones.
 
 ### Recommendations
-- Document the value head's prediction target (probability of blue win vs red win).
+- Document the value head's prediction target (probability of Red winning).
 - Ensure consistent usage of value predictions throughout the codebase.
 - Fix code that regenerates value logits to use original values for debugging.
+- **Future improvement**: Consider upgrading value head architecture to KataGo-style with hidden layer for better performance.
 
 ---
 

@@ -122,8 +122,10 @@ def int_to_channel(channel_int: int) -> Channel:
 
 def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
     """
-    Convert model output (sigmoid(logit), trained with 0.0=Blue win, 1.0=Red win)
-    to probability for the given perspective.
+    Convert model output (sigmoid(logit)) to probability for the given perspective.
+    
+    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
+    model_output is the probability that Red wins (after applying sigmoid to the raw logit).
     """
     if perspective == ValuePerspective.TRAINING_TARGET:
         return model_output
@@ -136,7 +138,10 @@ def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> 
 
 def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     """
-    Convert a probability for a given perspective to the model output convention (probability Red wins).
+    Convert a probability for a given perspective to the model output convention.
+    
+    The value head predicts Red's win probability, so the model output convention
+    is the probability that Red wins.
     """
     if perspective == ValuePerspective.TRAINING_TARGET:
         return prob
@@ -150,7 +155,9 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
 def get_win_prob_from_model_output(model_output: float, player) -> float:
     """
     Given the raw model output (logit) and a player ('blue', 'red', or Winner),
-    return the probability that player wins (according to the model's convention).
+    return the probability that player wins.
+    
+    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     """
     if isinstance(player, str):
         player = player.lower()
