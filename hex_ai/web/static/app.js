@@ -29,7 +29,7 @@ let state = {
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
-  red_model_id: 'model2',
+  red_model_id: 'model1',
   blue_search_widths: [],
   red_search_widths: [],
   blue_temperature: 0.2,
