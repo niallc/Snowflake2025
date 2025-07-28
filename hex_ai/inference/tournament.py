@@ -105,16 +105,24 @@ class TournamentResult:
         # Calculate win rates
         win_rates = self.win_rates()
         
-        # Convert win rates to ELO differences
-        # Use a simple linear mapping: 50% win rate = base rating
-        # Each 10% difference in win rate = 200 ELO points difference
-        elo_scale = 200 / 0.1  # 200 ELO points per 10% win rate difference
+        # Use a more reasonable ELO scale: 400 ELO points = 91% win probability
+        # This means 200 ELO points = 75% win probability, which is standard
+        # For small win rate differences, we use a linear approximation
+        elo_scale = 400 / 0.41  # 400 ELO points per 41% win rate difference (0.5 to 0.91)
         
         ratings = {}
+        total_rating_diff = 0
+        
         for player, win_rate in win_rates.items():
-            # Center around base rating
+            # Center around base rating with more reasonable scaling
             rating_diff = (win_rate - 0.5) * elo_scale
             ratings[player] = base + rating_diff
+            total_rating_diff += rating_diff
+        
+        # Ensure zero-sum property by centering around the base
+        avg_rating_diff = total_rating_diff / len(ratings)
+        for player in ratings:
+            ratings[player] = base + (ratings[player] - base) - avg_rating_diff
         
         return ratings
 
