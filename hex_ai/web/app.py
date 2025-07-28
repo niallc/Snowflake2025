@@ -25,7 +25,7 @@ from hex_ai.value_utils import (
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
 THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
 CHECKPOINT_FILE1 = "epoch1_mini30.pt"
-CHECKPOINT_FILE2 = "epoch2_mini20.pt"
+CHECKPOINT_FILE2 = "epoch1_mini30.pt"
 DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
 DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
 
@@ -65,7 +65,7 @@ def get_available_models():
     ]
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                       search_widths, temperature, verbose, model_move=None):
+                       search_widths, temperature, verbose, model_move=None, search_tree=None):
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
     
@@ -92,8 +92,10 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "model_move": model_move
         }
         
-        # Top-k policy moves
+        # Use existing utilities to get policy analysis
         legal_moves = state.get_legal_moves()
+        
+        # Get post-temperature scaling moves using existing utility
         move_probs = []
         for row, col in legal_moves:
             move_trmph = fc.rowcol_to_trmph(row, col)
@@ -102,34 +104,39 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
         
         # Sort by probability descending
         move_probs.sort(key=lambda x: x["probability"], reverse=True)
+        
+        # Get pre-temperature scaling moves using existing utility
+        raw_move_probs = []
+        raw_policy_logits = policy_logits.flatten()
+        for row, col in legal_moves:
+            move_trmph = fc.rowcol_to_trmph(row, col)
+            raw_prob = float(raw_policy_logits[row * state.board.shape[0] + col])
+            raw_move_probs.append({"move": move_trmph, "row": row, "col": col, "raw_logit": raw_prob})
+        
+        # Sort raw probabilities by logit value descending
+        raw_move_probs.sort(key=lambda x: x["raw_logit"], reverse=True)
+        
         debug_info["policy_analysis"] = {
-            "top_moves": move_probs[:10],  # Top 10 moves
+            "top_moves": move_probs[:10],  # Top 10 moves (post-temperature)
+            "raw_top_moves": raw_move_probs[:10],  # Top 10 moves (pre-temperature)
             "total_legal_moves": len(legal_moves)
         }
     
     # Level 2: Detailed analysis including tree search
-    if verbose >= 2 and search_widths and len(search_widths) > 0:
+    if verbose >= 2 and search_tree is not None:
         try:
-            from hex_ai.inference.fixed_tree_search import minimax_policy_value_search, build_search_tree, evaluate_leaf_nodes, minimax_backup
-            
-            # Build search tree for analysis
-            root = build_search_tree(state, model, search_widths, temperature)
-            # TODO: This function *regenerates* the value logits for the leaf nodes.
-            #       To debug faithfully we need to use the original value logits.
-            evaluate_leaf_nodes([root], model, batch_size=1000, root_player=state.current_player)
-            final_value = minimax_backup(root)
-            
+            # Use the actual search tree from the main flow
             debug_info["tree_search"] = {
                 "search_widths": search_widths,
                 "tree_depth": len(search_widths),
-                "final_value": float(final_value),
-                "best_move": fc.rowcol_to_trmph(*root.best_move) if root.best_move else None,
-                "tree_size": count_tree_nodes(root)
+                "final_value": float(search_tree.value) if search_tree.value is not None else None,
+                "best_move": fc.rowcol_to_trmph(*search_tree.best_move) if search_tree.best_move else None,
+                "tree_size": count_tree_nodes(search_tree)
             }
             
             # Add terminal node analysis
             if verbose >= 3:
-                debug_info["tree_search"]["terminal_nodes"] = collect_terminal_nodes(root)
+                debug_info["tree_search"]["terminal_nodes"] = collect_terminal_nodes(search_tree)
                 
         except Exception as e:
             debug_info["tree_search"] = {"error": str(e)}
@@ -180,7 +187,7 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 # --- Computer move functionality ---
-def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
+def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, verbose=0):
     """Make one computer move and return the new state."""
     try:
         state = HexGameState.from_trmph(trmph)
@@ -199,12 +206,25 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
             }
         
         model = get_model(model_id)
+        debug_info = {}
         
         # Use tree search if search_widths provided, otherwise use simple policy
+        search_tree = None
         if search_widths and len(search_widths) > 0:
             try:
-                best_move, _ = minimax_policy_value_search(
-                    state, model, search_widths, batch_size=1000, temperature=temperature
+                # Capture debug information during the actual search
+                if verbose >= 1:
+                    # Get policy and value for the current state before search
+                    policy_logits, value_logit = model.infer(trmph)
+                    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+                    
+                    # Generate basic debug info from the original state
+                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
+                                                  search_widths, temperature, verbose, None, None)  # No search tree yet
+                
+                best_move, _, search_tree = minimax_policy_value_search(
+                    state, model, search_widths, batch_size=1000, temperature=temperature,
+                    return_tree=(verbose >= 2)  # Only return tree if we need debug info
                 )
                 if best_move is not None:
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
@@ -212,6 +232,11 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
                     # Fallback to policy-based move using centralized utilities
                     best_move = select_policy_move(state, model, temperature)
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                    
+                # Update debug info with search tree if available
+                if verbose >= 2 and search_tree is not None:
+                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
+                                                  search_widths, temperature, verbose, None, search_tree)
             except Exception as e:
                 app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                 # Fallback to policy-based move using centralized utilities
@@ -219,8 +244,21 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
                 best_move_trmph = fc.rowcol_to_trmph(*best_move)
         else:
             # Simple policy-based move using centralized utilities
+            if verbose >= 1:
+                # Get policy and value for the current state before move selection
+                policy_logits, value_logit = model.infer(trmph)
+                policy_probs = policy_logits_to_probs(policy_logits, temperature)
+                
+                # Generate basic debug info from the original state
+                debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
+                                              search_widths, temperature, verbose, None)
+            
             best_move = select_policy_move(state, model, temperature)
             best_move_trmph = fc.rowcol_to_trmph(*best_move)
+        
+        # Update debug info with the actual move made
+        if verbose >= 1 and debug_info:
+            debug_info["basic"]["model_move"] = best_move_trmph
         
         # Apply the move using centralized utility
         state = apply_move_to_state_trmph(state, best_move_trmph)
@@ -233,7 +271,8 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0):
             "legal_moves": moves_to_trmph(state.get_legal_moves()),
             "winner": state.winner,
             "move_made": best_move_trmph,
-            "game_over": state.game_over
+            "game_over": state.game_over,
+            "debug_info": debug_info if verbose >= 1 else None
         }
         
     except Exception as e:
@@ -381,7 +420,9 @@ def api_move():
     winner = state.winner
 
     model_move = None
+    debug_info = {}
     # If game not over and it's model's turn, have model pick a move
+    app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={state.current_player}")
     if not state.game_over:
         try:
             # Determine which player's settings to use for the computer move
@@ -405,11 +446,17 @@ def api_move():
             
             model = get_model(computer_model_id)
             
+            # Capture the state before the computer move for debug info
+            state_before_computer_move = state
+            trmph_before_computer_move = new_trmph
+            
             # Use tree search if search_widths provided
+            search_tree = None
             if computer_search_widths and len(computer_search_widths) > 0:
                 try:
-                    best_move, _ = minimax_policy_value_search(
-                        state, model, computer_search_widths, batch_size=1000, temperature=computer_temperature
+                    best_move, _, search_tree = minimax_policy_value_search(
+                        state, model, computer_search_widths, batch_size=1000, temperature=computer_temperature,
+                        return_tree=(verbose >= 2)  # Only return tree if we need debug info
                     )
                     if best_move is not None:
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
@@ -436,6 +483,16 @@ def api_move():
             legal_moves = moves_to_trmph(state.get_legal_moves())
             winner = state.winner
             
+            # Generate debug information after the move is made (when all data is available)
+            if verbose >= 1:
+                # Get policy and value for the state BEFORE the computer move (the state the computer was thinking about)
+                policy_logits, value_logit = model.infer(trmph_before_computer_move)
+                policy_probs = policy_logits_to_probs(policy_logits, computer_temperature)
+                
+                # Generate debug info using the actual search tree from the move selection
+                debug_info = generate_debug_info(state_before_computer_move, model, policy_logits, value_logit, policy_probs, 
+                                              computer_search_widths, computer_temperature, verbose, model_move, search_tree)
+            
         except Exception as e:
             app.logger.error(f"Model move failed: {e}")
             # Continue without model move if there's an error
@@ -448,7 +505,6 @@ def api_move():
         player_color = 'unknown'
 
     # Recompute policy/value for final state using centralized utilities
-    debug_info = {}
     try:
         model = get_model(model_id)
         policy_logits, value_logit = model.infer(new_trmph)
@@ -456,11 +512,6 @@ def api_move():
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
         win_prob = get_win_prob_from_model_output(value_logit, player_color)
-        
-        # Add verbose debug information
-        if verbose >= 1:
-            debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                          search_widths, temperature, verbose, model_move)
     except Exception as e:
         app.logger.error(f"Final inference failed: {e}")
         policy_dict = {}
@@ -497,22 +548,7 @@ def api_computer_move():
     if not trmph:
         return jsonify({"error": "TRMPH required"}), 400
     
-    result = make_computer_move(trmph, model_id, search_widths, temperature)
-    
-    # Add verbose debug information if requested
-    if verbose >= 1 and result["success"]:
-        try:
-            state = HexGameState.from_trmph(result["new_trmph"])
-            model = get_model(model_id)
-            policy_logits, value_logit = model.infer(result["new_trmph"])
-            policy_probs = policy_logits_to_probs(policy_logits, temperature)
-            
-            debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
-                                          search_widths, temperature, verbose, result.get("move_made"))
-            result["debug_info"] = debug_info
-        except Exception as e:
-            app.logger.error(f"Debug info generation failed: {e}")
-            result["debug_info"] = {"error": str(e)}
+    result = make_computer_move(trmph, model_id, search_widths, temperature, verbose)
     
     if result["success"]:
         return jsonify(result)
@@ -532,5 +568,12 @@ def serve_index():
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static"), "index.html")
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Hex AI Web Server')
+    parser.add_argument('--port', type=int, default=5001, help='Port to run the server on (default: 5001)')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
+    args = parser.parse_args()
+    
     logging.basicConfig(level=logging.DEBUG)
-    app.run(debug=True, port=5001) 
+    app.run(debug=True, host=args.host, port=args.port) 

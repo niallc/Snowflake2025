@@ -624,11 +624,23 @@ function displayDebugInfo(debugInfo) {
   // Policy analysis
   if (debugInfo.policy_analysis) {
     output += '=== POLICY ANALYSIS ===\n';
-    output += `Top ${debugInfo.policy_analysis.top_moves.length} moves:\n`;
+    
+    // Post-temperature scaling (current behavior)
+    output += `Top ${debugInfo.policy_analysis.top_moves.length} moves (post-temperature scaling):\n`;
     debugInfo.policy_analysis.top_moves.forEach((move, index) => {
       const probPercent = (move.probability * 100).toFixed(2);
       output += `  ${index + 1}. ${move.move} (${move.row},${move.col}): ${probPercent}%\n`;
     });
+    
+    // Pre-temperature scaling (raw logits)
+    if (debugInfo.policy_analysis.raw_top_moves) {
+      output += `\nTop ${debugInfo.policy_analysis.raw_top_moves.length} moves (raw logits, pre-temperature):\n`;
+      debugInfo.policy_analysis.raw_top_moves.forEach((move, index) => {
+        const logitStr = move.raw_logit.toFixed(4);
+        output += `  ${index + 1}. ${move.move} (${move.row},${move.col}): ${logitStr}\n`;
+      });
+    }
+    
     output += `Total legal moves: ${debugInfo.policy_analysis.total_legal_moves}\n\n`;
   }
   

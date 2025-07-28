@@ -278,8 +278,9 @@ def minimax_policy_value_search(
     batch_size: int = 1000,
     use_alpha_beta: bool = True,
     temperature: float = 1.0,
-    debug: bool = False
-) -> Tuple[Tuple[int, int], float]:
+    debug: bool = False,
+    return_tree: bool = False
+) -> Tuple[Tuple[int, int], float, Optional[MinimaxSearchNode]]:
     """
     Fixed-width, fixed-depth minimax search with alpha-beta pruning and batch evaluation at the leaves.
 
@@ -291,10 +292,12 @@ def minimax_policy_value_search(
         use_alpha_beta: Whether to use alpha-beta pruning (not implemented in new version yet)
         temperature: Policy temperature for move selection (default 1.0)
         debug: Whether to enable debug logging
+        return_tree: Whether to return the search tree for debugging
 
     Returns:
         best_move: (row, col) tuple for the best move at the root
         value: estimated value for the root position
+        root: search tree root node (if return_tree=True, otherwise None)
     """
     if debug:
         logger.setLevel(logging.DEBUG)
@@ -313,4 +316,7 @@ def minimax_policy_value_search(
     
     logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
     
-    return root.best_move, root_value 
+    if return_tree:
+        return root.best_move, root_value, root
+    else:
+        return root.best_move, root_value 
