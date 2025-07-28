@@ -65,8 +65,24 @@ This document tracks remaining areas of code duplication, technical debt, and re
 
 ---
 
-## Tidy up many inline imports
+## Misc
+- Tidy up many inline imports
  -Move them to the top (and alphabetize within type, e.g. local vs. standard library imports)
+- TODOs
+ - Line ~177 of fixed_tree_search:
+   - TODO: This looks like it's passing the boards one at a time.
+   -       The reason for batching is that networks are faster when batching.
+- Need more complete description of what the value head is predicting and how to use the values it returns.
+ - In hex_ai/inference/fixed_tree_search.py we have:
+  - prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
+  - Conceptually Niall planned to have the value head predict the probability of a blue win. Does this all align?
+ -
+   - app.py, (~line 67): 
+   - TODO: This function *regenerates* the value logits for the leaf nodes.
+   -       To debug faithfully we need to use the original value logits.
+
+
+ 
 
 ---
 

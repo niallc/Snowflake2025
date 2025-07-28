@@ -71,12 +71,22 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
     
     # Level 1: Basic policy and value analysis
     if verbose >= 1:
+        # Add defensive programming to catch any issues
+        try:
+            current_player_color = winner_to_color(state.current_player)
+            win_prob = get_win_prob_from_model_output(value_logit, current_player_color)
+        except Exception as e:
+            # Log the error and provide fallback values
+            app.logger.error(f"Error in app.py debug info generation: {e}")
+            raise RuntimeError(f"Error in app.py debug info generation: {e}")
+        
         debug_info["basic"] = {
-            "current_player": winner_to_color(state.current_player),
+            "current_player": current_player_color,
+            "current_player_raw": state.current_player,  # Add raw value for debugging
             "game_over": state.game_over,
             "legal_moves_count": len(state.get_legal_moves()),
             "value_logit": float(value_logit),
-            "win_probability": float(get_win_prob_from_model_output(value_logit, winner_to_color(state.current_player))),
+            "win_probability": float(win_prob),
             "temperature": temperature,
             "search_widths": search_widths,
             "model_move": model_move
@@ -104,6 +114,8 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             
             # Build search tree for analysis
             root = build_search_tree(state, model, search_widths, temperature)
+            # TODO: This function *regenerates* the value logits for the leaf nodes.
+            #       To debug faithfully we need to use the original value logits.
             evaluate_leaf_nodes([root], model, batch_size=1000, root_player=state.current_player)
             final_value = minimax_backup(root)
             
@@ -250,6 +262,13 @@ def api_state():
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
+    # Add defensive programming to catch any issues
+    try:
+        player_color = winner_to_color(player)
+    except Exception as e:
+        app.logger.error(f"Error converting player to color: {e}, player={player}")
+        player_color = 'unknown'
+
     # Model inference
     try:
         model = get_model(model_id)
@@ -259,7 +278,7 @@ def api_state():
         # Map policy to trmph moves
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
         # Win probability for current player
-        win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
+        win_prob = get_win_prob_from_model_output(value_logit, player_color)
     except Exception as e:
         app.logger.error(f"Model inference failed: {e}")
         policy_dict = {}
@@ -267,7 +286,8 @@ def api_state():
 
     return jsonify({
         "board": board,
-        "player": winner_to_color(player),
+        "player": player_color,
+        "player_raw": player,  # Add raw value for debugging
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
@@ -301,6 +321,13 @@ def api_apply_move():
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
+    # Add defensive programming to catch any issues
+    try:
+        player_color = winner_to_color(player)
+    except Exception as e:
+        app.logger.error(f"Error converting player to color: {e}, player={player}")
+        player_color = 'unknown'
+
     # Recompute policy/value for the new state
     try:
         model = get_model(model_id)
@@ -308,7 +335,7 @@ def api_apply_move():
         # Apply temperature scaling to policy using centralized utility
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
+        win_prob = get_win_prob_from_model_output(value_logit, player_color)
     except Exception as e:
         app.logger.error(f"Final inference failed: {e}")
         policy_dict = {}
@@ -317,7 +344,8 @@ def api_apply_move():
     return jsonify({
         "new_trmph": new_trmph,
         "board": board,
-        "player": winner_to_color(player),
+        "player": player_color,
+        "player_raw": player,  # Add raw value for debugging
         "legal_moves": legal_moves,
         "winner": winner,
         "model_move": None,  # No computer move made
@@ -334,7 +362,7 @@ def api_move():
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 0.15)  # Default temperature
-    verbose = data.get("verbose", 0)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
+    verbose = data.get("verbose", 3)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -358,7 +386,12 @@ def api_move():
         try:
             # Determine which player's settings to use for the computer move
             # The current player after the human move determines whose settings to use
-            current_player_color = winner_to_color(player)
+            try:
+                current_player_color = winner_to_color(player)
+            except Exception as e:
+                app.logger.error(f"Error converting player to color for computer move: {e}, player={player}")
+                current_player_color = 'unknown'  # Avoids fallbacks as they can cause silent errors
+            
             if current_player_color == 'blue':
                 # Use blue's settings for blue's computer move
                 computer_model_id = data.get("blue_model_id", model_id)
@@ -407,6 +440,13 @@ def api_move():
             app.logger.error(f"Model move failed: {e}")
             # Continue without model move if there's an error
     
+    # Add defensive programming to catch any issues
+    try:
+        player_color = winner_to_color(player)
+    except Exception as e:
+        app.logger.error(f"Error converting player to color: {e}, player={player}")
+        player_color = 'unknown'
+
     # Recompute policy/value for final state using centralized utilities
     debug_info = {}
     try:
@@ -415,7 +455,7 @@ def api_move():
         # Apply temperature scaling to policy using centralized utility
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
+        win_prob = get_win_prob_from_model_output(value_logit, player_color)
         
         # Add verbose debug information
         if verbose >= 1:
@@ -429,7 +469,8 @@ def api_move():
     response = {
         "new_trmph": new_trmph,
         "board": board,
-        "player": winner_to_color(player),
+        "player": player_color,
+        "player_raw": player,  # Add raw value for debugging
         "legal_moves": legal_moves,
         "winner": winner,
         "model_move": model_move,

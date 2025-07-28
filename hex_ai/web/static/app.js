@@ -37,7 +37,7 @@ let state = {
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
-  verbose_level: 0, // Debug output level
+  verbose_level: 3, // Debug output level
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [] // Track move history for undo functionality
 };
@@ -87,7 +87,7 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
 async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
-                       verbose = 0) {
+                       verbose = 3) {
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

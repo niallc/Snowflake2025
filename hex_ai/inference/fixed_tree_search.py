@@ -23,7 +23,7 @@ class MinimaxSearchNode:
         self.children: Dict[Tuple[int, int], MinimaxSearchNode] = {}
         self.value: Optional[float] = None
         self.best_move: Optional[Tuple[int, int]] = None
-        self.is_maximizing: bool = (state.current_player == 0)  # Blue (0) maximizes, Red (1) minimizes
+        self.is_maximizing: bool = (state.current_player == BLUE_PLAYER)  # Blue (0) maximizes, Red (1) minimizes
         
     def __str__(self):
         return f"Node(depth={self.depth}, player={'Blue' if self.state.current_player == 0 else 'Red'}, " \
@@ -138,6 +138,8 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
         raise ValueError(f"root_player must be BLUE_PLAYER ({BLUE_PLAYER}) or RED_PLAYER ({RED_PLAYER}), got {root_player}")
     
     # Step 1: Convert logit to probability using sigmoid
+    # TODO: Need a more complete explanation of why this gives the probability of *Red* winning.
+    #       The value network was trained, Niall thought, to predict the probability of Blue winning.
     prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
     
     # Step 2: Convert to root player's perspective
@@ -174,6 +176,9 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode],
     
     for i in range(0, len(boards), batch_size):
         batch = boards[i:i+batch_size]
+        # TODO: This looks like it's passing the boards one at a time.
+        #       The reason for batching is that networks are faster when batching.
+        #       Might want an infer_batch method.
         batch_results = [model.infer(board)[1] for board in batch]
         values.extend(batch_results)
     
@@ -199,7 +204,7 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
         return node.value
     
     if not node.children:  # No children (shouldn't happen if we built tree correctly)
-        return 0.0
+        raise RuntimeError("minimax_backup called on a node with no value and no children (invalid tree structure)")
     
     # Recursively get values from children
     child_values = []
