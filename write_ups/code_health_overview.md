@@ -1,8 +1,9 @@
-# Code Health Review: Hex AI Project
+# Code Health Overview: Hex AI Project
 
-**Date:** 2024-07-17
+**Date:** 2024-12-19  
+**Last Updated:** 2024-12-19
 
-This document summarizes code health issues, technical debt, and recommendations for the Hex AI project, based on recent debugging and development work. It is intended as a living document to guide future refactoring and cleanup.
+This document provides a comprehensive overview of code health issues, technical debt, and recommendations for the Hex AI project. It serves as a high-level guide for future refactoring and cleanup efforts.
 
 ---
 
@@ -66,11 +67,13 @@ This document summarizes code health issues, technical debt, and recommendations
 ### Issues
 - Some scripts and modules lack clear docstrings or usage examples.
 - The distinction between library code, script-level utilities, and legacy code could be clearer.
+- Many inline imports should be moved to the top and alphabetized.
 
 ### Recommendations
 - Add/expand docstrings and usage examples for all scripts and modules.
 - Keep `hex_ai/` for core library code, `scripts/` for CLI and analysis tools, and `scripts/lib/` for script-level utilities.
 - Regularly review and clean up unused or deprecated code.
+- Standardize import organization across all files.
 
 ---
 
@@ -79,20 +82,54 @@ This document summarizes code health issues, technical debt, and recommendations
 ### Issues
 - There is limited automated testing for data loading, model instantiation, and inference.
 - Reproducibility of experiments depends on careful manual tracking of configs and seeds.
+- Mock models with hardcoded heuristics that don't reflect real Hex strategy.
 
 ### Recommendations
 - Add basic tests for data loading, model forward pass, and checkpoint loading.
 - Save all configs and random seeds with each experiment.
 - Consider using a config management tool or experiment tracker for larger runs.
+- Replace mock models with proper test cases using real game positions.
 
 ---
 
-## 6. Miscellaneous
+## 6. Value Head Documentation
 
+### Issues
+- Need more complete description of what the value head is predicting and how to use the values it returns.
+- Inconsistent usage of value predictions across different parts of the codebase.
+- Some code regenerates value logits instead of using original ones.
+
+### Recommendations
+- Document the value head's prediction target (probability of blue win vs red win).
+- Ensure consistent usage of value predictions throughout the codebase.
+- Fix code that regenerates value logits to use original values for debugging.
+
+---
+
+## 7. Project Setup and Dependencies
+
+### Issues
+- Dependencies may not be fully documented in `requirements.txt`.
+- Missing documentation about environment setup.
+
+### Recommendations
 - Ensure all dependencies are listed in `requirements.txt` and are up to date.
 - Add a section to the README about activating the virtual environment and installing dependencies.
 - Consider adding a script to check environment and dependency versions.
 
 ---
 
-**This document is a starting point. Please add, update, and refine as the project evolves!** 
+## 8. Performance and Optimization
+
+### Issues
+- Some inference code processes boards one at a time instead of batching for better network performance.
+- Streaming dataset uses a hack for `__len__` that returns a huge value for PyTorch compatibility.
+
+### Recommendations
+- Implement proper batching in inference code where possible.
+- Remove the `__len__` hack when PyTorch compatibility allows.
+- Profile and optimize critical code paths.
+
+---
+
+**This document should be updated regularly as the project evolves. For specific technical debt items and refactoring tasks, see `technical_debt_tracker.md`.** 
