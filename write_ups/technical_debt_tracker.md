@@ -3,82 +3,92 @@
 **Date:** 2024-12-19  
 **Last Updated:** 2024-12-19
 
-This document tracks specific technical debt items, refactoring tasks, and completed work. It serves as a living checklist for ongoing code cleanup efforts.
+This document tracks specific technical debt items and refactoring tasks that need to be addressed. Focus is on actionable items that improve code quality and maintainability.
 
 ---
 
-## ✅ Completed Work
+## 🔄 High Priority - Needs Attention
 
-### 1. Trainer Methods Documentation
-- **Status:** ✅ **COMPLETED**
-- **Issue:** Confusion between `Trainer.train` vs. `Trainer.train_on_batches`
-- **Solution:** Added comprehensive documentation explaining the differences and intended usage
-- **Changes:**
-  - `train()`: Main method for complete training runs with automatic checkpointing and validation
-  - `train_on_batches()`: Lower-level method for mini-epoch orchestration and custom training loops
-- **Result:** Clear guidance on when to use each method, reducing confusion for developers
+### 1. Value Head Documentation and Consistency
+- **Priority:** High
+- **Issue:** Inconsistent value head interpretation across codebase
+- **Action:** 
+  - Document what the value head predicts (blue win probability vs red win)
+  - Audit all value head usage across codebase
+  - Fix inconsistent value interpretation
+  - Resolve TODO in `app.py` about regenerating value logits
+  - Update `fixed_tree_search.py` value interpretation if needed
 
-### 2. Player Identification Code: BLUE / RED, Constants and Enums
-- **Status:** ✅ **COMPLETED**
-- **Issue:** Magic numbers and inconsistent player identification
-- **Solution:** Implemented comprehensive enum system for type safety and clarity
-- **Changes:**
-  - Added `Player`, `Piece`, and `Channel` enums to complement existing `Winner` enum
-  - Created conversion functions for backward compatibility
-  - Added utility functions for common operations (`get_opponent`, `is_blue`, `is_red`)
-  - Updated key functions to use enums while maintaining compatibility
-  - **Migrated `get_player_to_move_from_board` function** to return `Player` enum instead of integer
-  - Updated all callers to handle the new enum return type
-- **Benefits:**
-  - Type safety: prevents invalid values and catches errors at runtime
-  - Better IDE support: autocomplete, refactoring, error detection
-  - Clearer code intent: `Player.BLUE` vs magic number `0`
-  - Maintains backward compatibility with existing integer constants
-  - **Demonstrated successful migration** of a core function with comprehensive testing
-- **Documentation:** Created comprehensive guide in `write_ups/enum_system_guide.md`
-
-### 3. Training Example Extraction Analysis
-- **Status:** ✅ **COMPLETED**
-- **Issue:** Potential duplication between `extract_training_examples_from_game` and `extract_training_examples_with_selector_from_game`
-- **Analysis:**
-  - `extract_training_examples_from_game`: Used in `data_processing.py` for general processing
-  - `extract_training_examples_with_selector_from_game`: Used in `batch_processor.py` with position selection
-- **Action:** Fixed magic numbers in the first function to use proper constants
-- **Result:** Both functions are actively used and serve distinct purposes - no consolidation needed
-
-### 4. Test Suite Cleanup
-- **Status:** ✅ **COMPLETED**
-- **Issue:** Test failures due to API mismatches and data format changes
-- **Fixed Issues:**
-  - `tests/test_mini_epoch_orchestrator.py`: Updated MockTrainer to accept `epoch` and `mini_epoch` parameters
-  - `tests/test_policy_utilities.py`: Fixed flaky temperature scaling test by removing deterministic assertions
-  - `tests/test_data_shuffling.py`: Added proper pytest.skip for missing test data files
-- **Result:** All tests now pass or skip gracefully when data is unavailable
-
----
-
-## 🔄 In Progress
-
-### 1. Inference and CLI Duplication Review
-- **Status:** 🔄 **NEEDS REVIEW**
+### 2. Inference and CLI Duplication Review
+- **Priority:** Medium
 - **Files:** `hex_ai/inference/simple_model_inference.py` and `scripts/simple_inference_cli.py`
 - **Issue:** May have legacy or redundant code paths
 - **Action:** Review for deletion or further refactoring
 - **Notes:** Model loading and inference logic is now centralized in `ModelWrapper`, but older scripts/utilities may still use custom or legacy code paths
 
-### 2. Data Preprocessing Unification
-- **Status:** 🔄 **NEEDS REVIEW**
+### 3. Data Preprocessing Unification
+- **Priority:** Medium
 - **Issue:** Data preprocessing for inference vs. training should be unified
 - **Action:** Update all code to use `preprocess_example_for_model` where possible
 
 ---
 
-## 📋 Pending Work
+## 📋 Medium Priority - Code Quality
 
-### 1. Import Organization
+### 4. Import Organization
 - **Priority:** Medium
 - **Issue:** Many inline imports should be moved to the top and alphabetized
-- **Action:** Standardize import organization across all files
+- **Action:** 
+  - Audit all Python files for inline imports
+  - Move all imports to top of files
+  - Alphabetize imports within categories (standard library, third-party, local)
+  - Add import organization to linting rules if possible
+
+### 5. Inference Batching Optimization
+- **Priority:** Medium
+- **Location:** `hex_ai/inference/fixed_tree_search.py`
+- **Issue:** TODO at line ~177: "This looks like it's passing the boards one at a time. The reason for batching is that networks are faster when batching."
+- **Action:** Implement proper batching in inference code where possible
+
+### 6. Mock Model Replacement
+- **Priority:** Medium
+- **Issue:** Mock models used in testing may not reflect real model behavior
+- **Action:** Replace mock models with lightweight real models or improve mock fidelity
+
+---
+
+## 📋 Low Priority - Documentation & Organization
+
+### 7. Documentation Organization
+- **Priority:** Low
+- **Issue:** Multiple documentation locations (`write_ups/`, `docs/`, `hex_ai/`) without clear organization
+- **Action:** 
+  - Define documentation structure and purpose for each location
+  - Create project map or documentation index
+  - Consider migrating files to appropriate locations
+  - Document the organization system
+
+### 8. Enhanced Testing Coverage
+- **Priority:** Medium
+- **Issue:** Some areas lack comprehensive test coverage
+- **Action:** 
+  - Add tests for critical inference paths
+  - Improve integration test coverage
+  - Add property-based testing for data transformations
+
+### 9. Dependency Management
+- **Priority:** Low
+- **Issue:** Requirements may be outdated or include unnecessary dependencies
+- **Action:** 
+  - Audit and update requirements.txt
+  - Remove unused dependencies
+  - Pin critical dependency versions
+
+---
+
+## ✅ Recently Completed (Archive)
+
+*Note: Completed work has been moved to separate documentation files to keep this tracker focused on actionable items.*
 - **Files:** All Python files in the project
 
 ### 2. Value Head Documentation and Consistency
@@ -112,6 +122,15 @@ This document tracks specific technical debt items, refactoring tasks, and compl
 - **Location:** `hex_ai/inference/fixed_tree_search.py`
 - **Issue:** TODO at line ~177: "This looks like it's passing the boards one at a time. The reason for batching is that networks are faster when batching."
 - **Action:** Implement proper batching in inference code where possible
+
+### 6. Documentation Organization
+- **Priority:** Low
+- **Issue:** Multiple documentation locations (`write_ups/`, `docs/`, `hex_ai/`) without clear organization
+- **Action:** 
+  - Define documentation structure and purpose for each location
+  - Create project map or documentation index
+  - Consider migrating files to appropriate locations
+  - Document the organization system
 
 ---
 

@@ -693,8 +693,16 @@ class Trainer:
             "data_stats": stats
         }
     
-    def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict):
-        """Save model checkpoint."""
+    def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict, compress: bool = True):
+        """
+        Save model checkpoint.
+        
+        Args:
+            path: Path to save the checkpoint
+            train_metrics: Training metrics for this checkpoint
+            val_metrics: Validation metrics for this checkpoint
+            compress: Whether to save as gzipped file (.pt.gz)
+        """
         checkpoint = {
             'epoch': self.current_epoch,
             'model_state_dict': self.model.state_dict(),
@@ -704,11 +712,34 @@ class Trainer:
             'best_val_loss': self.best_val_loss,
             'mixed_precision': self.mixed_precision.use_mixed_precision
         }
-        torch.save(checkpoint, path)
+        
+        if compress:
+            # Ensure path has .pt.gz extension
+            if not str(path).endswith('.pt.gz'):
+                path = path.with_suffix('.pt.gz')
+            
+            # Save as gzipped file
+            import gzip
+            with gzip.open(path, 'wb') as f:
+                torch.save(checkpoint, f)
+        else:
+            # Save as uncompressed file
+            torch.save(checkpoint, path)
     
     def load_checkpoint(self, path: Path):
         """Load model checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        # Check if file is gzipped by reading the first two bytes
+        def is_gzipped(filepath):
+            with open(filepath, 'rb') as f:
+                return f.read(2) == b'\x1f\x8b'
+        
+        if is_gzipped(path):
+            import gzip
+            with gzip.open(path, 'rb') as f:
+                checkpoint = torch.load(f, map_location=self.device, weights_only=False)
+        else:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+            
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.current_epoch = checkpoint['epoch']

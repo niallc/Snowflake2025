@@ -34,7 +34,8 @@ def save_checkpoint(model: torch.nn.Module,
                    optimizer: torch.optim.Optimizer,
                    epoch: int,
                    loss: float,
-                   filepath: str):
+                   filepath: str,
+                   compress: bool = True):
     """
     Save a model checkpoint.
     
@@ -44,13 +45,27 @@ def save_checkpoint(model: torch.nn.Module,
         epoch: Current epoch
         loss: Current loss value
         filepath: Path to save the checkpoint
+        compress: Whether to save as gzipped file (.pt.gz)
     """
-    torch.save({
+    checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,
-    }, filepath)
+    }
+    
+    if compress:
+        # Ensure path has .pt.gz extension
+        if not filepath.endswith('.pt.gz'):
+            filepath = filepath.replace('.pt', '.pt.gz') if filepath.endswith('.pt') else filepath + '.pt.gz'
+        
+        # Save as gzipped file
+        import gzip
+        with gzip.open(filepath, 'wb') as f:
+            torch.save(checkpoint, f)
+    else:
+        # Save as uncompressed file
+        torch.save(checkpoint, filepath)
 
 
 def load_checkpoint(model: torch.nn.Module,
@@ -67,7 +82,18 @@ def load_checkpoint(model: torch.nn.Module,
     Returns:
         Tuple of (epoch, loss)
     """
-    checkpoint = torch.load(filepath, weights_only=False)
+    # Check if file is gzipped by reading the first two bytes
+    def is_gzipped(filepath):
+        with open(filepath, 'rb') as f:
+            return f.read(2) == b'\x1f\x8b'
+    
+    if is_gzipped(filepath):
+        import gzip
+        with gzip.open(filepath, 'rb') as f:
+            checkpoint = torch.load(f, weights_only=False)
+    else:
+        checkpoint = torch.load(filepath, weights_only=False)
+        
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return checkpoint['epoch'], checkpoint['loss']
