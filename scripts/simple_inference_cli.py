@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--model_file', type=str, default="best_model.pt", help='Model checkpoint file name')
     parser.add_argument('--topk', type=int, default=3, help='Number of top policy moves to display')
     parser.add_argument('--device', type=str, default=None, help='Device to use (cpu, cuda, mps)')
-    parser.add_argument('--legacy-model', action='store_true', help='Use legacy 2-channel model for old checkpoints')
+
     args = parser.parse_args()
 
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"

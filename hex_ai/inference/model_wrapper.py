@@ -17,21 +17,16 @@ class ModelWrapper:
         self,
         checkpoint_path: str,
         device: Optional[str] = None,
-        model_type: str = "resnet18",
-        model_instance=None
+        model_type: str = "resnet18"
     ):
         """
         Args:
             checkpoint_path: Path to the model checkpoint (.pt or .pth file, possibly .gz)
             device: 'cpu', 'cuda', 'mps', or None for auto-detect
             model_type: Model architecture type (default: 'resnet18')
-            model_instance: If provided, use this model instance instead of creating one (for legacy support)
         """
         self.device = self._detect_device(device)
-        if model_instance is not None:
-            self.model = self._load_model_with_instance(checkpoint_path, model_instance)
-        else:
-            self.model = self._load_model(checkpoint_path, model_type)
+        self.model = self._load_model(checkpoint_path, model_type)
         self.model.eval()
         self.model.to(self.device)
         # self.prediction_cache = {}  # Uncomment to enable prediction caching
@@ -57,30 +52,7 @@ class ModelWrapper:
             raise RuntimeError(f"Failed to load checkpoint {checkpoint_path}: {e}")
         return model
 
-    def _load_model_with_instance(self, checkpoint_path: str, model):
-        # Check if the file is gzipped by reading the first two bytes
-        def is_gzipped(filepath):
-            with open(filepath, 'rb') as f:
-                return f.read(2) == b'\x1f\x8b'
 
-        if is_gzipped(checkpoint_path):
-            print(f"[INFO] Loading gzipped checkpoint: {checkpoint_path}")
-            try:
-                with gzip.open(checkpoint_path, 'rb') as f:
-                    checkpoint = torch.load(f, map_location=self.device, weights_only=False)
-            except Exception as e:
-                raise RuntimeError(f"Failed to load gzipped checkpoint {checkpoint_path}: {e}")
-        else:
-            print(f"[INFO] Loading uncompressed checkpoint: {checkpoint_path}")
-            try:
-                checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-            except Exception as e:
-                raise RuntimeError(f"Failed to load uncompressed checkpoint {checkpoint_path}: {e}")
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
-        return model
 
     def eval(self):
         """Set the underlying model to evaluation mode (passthrough)."""

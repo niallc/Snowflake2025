@@ -5,7 +5,7 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.config import (
-    PLAYER_CHANNEL, LEGACY_MODEL_CHANNELS, CURRENT_MODEL_CHANNELS,
+    PLAYER_CHANNEL, MODEL_CHANNELS,
     BLUE_PLAYER, RED_PLAYER, BLUE_CHANNEL, RED_CHANNEL,
     BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
@@ -27,28 +27,14 @@ class SimpleModelInference:
         self,
         checkpoint_path: str,
         device: str = None,
-        model_type: str = "resnet18",
-        model_instance=None
+        model_type: str = "resnet18"
     ):
-        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}, model_instance={type(model_instance) if model_instance is not None else None}")
-        self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type, model_instance=model_instance)
+        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}")
+        self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type)
         self.board_size = fc.BOARD_SIZE
-        self.checkpoint_path = checkpoint_path
-
-        # Detect if this is a legacy model (2-channel input) or current model (3-channel input)
-        if model_instance is not None:
-            # Check the first layer's input channels to determine if it's legacy
-            first_layer = list(self.model.model.children())[0]
-            if hasattr(first_layer, 'in_channels'):
-                self.is_legacy = (first_layer.in_channels == LEGACY_MODEL_CHANNELS)  # Legacy models have 2 channels, current models have 3
-            else:
-                # Fallback: assume legacy if model_instance was provided
-                self.is_legacy = True
-        else:
-            # Current model always uses 3 channels
-            self.is_legacy = False
+        self.checkpoint_path = checkpoint
         
-        print(f"Detected {'legacy' if self.is_legacy else 'current'} model (expects {LEGACY_MODEL_CHANNELS if self.is_legacy else CURRENT_MODEL_CHANNELS} channels)")
+        print(f"Using model architecture (expects {MODEL_CHANNELS} channels)")
 
     def trmph_to_2nxn(self, trmph: str) -> torch.Tensor:
         board_nxn = fc.parse_trmph_to_board(trmph, board_size=self.board_size)
@@ -142,13 +128,7 @@ class SimpleModelInference:
             raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
 
         # Create the 3-channel board with correct player-to-move channel
-        board_3ch = self._create_board_with_correct_player_channel(board_2ch)
-        
-        # For legacy models, we need to remove the player-to-move channel
-        if self.is_legacy:
-            input_tensor = board_3ch[:2]  # Remove player-to-move channel
-        else:
-            input_tensor = board_3ch
+        input_tensor = self._create_board_with_correct_player_channel(board_2ch)
 
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)

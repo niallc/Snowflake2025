@@ -60,15 +60,16 @@ This document tracks specific technical debt items and refactoring tasks that ne
 **Issue:** May have legacy or redundant code paths between inference modules
 
 **Tasks:**
+- [x] Remove legacy model support from CLI and inference modules
 - [ ] Compare `hex_ai/inference/simple_model_inference.py` and `scripts/simple_inference_cli.py`
 - [ ] Identify redundant code paths
 - [ ] Consolidate or remove duplicate functionality
 - [ ] Ensure all inference uses centralized `ModelWrapper`
 
 **Files to review:**
-- `hex_ai/inference/simple_model_inference.py`
-- `scripts/simple_inference_cli.py`
-- `hex_ai/inference/model_wrapper.py`
+- `hex_ai/inference/simple_model_inference.py` ✅ (legacy support removed)
+- `scripts/simple_inference_cli.py` ✅ (legacy flag removed)
+- `hex_ai/inference/model_wrapper.py` ✅ (legacy support removed)
 
 ### 4. Data Preprocessing Unification
 **Priority:** Medium  
