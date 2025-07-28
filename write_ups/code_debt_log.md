@@ -65,6 +65,11 @@ This document tracks remaining areas of code duplication, technical debt, and re
 
 ---
 
+## Tidy up many inline imports
+ -Move them to the top (and alphabetize within type, e.g. local vs. standard library imports)
+
+---
+
 ## Notes
 - Use this as a living checklist for ongoing code health and cleanup.
 - Remove items as they are resolved to keep the document focused on actionable work. 

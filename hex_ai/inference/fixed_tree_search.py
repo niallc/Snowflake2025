@@ -1,10 +1,12 @@
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import logging
+import torch
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.value_utils import temperature_scaled_softmax  # <-- Add this import
+from hex_ai.value_utils import temperature_scaled_softmax
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
@@ -109,7 +111,49 @@ def build_search_tree(
     return build_node(root_state, 0, [])
 
 
-def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int = 1000, root_player: int = None) -> None:
+def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -> float:
+    """
+    Convert a raw model value logit to a minimax-friendly value from the root player's perspective.
+    
+    The model outputs raw logits representing log(p/(1-p)) where p is the probability of Red winning.
+    This function:
+    1. Applies sigmoid to convert logit to probability: sigmoid(logit) = p
+    2. Converts to root player's perspective for minimax search
+    
+    Args:
+        value_logit: Raw logit from model's value head (unbounded)
+        root_player: BLUE_PLAYER (0) for Blue, RED_PLAYER (1) for Red (the player whose perspective we want)
+        
+    Returns:
+        Minimax value in range [-1, 1] where:
+        - Positive values are good for the root player
+        - Negative values are bad for the root player
+        - 0.0 represents neutral/equal chances
+        
+    Raises:
+        ValueError: If root_player is not BLUE_PLAYER or RED_PLAYER
+    """
+    # Validate root_player
+    if root_player not in (BLUE_PLAYER, RED_PLAYER):
+        raise ValueError(f"root_player must be BLUE_PLAYER ({BLUE_PLAYER}) or RED_PLAYER ({RED_PLAYER}), got {root_player}")
+    
+    # Step 1: Convert logit to probability using sigmoid
+    prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
+    
+    # Step 2: Convert to root player's perspective
+    if root_player == BLUE_PLAYER:  # Root player is Blue
+        # For Blue: positive values = Blue wins (good), negative values = Red wins (bad)
+        # Convert from Red's win probability to Blue's perspective
+        return 1.0 - 2.0 * prob_red_win  # Maps [0,1] to [1,-1]
+    else:  # Root player is Red
+        # For Red: negative values = Red wins (good), positive values = Blue wins (bad)
+        # Convert from Red's win probability to Red's perspective
+        return 2.0 * prob_red_win - 1.0  # Maps [0,1] to [-1,1]
+
+
+def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], 
+    model, batch_size: int = 1000, root_player: int = None
+) -> None:
     """Batch evaluate all leaf nodes from the root player's perspective."""
     leaf_nodes = []
     
@@ -135,18 +179,12 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], model, batch_size: int =
     
     # Assign values to leaf nodes, converting to root player's perspective
     for node, value in zip(leaf_nodes, values):
-        # The model outputs probability of Red winning (1.0 = Red wins, 0.0 = Blue wins)
-        # We need to convert this to a value from the root player's perspective
-        if root_player == 0:  # Root player is Blue
-            # For Blue, positive values are good (Blue wins), negative are bad (Red wins)
-            # Convert from Red's win probability to Blue's perspective
-            node.value = 1.0 - 2.0 * value  # Maps [0,1] to [1,-1]
-        else:  # Root player is Red
-            # For Red, negative values are good (Red wins), positive are bad (Blue wins)
-            # Convert from Red's win probability to Red's perspective
-            node.value = 2.0 * value - 1.0  # Maps [0,1] to [-1,1]
+        # Convert raw model logit to minimax-friendly value
+        node.value = convert_model_logit_to_minimax_value(value, root_player)
         
-        logger.debug(f"Leaf node {node.path}: raw_value={value:.4f}, converted_value={node.value:.4f}")
+        # Debug logging with intermediate values for clarity
+        prob_red_win = torch.sigmoid(torch.tensor(value)).item()
+        logger.debug(f"Leaf node {node.path}: raw_logit={value:.4f}, prob_red={prob_red_win:.4f}, converted_value={node.value:.4f}")
 
 
 
@@ -186,7 +224,7 @@ def print_tree_structure(node: MinimaxSearchNode, indent=0):
     print(
         "  " * indent
         + f"Node: depth={node.depth}, "
-        + f"player={'Blue' if node.state.current_player == 0 else 'Red'}, "
+        + f"player={'Blue' if node.state.current_player == BLUE_PLAYER else 'Red'}, "
         + f"maximizing={node.is_maximizing}, "
         + f"value={node.value}, "
         + f"path={node.path}"
