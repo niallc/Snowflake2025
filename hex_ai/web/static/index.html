@@ -67,6 +67,36 @@
           <small>Automatically make computer moves with delay</small>
         </div>
       </div>
+      
+      <!-- Debug Controls -->
+      <div id="debug-controls" class="control-panel">
+        <h3>Debug & Diagnostics</h3>
+        <div class="debug-row">
+          <label for="verbose-level">Verbose Level:</label>
+          <select id="verbose-level">
+            <option value="0">None</option>
+            <option value="1">Basic</option>
+            <option value="2">Detailed</option>
+            <option value="3">Full</option>
+          </select>
+          <small>Level of debug output (0=none, 1=basic, 2=detailed, 3=full)</small>
+        </div>
+        <div class="debug-row">
+          <label for="computer-toggle">Computer:</label>
+          <button id="computer-toggle" class="btn-secondary">ON</button>
+          <small>Toggle computer moves on/off for manual testing</small>
+        </div>
+        <div class="debug-row">
+          <button id="undo-btn" class="btn-secondary">Undo Last Move</button>
+          <button id="clear-btn" class="btn-secondary">Clear Board</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Debug Output Section -->
+    <div id="debug-output" class="debug-panel" style="display: none;">
+      <h3>Debug Information</h3>
+      <div id="debug-content"></div>
     </div>
   </div>
   <script src="/static/app.js"></script>

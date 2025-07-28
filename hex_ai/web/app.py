@@ -64,6 +64,105 @@ def get_available_models():
         {"id": "model2", "name": f"Model 2 ({CHECKPOINT_FILE2})", "path": MODEL_PATHS["model2"]},
     ]
 
+def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
+                       search_widths, temperature, verbose, model_move=None):
+    """Generate comprehensive debug information based on verbose level."""
+    debug_info = {}
+    
+    # Level 1: Basic policy and value analysis
+    if verbose >= 1:
+        debug_info["basic"] = {
+            "current_player": winner_to_color(state.current_player),
+            "game_over": state.game_over,
+            "legal_moves_count": len(state.get_legal_moves()),
+            "value_logit": float(value_logit),
+            "win_probability": float(get_win_prob_from_model_output(value_logit, winner_to_color(state.current_player))),
+            "temperature": temperature,
+            "search_widths": search_widths,
+            "model_move": model_move
+        }
+        
+        # Top-k policy moves
+        legal_moves = state.get_legal_moves()
+        move_probs = []
+        for row, col in legal_moves:
+            move_trmph = fc.rowcol_to_trmph(row, col)
+            prob = float(policy_probs[row * state.board.shape[0] + col])
+            move_probs.append({"move": move_trmph, "row": row, "col": col, "probability": prob})
+        
+        # Sort by probability descending
+        move_probs.sort(key=lambda x: x["probability"], reverse=True)
+        debug_info["policy_analysis"] = {
+            "top_moves": move_probs[:10],  # Top 10 moves
+            "total_legal_moves": len(legal_moves)
+        }
+    
+    # Level 2: Detailed analysis including tree search
+    if verbose >= 2 and search_widths and len(search_widths) > 0:
+        try:
+            from hex_ai.inference.fixed_tree_search import minimax_policy_value_search, build_search_tree, evaluate_leaf_nodes, minimax_backup
+            
+            # Build search tree for analysis
+            root = build_search_tree(state, model, search_widths, temperature)
+            evaluate_leaf_nodes([root], model, batch_size=1000, root_player=state.current_player)
+            final_value = minimax_backup(root)
+            
+            debug_info["tree_search"] = {
+                "search_widths": search_widths,
+                "tree_depth": len(search_widths),
+                "final_value": float(final_value),
+                "best_move": fc.rowcol_to_trmph(*root.best_move) if root.best_move else None,
+                "tree_size": count_tree_nodes(root)
+            }
+            
+            # Add terminal node analysis
+            if verbose >= 3:
+                debug_info["tree_search"]["terminal_nodes"] = collect_terminal_nodes(root)
+                
+        except Exception as e:
+            debug_info["tree_search"] = {"error": str(e)}
+    
+    # Level 3: Full analysis including policy-value conflicts
+    if verbose >= 3:
+        # Compare policy top move vs tree search best move
+        if debug_info.get("policy_analysis") and debug_info.get("tree_search"):
+            policy_top_move = debug_info["policy_analysis"]["top_moves"][0]["move"]
+            tree_best_move = debug_info["tree_search"]["best_move"]
+            
+            debug_info["policy_value_comparison"] = {
+                "policy_top_move": policy_top_move,
+                "tree_best_move": tree_best_move,
+                "moves_match": policy_top_move == tree_best_move,
+                "policy_top_prob": debug_info["policy_analysis"]["top_moves"][0]["probability"]
+            }
+    
+    return debug_info
+
+def count_tree_nodes(node):
+    """Count total nodes in search tree."""
+    count = 1
+    for child in node.children.values():
+        count += count_tree_nodes(child)
+    return count
+
+def collect_terminal_nodes(root):
+    """Collect all terminal nodes with their values."""
+    terminals = []
+    
+    def collect_terminals(node):
+        if not node.children:  # Terminal node
+            terminals.append({
+                "path": [fc.rowcol_to_trmph(*move) for move in node.path],
+                "value": float(node.value) if node.value is not None else None,
+                "depth": node.depth
+            })
+        else:
+            for child in node.children.values():
+                collect_terminals(child)
+    
+    collect_terminals(root)
+    return terminals
+
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
@@ -235,6 +334,7 @@ def api_move():
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 0.15)  # Default temperature
+    verbose = data.get("verbose", 0)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -308,6 +408,7 @@ def api_move():
             # Continue without model move if there's an error
     
     # Recompute policy/value for final state using centralized utilities
+    debug_info = {}
     try:
         model = get_model(model_id)
         policy_logits, value_logit = model.infer(new_trmph)
@@ -315,12 +416,17 @@ def api_move():
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
         win_prob = get_win_prob_from_model_output(value_logit, winner_to_color(player))
+        
+        # Add verbose debug information
+        if verbose >= 1:
+            debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
+                                          search_widths, temperature, verbose, model_move)
     except Exception as e:
         app.logger.error(f"Final inference failed: {e}")
         policy_dict = {}
         win_prob = 0.5
 
-    return jsonify({
+    response = {
         "new_trmph": new_trmph,
         "board": board,
         "player": winner_to_color(player),
@@ -330,7 +436,12 @@ def api_move():
         "policy": policy_dict,
         "value": float(value_logit) if 'value_logit' in locals() else 0.0,
         "win_prob": win_prob,
-    })
+    }
+    
+    if verbose >= 1:
+        response["debug_info"] = debug_info
+    
+    return jsonify(response)
 
 @app.route("/api/computer_move", methods=["POST"])
 def api_computer_move():
@@ -340,11 +451,27 @@ def api_computer_move():
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 1.0)  # Default temperature
+    verbose = data.get("verbose", 0)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     if not trmph:
         return jsonify({"error": "TRMPH required"}), 400
     
     result = make_computer_move(trmph, model_id, search_widths, temperature)
+    
+    # Add verbose debug information if requested
+    if verbose >= 1 and result["success"]:
+        try:
+            state = HexGameState.from_trmph(result["new_trmph"])
+            model = get_model(model_id)
+            policy_logits, value_logit = model.infer(result["new_trmph"])
+            policy_probs = policy_logits_to_probs(policy_logits, temperature)
+            
+            debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
+                                          search_widths, temperature, verbose, result.get("move_made"))
+            result["debug_info"] = debug_info
+        except Exception as e:
+            app.logger.error(f"Debug info generation failed: {e}")
+            result["debug_info"] = {"error": str(e)}
     
     if result["success"]:
         return jsonify(result)
@@ -363,6 +490,6 @@ def serve_static(path):
 def serve_index():
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static"), "index.html")
 
-if __name__ == "__main__" or __name__ == "hex_ai.web.app":
+if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
     app.run(debug=True, port=5001) 

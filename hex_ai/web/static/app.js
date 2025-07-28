@@ -36,7 +36,10 @@ let state = {
   red_temperature: 0.2,
   auto_step_active: false,
   auto_step_timeout: null,
-  available_models: []
+  available_models: [],
+  verbose_level: 0, // Debug output level
+  computer_enabled: true, // Whether computer moves are enabled
+  move_history: [] // Track move history for undo functionality
 };
 
 // --- Utility: Get per-player settings ---
@@ -83,7 +86,8 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
 
 async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
-                       red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0) {
+                       red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
+                       verbose = 0) {
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -98,7 +102,8 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
       blue_temperature,
       red_model_id,
       red_search_widths,
-      red_temperature
+      red_temperature,
+      verbose
     }),
   });
   if (!resp.ok) throw new Error('API error');
@@ -120,11 +125,11 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0) {
+async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0) {
   const resp = await fetch('/api/computer_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, search_widths, temperature }),
+    body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -275,6 +280,18 @@ function updateUI() {
     stepBtn.disabled = false;
   }
   
+  // Update debug controls
+  const verboseLevel = document.getElementById('verbose-level');
+  const computerToggle = document.getElementById('computer-toggle');
+  if (verboseLevel) verboseLevel.value = state.verbose_level;
+  if (computerToggle) computerToggle.textContent = state.computer_enabled ? 'ON' : 'OFF';
+  
+  // Show/hide debug output based on verbose level
+  const debugOutput = document.getElementById('debug-output');
+  if (debugOutput) {
+    debugOutput.style.display = state.verbose_level > 0 ? 'block' : 'none';
+  }
+  
   // Disable controls during auto-step (but allow interruption)
   const controls = document.querySelectorAll('select, input:not(#auto-step-checkbox), button:not(#step-btn)');
   controls.forEach(control => {
@@ -293,6 +310,9 @@ async function onCellClick(e) {
   // Store the move that was just made
   const moveMade = [row, col];
   const currentPlayer = state.player;
+  
+  // Save state for undo functionality
+  saveStateForUndo();
   
   try {
     // Step 1: Immediately apply the human move and show it
@@ -313,8 +333,8 @@ async function onCellClick(e) {
     state.last_move_player = currentPlayer;
     updateUI();
     
-    // Step 2: If game is not over, get the computer move
-    if (!state.winner) {
+    // Step 2: If game is not over and computer is enabled, get the computer move
+    if (!state.winner && state.computer_enabled) {
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
       let computerModelId, computerSearchWidths, computerTemperature;
@@ -329,12 +349,13 @@ async function onCellClick(e) {
         computerTemperature = state.red_temperature;
       }
       
-      // Make computer move
+      // Make computer move with verbose output
       const computerResult = await makeComputerMove(
         state.trmph, 
         computerModelId, 
         computerSearchWidths, 
-        computerTemperature
+        computerTemperature,
+        state.verbose_level
       );
       
       if (computerResult.success) {
@@ -345,6 +366,12 @@ async function onCellClick(e) {
         state.winner = computerResult.winner;
         state.last_move = computerResult.move_made ? getLastMoveFromTrmph(computerResult.move_made) : null;
         state.last_move_player = computerPlayer;
+        
+        // Display debug information if available
+        if (computerResult.debug_info) {
+          displayDebugInfo(computerResult.debug_info);
+        }
+        
         updateUI();
       } else {
         alert('Computer move failed: ' + computerResult.error);
@@ -369,7 +396,7 @@ async function stepComputerMove() {
   const currentPlayer = state.player; // Store current player before the move
   
   try {
-    const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature);
+    const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature, state.verbose_level);
     
     if (result.success) {
       state.trmph = result.new_trmph;
@@ -379,6 +406,12 @@ async function stepComputerMove() {
       state.winner = result.winner;
       state.last_move = result.move_made ? getLastMoveFromTrmph(result.move_made) : null;
       state.last_move_player = currentPlayer; // Use the player who made the move
+      
+      // Display debug information if available
+      if (result.debug_info) {
+        displayDebugInfo(result.debug_info);
+      }
+      
       updateUI();
       
       // If auto-step is active and game isn't over, schedule next move
@@ -529,4 +562,132 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('copy-trmph').addEventListener('click', () => {
     navigator.clipboard.writeText(state.trmph);
   });
-}); 
+
+  // Debug controls
+  document.getElementById('verbose-level').addEventListener('change', (e) => {
+    state.verbose_level = parseInt(e.target.value);
+    updateUI();
+  });
+
+  document.getElementById('computer-toggle').addEventListener('click', () => {
+    state.computer_enabled = !state.computer_enabled;
+    updateUI();
+  });
+
+  document.getElementById('undo-btn').addEventListener('click', () => {
+    if (state.move_history.length > 0) {
+      const previousState = state.move_history.pop();
+      Object.assign(state, previousState);
+      updateUI();
+    }
+  });
+
+  document.getElementById('clear-btn').addEventListener('click', async () => {
+    state.trmph = '#13,';
+    state.move_history = [];
+    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
+    state.board = result.board;
+    state.player = result.player;
+    state.legal_moves = result.legal_moves;
+    state.winner = result.winner;
+    state.last_move = null;
+    state.last_move_player = null;
+    updateUI();
+  });
+});
+
+// --- Debug Output Functions ---
+function displayDebugInfo(debugInfo) {
+  if (!debugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // Basic information
+  if (debugInfo.basic) {
+    output += '=== BASIC INFORMATION ===\n';
+    output += `Current Player: ${debugInfo.basic.current_player}\n`;
+    output += `Game Over: ${debugInfo.basic.game_over}\n`;
+    output += `Legal Moves: ${debugInfo.basic.legal_moves_count}\n`;
+    output += `Value Logit: ${debugInfo.basic.value_logit.toFixed(4)}\n`;
+    output += `Win Probability: ${(debugInfo.basic.win_probability * 100).toFixed(2)}%\n`;
+    output += `Temperature: ${debugInfo.basic.temperature}\n`;
+    output += `Search Widths: ${debugInfo.basic.search_widths ? debugInfo.basic.search_widths.join(',') : 'None'}\n`;
+    if (debugInfo.basic.model_move) {
+      output += `Model Move: ${debugInfo.basic.model_move}\n`;
+    }
+    output += '\n';
+  }
+  
+  // Policy analysis
+  if (debugInfo.policy_analysis) {
+    output += '=== POLICY ANALYSIS ===\n';
+    output += `Top ${debugInfo.policy_analysis.top_moves.length} moves:\n`;
+    debugInfo.policy_analysis.top_moves.forEach((move, index) => {
+      const probPercent = (move.probability * 100).toFixed(2);
+      output += `  ${index + 1}. ${move.move} (${move.row},${move.col}): ${probPercent}%\n`;
+    });
+    output += `Total legal moves: ${debugInfo.policy_analysis.total_legal_moves}\n\n`;
+  }
+  
+  // Tree search analysis
+  if (debugInfo.tree_search) {
+    output += '=== TREE SEARCH ANALYSIS ===\n';
+    if (debugInfo.tree_search.error) {
+      output += `Error: ${debugInfo.tree_search.error}\n`;
+    } else {
+      output += `Search Widths: ${debugInfo.tree_search.search_widths.join(',')}\n`;
+      output += `Tree Depth: ${debugInfo.tree_search.tree_depth}\n`;
+      output += `Tree Size: ${debugInfo.tree_search.tree_size} nodes\n`;
+      output += `Final Value: ${debugInfo.tree_search.final_value.toFixed(4)}\n`;
+      output += `Best Move: ${debugInfo.tree_search.best_move || 'None'}\n`;
+      
+      // Terminal nodes (verbose level 3)
+      if (debugInfo.tree_search.terminal_nodes && state.verbose_level >= 3) {
+        output += '\nTerminal Nodes:\n';
+        debugInfo.tree_search.terminal_nodes.forEach((node, index) => {
+          const pathStr = node.path.join(' → ');
+          const valueStr = node.value !== null ? node.value.toFixed(4) : 'None';
+          output += `  ${index + 1}. Path: ${pathStr} | Value: ${valueStr} | Depth: ${node.depth}\n`;
+        });
+      }
+    }
+    output += '\n';
+  }
+  
+  // Policy vs Value comparison
+  if (debugInfo.policy_value_comparison) {
+    output += '=== POLICY vs VALUE COMPARISON ===\n';
+    output += `Policy Top Move: ${debugInfo.policy_value_comparison.policy_top_move}\n`;
+    output += `Tree Best Move: ${debugInfo.policy_value_comparison.tree_best_move}\n`;
+    output += `Moves Match: ${debugInfo.policy_value_comparison.moves_match ? 'YES' : 'NO'}\n`;
+    output += `Policy Top Probability: ${(debugInfo.policy_value_comparison.policy_top_prob * 100).toFixed(2)}%\n`;
+    if (!debugInfo.policy_value_comparison.moves_match) {
+      output += '⚠️  WARNING: Policy and value networks disagree!\n';
+    }
+    output += '\n';
+  }
+  
+  debugContent.textContent = output;
+}
+
+function saveStateForUndo() {
+  // Save current state for undo functionality
+  const stateCopy = {
+    trmph: state.trmph,
+    board: JSON.parse(JSON.stringify(state.board)),
+    player: state.player,
+    legal_moves: [...state.legal_moves],
+    winner: state.winner,
+    last_move: state.last_move ? [...state.last_move] : null,
+    last_move_player: state.last_move_player
+  };
+  state.move_history.push(stateCopy);
+  
+  // Keep only last 10 moves in history
+  if (state.move_history.length > 10) {
+    state.move_history.shift();
+  }
+} 
