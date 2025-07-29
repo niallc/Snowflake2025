@@ -307,36 +307,74 @@ def sample_move_by_value(move_values: List[float], temperature: float = 1.0) -> 
     chosen_idx = np.random.choice(len(move_values), p=probs)
     return chosen_idx
 
+def _sample_moves_from_policy(policy_logits: np.ndarray, legal_moves: List[Tuple[int, int]], 
+                             board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
+    """
+    Core function to sample k moves from policy logits with temperature scaling.
+    
+    Args:
+        policy_logits: Raw policy logits
+        legal_moves: List of (row, col) tuples for legal moves
+        board_size: Board size
+        k: Number of moves to sample
+        temperature: Temperature for sampling (0.0 = deterministic top-k, higher = more random)
+        
+    Returns:
+        List of ((row, col), probability) tuples for k sampled moves
+    """
+    if not legal_moves:
+        return []
+    
+    # Convert logits to probabilities with temperature scaling
+    policy_probs = temperature_scaled_softmax(policy_logits, temperature)
+    
+    # Get legal move probabilities
+    move_indices = [row * board_size + col for row, col in legal_moves]
+    legal_policy = np.array([policy_probs[idx] for idx in move_indices])
+    
+    # Normalize legal move probabilities to sum to 1
+    legal_policy_sum = np.sum(legal_policy)
+    if legal_policy_sum > 0:
+        legal_policy = legal_policy / legal_policy_sum
+    else:
+        # If all probabilities are 0, use uniform distribution
+        legal_policy = np.ones(len(legal_moves)) / len(legal_moves)
+    
+    # Sample k moves from the policy distribution
+    if temperature == 0.0 or len(legal_moves) <= k:
+        # Deterministic: take top-k moves
+        topk_idx = np.argsort(legal_policy)[::-1][:k]
+        sampled_moves = [legal_moves[i] for i in topk_idx]
+    else:
+        # Stochastic: sample k moves weighted by policy probabilities
+        sampled_indices = np.random.choice(len(legal_moves), size=k, replace=False, p=legal_policy)
+        sampled_moves = [legal_moves[i] for i in sampled_indices]
+    
+    # Get corresponding probabilities for the sampled moves
+    move_indices = [row * board_size + col for row, col in sampled_moves]
+    move_probs = [float(policy_probs[idx]) for idx in move_indices]
+    
+    return list(zip(sampled_moves, move_probs))
+
+
 def get_top_k_moves_with_probs(policy_logits: np.ndarray,
                                legal_moves: List[Tuple[int, int]],
-                               board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
+                               board_size: int, k: int,
+                               temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
     """
-    Get top-k moves with their probabilities, using centralized policy processing.
+    Get top-k moves with their probabilities, using temperature-aware sampling.
     
     Args:
         policy_logits: Raw policy logits
         legal_moves: List of (row, col) tuples for legal moves
         board_size: Board size
         k: Number of top moves to return
-        temperature: Temperature for policy sampling
+        temperature: Temperature for policy sampling (0.0 = deterministic top-k, higher = more random)
         
     Returns:
         List of ((row, col), probability) tuples for top-k moves
     """
-    # Convert logits to probabilities
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    
-    # Get legal move probabilities
-    legal_policy = get_legal_policy_probs(policy_probs, legal_moves, board_size)
-    
-    # Select top-k moves
-    topk_moves = select_top_k_moves(legal_policy, legal_moves, k)
-    
-    # Get corresponding probabilities
-    move_indices = [row * board_size + col for row, col in topk_moves]
-    move_probs = [float(policy_probs[idx]) for idx in move_indices]
-    
-    return list(zip(topk_moves, move_probs))
+    return _sample_moves_from_policy(policy_logits, legal_moves, board_size, k, temperature)
 
 def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int]:
     """

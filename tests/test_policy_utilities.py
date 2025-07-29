@@ -93,26 +93,35 @@ def test_get_top_k_moves_with_probs():
         assert isinstance(prob, float) and 0 <= prob <= 1
 
 def test_consistency_with_original_logic():
-    """Test that the new utilities produce the same results as the original duplicated logic."""
-    # Simulate the original logic from model_select_move
+    """Test that the new utilities produce consistent results with temperature-aware sampling."""
+    # Test with temperature=0.0 (deterministic) to ensure consistency
     policy_logits = np.array([1.0, 2.0, 0.5, 3.0, 1.5, 0.8, 2.5, 1.2, 0.9])
     legal_moves = [(0, 0), (0, 1), (1, 0), (1, 1)]
     board_size = 3
-    temperature = 0.5
+    temperature = 0.0  # Deterministic mode
     
-    # Original logic (simulated)
+    # Original logic (simulated) - deterministic top-k
     policy_probs_orig = temperature_scaled_softmax(policy_logits, temperature)
     move_indices_orig = [row * board_size + col for row, col in legal_moves]
     legal_policy_orig = np.array([policy_probs_orig[idx] for idx in move_indices_orig])
     topk_idx_orig = np.argsort(legal_policy_orig)[::-1][:2]
     topk_moves_orig = [legal_moves[i] for i in topk_idx_orig]
     
-    # New logic
+    # New logic - should match in deterministic mode
     result_new = get_top_k_moves_with_probs(policy_logits, legal_moves, board_size, 2, temperature)
     topk_moves_new = [move for move, _ in result_new]
     
-    # Should produce the same moves
+    # Should produce the same moves in deterministic mode
     assert topk_moves_new == topk_moves_orig
+    
+    # Test that stochastic sampling returns valid moves
+    temperature = 1.0  # Stochastic mode
+    result_stochastic = get_top_k_moves_with_probs(policy_logits, legal_moves, board_size, 2, temperature)
+    topk_moves_stochastic = [move for move, _ in result_stochastic]
+    
+    # Should return valid moves from legal_moves
+    for move in topk_moves_stochastic:
+        assert move in legal_moves
 
 def test_select_policy_move():
     """Test the new select_policy_move function."""
@@ -120,7 +129,7 @@ def test_select_policy_move():
     
     # Create a mock model that returns predictable logits for a 13x13 board (169 positions)
     class MockModel:
-        def infer(self, board):
+        def simple_infer(self, board):
             # Return logits that favor the first few positions
             # Create 169 logits (13x13 board)
             logits = np.zeros(169)

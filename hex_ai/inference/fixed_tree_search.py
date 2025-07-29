@@ -8,7 +8,7 @@ import threading
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs
+from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, _sample_moves_from_policy
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 # Set up logging for debugging
@@ -281,7 +281,7 @@ class MinimaxSearchNode:
 
 
 def get_topk_moves(state: HexGameState, model, k: int, 
-                   temperature: float = 1.0) -> List[Tuple[int, int]]:
+                   temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
     """
     Sample k moves from the policy distribution with temperature scaling.
     
@@ -292,42 +292,13 @@ def get_topk_moves(state: HexGameState, model, k: int,
         temperature: Temperature for sampling (0.0 = deterministic top-k, higher = more random)
         
     Returns:
-        List of k sampled moves
+        List of ((row, col), probability) tuples for k sampled moves
     """
     policy_logits, _ = model.simple_infer(state.board)
-    policy_probs = temperature_scaled_softmax(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
     
-    if not legal_moves:
-        return []
-    
-    # Convert moves to indices and get probabilities
-    # TODO: Is legal_policy checking for legal moves? 
-    #       Legal moves have value 0, where is this being checked?
-    # TODO: This logic should be refactored into a reusable utility function.
-    move_indices = [row * state.board.shape[0] + col for row, col in legal_moves]
-    legal_policy = np.array([policy_probs[idx] for idx in move_indices])
-    
-    # Normalize legal move probabilities to sum to 1
-    legal_policy_sum = np.sum(legal_policy)
-    if legal_policy_sum > 0:
-        legal_policy = legal_policy / legal_policy_sum
-    else:
-        # If all probabilities are 0, use uniform distribution
-        legal_policy = np.ones(len(legal_moves)) / len(legal_moves)
-    
-    # Sample k moves from the policy distribution
-    if temperature == 0.0 or len(legal_moves) <= k:
-        # Deterministic: take top-k moves
-        topk_idx = np.argsort(legal_policy)[::-1][:k]
-        sampled_moves = [legal_moves[i] for i in topk_idx]
-    else:
-        # Stochastic: sample k moves weighted by policy probabilities
-        sampled_indices = np.random.choice(len(legal_moves), size=k, replace=False, p=legal_policy)
-        sampled_moves = [legal_moves[i] for i in sampled_indices]
-    
-    # Debug logging removed for production code
-    return sampled_moves
+    # Use the core sampling function
+    return _sample_moves_from_policy(policy_logits, legal_moves, state.board.shape[0], k, temperature)
 
 
 def get_topk_moves_from_policy(policy_logits: np.ndarray, state: HexGameState, k: int, 
@@ -348,7 +319,7 @@ def get_topk_moves_from_policy(policy_logits: np.ndarray, state: HexGameState, k
     if not legal_moves:
         return []
     
-    # Use existing utility function
+    # Use the centralized utility function
     moves_with_probs = get_top_k_moves_with_probs(
         policy_logits, legal_moves, state.board.shape[0], k, temperature
     )
@@ -374,10 +345,10 @@ def build_search_tree(
         
         # Get top moves for this depth
         k = widths[depth] if depth < len(widths) else 1
-        moves = get_topk_moves(state, model, k, temperature)
+        moves_with_probs = get_topk_moves(state, model, k, temperature)
         
         # Build children
-        for move in moves:
+        for move, _ in moves_with_probs:
             child_state = state.make_move(*move)
             child_path = path + [move]
             child_node = build_node(child_state, depth + 1, child_path)
@@ -483,10 +454,10 @@ def build_search_tree_with_collection(
                     )
                 
                 # Use policy to get top moves
-                moves = get_topk_moves_from_policy(policy_logits, state, k, temperature)
+                moves_with_probs = get_topk_moves(state, model, k, temperature)
                 
                 # Build children for each move
-                for move in moves:
+                for move, _ in moves_with_probs:
                     child_state = state.make_move(*move)
                     child_path = path + [move]
                     child_node = build_node(child_state, depth + 1, child_path)
@@ -504,10 +475,10 @@ def build_search_tree_with_collection(
             
         else:
             # FALLBACK: Immediate inference (original behavior)
-            moves = get_topk_moves(state, model, k, temperature)
+            moves_with_probs = get_topk_moves(state, model, k, temperature)
             
             # Build children immediately
-            for move in moves:
+            for move, _ in moves_with_probs:
                 child_state = state.make_move(*move)
                 child_path = path + [move]
                 child_node = build_node(child_state, depth + 1, child_path)
