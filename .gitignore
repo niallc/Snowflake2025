@@ -30,6 +30,13 @@ write_ups/update_training_for_shuffled_TMP.md
 write_ups/shuffled_data_integration_summary.md
 write_ups/completed_work_archive.md
 write_ups/checkpoint_audit_summary.md
+scripts/calculate_performance.py
+scripts/final_performance_summary.py
+scripts/optimize_performance.py
+scripts/profile_selfplay.py
+scripts/test_device_detection.py
+scripts/test_mps_performance.py
+
 
 
 # VSCode

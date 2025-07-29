@@ -19,6 +19,7 @@ from ..inference.fixed_tree_search import minimax_policy_value_search
 from ..config import BLUE_PLAYER, RED_PLAYER
 from ..utils import format_conversion as fc
 from ..value_utils import get_top_k_legal_moves, policy_logits_to_probs, get_top_k_moves_with_probs
+from ..training_utils import get_device  # Use centralized device detection
 
 
 class SelfPlayEngine:
@@ -58,7 +59,7 @@ class SelfPlayEngine:
         self.streaming_file = streaming_file
         
         # Initialize model
-        self.model = SimpleModelInference(model_path, device='cpu', cache_size=cache_size)
+        self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
         
         # Performance tracking
         self.stats = {

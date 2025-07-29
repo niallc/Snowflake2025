@@ -190,6 +190,13 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - hex_ai/selfplay/selfplay_engine.py:158:
  - def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
 
+### 17. Too many functions to figure out the GPU situation
+ - hex_ai/training_utils.py:116:def get_device() -> str:
+ - hex_ai/inference/model_wrapper.py:37:        return get_device()
+ - hex_ai/training_orchestration.py:222:def select_device():
+ - hex_ai/training_orchestration.py:288:    device = select_device()
+ - scripts/validate_checkpoints.py:38:        self.device = get_device()
+
 ---
 
 ## 📝 Notes

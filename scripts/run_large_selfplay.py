@@ -21,14 +21,14 @@ def main():
                        help='Path to the model checkpoint')
     parser.add_argument('--num-games', type=int, default=1000,
                        help='Number of games to generate (default: 1000)')
-    parser.add_argument('--num-workers', type=int, default=4,
-                       help='Number of parallel workers (default: 4)')
-    parser.add_argument('--batch-size', type=int, default=100,
-                       help='Maximum batch size for inference (default: 100)')
-    parser.add_argument('--cache-size', type=int, default=10000,
-                       help='Size of inference cache (default: 10000)')
-    parser.add_argument('--search-widths', type=int, nargs='+', default=[3, 2],
-                       help='Search widths for minimax search (default: 3 2)')
+    parser.add_argument('--num-workers', type=int, default=8,
+                       help='Number of parallel workers (default: 8)')
+    parser.add_argument('--batch-size', type=int, default=400,  # Increased from 200 based on MPS testing
+                       help='Maximum batch size for inference (default: 400)')
+    parser.add_argument('--cache-size', type=int, default=50000,  # Increased from 10000
+                       help='Size of inference cache (default: 50000)')
+    parser.add_argument('--search-widths', type=int, nargs='+', default=[10, 5],  # Reduced from [3, 2]
+                       help='Search widths for minimax search (default: 10 5)')
     parser.add_argument('--temperature', type=float, default=1.0,
                        help='Temperature for move selection (default: 1.0)')
     parser.add_argument('--output-dir', type=str, default='data/sf25/jul29/',

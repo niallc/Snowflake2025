@@ -2,10 +2,15 @@ import torch
 import numpy as np
 import time
 import psutil
-from typing import Union, Tuple, List, Optional, Dict, Any
+from typing import List, Tuple, Union, Optional, Dict, Any
 from collections import OrderedDict
-from hex_ai.inference.model_wrapper import ModelWrapper
+import logging
+
 from hex_ai.utils import format_conversion as fc
+from hex_ai.data_utils import create_board_from_moves
+from hex_ai.value_utils import policy_logits_to_probs, get_top_k_moves_with_probs
+from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.training_utils import get_device  # Use centralized device detection
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.config import (
     PLAYER_CHANNEL, MODEL_CHANNELS,
@@ -14,7 +19,6 @@ from hex_ai.config import (
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
-from hex_ai.data_utils import create_board_from_moves
 from hex_ai.utils.player_utils import get_player_to_move_from_board
 from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 from hex_ai.value_utils import (
@@ -72,18 +76,37 @@ class SimpleModelInference:
         max_batch_size: int = 1000,
         enable_caching: bool = True
     ):
-        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={device}, model_type={model_type}")
-        self.model = ModelWrapper(checkpoint_path, device=device, model_type=model_type)
-        self.board_size = fc.BOARD_SIZE
-        self.checkpoint_path = checkpoint_path
-        self.max_batch_size = max_batch_size
-        self.enable_caching = enable_caching
+        """
+        Initialize the SimpleModelInference with a trained model.
         
-        # Initialize cache if enabled
-        if self.enable_caching:
-            self.cache = LRUCache(cache_size)
+        Args:
+            checkpoint_path: Path to the model checkpoint
+            device: Device to use ('cuda', 'mps', 'cpu', or None for auto-detection)
+            model_type: Type of model architecture
+            cache_size: Size of the LRU cache for inference results
+            max_batch_size: Maximum batch size for inference
+            enable_caching: Whether to enable caching
+        """
+        self.checkpoint_path = checkpoint_path
+        self.model_type = model_type
+        self.board_size = 13  # Fixed for Hex
+        
+        # Use centralized device detection if not specified
+        if device is None:
+            self.device = get_device()
         else:
-            self.cache = None
+            self.device = device
+            
+        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={self.device}, model_type={model_type}")
+        
+        # Initialize the model wrapper
+        self.model = ModelWrapper(checkpoint_path, self.device, model_type)
+        
+        # Initialize caching
+        self.enable_caching = enable_caching
+        self.cache = LRUCache(cache_size) if enable_caching else None
+        if enable_caching:
+            print(f"Cache enabled with size {cache_size}")
         
         # Performance tracking
         self.stats = {
@@ -94,9 +117,7 @@ class SimpleModelInference:
             'cache_misses': 0
         }
         
-        print(f"Using model architecture (expects {MODEL_CHANNELS} channels)")
-        if self.enable_caching:
-            print(f"Cache enabled with size {cache_size}")
+        self.max_batch_size = max_batch_size
 
     def _get_board_hash(self, board: Union[str, np.ndarray, torch.Tensor]) -> str:
         """Create a hash for caching board positions."""
