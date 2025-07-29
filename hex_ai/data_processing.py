@@ -1,24 +1,21 @@
 """
-Data processing utilities for converting raw .trmph files to efficient training formats.
+Data processing utilities for Hex AI.
 
-This module handles:
-- Converting .trmph files to processed tensors
-- Sharding data into manageable chunks
-- Compressing data for efficient storage
-- Creating training-ready datasets
+This module provides utilities for processing TRMPH game data into training-ready formats.
 """
+
+import logging
+from pathlib import Path
+from typing import List, Tuple, Dict, Optional
 
 import torch
 import gzip
 import pickle
-import logging
-from pathlib import Path
-from typing import List, Tuple, Dict, Optional
 import numpy as np
 from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
-from .data_utils import validate_game
+from .data_utils import validate_game, extract_training_examples_from_game
 from hex_ai.utils.format_conversion import parse_trmph_game_record
 from hex_ai.value_utils import trmph_winner_to_training_value
 
@@ -96,7 +93,6 @@ class DataProcessor:
         processed_games = []
         for game_idx, (trmph_url, winner_indicator) in enumerate(tqdm(games, desc="Converting games to tensors")):
             try:
-                from .data_utils import extract_training_examples_from_game
                 game_id = (file_idx, game_idx+1)
                 training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, game_id)
                 value_override = trmph_winner_to_training_value(winner_indicator)

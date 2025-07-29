@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
 
-from .data_utils import load_trmph_file
+from .data_utils import load_trmph_file, extract_training_examples_with_selector_from_game
 from .utils.format_conversion import parse_trmph_game_record
 from .file_utils import (
     GracefulShutdown, atomic_write_pickle_gz, validate_output_directory,
@@ -370,7 +370,6 @@ class BatchProcessor:
                     try:
                         # Create game_id with file_idx and line_idx (i+1 for 1-based line numbers)
                         game_id = (file_idx, i+1)
-                        from .data_utils import extract_training_examples_with_selector_from_game
                         examples = extract_training_examples_with_selector_from_game(trmph_url, winner, game_id, position_selector=position_selector)
                         if examples:
                             # Use dictionary format directly - no conversion needed

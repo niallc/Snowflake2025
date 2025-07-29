@@ -1,25 +1,25 @@
 """
 Game engine for Hex AI.
 
-This module provides the core game logic, state management, and move validation
-for Hex games. It integrates with the existing data_utils for coordinate conversions
-and ports the Union-Find winner detection from legacy code.
+This module provides the core game logic for Hex, including board representation,
+move validation, winner detection, and game state management.
 """
 
-import torch
 import numpy as np
+import torch
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 from collections import namedtuple
 
-from .board_utils import (
-    board_2nxn_to_nxn, board_nxn_to_2nxn,
-    has_piece_at, is_empty, place_piece, board_to_string
+from hex_ai.config import (
+    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, VERBOSE_LEVEL
 )
-from ..config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER
-from hex_ai.utils.format_conversion import rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
-from ..config import BOARD_SIZE
-VERBOSE_LEVEL = 3
+from hex_ai.utils.format_conversion import (
+    board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
+)
+from hex_ai.inference.board_utils import (
+    is_empty, place_piece, board_to_string
+)
 
 # Edge coordinates for Union-Find
 LEFT_EDGE = -1
@@ -92,7 +92,6 @@ class HexGameState:
     @property
     def board_2nxn(self) -> torch.Tensor:
         """Get board in 2×N×N format for compatibility with tests (legacy, do not use for inference)."""
-        from hex_ai.utils.format_conversion import board_nxn_to_2nxn
         return board_nxn_to_2nxn(self.board)
 
     def is_valid_move(self, row: int, col: int) -> bool:
@@ -278,7 +277,6 @@ class HexGameState:
 
     def get_board_tensor(self) -> torch.Tensor:
         """Convert board to 3×N×N tensor for neural net input (with player-to-move channel)."""
-        from hex_ai.utils.format_conversion import board_nxn_to_3nxn
         return board_nxn_to_3nxn(self.board)
 
     def to_trmph(self) -> str:

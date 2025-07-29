@@ -1,7 +1,15 @@
-import os
+"""
+Error handling utilities for Hex AI.
+
+This module provides error tracking, logging, and graceful shutdown functionality.
+"""
+
+import gzip
 import logging
-from typing import List, Tuple, Dict, Optional
+import pickle
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -172,17 +180,12 @@ class BoardStateErrorTracker:
     def _save_error_sample(self, error_detail: Dict):
         """Save error sample to file for later analysis."""
         try:
-            import pickle
-            import gzip
-            from pathlib import Path
-            
             # Create errors directory in current checkpoint directory
             # We'll try to find the current training directory
             error_dir = Path("checkpoints/errors")
             error_dir.mkdir(exist_ok=True)
             
             # Create filename with error number and timestamp
-            from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"error_{error_detail['error_count']:04d}_{timestamp}.pkl.gz"
             filepath = error_dir / filename

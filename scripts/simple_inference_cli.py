@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.value_utils import ValuePerspective, get_win_prob_from_model_output, Winner, get_policy_probs_from_logits
+from hex_ai.models import TwoHeadedResNet
 
 def main():
     parser = argparse.ArgumentParser(description="Hex AI Simple Inference CLI")
@@ -22,7 +23,6 @@ def main():
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"
     print(f"model_path = {model_path}")
     print("Using current model architecture")
-    from hex_ai.models import TwoHeadedResNet
     # model = TwoHeadedResNet()  # Redundant, not used
     infer = SimpleModelInference(model_path, device=args.device)
 

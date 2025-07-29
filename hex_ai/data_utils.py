@@ -843,7 +843,6 @@ def get_valid_policy_target(policy, use_uniform: bool = False):
     Returns:
         np.ndarray of shape (BOARD_SIZE * BOARD_SIZE,)
     """
-    from .config import BOARD_SIZE
     N = BOARD_SIZE * BOARD_SIZE
     if policy is None:
         if use_uniform:
@@ -868,7 +867,6 @@ def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
         policy: torch.FloatTensor (BOARD_SIZE * BOARD_SIZE,)
         value: torch.FloatTensor (scalar or shape (1,))
     """
-    from .config import BOARD_SIZE
     board_2ch = ex['board']
     player_to_move = get_player_to_move_from_board(board_2ch)
     # Convert Player enum to integer for tensor creation

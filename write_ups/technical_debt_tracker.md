@@ -9,26 +9,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 
 ## 🎯 High Priority - Critical Issues
 
-### 1. Value Head Documentation and Consistency
-**Priority:** High  
-**Estimated Time:** 1-2 days  
-**Impact:** High - affects inference accuracy and debugging
 
-**Issue:** Inconsistent value head interpretation across codebase
-
-**Tasks:**
-- [x] Document what the value head predicts (Red's win probability)
-- [x] Audit all value head usage across codebase
-- [x] Fix inconsistent value interpretation
-- [x] Resolve TODO in `fixed_tree_search.py` about value interpretation
-- [x] Create: `docs/value_head_specification.md`
-
-**Files to modify:**
-- `hex_ai/inference/fixed_tree_search.py` ✅
-- `hex_ai/value_utils.py` ✅
-- `hex_ai/models.py` ✅
-- `hex_ai/training.py` ✅
-- `docs/value_head_specification.md` ✅
 
 ---
 
@@ -42,17 +23,19 @@ This document tracks specific technical debt items and refactoring tasks that ne
 **Issue:** Many inline imports should be moved to the top and alphabetized
 
 **Tasks:**
-- [ ] Audit all Python files for inline imports
-- [ ] Move all imports to top of files
+- [x] Audit all Python files for inline imports
+- [x] Move all imports to top of files
 - [ ] Alphabetize imports within categories (standard library, third-party, local)
 - [ ] Add import organization to linting rules if possible
 
 **Files to audit:**
-- All Python files in `hex_ai/`
-- All Python files in `scripts/`
-- All Python files in `tests/`
+- All Python files in `hex_ai/` ✅ **COMPLETED**
+- All Python files in `scripts/` ✅ **COMPLETED**
+- All Python files in `tests/` (not part of main scope)
 
-### 3. Inference and CLI Duplication Review
+**Completed:** Moved all inline imports to the top of files in `scripts/` and `hex_ai/` directories. The remaining inline imports are primarily in test files which were not part of the main scope.
+
+### 2. Inference and CLI Duplication Review
 **Priority:** Medium  
 **Estimated Time:** 1-2 days  
 **Impact:** Medium - reduces code duplication and maintenance burden
@@ -60,18 +43,17 @@ This document tracks specific technical debt items and refactoring tasks that ne
 **Issue:** May have legacy or redundant code paths between inference modules
 
 **Tasks:**
-- [x] Remove legacy model support from CLI and inference modules
 - [ ] Compare `hex_ai/inference/simple_model_inference.py` and `scripts/simple_inference_cli.py`
 - [ ] Identify redundant code paths
 - [ ] Consolidate or remove duplicate functionality
 - [ ] Ensure all inference uses centralized `ModelWrapper`
 
 **Files to review:**
-- `hex_ai/inference/simple_model_inference.py` ✅ (legacy support removed)
-- `scripts/simple_inference_cli.py` ✅ (legacy flag removed)
-- `hex_ai/inference/model_wrapper.py` ✅ (legacy support removed)
+- `hex_ai/inference/simple_model_inference.py`
+- `scripts/simple_inference_cli.py`
+- `hex_ai/inference/model_wrapper.py`
 
-### 4. Data Preprocessing Unification
+### 3. Data Preprocessing Unification
 **Priority:** Medium  
 **Estimated Time:** 1 day  
 **Impact:** Medium - ensures consistent data handling
@@ -93,7 +75,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 
 ## ⚡ Medium Priority - Performance & Testing
 
-### 5. Inference Batching Optimization
+### 4. Inference Batching Optimization
 **Priority:** Medium  
 **Estimated Time:** 1-2 days  
 **Impact:** Medium - improves inference performance
@@ -110,7 +92,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - `hex_ai/inference/fixed_tree_search.py`
 - `hex_ai/inference/model_wrapper.py`
 
-### 6. Mock Model Replacement
+### 5. Mock Model Replacement
 **Priority:** Medium  
 **Estimated Time:** 1-2 days  
 **Impact:** Medium - improves test quality
@@ -125,7 +107,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 **Files to modify:**
 - `tests/test_minimax_debug.py`
 
-### 7. Enhanced Testing Coverage
+### 6. Enhanced Testing Coverage
 **Priority:** Medium  
 **Estimated Time:** 2-3 days  
 **Impact:** Medium - improves code reliability
@@ -149,7 +131,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 
 ## 📚 Low Priority - Documentation & Organization
 
-### 8. Documentation Organization
+### 7. Documentation Organization
 **Priority:** Low  
 **Estimated Time:** 1-2 days  
 **Impact:** Low - improves developer experience
@@ -162,7 +144,7 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - [ ] Consider migrating files to appropriate locations
 - [ ] Document the organization system
 
-### 9. Dependency Management
+### 8. Dependency Management
 **Priority:** Low  
 **Estimated Time:** 1 day  
 **Impact:** Low - ensures reproducible builds
@@ -179,41 +161,6 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - `requirements.txt`
 - Create: `scripts/validate_environment.py`
 
-### 10. Deprecated Scripts Cleanup
-**Priority:** Low  
-**Estimated Time:** 1-2 days  
-**Impact:** Low - improves codebase organization
-
-**Issue:** Large number of deprecated scripts in `scripts/deprecated/` directory
-
-**Tasks:**
-- [ ] Review all deprecated scripts for any still-useful functionality
-- [ ] Extract any reusable utilities to appropriate modules
-- [ ] Remove scripts that are no longer needed
-- [ ] Update documentation to reflect current state
-- [ ] Consider archiving important historical scripts
-
-**Files to review:**
-- All files in `scripts/deprecated/` (30+ files)
-- `write_ups/redundant/` directory for related documentation
-
-### 11. Redundant Documentation Cleanup
-**Priority:** Low  
-**Estimated Time:** 1 day  
-**Impact:** Low - improves documentation organization
-
-**Issue:** Large number of redundant documentation files in `write_ups/redundant/` directory
-
-**Tasks:**
-- [ ] Review all redundant documentation for any still-relevant information
-- [ ] Extract any useful content to appropriate documentation files
-- [ ] Remove files that are completely outdated
-- [ ] Consider creating a historical archive for important completed work
-- [ ] Update main documentation to reference any preserved historical information
-
-**Files to review:**
-- All files in `write_ups/redundant/` (20+ files)
-
 ---
 
 ## 📝 Notes
@@ -223,10 +170,4 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - Update status and add new items as they are discovered
 - For high-level code health issues and recommendations, see `code_health_overview.md`
 - Consider breaking large tasks into smaller, more manageable pieces
-- Regular code reviews should be conducted to prevent new technical debt from accumulating
-
----
-
-## 🗑️ Removed Items
-
-Items that have been completed or are no longer relevant should be moved here with completion dates and brief summaries. 
+- Regular code reviews should be conducted to prevent new technical debt from accumulating 

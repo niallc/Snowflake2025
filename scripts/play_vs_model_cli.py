@@ -2,6 +2,8 @@
 import argparse
 import numpy as np
 import random
+import operator
+from functools import reduce
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.game_engine import HexGameState
@@ -27,6 +29,7 @@ from hex_ai.value_utils import (
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
+from hex_ai.utils.format_conversion import trmph_move_to_rowcol, rowcol_to_trmph
 
 DEFAULT_BOARD_SIZE = 13
 DEFAULT_TOP_K = 20
@@ -47,7 +50,6 @@ def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
             print("Quitting game by user request.")
             sys.exit(0)
         try:
-            from hex_ai.utils.format_conversion import trmph_move_to_rowcol
             row, col = trmph_move_to_rowcol(move, board_size=DEFAULT_BOARD_SIZE)
             if state.is_valid_move(row, col):
                 return row, col
@@ -89,8 +91,6 @@ def main():
         if not search_widths:
             print("Error: --search-widths must not be empty.")
             sys.exit(1)
-        from functools import reduce
-        import operator
         num_leaves = reduce(operator.mul, search_widths, 1)
         if num_leaves > 1_000_000:
             print(f"Error: The product of --search-widths is {num_leaves}, which exceeds the safety limit of 1,000,000. Please use smaller widths.")
@@ -146,7 +146,6 @@ def main():
                 if move is None:
                     print("No valid moves left. Game over.")
                     break
-                from hex_ai.utils.format_conversion import rowcol_to_trmph
                 trmph_move = rowcol_to_trmph(move[0], move[1], board_size=args.board_size)
                 # The model just played, so the player to move is now the human; the model's color is the opposite
                 model_color_enum = Winner.RED if state.current_player == BLUE_PLAYER else Winner.BLUE

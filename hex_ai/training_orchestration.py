@@ -1,24 +1,24 @@
 """
-Training utilities for Hex AI models.
+Training orchestration module for Hex AI.
 
-This module provides reusable utilities for:
-- Loading and processing the new data format
-- Creating train/validation splits
-- Managing hyperparameter experiments
-- Data loading with variable shard sizes
-- Experiment tracking and results management
+This module provides high-level training orchestration including hyperparameter tuning,
+experiment management, and data pipeline coordination.
 """
+
+import csv
+import json
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
 import numpy as np
 import gzip
 import pickle
-import json
 import logging
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Union
-from datetime import datetime
 import random
 
 from .models import TwoHeadedResNet
@@ -64,9 +64,6 @@ def create_summary_csv(experiment_results: List[Dict], results_path: Path):
         experiment_results: List of experiment result dictionaries
         results_path: Path to save the summary CSV
     """
-    import csv
-    from datetime import datetime
-    
     summary_file = results_path / "experiment_summary.csv"
     
     # Define headers for summary CSV
@@ -164,9 +161,6 @@ def run_single_experiment(exp_config, train_dataset, val_dataset, results_path, 
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
     Returns a result dict (can be expanded later).
     """
-    from .models import TwoHeadedResNet
-    from .training import Trainer
-    import torch
     model = TwoHeadedResNet(dropout_prob=exp_config['hyperparameters'].get('dropout_prob', 0.1))
     trainer = Trainer(
         model=model,
@@ -229,7 +223,6 @@ def select_device():
     """
     Select the best available device (cuda, mps, or cpu).
     """
-    import torch
     if torch.cuda.is_available():
         return "cuda"
     elif torch.backends.mps.is_available():
@@ -277,9 +270,6 @@ def run_hyperparameter_tuning_current_data(
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
     """
-    import time
-    from pathlib import Path
-    from datetime import datetime
     if max_validation_examples is None:
         max_validation_examples = max_examples_unaugmented
     results_path = Path(results_dir)

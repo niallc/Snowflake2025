@@ -1,36 +1,39 @@
 """
-Training module for Hex AI models.
+Training module for Hex AI.
 
-This module provides training loops, loss computation, checkpointing,
-and progress tracking for the two-headed ResNet models.
+This module contains the training infrastructure including the Trainer class,
+loss functions, and training utilities.
 """
 
+import logging
+import math
+import os
+import pickle
+import re
+import time
+from contextlib import nullcontext
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
-import math
-import numpy as np
-import os
-import json
-from typing import Dict, List, Optional, Tuple
-import logging
-from datetime import datetime
-from pathlib import Path
-import time
-import sys
-import re
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
 from .config import (
-    BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
-    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS
+    LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
+    BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEVICE
 )
 from hex_ai.data_pipeline import discover_processed_files
-
 from hex_ai.training_utils import get_device
-DEVICE = get_device()
+from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
+from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
+from hex_ai.error_handling import get_board_state_error_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +122,6 @@ class MixedPrecisionTrainer:
         if self.use_mixed_precision:
             try:
                 if device_str == 'cuda':
-                    from torch.cuda.amp import autocast, GradScaler
                     self.autocast = autocast
                     self.scaler = GradScaler()
                     logger.info("Mixed precision training enabled for CUDA GPU")
@@ -142,7 +144,6 @@ class MixedPrecisionTrainer:
             return self.autocast()
         else:
             # Return a no-op context manager
-            from contextlib import nullcontext
             return nullcontext()
     
     def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
@@ -299,7 +300,6 @@ class Trainer:
         # CSV logging
         self.csv_logger = None
         if enable_csv_logging:
-            from .training_logger import TrainingLogger
             self.csv_logger = TrainingLogger(experiment_name=experiment_name)
         
         # System analysis
@@ -318,8 +318,6 @@ class Trainer:
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
         try:
-            from .system_utils import get_system_info, calculate_optimal_batch_size
-            
             system_info = get_system_info()
             _, batch_analysis = calculate_optimal_batch_size()
             
@@ -351,7 +349,6 @@ class Trainer:
             print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
 
         # Enhanced logging setup
-        from pathlib import Path
         log_dir = Path('logs')
         log_dir.mkdir(exist_ok=True)
         verbose_log_file = log_dir / 'run_training_verbose.txt'
@@ -586,7 +583,6 @@ class Trainer:
             samples_per_second = float('nan')  # Unknown for streaming datasets
             
             # Get memory usage
-            from .training_logger import get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
             memory_usage_mb = get_memory_usage()
             gpu_memory_mb = get_gpu_memory_usage()
             weight_stats = get_weight_statistics(self.model)
@@ -667,7 +663,6 @@ class Trainer:
         logger.info("Training completed!")
         
         # Print compact summary if we used compact logging
-        from hex_ai.error_handling import get_board_state_error_tracker
         error_tracker = get_board_state_error_tracker()
         stats = error_tracker.get_stats()
         if stats['total_samples'] > 0:
@@ -851,9 +846,7 @@ class Trainer:
         for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
             # --- DEBUG: Dump first batch of epoch 0, mini_epoch 0 ---
             if (epoch == 0 and mini_epoch == 0 and batch_idx == 0):
-                import pickle, os
                 os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                from datetime import datetime
                 now = datetime.now()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H-%M")
@@ -948,9 +941,7 @@ class Trainer:
             # --- DUMP FINAL BATCH FOR DETAILED DEBUGGING ---
             is_last_batch = (batch_idx == len(batch_iterable) - 1)
             if (epoch == 0 and mini_epoch == 0 and is_last_batch):
-                import pickle, os
                 os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                from datetime import datetime
                 now = datetime.now()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H-%M")
@@ -1026,7 +1017,6 @@ def resume_training(checkpoint_path: str,
     best_val_loss = checkpoint['best_val_loss']
     
     # Create model (we need to know the architecture)
-    from .models import TwoHeadedResNet
     model = TwoHeadedResNet()  # Default architecture
     
     # Create trainer with dummy data (will be overridden)

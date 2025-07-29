@@ -1,29 +1,19 @@
 """
 Format conversion utilities for Hex AI.
 
-NOTE: Data augmentation and .pkl.gz file processing is performed using the 
-      2-channel (blue/red) format. The player-to-move (3rd) channel is added 
-      at load time for training and inference, ensuring consistency with the 
-      model input format.
-
-This module centralizes all board, trmph, and tensor conversion functions.
-
-Migrated from:
-- hex_ai/data_utils.py
-- hex_ai/inference/board_utils.py
+This module provides utilities for converting between different board representations
+and coordinate systems used in the Hex AI project.
 """
 
-import torch
 import numpy as np
+import torch
 from typing import Tuple
-# Board value constants for N×N format
+
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
+    BOARD_SIZE, BLUE_PIECE, RED_PIECE, BLUE_CHANNEL, RED_CHANNEL, 
+    PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 )
-# Remove this import to break circular dependency
-# from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+from hex_ai.data_utils import get_player_to_move_from_board
 
 import string
 import logging
@@ -91,7 +81,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         row, col = trmph_move_to_rowcol(move, board_size)
         
         # Check for duplicate moves
-        if board[row, col] != EMPTY_PIECE:
+        if board[row, col] != 0: # Changed from EMPTY_PIECE to 0 for consistency with new_code
             if duplicate_action == "ignore":
                 logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
                 break  # Do not process any moves after a duplicate.
@@ -111,8 +101,8 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
                 raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
         
         # Place move (Alternating players. Piece colours are blue=1, red=2 for nxn boards)
-        player = BLUE_PLAYER if (i % 2) == 0 else RED_PLAYER
-        board[row, col] = BLUE_PIECE if player == BLUE_PLAYER else RED_PIECE
+        player = 0 if (i % 2) == 0 else 1 # Changed from BLUE_PLAYER/RED_PLAYER to 0/1 for consistency with new_code
+        board[row, col] = BLUE_PIECE if player == 0 else RED_PIECE
     
     return board
 
@@ -172,8 +162,6 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor of shape (3, N, N)
     """
-    import numpy as np
-    from hex_ai.data_utils import get_player_to_move_from_board
     if isinstance(board_2nxn, torch.Tensor):
         board_np = board_2nxn.detach().cpu().numpy()
     else:
