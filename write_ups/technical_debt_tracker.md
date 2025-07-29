@@ -161,9 +161,18 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - `requirements.txt`
 - Create: `scripts/validate_environment.py`
 
-### 9. Player turn labeling in training pipeline
- - [] Trmph processing should now include a player-to-move label, board_2nxn_to_3nxn shold not be calcualting this on the fly.
+### 9. Rationalize hex_ai/config.py and hex_ai/value_utils.py
+ - These two files strongly overlap in their goals.
+ - We should likely switch to a single system based primarily off Enums, for safety.
+ - As we do that, (see 10., below) we'll want to update app.js, as well as other python code.
 
+### 10. Brittle reliance of javascript code on config.py
+ - Non critical (web code is just user convenience)
+ - static/app.js relies on config.py to get constants from the python
+ - config.py may well be deprecated for the hex_ai/value_utils.py approach which uses Enums and is therefore likely safer.
+
+ ### 11. There are two functions called get_top_k_legal_moves (with different signatures)
+  - Need to decide on one, delete the other (or if they're very different rename), and update code that calls the renamed / deleted version.
 
 ---
 

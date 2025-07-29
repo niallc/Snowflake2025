@@ -9,15 +9,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from queue import Queue
 import logging
+import os
+import csv
+from datetime import datetime
 
 from ..inference.simple_model_inference import SimpleModelInference
 from ..inference.game_engine import HexGameState
 from ..inference.fixed_tree_search import minimax_policy_value_search
 from ..config import BLUE_PLAYER, RED_PLAYER
+from ..utils import format_conversion as fc
+from ..value_utils import get_top_k_legal_moves, policy_logits_to_probs, get_top_k_moves_with_probs
 
 
 class SelfPlayEngine:
-    """High-performance self-play engine with optimized inference."""
+    """High-performance self-play engine with optimized inference and detailed logging."""
     
     def __init__(self, 
                  model_path: str,
@@ -26,26 +31,31 @@ class SelfPlayEngine:
                  cache_size: int = 10000,
                  search_widths: Optional[List[int]] = None,
                  temperature: float = 1.0,
-                 enable_caching: bool = True):
+                 enable_caching: bool = True,
+                 verbose: int = 1):
         """
         Initialize the self-play engine.
         
         Args:
             model_path: Path to the model checkpoint
-            num_workers: Number of parallel workers for game generation
+            num_workers: Number of parallel workers
             batch_size: Maximum batch size for inference
-            cache_size: Size of the inference cache
-            search_widths: List of search widths for minimax search
+            cache_size: Size of inference cache
+            search_widths: Search widths for minimax search
             temperature: Temperature for move selection
             enable_caching: Whether to enable inference caching
+            verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
         """
         self.model_path = model_path
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.cache_size = cache_size
         self.search_widths = search_widths or [3, 2]
         self.temperature = temperature
+        self.enable_caching = enable_caching
+        self.verbose = verbose
         
-        # Initialize model with caching and performance monitoring
+        # Initialize model
         self.model = SimpleModelInference(
             checkpoint_path=model_path,
             cache_size=cache_size,
@@ -53,20 +63,27 @@ class SelfPlayEngine:
             enable_caching=enable_caching
         )
         
-        # Setup logging
-        self.logger = logging.getLogger("selfplay")
-        self.logger.setLevel(logging.INFO)
-        
         # Performance tracking
         self.stats = {
-            'games_generated': 0,
+            'total_games': 0,
             'total_moves': 0,
             'total_time': 0.0,
-            'games_per_second': 0.0
+            'policy_vs_minimax_agreement': 0,
+            'policy_vs_minimax_disagreement': 0
         }
         
-        print(f"SelfPlayEngine initialized with {num_workers} workers, batch_size={batch_size}")
-        print(f"Search widths: {search_widths}, temperature: {temperature}")
+        # Logging
+        self.logger = logging.getLogger(__name__)
+        
+        if self.verbose >= 1:
+            print(f"SelfPlayEngine initialized:")
+            print(f"  Model: {model_path}")
+            print(f"  Workers: {num_workers}")
+            print(f"  Batch size: {batch_size}")
+            print(f"  Cache size: {cache_size}")
+            print(f"  Search widths: {search_widths}")
+            print(f"  Temperature: {temperature}")
+            print(f"  Verbose: {verbose}")
     
     def generate_games(self, num_games: int, board_size: int = 13) -> List[Dict[str, Any]]:
         """
@@ -124,51 +141,127 @@ class SelfPlayEngine:
     
     def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
         """
-        Generate a single self-play game.
+        Generate a single self-play game with detailed move tracking.
         
         Args:
             board_size: Size of the board (ignored, always uses 13)
             
         Returns:
-            Dictionary containing game data
+            Dictionary containing game data and detailed move information
         """
         state = HexGameState()  # Always uses 13x13 board
         moves = []
         policies = []
         values = []
         move_times = []
+        detailed_moves = []  # New: detailed move-by-move data
+        
+        move_number = 0
         
         while not state.game_over:
             move_start = time.time()
+            move_number += 1
             
             # Get model prediction
             policy, value = self.model.simple_infer(state.board)
+            
+            # Get policy head's top 5 moves
+            legal_moves = state.get_legal_moves()
+            policy_probs = policy_logits_to_probs(policy, self.temperature)
+            
+            # Find policy head's top 5 moves
+            policy_top_moves = get_top_k_moves_with_probs(
+                policy, legal_moves, state.board.shape[0], k=5, temperature=self.temperature
+            )
+            
+            # Get value predictions for top 5 policy moves
+            policy_move_values = []
+            for move, prob in policy_top_moves:
+                # Create temporary state to evaluate this move
+                temp_state = state.make_move(*move)
+                _, move_value = self.model.simple_infer(temp_state.board)
+                policy_move_values.append(move_value)
+            
+            # Get policy head's preferred move (top 1)
+            policy_preferred_move = policy_top_moves[0][0] if policy_top_moves else None
             
             # Store game state
             moves.append(state.to_trmph())
             policies.append(policy)
             values.append(value)
             
-            # Select move using search
-            move, value = minimax_policy_value_search(
+            # Select move using search (minimax)
+            minimax_move, minimax_value = minimax_policy_value_search(
                 state=state,
                 model=self.model,
                 widths=self.search_widths,
                 temperature=self.temperature
             )
             
+            # Track agreement between policy and minimax
+            if policy_preferred_move == minimax_move:
+                self.stats['policy_vs_minimax_agreement'] += 1
+            else:
+                self.stats['policy_vs_minimax_disagreement'] += 1
+            
+            # Create structured policy summary
+            policy_summary = []
+            for i, ((move, prob), value) in enumerate(zip(policy_top_moves, policy_move_values)):
+                policy_summary.append({
+                    'rank': i + 1,
+                    'move': move,
+                    'move_trmph': fc.rowcol_to_trmph(*move),
+                    'probability': prob,
+                    'value': value
+                })
+            
+            # Store detailed move information
+            move_detail = {
+                'move_number': move_number,
+                'player': state.current_player,
+                'board_state': state.to_trmph(),
+                'policy_summary': policy_summary,  # Top 5 moves with values
+                'policy_preferred_move': policy_preferred_move,
+                'policy_preferred_move_trmph': fc.rowcol_to_trmph(*policy_preferred_move) if policy_preferred_move else None,
+                'minimax_chosen_move': minimax_move,
+                'minimax_chosen_move_trmph': fc.rowcol_to_trmph(*minimax_move) if minimax_move else None,
+                'minimax_value': minimax_value,
+                'agreement': policy_preferred_move == minimax_move,
+                'legal_moves_count': len(legal_moves),
+                'move_time': 0.0  # Will be set after move
+            }
+            
             # Apply move
-            state = state.make_move(*move)
-            move_times.append(time.time() - move_start)
+            state = state.make_move(*minimax_move)
+            move_time = time.time() - move_start
+            move_times.append(move_time)
+            move_detail['move_time'] = move_time
+            
+            detailed_moves.append(move_detail)
+            
+            if self.verbose >= 2:
+                print(f"\nMove {move_number} (Player {state.current_player}):")
+                print(f"  Policy top 5 moves:")
+                for i, item in enumerate(policy_summary):
+                    marker = " →" if item['move'] == minimax_move else "  "
+                    print(f"    {i+1}. {item['move_trmph']} ({item['move']}) - prob: {item['probability']:.3f}, value: {item['value']:.3f}{marker}")
+                print(f"  Minimax chose: {move_detail['minimax_chosen_move_trmph']} ({minimax_move}) - value: {minimax_value:.3f}")
+                print(f"  Agreement: {move_detail['agreement']}, Time: {move_time:.3f}s")
         
         return {
             'moves': moves,
             'policies': policies,
             'values': values,
+            'detailed_moves': detailed_moves,  # New: detailed move data
             'winner': state.winner,
             'final_trmph': state.to_trmph(),
             'num_moves': len(moves),
-            'avg_move_time': np.mean(move_times) if move_times else 0
+            'avg_move_time': np.mean(move_times) if move_times else 0,
+            'policy_minimax_agreement_rate': (
+                self.stats['policy_vs_minimax_agreement'] / 
+                (self.stats['policy_vs_minimax_agreement'] + self.stats['policy_vs_minimax_disagreement'])
+                if (self.stats['policy_vs_minimax_agreement'] + self.stats['policy_vs_minimax_disagreement']) > 0 else 0
+            )
         }
     
     def generate_games_with_monitoring(self, num_games: int, board_size: int = 13, 
@@ -185,7 +278,9 @@ class SelfPlayEngine:
             List of game data dictionaries
         """
         start_time = time.time()
-        print(f"Generating {num_games} games with monitoring...")
+        
+        if self.verbose >= 1:
+            print(f"Generating {num_games} games with monitoring...")
         
         games = []
         
@@ -203,7 +298,11 @@ class SelfPlayEngine:
                     games.append(game_data)
                     completed += 1
                     
-                    if completed % progress_interval == 0 or completed == num_games:
+                    # Update stats
+                    self.stats['total_games'] += 1
+                    self.stats['total_moves'] += len(game_data['moves'])
+                    
+                    if self.verbose >= 1 and (completed % progress_interval == 0 or completed == num_games):
                         elapsed = time.time() - start_time
                         rate = completed / elapsed if elapsed > 0 else 0
                         
@@ -217,6 +316,11 @@ class SelfPlayEngine:
                         print(f"Cache hit rate: {cache_stats.get('hit_rate', 0):.1%}")
                         print(f"Average batch size: {model_stats.get('avg_batch_size', 0):.1f}")
                         
+                        # Policy vs Minimax agreement
+                        if completed > 0:
+                            total_agreements = sum(1 for game in games if game.get('policy_minimax_agreement_rate', 0) > 0.5)
+                            print(f"Policy-Minimax agreement rate: {total_agreements/completed:.1%}")
+                        
                         # Memory usage
                         memory_stats = self.model.get_memory_usage()
                         if 'system_used_mb' in memory_stats:
@@ -226,19 +330,30 @@ class SelfPlayEngine:
                         
                 except Exception as e:
                     self.logger.error(f"Error generating game {game_id}: {e}")
+                    if self.verbose >= 1:
+                        print(f"Error generating game {game_id}: {e}")
         
         # Final statistics
         total_time = time.time() - start_time
         total_moves = sum(len(game['moves']) for game in games)
         
-        print(f"\n=== Final Statistics ===")
-        print(f"Games generated: {len(games)}")
-        print(f"Total time: {total_time:.1f}s")
-        print(f"Games per second: {len(games) / total_time:.1f}")
-        print(f"Average moves per game: {total_moves / len(games):.1f}")
-        
-        # Model performance summary
-        self.model.print_performance_summary()
+        if self.verbose >= 1:
+            print(f"\n=== Final Statistics ===")
+            print(f"Games generated: {len(games)}")
+            print(f"Total time: {total_time:.1f}s")
+            if len(games) > 0:
+                print(f"Games per second: {len(games) / total_time:.1f}")
+                print(f"Average moves per game: {total_moves / len(games):.1f}")
+                
+                # Policy vs Minimax agreement
+                agreement_rates = [game.get('policy_minimax_agreement_rate', 0) for game in games]
+                avg_agreement = sum(agreement_rates) / len(agreement_rates)
+                print(f"Average policy-minimax agreement: {avg_agreement:.1%}")
+            else:
+                print("No games generated successfully.")
+            
+            # Model performance summary
+            self.model.print_performance_summary()
         
         return games
     
@@ -275,7 +390,127 @@ class SelfPlayEngine:
         with gzip.open(filename, 'wb') as f:
             pickle.dump(data, f)
         
-        print(f"Saved {len(games)} games to {filename}")
+        if self.verbose >= 1:
+            print(f"Saved {len(games)} games to {filename}")
+    
+    def save_detailed_moves_to_csv(self, games: List[Dict[str, Any]], output_dir: str):
+        """
+        Save detailed move-by-move data to CSV files.
+        One file per game, one row per move.
+        
+        Args:
+            games: List of game data dictionaries
+            output_dir: Directory to save CSV files
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create a summary file
+        summary_file = os.path.join(output_dir, "games_summary.csv")
+        with open(summary_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'game_id', 'num_moves', 'winner', 'final_trmph', 
+                'avg_move_time', 'policy_minimax_agreement_rate'
+            ])
+            
+            for i, game in enumerate(games):
+                writer.writerow([
+                    i,
+                    game['num_moves'],
+                    game['winner'],
+                    game['final_trmph'],
+                    game['avg_move_time'],
+                    game.get('policy_minimax_agreement_rate', 0)
+                ])
+        
+        # Create detailed move files
+        for i, game in enumerate(games):
+            game_file = os.path.join(output_dir, f"game_{i:04d}_moves.csv")
+            
+            with open(game_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'move_number', 'player', 'board_state',
+                    'policy_rank1_move', 'policy_rank1_trmph', 'policy_rank1_prob', 'policy_rank1_value',
+                    'policy_rank2_move', 'policy_rank2_trmph', 'policy_rank2_prob', 'policy_rank2_value',
+                    'policy_rank3_move', 'policy_rank3_trmph', 'policy_rank3_prob', 'policy_rank3_value',
+                    'policy_rank4_move', 'policy_rank4_trmph', 'policy_rank4_prob', 'policy_rank4_value',
+                    'policy_rank5_move', 'policy_rank5_trmph', 'policy_rank5_prob', 'policy_rank5_value',
+                    'minimax_chosen_move', 'minimax_chosen_move_trmph', 'minimax_value',
+                    'agreement', 'legal_moves_count', 'move_time'
+                ])
+                
+                for move_detail in game.get('detailed_moves', []):
+                    # Extract policy summary data
+                    policy_summary = move_detail.get('policy_summary', [])
+                    
+                    # Pad with empty values if less than 5 moves
+                    while len(policy_summary) < 5:
+                        policy_summary.append({
+                            'move': None, 'move_trmph': None, 'probability': 0.0, 'value': 0.0
+                        })
+                    
+                    writer.writerow([
+                        move_detail['move_number'],
+                        move_detail['player'],
+                        move_detail['board_state'],
+                        # Policy rank 1
+                        str(policy_summary[0]['move']),
+                        policy_summary[0]['move_trmph'],
+                        policy_summary[0]['probability'],
+                        policy_summary[0]['value'],
+                        # Policy rank 2
+                        str(policy_summary[1]['move']),
+                        policy_summary[1]['move_trmph'],
+                        policy_summary[1]['probability'],
+                        policy_summary[1]['value'],
+                        # Policy rank 3
+                        str(policy_summary[2]['move']),
+                        policy_summary[2]['move_trmph'],
+                        policy_summary[2]['probability'],
+                        policy_summary[2]['value'],
+                        # Policy rank 4
+                        str(policy_summary[3]['move']),
+                        policy_summary[3]['move_trmph'],
+                        policy_summary[3]['probability'],
+                        policy_summary[3]['value'],
+                        # Policy rank 5
+                        str(policy_summary[4]['move']),
+                        policy_summary[4]['move_trmph'],
+                        policy_summary[4]['probability'],
+                        policy_summary[4]['value'],
+                        # Minimax data
+                        str(move_detail['minimax_chosen_move']),
+                        move_detail['minimax_chosen_move_trmph'],
+                        move_detail['minimax_value'],
+                        move_detail['agreement'],
+                        move_detail['legal_moves_count'],
+                        move_detail['move_time']
+                    ])
+        
+        if self.verbose >= 1:
+            print(f"Saved detailed move data:")
+            print(f"  Summary: {summary_file}")
+            print(f"  Individual games: {len(games)} CSV files in {output_dir}")
+            print(f"  Format: Top 5 policy moves with probabilities and values per move")
+    
+    def save_games_with_details(self, games: List[Dict[str, Any]], base_filename: str):
+        """
+        Save games with both compressed data and detailed CSV files.
+        
+        Args:
+            games: List of game data dictionaries
+            base_filename: Base filename (without extension)
+        """
+        # Save compressed data
+        compressed_file = f"{base_filename}.pkl.gz"
+        self.save_games_to_file(games, compressed_file)
+        
+        # Save detailed CSV files
+        csv_dir = f"{base_filename}_detailed_moves"
+        self.save_detailed_moves_to_csv(games, csv_dir)
+        
+        return compressed_file, csv_dir
     
     def clear_cache(self):
         """Clear the model's inference cache."""
