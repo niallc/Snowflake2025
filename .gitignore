@@ -36,6 +36,7 @@ scripts/optimize_performance.py
 scripts/profile_selfplay.py
 scripts/test_device_detection.py
 scripts/test_mps_performance.py
+scripts/profile_gpu_performance.py
 
 
 
