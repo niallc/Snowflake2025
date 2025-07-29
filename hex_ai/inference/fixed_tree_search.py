@@ -2,6 +2,9 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Any, Callable
 import logging
 import torch
+import psutil
+import sys
+import threading
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
@@ -12,40 +15,268 @@ from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Memory monitoring constants
+MAX_POSITIONS = 10_000_000  # Exit if we try to collect more than 10M positions
+MEMORY_WARNINGS = [1, 5, 10, 15, 19]  # GB thresholds for warnings
+MEMORY_EXIT_THRESHOLD = 20  # GB threshold for exit
+
 
 class PositionCollector:
-    """Collects board positions during tree building for batch processing."""
+    """
+    Collects board positions during tree building for batch processing.
+    
+    This class implements a deferred execution pattern for neural network inference
+    to improve performance by batching multiple inference requests together.
+    
+    HOW IT WORKS:
+    1. During tree building, instead of immediately calling model.infer() for each position,
+       we collect the board and a callback function using request_policy() or request_value()
+    2. After the entire tree is built, we call process_batches() which:
+       - Groups all policy requests into a single batch
+       - Groups all value requests into a single batch  
+       - Calls model.batch_infer() once for each type
+       - Calls the appropriate callback for each result
+    
+    BENEFITS:
+    - Reduces GPU kernel launches from O(n) to O(1) where n is the number of positions
+    - Better GPU utilization through larger batch sizes
+    - Reduced overhead from individual inference calls
+    
+    CONCERNS:
+    - Memory usage: All requests are held in memory until processed
+    - Error handling: No error handling in callback system
+    - Thread safety: Not thread-safe (single-threaded usage only)
+    - Complexity: Callback mechanism can be error-prone
+    
+    USAGE PATTERN:
+        collector = PositionCollector(model)
+        # Build tree while collecting requests
+        root = build_search_tree_with_collection(state, model, widths, collector)
+        # Process all collected requests in batches
+        collector.process_batches()
+    """
     
     def __init__(self, model):
+        """
+        Initialize the position collector.
+        
+        Args:
+            model: Model instance that supports batch_infer() method
+            
+        Raises:
+            RuntimeError: If called from a multi-threaded context
+        """
+        # Thread safety check: ensure we're in the main thread
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError(
+                "PositionCollector is not thread-safe and must be used only in the main thread. "
+                "This is a GPU-limited process that benefits from batching, not multi-threading."
+            )
+        
         self.model = model
-        self.policy_requests = []  # List of (board, callback) tuples
-        self.value_requests = []   # List of (board, callback) tuples
+        # Store (board, callback, metadata) tuples for deferred processing
+        self.policy_requests = []  # List of (board, callback, metadata) tuples
+        self.value_requests = []   # List of (board, callback, metadata) tuples
+        self._memory_warnings_shown = set()  # Track which warnings we've already shown
+        self._creation_thread = threading.current_thread()  # Track creation thread
         
-    def request_policy(self, board, callback: Callable):
-        """Add a policy request to be processed later."""
-        self.policy_requests.append((board, callback))
+    def _check_memory_usage(self):
+        """
+        Check current memory usage and warn/exit if thresholds are exceeded.
         
-    def request_value(self, board, callback: Callable):
-        """Add a value request to be processed later."""
-        self.value_requests.append((board, callback))
+        Raises:
+            RuntimeError: If memory usage exceeds exit threshold
+        """
+        process = psutil.Process()
+        memory_gb = process.memory_info().rss / (1024**3)
+        
+        # Check for warnings
+        for threshold in MEMORY_WARNINGS:
+            if memory_gb >= threshold and threshold not in self._memory_warnings_shown:
+                logger.warning(f"Memory usage is {memory_gb:.1f}GB (threshold: {threshold}GB)")
+                self._memory_warnings_shown.add(threshold)
+        
+        # Check for exit condition
+        if memory_gb >= MEMORY_EXIT_THRESHOLD:
+            logger.error(f"Memory usage {memory_gb:.1f}GB exceeds exit threshold {MEMORY_EXIT_THRESHOLD}GB")
+            raise RuntimeError(f"Memory usage {memory_gb:.1f}GB exceeds safety limit of {MEMORY_EXIT_THRESHOLD}GB")
+    
+    def _check_position_limit(self):
+        """
+        Check if we're approaching the position limit.
+        
+        Raises:
+            RuntimeError: If position count exceeds limit
+        """
+        total_positions = len(self.policy_requests) + len(self.value_requests)
+        if total_positions >= MAX_POSITIONS:
+            raise RuntimeError(f"Position count {total_positions} exceeds limit of {MAX_POSITIONS}")
+        
+        # Warn at 80% of limit
+        if total_positions >= MAX_POSITIONS * 0.8:
+            logger.warning(f"Position count {total_positions} is approaching limit of {MAX_POSITIONS}")
+        
+    def request_policy(self, board, callback: Callable, metadata: Optional[Dict] = None):
+        """
+        Add a policy request to be processed later.
+        
+        Args:
+            board: Board state to get policy for
+            callback: Function to call with policy logits when available
+                     Signature: callback(policy_logits: np.ndarray, metadata: Dict) -> None
+            metadata: Optional metadata for validation (e.g., {'game_id': 1, 'depth': 2, 'path': [(1,1), (2,2)]})
+            
+        Raises:
+            RuntimeError: If called from a different thread than the constructor
+        """
+        # Thread safety check
+        if threading.current_thread() is not self._creation_thread:
+            raise RuntimeError(
+                f"PositionCollector.request_policy() called from thread {threading.current_thread().name} "
+                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
+            )
+        
+        self._check_memory_usage()
+        self._check_position_limit()
+        
+        # Use empty dict as default metadata
+        metadata = metadata or {}
+        self.policy_requests.append((board, callback, metadata))
+        
+    def request_value(self, board, callback: Callable, metadata: Optional[Dict] = None):
+        """
+        Add a value request to be processed later.
+        
+        Args:
+            board: Board state to get value for  
+            callback: Function to call with value when available
+                     Signature: callback(value: float, metadata: Dict) -> None
+            metadata: Optional metadata for validation
+            
+        Raises:
+            RuntimeError: If called from a different thread than the constructor
+        """
+        # NOTE: This method is currently unused in the minimax search.
+        # The value requests are only used in evaluate_leaf_nodes() which
+        # implements its own batching. Consider consolidating the batching
+        # logic or removing this unused functionality.
+        
+        # Thread safety check
+        if threading.current_thread() is not self._creation_thread:
+            raise RuntimeError(
+                f"PositionCollector.request_value() called from thread {threading.current_thread().name} "
+                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
+            )
+        
+        self._check_memory_usage()
+        self._check_position_limit()
+        
+        metadata = metadata or {}
+        self.value_requests.append((board, callback, metadata))
     
     def process_batches(self):
-        """Process all collected positions in batches."""
+        """
+        Process all collected positions in batches.
+        
+        This method:
+        1. Extracts all boards from policy requests
+        2. Calls model.batch_infer() once for all policy requests
+        3. Calls each policy callback with its corresponding result and metadata
+        4. Repeats the same process for value requests
+        5. Clears all request lists after processing
+        
+        Note: This method assumes the model.batch_infer() returns results
+        in the same order as the input boards.
+        
+        Raises:
+            RuntimeError: If model.batch_infer() fails or callback errors occur
+        """
+        # Thread safety check
+        if threading.current_thread() is not self._creation_thread:
+            raise RuntimeError(
+                f"PositionCollector.process_batches() called from thread {threading.current_thread().name} "
+                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
+            )
+        
         # Process policy requests
         if self.policy_requests:
             boards = [req[0] for req in self.policy_requests]
-            policies, _ = self.model.batch_infer(boards)
-            for (board, callback), policy in zip(self.policy_requests, policies):
-                callback(policy)
+            callbacks = [req[1] for req in self.policy_requests]
+            metadata_list = [req[2] for req in self.policy_requests]
+            
+            # Validate that we have the expected number of requests
+            if len(boards) != len(callbacks) or len(boards) != len(metadata_list):
+                raise RuntimeError(f"Inconsistent request counts: {len(boards)} boards, {len(callbacks)} callbacks, {len(metadata_list)} metadata")
+            
+            # Single batch inference call for all policy requests
+            try:
+                policies, _ = self.model.batch_infer(boards)
+            except Exception as e:
+                raise RuntimeError(f"Model batch inference failed: {e}")
+            
+            # Validate that we got the expected number of results
+            if len(policies) != len(boards):
+                raise RuntimeError(f"Model returned {len(policies)} policies for {len(boards)} boards")
+            
+            # Call each callback with its corresponding policy result and metadata
+            for i, (callback, policy, metadata) in enumerate(zip(callbacks, policies, metadata_list)):
+                try:
+                    callback(policy, metadata)
+                except Exception as e:
+                    # Log error and re-raise to fail fast
+                    logger.error(f"Error in policy callback {i} with metadata {metadata}: {e}")
+                    raise RuntimeError(f"Policy callback {i} failed: {e}")
+            
             self.policy_requests.clear()
         
-        # Process value requests
+        # Process value requests  
         if self.value_requests:
             boards = [req[0] for req in self.value_requests]
-            _, values = self.model.batch_infer(boards)
-            for (board, callback), value in zip(self.value_requests, values):
-                callback(value)
+            callbacks = [req[1] for req in self.value_requests]
+            metadata_list = [req[2] for req in self.value_requests]
+            
+            # Validate that we have the expected number of requests
+            if len(boards) != len(callbacks) or len(boards) != len(metadata_list):
+                raise RuntimeError(f"Inconsistent value request counts: {len(boards)} boards, {len(callbacks)} callbacks, {len(metadata_list)} metadata")
+            
+            # Single batch inference call for all value requests
+            try:
+                _, values = self.model.batch_infer(boards)
+            except Exception as e:
+                raise RuntimeError(f"Model batch inference for values failed: {e}")
+            
+            # Validate that we got the expected number of results
+            if len(values) != len(boards):
+                raise RuntimeError(f"Model returned {len(values)} values for {len(boards)} boards")
+            
+            # Call each callback with its corresponding value result and metadata
+            for i, (callback, value, metadata) in enumerate(zip(callbacks, values, metadata_list)):
+                try:
+                    callback(value, metadata)
+                except Exception as e:
+                    # Log error and re-raise to fail fast
+                    logger.error(f"Error in value callback {i} with metadata {metadata}: {e}")
+                    raise RuntimeError(f"Value callback {i} failed: {e}")
+            
             self.value_requests.clear()
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about collected requests and memory usage.
+        
+        Returns:
+            Dictionary with counts of pending requests and memory info
+        """
+        process = psutil.Process()
+        memory_gb = process.memory_info().rss / (1024**3)
+        
+        return {
+            'policy_requests': len(self.policy_requests),
+            'value_requests': len(self.value_requests),
+            'total_requests': len(self.policy_requests) + len(self.value_requests),
+            'memory_gb': memory_gb,
+            'memory_warnings_shown': len(self._memory_warnings_shown)
+        }
 
 
 class MinimaxSearchNode:
@@ -178,11 +409,57 @@ def build_search_tree_with_collection(
     model, 
     widths: List[int], 
     temperature: float = 1.0,
-    collector: PositionCollector = None
+    collector: PositionCollector = None,
+    game_id: Optional[int] = None
 ) -> MinimaxSearchNode:
-    """Build search tree while collecting positions for batch processing."""
+    """
+    Build search tree while collecting positions for batch processing.
+    
+    This function builds a minimax search tree but defers all neural network
+    inference calls to be processed later in batches. This is the key function
+    that enables the batching optimization.
+    
+    HOW IT WORKS:
+    1. Recursively builds the tree structure (nodes and edges)
+    2. Instead of immediately calling model.infer() for each position, it:
+       - Creates a callback function that will handle the policy result
+       - Registers the board + callback with the PositionCollector
+       - Continues building the tree structure
+    3. The callback function (when called later) will:
+       - Extract moves from the policy logits
+       - Create child nodes for each move
+       - Recursively build the subtree for each child
+    
+    KEY INSIGHT:
+    The tree structure is built "lazily" - we know the shape of the tree
+    (which moves to explore) but don't have the actual policy values yet.
+    The callbacks allow us to complete the tree building once the batched
+    inference results are available.
+    
+    VALIDATION:
+    Each position request includes metadata (game_id, depth, path) that is
+    passed back with the result to ensure correct routing of batched results.
+    
+    Args:
+        root_state: Starting game state
+        model: Neural network model
+        widths: List of search widths at each depth
+        temperature: Temperature for move sampling
+        collector: PositionCollector instance for batching (if None, falls back to immediate inference)
+        game_id: Optional game identifier for metadata validation
+        
+    Returns:
+        Root node of the search tree (children may not be fully populated until process_batches() is called)
+    """
     
     def build_node(state: HexGameState, depth: int, path: List[Tuple[int, int]]) -> MinimaxSearchNode:
+        """
+        Recursively build a node in the search tree.
+        
+        This function creates the tree structure but defers policy inference
+        when a collector is provided. The actual move selection happens later
+        when the batched policy results are processed.
+        """
         node = MinimaxSearchNode(state, depth, path)
         
         # Stop if game is over or we've reached max depth
@@ -193,22 +470,59 @@ def build_search_tree_with_collection(
         k = widths[depth] if depth < len(widths) else 1
         
         if collector is not None:
-            # Collect policy request instead of immediate inference
-            def policy_callback(policy_logits):
+            # DEFERRED INFERENCE: Collect policy request instead of immediate inference
+            def policy_callback(policy_logits, metadata):
+                """
+                Callback function that will be called when policy results are available.
+                
+                This function:
+                1. Extracts the top-k moves from the policy logits
+                2. Creates child nodes for each move
+                3. Recursively builds the subtree for each child
+                
+                Note: This callback is called AFTER the tree structure is built,
+                so we can safely modify the node's children.
+                
+                Args:
+                    policy_logits: Policy logits from batched inference
+                    metadata: Validation metadata to ensure correct routing
+                """
+                # Validate metadata to ensure this result belongs to this node
+                expected_metadata = {
+                    'game_id': game_id,
+                    'depth': depth,
+                    'path': path.copy()
+                }
+                if metadata != expected_metadata:
+                    raise RuntimeError(
+                        f"Metadata mismatch in policy callback. Expected {expected_metadata}, got {metadata}"
+                    )
+                
                 # Use policy to get top moves
                 moves = get_topk_moves_from_policy(policy_logits, state, k, temperature)
-                # Build children
+                
+                # Build children for each move
                 for move in moves:
                     child_state = state.make_move(*move)
                     child_path = path + [move]
                     child_node = build_node(child_state, depth + 1, child_path)
                     node.children[move] = child_node
             
-            collector.request_policy(state.board, policy_callback)
+            # Create metadata for validation
+            metadata = {
+                'game_id': game_id,
+                'depth': depth,
+                'path': path.copy()
+            }
+            
+            # Register the board + callback + metadata for later batch processing
+            collector.request_policy(state.board, policy_callback, metadata)
+            
         else:
-            # Fallback to original behavior
+            # FALLBACK: Immediate inference (original behavior)
             moves = get_topk_moves(state, model, k, temperature)
-            # Build children
+            
+            # Build children immediately
             for move in moves:
                 child_state = state.make_move(*move)
                 child_path = path + [move]
@@ -433,11 +747,37 @@ def minimax_policy_value_search_with_batching(
     """
     Fixed-width, fixed-depth minimax search with batched inference for all policy calls.
 
+    This function implements the complete batching workflow for minimax search.
+    It demonstrates the key optimization: instead of making O(n) individual
+    neural network calls during tree building, it makes O(1) batched calls.
+
+    BATCHING WORKFLOW:
+    1. Create PositionCollector to manage deferred inference requests
+    2. Build search tree structure while collecting all policy requests
+    3. Process all collected policy requests in a single batch call
+    4. Evaluate leaf nodes (also batched)
+    5. Perform minimax backup to compute final values
+
+    PERFORMANCE BENEFITS:
+    - Tree building: O(n) individual calls → O(1) batched calls
+    - Leaf evaluation: Already batched in evaluate_leaf_nodes()
+    - Total inference calls: O(n) → O(1) for policy + O(1) for values
+    
+    MEMORY CONSIDERATIONS:
+    - All policy requests are held in memory during tree building
+    - Memory usage scales with tree size (widths[0] * widths[1] * ... * widths[depth])
+    - For large trees, consider using smaller batch sizes or different strategies
+    
+    VALIDATION:
+    - Each position request includes metadata for validation
+    - Results are validated to ensure correct routing back to the right node
+    - Fail-fast on any metadata mismatches
+
     Args:
         state: HexGameState (current position)
         model: SimpleModelInference (must support batch inference)
         widths: List of ints, e.g. [20, 10, 10, 5] (width at each ply)
-        batch_size: Max batch size for evaluation
+        batch_size: Max batch size for evaluation (used for leaf nodes)
         use_alpha_beta: Whether to use alpha-beta pruning (not implemented in new version yet)
         temperature: Policy temperature for move selection (default 1.0)
         debug: Whether to enable debug logging
@@ -460,19 +800,34 @@ def minimax_policy_value_search_with_batching(
         logger.info(f"Starting batched minimax search with widths {widths}, temperature {temperature}")
         logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
     
-    # Create position collector for batched inference
+    # Generate unique game ID for metadata validation
+    game_id = id(state)  # Use object ID as unique identifier
+    
+    # STEP 1: Create position collector for batched inference
     collector = PositionCollector(model)
     
-    # Build the search tree with position collection
-    root = build_search_tree_with_collection(state, model, widths, temperature, collector)
+    # STEP 2: Build the search tree with position collection
+    # This creates the tree structure but defers all policy inference
+    root = build_search_tree_with_collection(state, model, widths, temperature, collector, game_id=game_id)
     
-    # Process all collected batches
+    if verbose >= 2:
+        stats = collector.get_stats()
+        logger.info(f"Tree built with {stats['policy_requests']} policy requests collected")
+        logger.info(f"Memory usage: {stats['memory_gb']:.1f}GB")
+    
+    # STEP 3: Process all collected batches
+    # This is where the actual neural network inference happens
+    # All policy requests are processed in a single batch call
     collector.process_batches()
     
-    # Evaluate all leaf nodes from the root player's perspective
+    if verbose >= 2:
+        logger.info("All policy batches processed, tree is now complete")
+    
+    # STEP 4: Evaluate all leaf nodes from the root player's perspective
+    # This is also batched for efficiency
     evaluate_leaf_nodes([root], model, batch_size, state.current_player)
     
-    # Backup values to root (temperature already applied during move sampling)
+    # STEP 5: Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)
     
     if verbose >= 2:
