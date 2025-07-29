@@ -278,7 +278,8 @@ def minimax_policy_value_search(
     use_alpha_beta: bool = True,
     temperature: float = 1.0,
     debug: bool = False,
-    return_tree: bool = False
+    return_tree: bool = False,
+    verbose: int = 0
 ) -> Tuple[Tuple[int, int], float, Optional[MinimaxSearchNode]]:
     """
     Fixed-width, fixed-depth minimax search with alpha-beta pruning and batch evaluation at the leaves.
@@ -292,6 +293,7 @@ def minimax_policy_value_search(
         temperature: Policy temperature for move selection (default 1.0)
         debug: Whether to enable debug logging
         return_tree: Whether to return the search tree for debugging
+        verbose: Verbosity level (0: silent, 1+: show info logs)
 
     Returns:
         best_move: (row, col) tuple for the best move at the root
@@ -300,9 +302,14 @@ def minimax_policy_value_search(
     """
     if debug:
         logger.setLevel(logging.DEBUG)
+    elif verbose <= 1:
+        logger.setLevel(logging.WARNING)  # Suppress INFO logs when not verbose
+    else:
+        logger.setLevel(logging.INFO)
     
-    logger.info(f"Starting minimax search with widths {widths}, temperature {temperature}")
-    logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
+    if verbose >= 2:
+        logger.info(f"Starting minimax search with widths {widths}, temperature {temperature}")
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
     
     # Build the search tree
     root = build_search_tree(state, model, widths, temperature)
@@ -313,7 +320,8 @@ def minimax_policy_value_search(
     # Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)
     
-    logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
+    if verbose >= 2:
+        logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
     
     if return_tree:
         return root.best_move, root_value, root

@@ -174,6 +174,22 @@ This document tracks specific technical debt items and refactoring tasks that ne
  ### 11. There are two functions called get_top_k_legal_moves (with different signatures)
   - Need to decide on one, delete the other (or if they're very different rename), and update code that calls the renamed / deleted version.
 
+### 12. Update on moves in winning games more?
+ - Feature request rather than a bug: Do we want the policy head to update more on moves from the winning player?
+
+### 13. More batching in self-play code.
+ - Currently the self-play engine creates games one at a time, which 
+
+### 14. Multi-model and Search_widths flexibility in Self Play
+ - Implement ability to play model A vs. model B in self-play
+ - Implement ability to have different move-making strategies.
+
+### 15. Implement MCTS
+
+### 16. Remove _generate_single_game is unused
+ - hex_ai/selfplay/selfplay_engine.py:158:
+ - def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
+
 ---
 
 ## 📝 Notes

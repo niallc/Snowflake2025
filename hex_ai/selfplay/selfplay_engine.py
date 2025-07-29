@@ -24,27 +24,26 @@ from ..value_utils import get_top_k_legal_moves, policy_logits_to_probs, get_top
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and detailed logging."""
     
-    def __init__(self, 
-                 model_path: str,
-                 num_workers: int = 4,
-                 batch_size: int = 100,
-                 cache_size: int = 10000,
-                 search_widths: Optional[List[int]] = None,
-                 temperature: float = 1.0,
-                 enable_caching: bool = True,
-                 verbose: int = 1):
+    def __init__(self, model_path: str, num_workers: int = 4, batch_size: int = 32, 
+                 cache_size: int = 10000, search_widths: List[int] = None, 
+                 temperature: float = 1.0, enable_caching: bool = True, 
+                 verbose: int = 1, save_essential_only: bool = False,
+                 streaming_save: bool = False, streaming_file: str = None):
         """
         Initialize the self-play engine.
         
         Args:
             model_path: Path to the model checkpoint
-            num_workers: Number of parallel workers
-            batch_size: Maximum batch size for inference
-            cache_size: Size of inference cache
-            search_widths: Search widths for minimax search
-            temperature: Temperature for move selection
-            enable_caching: Whether to enable inference caching
+            num_workers: Number of worker threads
+            batch_size: Batch size for inference
+            cache_size: Size of the LRU cache
+            search_widths: List of search widths for minimax
+            temperature: Temperature for move sampling
+            enable_caching: Whether to enable caching
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
+            save_essential_only: Only save essential game data (no detailed moves)
+            streaming_save: Save games incrementally to avoid data loss
+            streaming_file: File path for streaming save (auto-generated if None)
         """
         self.model_path = model_path
         self.num_workers = num_workers
@@ -54,23 +53,36 @@ class SelfPlayEngine:
         self.temperature = temperature
         self.enable_caching = enable_caching
         self.verbose = verbose
+        self.save_essential_only = save_essential_only
+        self.streaming_save = streaming_save
+        self.streaming_file = streaming_file
         
         # Initialize model
-        self.model = SimpleModelInference(
-            checkpoint_path=model_path,
-            cache_size=cache_size,
-            max_batch_size=batch_size,
-            enable_caching=enable_caching
-        )
+        self.model = SimpleModelInference(model_path, device='cpu', cache_size=cache_size)
         
         # Performance tracking
         self.stats = {
-            'total_games': 0,
-            'total_moves': 0,
+            'total_inferences': 0,
             'total_time': 0.0,
-            'policy_vs_minimax_agreement': 0,
-            'policy_vs_minimax_disagreement': 0
+            'cache_hits': 0,
+            'cache_misses': 0
         }
+        
+        # Streaming save setup
+        if self.streaming_save and self.streaming_file is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.streaming_file = f"data/sf25/jul29/streaming_selfplay_{timestamp}.txt"
+        
+        if self.streaming_save:
+            os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
+            # Write header
+            with open(self.streaming_file, 'w') as f:
+                f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
+                f.write(f"# Model: {model_path}\n")
+                f.write(f"# Search widths: {search_widths}\n")
+                f.write(f"# Temperature: {temperature}\n")
+                f.write("# Format: trmph_string winner\n")
+                f.write("# Example: #13,a4g7e9e8f8f7h7h6j5 r\n")
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -85,7 +97,7 @@ class SelfPlayEngine:
             print(f"  Temperature: {temperature}")
             print(f"  Verbose: {verbose}")
     
-    def generate_games(self, num_games: int, board_size: int = 13) -> List[Dict[str, Any]]:
+    def generate_games(self, num_games: int, board_size: int = 13, progress_interval = 10) -> List[Dict[str, Any]]:
         """
         Generate self-play games efficiently.
         
@@ -117,10 +129,14 @@ class SelfPlayEngine:
                     games.append(game_data)
                     completed += 1
                     
-                    if completed % 10 == 0 or completed == num_games:
+                    # Progress update
+                    if completed % progress_interval == 0 or completed == num_games:
                         elapsed = time.time() - start_time
-                        rate = completed / elapsed if elapsed > 0 else 0
-                        print(f"Generated {completed}/{num_games} games ({rate:.1f} games/s)")
+                        games_per_sec = completed / elapsed
+                        if self.verbose >= 1:
+                            print(f"\nGenerated {completed}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    elif self.verbose >= 1:
+                        print(".", end="", flush=True)  # Progress dot for each game
                         
                 except Exception as e:
                     self.logger.error(f"Error generating game {game_id}: {e}")
@@ -263,6 +279,46 @@ class SelfPlayEngine:
                 if (self.stats['policy_vs_minimax_agreement'] + self.stats['policy_vs_minimax_disagreement']) > 0 else 0
             )
         }
+    
+    def _generate_single_game_essential(self, board_size: int) -> Dict[str, Any]:
+        """
+        Generate a single self-play game with only essential data.
+        
+        Args:
+            board_size: Size of the board (ignored, always uses 13)
+            
+        Returns:
+            Dictionary containing essential game data only
+        """
+        state = HexGameState()  # Always uses 13x13 board
+        move_times = []
+        
+        while not state.game_over:
+            move_start = time.time()
+            
+            # Get model prediction
+            policy, value = self.model.simple_infer(state.board)
+            
+            # Get minimax move
+            move, minimax_value = minimax_policy_value_search(
+                state=state,
+                model=self.model,
+                widths=self.search_widths,
+                temperature=self.temperature,
+                verbose=self.verbose
+            )
+            
+            # Apply move
+            state = state.make_move(*move)
+            move_times.append(time.time() - move_start)
+        
+        # Essential game data only - TRMPH string and winner
+        game_data = {
+            'trmph': state.to_trmph(),
+            'winner': 'r' if state.winner == RED_PLAYER else 'b'
+        }
+        
+        return game_data
     
     def generate_games_with_monitoring(self, num_games: int, board_size: int = 13, 
                                      progress_interval: int = 10) -> List[Dict[str, Any]]:
@@ -520,3 +576,65 @@ class SelfPlayEngine:
         """Clean shutdown of the engine."""
         print("Shutting down SelfPlayEngine...")
         self.model.print_performance_summary()
+    
+    def save_game_to_stream(self, game_data: Dict[str, Any]):
+        """Save a single game to the streaming file in simple text format."""
+        if self.streaming_save and self.streaming_file:
+            # Simple format: trmph_string <winner>
+            # Example: #13,a4g7e9e8f8f7h7h6j5 r
+            line = f"{game_data['trmph']} {game_data['winner']}\n"
+            with open(self.streaming_file, 'a') as f:
+                f.write(line)
+    
+    def generate_games_streaming(self, num_games: int, board_size: int = 13, 
+                               progress_interval: int = 10) -> List[Dict[str, Any]]:
+        """
+        Generate games with streaming save to avoid data loss.
+        
+        Args:
+            num_games: Number of games to generate
+            board_size: Size of the board
+            progress_interval: How often to print progress updates
+            
+        Returns:
+            List of game data dictionaries (also saved incrementally)
+        """
+        start_time = time.time()
+        games = []
+        
+        if self.verbose >= 1:
+            print(f"Generating {num_games} games with streaming save...")
+        
+        for i in range(num_games):
+            game_data = self._generate_single_game_essential(board_size)
+            games.append(game_data)
+            
+            # Save to stream immediately
+            self.save_game_to_stream(game_data)
+            
+            # Progress reporting
+            if self.verbose >= 1:
+                if (i + 1) % progress_interval == 0:
+                    print(f"\nGenerated {i + 1}/{num_games} games", end="")
+                else:
+                    print(".", end="", flush=True)  # Progress dot for each game
+        
+        total_time = time.time() - start_time
+        
+        if self.verbose >= 1:
+            print(f"\n=== Generation Complete ===")
+            print(f"Games generated: {len(games)}")
+            print(f"Total time: {total_time:.1f}s")
+            print(f"Games per second: {len(games) / total_time:.1f}")
+            
+            # Winner distribution
+            winners = [game['winner'] for game in games]
+            red_wins = winners.count('r')
+            blue_wins = winners.count('b')
+            print(f"Winner distribution: Red {red_wins}, Blue {blue_wins}")
+            
+            if self.streaming_save:
+                print(f"Games saved to: {self.streaming_file}")
+                print(f"Format: TRMPH string + winner (e.g., '#13,a4g7e9e8f8f7h7h6j5 r')")
+        
+        return games

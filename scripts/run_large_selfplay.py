@@ -42,9 +42,11 @@ def main():
     parser.add_argument('--cautious-mode', action='store_true',
                        help='Run with cautious settings (5 games, verbose=2, detailed moves)')
     parser.add_argument('--production-mode', action='store_true',
-                       help='Run with production settings (minimal output, detailed moves saved to files)')
-    parser.add_argument('--save-detailed-csv', action='store_true',
-                       help='Save detailed move-by-move data to CSV files')
+                       help='Run with production settings (minimal output, essential data only, streaming save)')
+    parser.add_argument('--streaming-save', action='store_true',
+                       help='Save games incrementally to avoid data loss on interruption')
+    parser.add_argument('--save-essential-only', action='store_true',
+                       help='Save only essential game data (no detailed move-by-move info)')
     
     args = parser.parse_args()
     
@@ -52,13 +54,13 @@ def main():
     if args.cautious_mode:
         args.num_games = 5
         args.verbose = 2
-        args.save_detailed_csv = True
         print("Running in cautious mode: 5 games, verbose=2, detailed CSV output")
     elif args.production_mode:
         args.num_games = 5  # Keep small for testing
-        args.verbose = 0  # Minimal output
-        args.save_detailed_csv = True  # Still save detailed data to files
-        print("Running in production mode: 5 games, minimal output, detailed CSV saved to files")
+        args.verbose = 1  # Show progress dots but suppress detailed logs
+        args.save_essential_only = True  # Only essential data
+        args.streaming_save = True  # Stream to avoid data loss
+        print("Running in production mode: 5 games, progress dots, essential data only, streaming save")
     
     # Validate model path
     if not os.path.exists(args.model_path):
@@ -83,15 +85,11 @@ def main():
         print(f"Search widths: {args.search_widths}")
         print(f"Temperature: {args.temperature}")
         print(f"Verbose: {args.verbose}")
-        print(f"Save detailed CSV: {args.save_detailed_csv}")
         print(f"Output base: {base_filename}")
         print(f"Caching: {'enabled' if not args.disable_caching else 'disabled'}")
         print()
     
     # Initialize self-play engine
-    if args.verbose >= 1:
-        print("Initializing self-play engine...")
-    
     engine = SelfPlayEngine(
         model_path=args.model_path,
         num_workers=args.num_workers,
@@ -100,16 +98,19 @@ def main():
         search_widths=args.search_widths,
         temperature=args.temperature,
         enable_caching=not args.disable_caching,
-        verbose=args.verbose
+        verbose=args.verbose,
+        save_essential_only=args.save_essential_only,
+        streaming_save=args.streaming_save
     )
     
     # Generate games
-    if args.verbose >= 1:
-        print(f"Starting generation of {args.num_games} games...")
-    
     start_time = time.time()
-    
-    try:
+    if args.streaming_save:
+        games = engine.generate_games_streaming(
+            num_games=args.num_games,
+            progress_interval=args.progress_interval
+        )
+    else:
         games = engine.generate_games_with_monitoring(
             num_games=args.num_games,
             progress_interval=args.progress_interval
@@ -145,18 +146,9 @@ def main():
             print(f"Compressed data: {compressed_file}")
             if csv_dir:
                 print(f"Detailed CSV data: {csv_dir}")
-        
-        # Print model performance summary
-        engine.shutdown()
-        
-    except KeyboardInterrupt:
-        print("\n\nGeneration interrupted by user.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\nError during generation: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    
+    # Print model performance summary
+    engine.shutdown()
 
 
 if __name__ == "__main__":
