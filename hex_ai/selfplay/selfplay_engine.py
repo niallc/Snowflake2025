@@ -13,18 +13,17 @@ import os
 import csv
 from datetime import datetime
 
-from ..inference.simple_model_inference import SimpleModelInference
-from ..inference.game_engine import HexGameState
-from ..inference.fixed_tree_search import minimax_policy_value_search, minimax_policy_value_search_with_batching
-from ..config import BLUE_PLAYER, RED_PLAYER
-from ..utils import format_conversion as fc
-from ..value_utils import get_top_k_legal_moves, policy_logits_to_probs, get_top_k_moves_with_probs
-from ..training_utils import get_device  # Use centralized device detection
-
-# Type annotation for PositionCollector (imported locally to avoid circular imports)
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from ..inference.fixed_tree_search import PositionCollector
+from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.fixed_tree_search import (
+    minimax_policy_value_search, 
+    minimax_policy_value_search_with_batching,
+    PositionCollector
+)
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.utils import format_conversion as fc
+from hex_ai.value_utils import get_top_k_legal_moves, policy_logits_to_probs, get_top_k_moves_with_probs
+from hex_ai.training_utils import get_device  # Use centralized device detection
 
 
 class SelfPlayEngine:
@@ -112,166 +111,6 @@ class SelfPlayEngine:
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
 
-    def generate_games(self, num_games: int, board_size: int = 13, progress_interval = 10) -> List[Dict[str, Any]]:
-        """
-        Generate self-play games efficiently.
-        
-        Args:
-            num_games: Number of games to generate
-            board_size: Size of the board (default: 13)
-            
-        Returns:
-            List of game data dictionaries
-        """
-        start_time = time.time()
-        print(f"Generating {num_games} games with {self.num_workers} workers...")
-        
-        games = []
-        
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            # Submit game generation tasks
-            future_to_game_id = {
-                executor.submit(self._generate_single_game, board_size): i 
-                for i in range(num_games)
-            }
-            
-            # Collect results
-            completed = 0
-            for future in as_completed(future_to_game_id):
-                game_id = future_to_game_id[future]
-                try:
-                    game_data = future.result()
-                    games.append(game_data)
-                    completed += 1
-                    
-                    # Progress update
-                    if completed % progress_interval == 0 or completed == num_games:
-                        elapsed = time.time() - start_time
-                        games_per_sec = completed / elapsed
-                        if self.verbose >= 1:
-                            print(f"\nGenerated {completed}/{num_games} games ({games_per_sec:.1f} games/s)")
-                    elif self.verbose >= 1:
-                        print(".", end="", flush=True)  # Progress dot for each game
-                        
-                except Exception as e:
-                    self.logger.error(f"Error generating game {game_id}: {e}")
-        
-        # Update statistics
-        total_time = time.time() - start_time
-        total_moves = sum(len(game['moves']) for game in games)
-        
-        self.stats['games_generated'] += len(games)
-        self.stats['total_moves'] += total_moves
-        self.stats['total_time'] += total_time
-        self.stats['games_per_second'] = len(games) / total_time if total_time > 0 else 0
-        
-        print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
-        print(f"Average moves per game: {total_moves / len(games):.1f}")
-        
-        return games
-
-    def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
-        """
-        Generate a single self-play game with detailed move tracking.
-        
-        Args:
-            board_size: Size of the board (ignored, always uses 13)
-            
-        Returns:
-            Dictionary containing game data and detailed move information
-        """
-        state = HexGameState()  # Always uses 13x13 board
-        moves = []
-        policies = []
-        values = []
-        move_times = []
-        detailed_moves = []  # New: detailed move-by-move data
-        
-        move_number = 0
-        
-        while not state.game_over:
-            move_start = time.time()
-            move_number += 1
-            
-            if self.use_batched_inference:
-                # Use batched inference for better performance
-                move_data = self._generate_move_with_batching(state)
-                policy, value, policy_top_moves, policy_move_values, minimax_move, minimax_value = move_data
-            else:
-                # Use individual inference with debug information
-                move_data = self._generate_move_with_debug(state)
-                policy, value, policy_top_moves, policy_move_values, minimax_move, minimax_value = move_data
-            
-            # Get policy head's preferred move (top 1)
-            policy_preferred_move = policy_top_moves[0][0] if policy_top_moves else None
-            
-            # Store game state
-            moves.append(state.to_trmph())
-            policies.append(policy)
-            values.append(value)
-            
-            # Track agreement between policy and minimax
-            if policy_preferred_move == minimax_move:
-                self.stats['policy_vs_minimax_agreement'] += 1
-            else:
-                self.stats['policy_vs_minimax_disagreement'] += 1
-            
-            # Create structured policy summary
-            policy_summary = []
-            for i, ((move, prob), value) in enumerate(zip(policy_top_moves, policy_move_values)):
-                policy_summary.append({
-                    'rank': i + 1,
-                    'move': move,
-                    'move_trmph': fc.rowcol_to_trmph(*move),
-                    'probability': prob,
-                    'value': value
-                })
-            
-            # Store detailed move information
-            move_detail = {
-                'move_number': move_number,
-                'player': state.current_player,
-                'board_state': state.to_trmph(),
-                'policy_summary': policy_summary,  # Top 5 moves with values
-                'policy_preferred_move': policy_preferred_move,
-                'policy_preferred_move_trmph': fc.rowcol_to_trmph(*policy_preferred_move) if policy_preferred_move else None,
-                'minimax_chosen_move': minimax_move,
-                'minimax_chosen_move_trmph': fc.rowcol_to_trmph(*minimax_move) if minimax_move else None,
-                'minimax_value': minimax_value,
-                'agreement': policy_preferred_move == minimax_move,
-                'legal_moves_count': len(state.get_legal_moves()),
-                'move_time': 0.0  # Will be set after move
-            }
-            
-            # Apply move
-            state = state.make_move(*minimax_move)
-            move_time = time.time() - move_start
-            move_times.append(move_time)
-            move_detail['move_time'] = move_time
-            
-            detailed_moves.append(move_detail)
-            
-            if self.verbose >= 2:
-                print(f"\nMove {move_number} (Player {state.current_player}):")
-                print(f"  Policy top 5 moves:")
-                for i, item in enumerate(policy_summary):
-                    marker = " →" if item['move'] == minimax_move else "  "
-                    print(f"    {i+1}. {item['move_trmph']} ({item['move']}) - prob: {item['probability']:.3f}, value: {item['value']:.3f}{marker}")
-                print(f"  Minimax chose: {move_detail['minimax_chosen_move_trmph']} ({minimax_move}) - value: {minimax_value:.3f}")
-                print(f"  Agreement: {move_detail['agreement']}, Time: {move_time:.3f}s")
-        
-        return {
-            'moves': moves,
-            'policies': policies,
-            'values': values,
-            'detailed_moves': detailed_moves,  # New: detailed move data
-            'winner': state.winner,
-            'final_trmph': state.to_trmph(),
-            'num_moves': len(moves),
-            'move_times': move_times,
-            'policy_vs_minimax_agreement_rate': self.stats.get('policy_vs_minimax_agreement', 0) / len(moves) if moves else 0
-        }
-
     def _generate_move_core(self, state: HexGameState) -> Tuple[Tuple[int, int], float]:
         """
         Generate move using minimax search (core functionality only).
@@ -355,84 +194,14 @@ class SelfPlayEngine:
         """
         return self._generate_move_with_debug(state)
 
-    def _generate_move_with_batching(self, state: HexGameState) -> Tuple:
-        """
-        Generate move using batched inference for better performance.
-        
-        This method is a batched version of _generate_move_individual that produces
-        identical results but with better GPU utilization. It follows this flow:
-        1. Get policy and value for current position
-        2. Get top-k policy moves for debugging/logging (separate from search width)
-        3. Get values for those top-k policy moves using batched inference
-        4. Run minimax search (which uses search_widths for actual tree exploration)
-        5. Return all results
-        
-        The top-k policy moves are used for debugging/logging to understand:
-        - Policy vs minimax agreement
-        - Model behavior analysis
-        - Detailed move analysis
-        
-        NOTE: This is separate from search_widths. The search uses search_widths[0] 
-        for the actual tree exploration, while this evaluates top-k policy moves 
-        for debugging purposes.
-        
-        Args:
-            state: Current game state
-            
-        Returns:
-            Tuple of (policy, value, policy_top_moves, policy_move_values, minimax_move, minimax_value)
-        """
-        from ..inference.fixed_tree_search import PositionCollector
-        
-        # Configuration: number of top policy moves to evaluate for debugging/logging
-        # This is separate from search_widths - it's just for understanding model behavior
-        # The actual search uses search_widths[0] for tree exploration
-        POLICY_DEBUG_WIDTH = 5  # Evaluate top 5 policy moves for debugging
-        
-        # Create position collector for batched inference
-        collector = PositionCollector(self.model)
-        
-        # Step 1: Get policy and value for current position
-        # Note: We get both policy and value in one call since the model outputs both
-        policy, value = self.model.simple_infer(state.board)
-        
-        # Step 2: Get top-k policy moves for debugging/logging
-        policy_top_moves = self._get_top_policy_moves(policy, state, POLICY_DEBUG_WIDTH)
-        
-        # Step 3: Get values for top-k policy moves using batched inference
-        policy_move_values = self._get_policy_move_values(collector, state, policy_top_moves)
-        
-        # Step 4: Run minimax search (this uses search_widths for actual tree exploration)
-        minimax_move, minimax_value = minimax_policy_value_search_with_batching(
-            state=state,
-            model=self.model,
-            widths=self.search_widths,  # This controls the actual search tree
-            temperature=self.temperature
-        )
-        
-        return policy, value, policy_top_moves, policy_move_values, minimax_move, minimax_value
 
-    def _get_top_policy_moves(self, policy: np.ndarray, state: HexGameState, k: int = 5) -> List[Tuple[Tuple[int, int], float]]:
-        """
-        Get top-k policy moves from policy logits.
-        
-        Args:
-            policy: Policy logits from model
-            state: Current game state
-            k: Number of top moves to return (default: 5 for debugging/logging)
-            
-        Returns:
-            List of (move, probability) tuples for top-k moves
-        """
-        legal_moves = state.get_legal_moves()
-        return get_top_k_moves_with_probs(
-            policy, legal_moves, state.board.shape[0], k=k, temperature=self.temperature
-        )
-
-    def _get_policy_move_values(self, collector: 'PositionCollector', state: HexGameState, 
+    def _get_batched_policy_move_values(self, collector: PositionCollector, state: HexGameState, 
                                policy_top_moves: List[Tuple[Tuple[int, int], float]]) -> List[float]:
         """
         Get value predictions for top policy moves using batched inference.
+        
+        This function uses PositionCollector to batch multiple value inference requests
+        into a single GPU call for better performance.
         
         Args:
             collector: PositionCollector instance for batched processing

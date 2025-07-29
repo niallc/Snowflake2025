@@ -211,6 +211,20 @@ This document tracks specific technical debt items and refactoring tasks that ne
   - from ..inference.fixed_tree_search import PositionCollector
  - This all needs to be cleaned up.
 
+### 21. Lots of duplication in methods to get the top moves from the policy network:
+ - hex_ai/value_utils.py:279:def select_top_k_moves
+ - hex_ai/value_utils.py:310:def get_top_k_moves_with_probs
+ - hex_ai/inference/fixed_tree_search.py:118:def get_topk_moves_from_policy
+ - hex_ai/inference/simple_model_inference.py:344:    def get_top_k_moves
+ - hex_ai/inference/simple_model_inference.py:355:    def get_top_k_legal_moves
+
+**Status:** PARTIALLY RESOLVED - Removed duplicate `_get_top_policy_moves` from selfplay_engine.py and renamed `_get_policy_move_values` to `_get_batched_policy_move_values` for clarity. The remaining functions serve different purposes:
+- `select_top_k_moves`: Core utility for selecting top-k moves from legal policy array
+- `get_top_k_moves_with_probs`: Main function that handles policy logits → legal moves → top-k with probabilities
+- `get_topk_moves_from_policy`: Wrapper that extracts just moves (no probabilities) for tree search
+- `get_top_k_moves`: Returns TRMPH format moves (different output format)
+- `get_top_k_legal_moves`: Direct wrapper around `get_top_k_moves_with_probs` (could be removed)
+
 ---
 
 ## 📝 Notes

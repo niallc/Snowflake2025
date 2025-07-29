@@ -13,7 +13,7 @@ import numpy as np
 from typing import Tuple
 
 # Board value constants for N×N format
-from ..config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
 
 def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
     """
