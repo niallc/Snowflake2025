@@ -10,7 +10,7 @@ This run uses the pie rule, temperature=0.5, and a fixed random seed for reprodu
 Example full usage:
 PYTHONPATH=. python scripts/run_tournament.py \
   --num-games=100 \
-  --checkpoints="epoch1_mini4.pt,epoch2_mini16.pt,epoch1_mini1.pt,epoch1_mini9.pt,epoch2_mini5.pt,epoch2_mini9.pt" \
+  --checkpoints="epoch1_mini4.pt.gz,epoch2_mini16.pt.gz,epoch1_mini1.pt.gz,epoch1_mini9.pt.gz,epoch2_mini5.pt.gz,epoch2_mini9.pt.gz" \
   --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408" \
   --temperature=0.25
 
@@ -28,15 +28,15 @@ DEFAULT_CHKPT_DIR = os.path.join(CHKPT_BASE_DIR, "loss_weight_sweep_exp0_bs256_9
 
 # Default list of checkpoints to compare
 DEFAULT_CHECKPOINTS = [
-    "epoch1_mini1.pt",
-    "epoch1_mini27.pt",
-    "epoch1_mini30.pt",
-    "epoch1_mini36.pt",
-    "epoch2_mini4.pt",
-    "epoch2_mini16.pt",
-    "epoch2_mini18.pt",
-    "epoch2_mini20.pt",
-    "epoch2_mini26.pt",
+    "epoch1_mini1.pt.gz",
+    "epoch1_mini27.pt.gz",
+    "epoch1_mini30.pt.gz",
+    "epoch1_mini36.pt.gz",
+    "epoch2_mini4.pt.gz",
+    "epoch2_mini16.pt.gz",
+    "epoch2_mini18.pt.gz",
+    "epoch2_mini20.pt.gz",
+    "epoch2_mini26.pt.gz",
 ]
 
 def parse_args():
@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument('--num-games', type=int, default=50, 
                        help='Number of games per pair (default: 50)')
     parser.add_argument('--checkpoints', type=str, 
-                       help='Comma-separated list of checkpoint filenames (e.g., "epoch1_mini1.pt,epoch2_mini16.pt")')
+                       help='Comma-separated list of checkpoint filenames (e.g., "epoch1_mini1.pt.gz,epoch2_mini16.pt.gz")')
     parser.add_argument(
         '--checkpoint_dirs', type=str, 
         help=(

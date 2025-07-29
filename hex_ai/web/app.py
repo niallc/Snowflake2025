@@ -24,8 +24,8 @@ from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move a
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
 THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-CHECKPOINT_FILE1 = "epoch2_mini4.pt"
-CHECKPOINT_FILE2 = "epoch2_mini26.pt"
+CHECKPOINT_FILE1 = "epoch2_mini4.pt.gz"
+CHECKPOINT_FILE2 = "epoch2_mini26.pt.gz"
 DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
 DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
 

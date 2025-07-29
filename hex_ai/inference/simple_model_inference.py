@@ -214,13 +214,6 @@ class SimpleModelInference:
         
         return result
 
-    def infer(self, board: Union[str, np.ndarray, torch.Tensor]) -> Tuple[np.ndarray, float]:
-        """
-        Alias for simple_infer for backward compatibility.
-        """
-        print(f"WARNING: SimpleModelInference.infer() is deprecated. Use simple_infer() instead.")
-        return self.simple_infer(board)
-
     def batch_infer(self, boards: List[Union[str, np.ndarray, torch.Tensor]]) -> Tuple[List[np.ndarray], List[float]]:
         """
         Efficiently process multiple boards in a single batch.

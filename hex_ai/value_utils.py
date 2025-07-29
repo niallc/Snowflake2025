@@ -344,7 +344,7 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     
     Args:
         state: Game state (must have .board and .get_legal_moves() methods)
-        model: Model instance (must have .infer() method that returns (policy_logits, value_logit))
+        model: Model instance (must have .simple_infer() method that returns (policy_logits, value_logit))
         temperature: Temperature for policy sampling (default 1.0)
         
     Returns:
@@ -476,7 +476,7 @@ def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=
     """
     Given a model and state, return the top-k legal moves (optionally with their probabilities).
     Args:
-        model: Model instance (must have .infer() method)
+        model: Model instance (must have .simple_infer() method)
         state: Game state (must have .board and .get_legal_moves())
         top_k: Number of top moves to return
         temperature: Temperature for policy softmax

@@ -471,7 +471,7 @@ def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
     """
     Select a move by evaluating the value head on the top-k policy moves and sampling among them.
     Args:
-        model: Model instance (must have .infer() method)
+        model: Model instance (must have .simple_infer() method)
         state: Game state (must have .board and .get_legal_moves())
         top_k: Number of top moves to consider
         temperature: Temperature for policy and value sampling

@@ -14,7 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description="Hex AI Simple Inference CLI")
     parser.add_argument('--trmph', type=str, required=True, help='TRMPH string or link describing the board')
     parser.add_argument('--model_dir', type=str, default="checkpoints/hex_ai_MainTraining_15M_samples_20250715_005413/bs_512_wd_5e-4_policy_0.2_value_0.8/", help='Directory containing the model checkpoint')
-    parser.add_argument('--model_file', type=str, default="best_model.pt", help='Model checkpoint file name')
+    parser.add_argument('--model_file', type=str, default="best_model.pt.gz", help='Model checkpoint file name')
     parser.add_argument('--topk', type=int, default=3, help='Number of top policy moves to display')
     parser.add_argument('--device', type=str, default=None, help='Device to use (cpu, cuda, mps)')
 
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
-    modelFile="epoch1_mini1.pt"
+    modelFile="epoch1_mini1.pt.gz"
     boardPos=${redFinal}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \
