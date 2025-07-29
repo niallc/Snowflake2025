@@ -197,6 +197,20 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - hex_ai/training_orchestration.py:288:    device = select_device()
  - scripts/validate_checkpoints.py:38:        self.device = get_device()
 
+### 18. Self-play is still writing .pkl.gz files instead of raw plain text .trmph strings
+ - Remove pkl.dump type writing and just append a simple text line.
+
+### 19. The self-play code still refers to detailed output and a CSV file.
+ - I have no plans to use this so it should all be deleted.
+
+### 20. self_play_engine.py has relative paths to its imports
+ - Also
+  -  # Type annotation for PositionCollector (imported locally to avoid circular imports)
+  - from typing import TYPE_CHECKING
+  - if TYPE_CHECKING:
+  - from ..inference.fixed_tree_search import PositionCollector
+ - This all needs to be cleaned up.
+
 ---
 
 ## 📝 Notes

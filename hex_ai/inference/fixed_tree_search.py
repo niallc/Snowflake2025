@@ -1,16 +1,51 @@
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Callable
 import logging
 import torch
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.value_utils import temperature_scaled_softmax
+from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class PositionCollector:
+    """Collects board positions during tree building for batch processing."""
+    
+    def __init__(self, model):
+        self.model = model
+        self.policy_requests = []  # List of (board, callback) tuples
+        self.value_requests = []   # List of (board, callback) tuples
+        
+    def request_policy(self, board, callback: Callable):
+        """Add a policy request to be processed later."""
+        self.policy_requests.append((board, callback))
+        
+    def request_value(self, board, callback: Callable):
+        """Add a value request to be processed later."""
+        self.value_requests.append((board, callback))
+    
+    def process_batches(self):
+        """Process all collected positions in batches."""
+        # Process policy requests
+        if self.policy_requests:
+            boards = [req[0] for req in self.policy_requests]
+            policies, _ = self.model.batch_infer(boards)
+            for (board, callback), policy in zip(self.policy_requests, policies):
+                callback(policy)
+            self.policy_requests.clear()
+        
+        # Process value requests
+        if self.value_requests:
+            boards = [req[0] for req in self.value_requests]
+            _, values = self.model.batch_infer(boards)
+            for (board, callback), value in zip(self.value_requests, values):
+                callback(value)
+            self.value_requests.clear()
 
 
 class MinimaxSearchNode:
@@ -80,6 +115,33 @@ def get_topk_moves(state: HexGameState, model, k: int,
     return sampled_moves
 
 
+def get_topk_moves_from_policy(policy_logits: np.ndarray, state: HexGameState, k: int, 
+                              temperature: float = 1.0) -> List[Tuple[int, int]]:
+    """
+    Get top-k moves from policy logits (for use with batched inference).
+    
+    Args:
+        policy_logits: Raw policy logits
+        state: Current game state
+        k: Number of moves to sample
+        temperature: Temperature for sampling
+        
+    Returns:
+        List of k sampled moves
+    """
+    legal_moves = state.get_legal_moves()
+    if not legal_moves:
+        return []
+    
+    # Use existing utility function
+    moves_with_probs = get_top_k_moves_with_probs(
+        policy_logits, legal_moves, state.board.shape[0], k, temperature
+    )
+    
+    # Extract just the moves (not the probabilities)
+    return [move for move, _ in moves_with_probs]
+
+
 def build_search_tree(
     root_state: HexGameState, 
     model, 
@@ -105,6 +167,53 @@ def build_search_tree(
             child_path = path + [move]
             child_node = build_node(child_state, depth + 1, child_path)
             node.children[move] = child_node
+            
+        return node
+    
+    return build_node(root_state, 0, [])
+
+
+def build_search_tree_with_collection(
+    root_state: HexGameState, 
+    model, 
+    widths: List[int], 
+    temperature: float = 1.0,
+    collector: PositionCollector = None
+) -> MinimaxSearchNode:
+    """Build search tree while collecting positions for batch processing."""
+    
+    def build_node(state: HexGameState, depth: int, path: List[Tuple[int, int]]) -> MinimaxSearchNode:
+        node = MinimaxSearchNode(state, depth, path)
+        
+        # Stop if game is over or we've reached max depth
+        if state.game_over or depth >= len(widths):
+            return node
+        
+        # Get top moves for this depth
+        k = widths[depth] if depth < len(widths) else 1
+        
+        if collector is not None:
+            # Collect policy request instead of immediate inference
+            def policy_callback(policy_logits):
+                # Use policy to get top moves
+                moves = get_topk_moves_from_policy(policy_logits, state, k, temperature)
+                # Build children
+                for move in moves:
+                    child_state = state.make_move(*move)
+                    child_path = path + [move]
+                    child_node = build_node(child_state, depth + 1, child_path)
+                    node.children[move] = child_node
+            
+            collector.request_policy(state.board, policy_callback)
+        else:
+            # Fallback to original behavior
+            moves = get_topk_moves(state, model, k, temperature)
+            # Build children
+            for move in moves:
+                child_state = state.make_move(*move)
+                child_path = path + [move]
+                child_node = build_node(child_state, depth + 1, child_path)
+                node.children[move] = child_node
             
         return node
     
@@ -191,8 +300,6 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode],
         logger.debug(f"Leaf node {node.path}: raw_logit={value:.4f}, prob_red={prob_red_win:.4f}, converted_value={node.value:.4f}")
 
 
-
-
 def minimax_backup(node: MinimaxSearchNode) -> float:
     """
     Backup values from leaves to root using minimax algorithm.
@@ -225,14 +332,8 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
 
 def print_tree_structure(node: MinimaxSearchNode, indent=0):
     """Print the complete tree structure with all nodes."""
-    print(
-        "  " * indent
-        + f"Node: depth={node.depth}, "
-        + f"player={'Blue' if node.state.current_player == BLUE_PLAYER else 'Red'}, "
-        + f"maximizing={node.is_maximizing}, "
-        + f"value={node.value}, "
-        + f"path={node.path}"
-    )
+    print("  " * indent + f"Node: depth={node.depth}, player={'Blue' if node.state.current_player == 0 else 'Red'}, "
+          f"maximizing={node.is_maximizing}, value={node.value}, path={node.path}")
     
     for move, child in node.children.items():
         print("  " * indent + f"Move {move}:")
@@ -240,33 +341,22 @@ def print_tree_structure(node: MinimaxSearchNode, indent=0):
 
 
 def print_all_terminal_nodes(root: MinimaxSearchNode):
-    """Print all terminal nodes with their values."""
-    print("\n=== ALL TERMINAL NODES ===")
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    RESET = "\033[0m"
-
+    """Print all terminal nodes for manual verification."""
+    terminals = []
+    
     def collect_terminals(node: MinimaxSearchNode):
         if not node.children:  # Terminal node
-            val = node.value
-            if val is not None:
-                if val > 0:
-                    val_str = f"{GREEN}{val:.4g}{RESET}"
-                elif val < 0:
-                    val_str = f"{RED}{val:.4g}{RESET}"
-                else:
-                    val_str = f"{val:.4g}"
-            else:
-                val_str = "None"
-            print(f"Terminal: path={node.path}, value= {val_str}")
-            return [node]
-        terminals = []
-        for child in node.children.values():
-            terminals.extend(collect_terminals(child))
-        return terminals
-
-    terminals = collect_terminals(root)
-    print(f"Total terminal nodes: {len(terminals)}")
+            terminals.append(node)
+        else:
+            for child in node.children.values():
+                collect_terminals(child)
+    
+    collect_terminals(root)
+    
+    print(f"Found {len(terminals)} terminal nodes:")
+    for i, node in enumerate(terminals):
+        print(f"  {i+1}. Path: {node.path}, Value: {node.value}")
+    
     return terminals
 
 
@@ -322,6 +412,71 @@ def minimax_policy_value_search(
     
     if verbose >= 2:
         logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
+    
+    if return_tree:
+        return root.best_move, root_value, root
+    else:
+        return root.best_move, root_value
+
+
+def minimax_policy_value_search_with_batching(
+    state: HexGameState,
+    model,
+    widths: List[int],
+    batch_size: int = 1000,
+    use_alpha_beta: bool = True,
+    temperature: float = 1.0,
+    debug: bool = False,
+    return_tree: bool = False,
+    verbose: int = 0
+) -> Tuple[Tuple[int, int], float, Optional[MinimaxSearchNode]]:
+    """
+    Fixed-width, fixed-depth minimax search with batched inference for all policy calls.
+
+    Args:
+        state: HexGameState (current position)
+        model: SimpleModelInference (must support batch inference)
+        widths: List of ints, e.g. [20, 10, 10, 5] (width at each ply)
+        batch_size: Max batch size for evaluation
+        use_alpha_beta: Whether to use alpha-beta pruning (not implemented in new version yet)
+        temperature: Policy temperature for move selection (default 1.0)
+        debug: Whether to enable debug logging
+        return_tree: Whether to return the search tree for debugging
+        verbose: Verbosity level (0: silent, 1+: show info logs)
+
+    Returns:
+        best_move: (row, col) tuple for the best move at the root
+        value: estimated value for the root position
+        root: search tree root node (if return_tree=True, otherwise None)
+    """
+    if debug:
+        logger.setLevel(logging.DEBUG)
+    elif verbose <= 1:
+        logger.setLevel(logging.WARNING)  # Suppress INFO logs when not verbose
+    else:
+        logger.setLevel(logging.INFO)
+    
+    if verbose >= 2:
+        logger.info(f"Starting batched minimax search with widths {widths}, temperature {temperature}")
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
+    
+    # Create position collector for batched inference
+    collector = PositionCollector(model)
+    
+    # Build the search tree with position collection
+    root = build_search_tree_with_collection(state, model, widths, temperature, collector)
+    
+    # Process all collected batches
+    collector.process_batches()
+    
+    # Evaluate all leaf nodes from the root player's perspective
+    evaluate_leaf_nodes([root], model, batch_size, state.current_player)
+    
+    # Backup values to root (temperature already applied during move sampling)
+    root_value = minimax_backup(root)
+    
+    if verbose >= 2:
+        logger.info(f"Batched search complete: best move = {root.best_move}, value = {root_value}")
     
     if return_tree:
         return root.best_move, root_value, root
