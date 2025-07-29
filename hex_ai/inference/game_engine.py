@@ -20,6 +20,10 @@ from hex_ai.inference.board_utils import (
 from hex_ai.utils.format_conversion import (
     board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
 )
+from hex_ai.value_utils import (
+    get_top_k_legal_moves, sample_move_by_value, apply_move_to_tensor
+)
+
 
 # Edge coordinates for Union-Find
 LEFT_EDGE = -1
@@ -462,3 +466,25 @@ def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, play
         return apply_move_to_tensor(board_tensor, row, col, player)
     except Exception as e:
         raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 
+
+def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
+    """
+    Select a move by evaluating the value head on the top-k policy moves and sampling among them.
+    Args:
+        model: Model instance (must have .infer() method)
+        state: Game state (must have .board and .get_legal_moves())
+        top_k: Number of top moves to consider
+        temperature: Temperature for policy and value sampling
+    Returns:
+        (row, col) tuple for the selected move, or None if no legal moves
+    """
+    topk_moves = get_top_k_legal_moves(model, state, top_k=top_k, temperature=temperature)
+    if not topk_moves:
+        return None
+    move_values = []
+    for move in topk_moves:
+        temp_state = apply_move_to_state(state, *move)
+        _, value_logit = model.infer(temp_state.board)
+        move_values.append(value_logit)
+    chosen_idx = sample_move_by_value(move_values, temperature)
+    return topk_moves[chosen_idx] 

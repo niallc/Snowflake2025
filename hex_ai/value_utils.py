@@ -502,28 +502,6 @@ def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=
     return topk_moves
 
 
-def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
-    """
-    Select a move by evaluating the value head on the top-k policy moves and sampling among them.
-    Args:
-        model: Model instance (must have .infer() method)
-        state: Game state (must have .board and .get_legal_moves())
-        top_k: Number of top moves to consider
-        temperature: Temperature for policy and value sampling
-    Returns:
-        (row, col) tuple for the selected move, or None if no legal moves
-    """
-    topk_moves = get_top_k_legal_moves(model, state, top_k=top_k, temperature=temperature)
-    if not topk_moves:
-        return None
-    move_values = []
-    for move in topk_moves:
-        temp_state = apply_move_to_state(state, *move)
-        _, value_logit = model.infer(temp_state.board)
-        move_values.append(value_logit)
-    chosen_idx = sample_move_by_value(move_values, temperature)
-    return topk_moves[chosen_idx] 
-
 # --- Utility functions for enum usage ---
 def get_opponent(player: Player) -> Player:
     """Get the opponent of the given player."""

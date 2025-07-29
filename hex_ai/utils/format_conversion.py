@@ -163,6 +163,10 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor of shape (3, N, N)
     """
+    # TODO: Properly fix the circular import from putting the below at the top of this file.
+    #       Decide which which of this and data_utils is the upstream dependency.
+    from hex_ai.data_utils import get_player_to_move_from_board
+
     if isinstance(board_2nxn, torch.Tensor):
         board_np = board_2nxn.detach().cpu().numpy()
     else:

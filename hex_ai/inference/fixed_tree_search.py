@@ -177,11 +177,9 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode],
     
     for i in range(0, len(boards), batch_size):
         batch = boards[i:i+batch_size]
-        # TODO: This looks like it's passing the boards one at a time.
-        #       The reason for batching is that networks are faster when batching.
-        #       Might want an infer_batch method.
-        batch_results = [model.infer(board)[1] for board in batch]
-        values.extend(batch_results)
+        # Use efficient batch inference instead of individual calls
+        _, batch_values = model.batch_infer(batch)
+        values.extend(batch_values)
     
     # Assign values to leaf nodes, converting to root player's perspective
     for node, value in zip(leaf_nodes, values):
