@@ -30,11 +30,10 @@ class PositionCollector:
     
     HOW IT WORKS:
     1. During tree building, instead of immediately calling model.infer() for each position,
-       we collect the board and a callback function using request_policy() or request_value()
+       we collect the board and a callback function using request_policy()
     2. After the entire tree is built, we call process_batches() which:
        - Groups all policy requests into a single batch
-       - Groups all value requests into a single batch  
-       - Calls model.batch_infer() once for each type
+       - Calls model.batch_infer() once for all requests
        - Calls the appropriate callback for each result
     
     BENEFITS:
@@ -44,7 +43,6 @@ class PositionCollector:
     
     CONCERNS:
     - Memory usage: All requests are held in memory until processed
-    - Error handling: No error handling in callback system
     - Thread safety: Not thread-safe (single-threaded usage only)
     - Complexity: Callback mechanism can be error-prone
     
@@ -76,10 +74,17 @@ class PositionCollector:
         self.model = model
         # Store (board, callback, metadata) tuples for deferred processing
         self.policy_requests = []  # List of (board, callback, metadata) tuples
-        self.value_requests = []   # List of (board, callback, metadata) tuples
         self._memory_warnings_shown = set()  # Track which warnings we've already shown
         self._creation_thread = threading.current_thread()  # Track creation thread
         
+    def _check_thread_safety(self, method_name: str):
+        """Check if method is called from the correct thread."""
+        if threading.current_thread() is not self._creation_thread:
+            raise RuntimeError(
+                f"PositionCollector.{method_name}() called from thread {threading.current_thread().name} "
+                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
+            )
+    
     def _check_memory_usage(self):
         """
         Check current memory usage and warn/exit if thresholds are exceeded.
@@ -108,13 +113,22 @@ class PositionCollector:
         Raises:
             RuntimeError: If position count exceeds limit
         """
-        total_positions = len(self.policy_requests) + len(self.value_requests)
+        total_positions = len(self.policy_requests)
         if total_positions >= MAX_POSITIONS:
             raise RuntimeError(f"Position count {total_positions} exceeds limit of {MAX_POSITIONS}")
         
         # Warn at 80% of limit
         if total_positions >= MAX_POSITIONS * 0.8:
             logger.warning(f"Position count {total_positions} is approaching limit of {MAX_POSITIONS}")
+    
+    def _validate_and_add_request(self, board, callback: Callable, metadata: Optional[Dict], method_name: str):
+        """Common validation and request addition logic."""
+        self._check_thread_safety(method_name)
+        self._check_memory_usage()
+        self._check_position_limit()
+        
+        metadata = metadata or {}
+        self.policy_requests.append((board, callback, metadata))
         
     def request_policy(self, board, callback: Callable, metadata: Optional[Dict] = None):
         """
@@ -129,50 +143,7 @@ class PositionCollector:
         Raises:
             RuntimeError: If called from a different thread than the constructor
         """
-        # Thread safety check
-        if threading.current_thread() is not self._creation_thread:
-            raise RuntimeError(
-                f"PositionCollector.request_policy() called from thread {threading.current_thread().name} "
-                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
-            )
-        
-        self._check_memory_usage()
-        self._check_position_limit()
-        
-        # Use empty dict as default metadata
-        metadata = metadata or {}
-        self.policy_requests.append((board, callback, metadata))
-        
-    def request_value(self, board, callback: Callable, metadata: Optional[Dict] = None):
-        """
-        Add a value request to be processed later.
-        
-        Args:
-            board: Board state to get value for  
-            callback: Function to call with value when available
-                     Signature: callback(value: float, metadata: Dict) -> None
-            metadata: Optional metadata for validation
-            
-        Raises:
-            RuntimeError: If called from a different thread than the constructor
-        """
-        # NOTE: This method is currently unused in the minimax search.
-        # The value requests are only used in evaluate_leaf_nodes() which
-        # implements its own batching. Consider consolidating the batching
-        # logic or removing this unused functionality.
-        
-        # Thread safety check
-        if threading.current_thread() is not self._creation_thread:
-            raise RuntimeError(
-                f"PositionCollector.request_value() called from thread {threading.current_thread().name} "
-                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
-            )
-        
-        self._check_memory_usage()
-        self._check_position_limit()
-        
-        metadata = metadata or {}
-        self.value_requests.append((board, callback, metadata))
+        self._validate_and_add_request(board, callback, metadata, "request_policy")
     
     def process_batches(self):
         """
@@ -182,8 +153,7 @@ class PositionCollector:
         1. Extracts all boards from policy requests
         2. Calls model.batch_infer() once for all policy requests
         3. Calls each policy callback with its corresponding result and metadata
-        4. Repeats the same process for value requests
-        5. Clears all request lists after processing
+        4. Clears all request lists after processing
         
         Note: This method assumes the model.batch_infer() returns results
         in the same order as the input boards.
@@ -191,12 +161,7 @@ class PositionCollector:
         Raises:
             RuntimeError: If model.batch_infer() fails or callback errors occur
         """
-        # Thread safety check
-        if threading.current_thread() is not self._creation_thread:
-            raise RuntimeError(
-                f"PositionCollector.process_batches() called from thread {threading.current_thread().name} "
-                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
-            )
+        self._check_thread_safety("process_batches")
         
         # Process policy requests
         if self.policy_requests:
@@ -228,37 +193,6 @@ class PositionCollector:
                     raise RuntimeError(f"Policy callback {i} failed: {e}")
             
             self.policy_requests.clear()
-        
-        # Process value requests  
-        if self.value_requests:
-            boards = [req[0] for req in self.value_requests]
-            callbacks = [req[1] for req in self.value_requests]
-            metadata_list = [req[2] for req in self.value_requests]
-            
-            # Validate that we have the expected number of requests
-            if len(boards) != len(callbacks) or len(boards) != len(metadata_list):
-                raise RuntimeError(f"Inconsistent value request counts: {len(boards)} boards, {len(callbacks)} callbacks, {len(metadata_list)} metadata")
-            
-            # Single batch inference call for all value requests
-            try:
-                _, values = self.model.batch_infer(boards)
-            except Exception as e:
-                raise RuntimeError(f"Model batch inference for values failed: {e}")
-            
-            # Validate that we got the expected number of results
-            if len(values) != len(boards):
-                raise RuntimeError(f"Model returned {len(values)} values for {len(boards)} boards")
-            
-            # Call each callback with its corresponding value result and metadata
-            for i, (callback, value, metadata) in enumerate(zip(callbacks, values, metadata_list)):
-                try:
-                    callback(value, metadata)
-                except Exception as e:
-                    # Log error and re-raise to fail fast
-                    logger.error(f"Error in value callback {i} with metadata {metadata}: {e}")
-                    raise RuntimeError(f"Value callback {i} failed: {e}")
-            
-            self.value_requests.clear()
     
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -272,8 +206,7 @@ class PositionCollector:
         
         return {
             'policy_requests': len(self.policy_requests),
-            'value_requests': len(self.value_requests),
-            'total_requests': len(self.policy_requests) + len(self.value_requests),
+            'total_requests': len(self.policy_requests),
             'memory_gb': memory_gb,
             'memory_warnings_shown': len(self._memory_warnings_shown)
         }
@@ -762,11 +695,6 @@ def minimax_policy_value_search_with_batching(
     - Tree building: O(n) individual calls → O(1) batched calls
     - Leaf evaluation: Already batched in evaluate_leaf_nodes()
     - Total inference calls: O(n) → O(1) for policy + O(1) for values
-    
-    MEMORY CONSIDERATIONS:
-    - All policy requests are held in memory during tree building
-    - Memory usage scales with tree size (widths[0] * widths[1] * ... * widths[depth])
-    - For large trees, consider using smaller batch sizes or different strategies
     
     VALIDATION:
     - Each position request includes metadata for validation
