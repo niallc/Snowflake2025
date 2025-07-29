@@ -37,9 +37,14 @@ BLUE_PLAYER = 0
 RED_PLAYER = 1
 
 # Piece constants (for N×N board representation)
-BLUE_PIECE = 1  # Blue pieces on the board
-RED_PIECE = 2   # Red pieces on the board
-EMPTY_PIECE = 0 # Empty positions
+BLUE_PIECE = "b"  # Blue pieces on the board (character representation)
+RED_PIECE = "r"   # Red pieces on the board (character representation)
+EMPTY_PIECE = "e" # Empty positions (character representation)
+
+# Legacy numeric constants for backward compatibility (will be removed)
+LEGACY_BLUE_PIECE = 0
+LEGACY_RED_PIECE = 1
+LEGACY_EMPTY_PIECE = -1
 
 # One-hot encoded board constants (for 2N×N and 3N×N formats)
 PIECE_ONEHOT = 1      # Value for occupied positions in one-hot encoding
@@ -52,11 +57,11 @@ PLAYER_CHANNEL = 2    # Channel index for player-to-move (3N×N format)
 MODEL_CHANNELS = 3 # Models expect 3-channel input (BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL)
 
 # Winner format mapping
-# TRMPH format: "1" = BLUE win, "2" = RED win
-# Training format: BLUE = 0.0, RED = 1.0 (subtract 1 from TRMPH values)
+# TRMPH format: "b" = BLUE win, "r" = RED win (was "1" and "2")
+# Training format: BLUE = 0.0, RED = 1.0 (unchanged)
 # Enhanced metadata: "BLUE" or "RED" (clear text)
-TRMPH_BLUE_WIN = "1"
-TRMPH_RED_WIN = "2"
+TRMPH_BLUE_WIN = "b"
+TRMPH_RED_WIN = "r"
 TRAINING_BLUE_WIN = 0.0
 TRAINING_RED_WIN = 1.0
 

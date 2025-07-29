@@ -4,10 +4,8 @@ from hex_ai.config import (
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     BLUE_PLAYER, RED_PLAYER,
     BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
-    BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL
+    BLUE_CHANNEL, RED_CHANNEL
 )
-from hex_ai.inference.game_engine import HexGameState
-from hex_ai.utils.format_conversion import trmph_move_to_rowcol
 # Remove self-import - these are defined in this file
 import torch
 import numpy as np
@@ -61,9 +59,9 @@ class Player(Enum):
 
 class Piece(Enum):
     """Piece constants for N×N board representation."""
-    EMPTY = 0
-    BLUE = 1
-    RED = 2
+    EMPTY = "e"
+    BLUE = "b"
+    RED = "r"
 
 class Channel(Enum):
     """Channel indices for one-hot encoded board formats."""
@@ -120,6 +118,20 @@ def int_to_channel(channel_int: int) -> Channel:
     """Convert integer to Channel enum."""
     return Channel(channel_int)
 
+# --- Validation functions to catch legacy formats ---
+def validate_piece_value(piece_value) -> None:
+    """Raise ValueError if piece_value is a legacy numeric value."""
+    if isinstance(piece_value, int):
+        raise ValueError(f"Legacy numeric piece value ({piece_value}) detected. Use character representation ('e', 'b', 'r') instead.")
+
+def validate_trmph_winner(trmph_winner: str) -> None:
+    """Raise ValueError if trmph_winner is a legacy value."""
+    if trmph_winner == "1":  # Legacy TRMPH_BLUE_WIN
+        raise ValueError(f"Legacy TRMPH_BLUE_WIN value ('1') detected. Use new TRMPH_BLUE_WIN ('b') instead.")
+    elif trmph_winner == "2":  # Legacy TRMPH_RED_WIN
+        raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected. Use new TRMPH_RED_WIN ('r') instead.")
+
+# --- Model output utilities ---
 def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
     """
     Convert model output (sigmoid(logit)) to probability for the given perspective.
@@ -459,78 +471,6 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player)
     return new_tensor
 
 
-def apply_move_to_state(state, row: int, col: int) -> 'HexGameState':
-    """
-    Apply a move to a HexGameState and return the new state.
-    
-    This is the primary function for applying moves to game states.
-    It handles the move validation and state updates.
-    
-    Args:
-        state: HexGameState instance
-        row: Row index (0-12)
-        col: Column index (0-12)
-        
-    Returns:
-        New HexGameState with the move applied
-        
-    Raises:
-        ValueError: If move is invalid
-    """
-    if not state.is_valid_move(row, col):
-        raise ValueError(f"Invalid move: ({row}, {col})")
-    
-    # Use the existing make_move method which handles all the game logic
-    return state.make_move(row, col)
-
-
-def apply_move_to_state_trmph(state, trmph_move: str) -> 'HexGameState':
-    """
-    Apply a TRMPH move to a HexGameState and return the new state.
-    
-    This is a wrapper that converts TRMPH to row,col coordinates.
-    
-    Args:
-        state: HexGameState instance
-        trmph_move: TRMPH format move (e.g., "a1", "b2")
-        
-    Returns:
-        New HexGameState with the move applied
-        
-    Raises:
-        ValueError: If TRMPH move is invalid or move is invalid
-    """
-    
-    try:
-        row, col = trmph_move_to_rowcol(trmph_move)
-        return apply_move_to_state(state, row, col)
-    except Exception as e:
-        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}")
-
-
-def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, player: int) -> torch.Tensor:
-    """
-    Apply a TRMPH move to a 3-channel board tensor and return the new tensor.
-    
-    This is a wrapper that converts TRMPH to row,col coordinates.
-    
-    Args:
-        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
-        trmph_move: TRMPH format move (e.g., "a1", "b2")
-        player: Player making the move (BLUE_PLAYER=0 or RED_PLAYER=1)
-        
-    Returns:
-        New board tensor with the move applied
-        
-    Raises:
-        ValueError: If TRMPH move is invalid or move is invalid
-    """
-    
-    try:
-        row, col = trmph_move_to_rowcol(trmph_move)
-        return apply_move_to_tensor(board_tensor, row, col, player)
-    except Exception as e:
-        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 
 
 def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=False):
     """

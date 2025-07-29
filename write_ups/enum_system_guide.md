@@ -11,8 +11,8 @@ This document explains the new enum-based system for handling player and piece c
 # Old approach in config.py
 BLUE_PLAYER = 0
 RED_PLAYER = 1
-BLUE_PIECE = 1
-RED_PIECE = 2
+BLUE_PIECE = "b"  # Updated from 1 to character representation
+RED_PIECE = "r"   # Updated from 2 to character representation
 ```
 
 **Issues:**
@@ -30,9 +30,9 @@ class Player(Enum):
     RED = 1
 
 class Piece(Enum):
-    EMPTY = 0
-    BLUE = 1
-    RED = 2
+    EMPTY = "e"  # Updated from 0 to character representation
+    BLUE = "b"   # Updated from 1 to character representation
+    RED = "r"    # Updated from 2 to character representation
 ```
 
 **Benefits:**
@@ -64,9 +64,9 @@ class Player(Enum):
 from hex_ai.value_utils import Piece
 
 class Piece(Enum):
-    EMPTY = 0
-    BLUE = 1
-    RED = 2
+    EMPTY = "e"  # Updated from 0 to character representation
+    BLUE = "b"   # Updated from 1 to character representation
+    RED = "r"    # Updated from 2 to character representation
 ```
 
 **Usage:**

@@ -17,10 +17,15 @@ This document describes the centralized constants system and the different board
 
 **Constants**:
 ```python
-EMPTY_PIECE = 0
-BLUE_PIECE = 1  
-RED_PIECE = 2
+EMPTY_PIECE = "e"
+BLUE_PIECE = "b"
+RED_PIECE = "r"
 ```
+
+**Usage**:
+- N×N board representation
+- NumPy arrays with `dtype='U1'` for character storage
+- Clear and unambiguous representation
 
 ### 2. 2N×N Format (Two Channels, One-Hot Encoded)
 **Shape**: `(2, BOARD_SIZE, BOARD_SIZE)`  
@@ -83,9 +88,14 @@ RED_PLAYER = 1
 
 **Constants**:
 ```python
-TRMPH_BLUE_WIN = "1"
-TRMPH_RED_WIN = "2"
+TRMPH_BLUE_WIN = "b"
+TRMPH_RED_WIN = "r"
 ```
+
+**Usage**:
+- TRMPH game record format
+- Winner indicators in .trmph files
+- Clear character-based representation
 
 ### Training Format Winners
 **Values**: `0.0` = Blue win, `1.0` = Red win  
@@ -123,7 +133,7 @@ board_3nxn = np.concatenate([board_2nxn, player_channel[None, ...]], axis=0)
 Replace magic numbers with descriptive constants:
 ```python
 # ❌ Bad
-if board[row, col] == 1:
+if board[row, col] == "b":
     # blue piece logic
 
 # ✅ Good  
@@ -144,7 +154,7 @@ board_2nxn[BLUE_CHANNEL] == PIECE_ONEHOT
 ### 3. Clear Comments
 Add comments explaining format conversions:
 ```python
-# Convert N×N format (0=empty, 1=blue, 2=red) to 2N×N one-hot format
+# Convert N×N format ('e'=empty, 'b'=blue, 'r'=red) to 2N×N one-hot format
 board_2nxn[BLUE_CHANNEL] = (board_nxn == BLUE_PIECE).astype(np.float32)
 ```
 
@@ -156,7 +166,7 @@ def process_board(board: np.ndarray) -> np.ndarray:
     Process a board in N×N format.
     
     Args:
-        board: N×N array with values 0=empty, 1=blue, 2=red
+        board: N×N array with values 'e'=empty, 'b'=blue, 'r'=red
         
     Returns:
         Processed board in same format
@@ -165,18 +175,20 @@ def process_board(board: np.ndarray) -> np.ndarray:
 
 ## Migration Status
 
-- ✅ N×N format constants implemented
+- ✅ N×N format constants implemented (character-based)
 - ✅ Player constants implemented  
-- ✅ TRMPH format constants implemented
+- ✅ TRMPH format constants implemented (character-based)
 - ✅ Training format constants implemented
 - ✅ One-hot format constants implemented
 - ✅ Format conversion functions updated
 - ✅ All modules migrated to use constants
+- ✅ Legacy format detection and rejection implemented
 
 ## Benefits
 
-1. **Readability**: Code is self-documenting
+1. **Readability**: Code is self-documenting with character constants
 2. **Maintainability**: Changes only need to be made in one place
-3. **Error Prevention**: Eliminates magic number typos
+3. **Error Prevention**: Eliminates magic number typos and legacy format confusion
 4. **Consistency**: All code uses the same naming scheme
-5. **Documentation**: Constants serve as living documentation of formats 
+5. **Documentation**: Constants serve as living documentation of formats
+6. **Clarity**: Character-based representation eliminates ambiguity

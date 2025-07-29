@@ -107,12 +107,13 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     
     elif format_type == "visual":
         # Create a visual representation
-        symbols = {0: ".", 1: "B", 2: "R"}
+        symbols = {EMPTY_PIECE: ".", BLUE_PIECE: "B", RED_PIECE: "R"}
         lines = []
         for row in range(BOARD_SIZE):
             line = " " * row  # Indent for hex shape
             for col in range(BOARD_SIZE):
-                line += symbols[board_2d[row, col]] + " "
+                piece = board_2d[row, col]
+                line += symbols[piece] + " "
             lines.append(line)
         return "\n".join(lines)
     

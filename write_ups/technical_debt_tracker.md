@@ -161,6 +161,10 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - `requirements.txt`
 - Create: `scripts/validate_environment.py`
 
+9.     # TODO: Trmph processing should now include a player-to-move label.
+    #       Let's produce a loud warning here until we migrate to this.
+
+
 ---
 
 ## 📝 Notes

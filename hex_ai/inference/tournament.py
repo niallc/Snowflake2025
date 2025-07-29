@@ -18,7 +18,10 @@ from hex_ai.value_utils import (
     select_policy_move,  # Add the new public function
     apply_move_to_state,  # Add move application utilities
 )
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import (
+    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, 
+    TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
+)
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
 import random
 from datetime import datetime
@@ -34,7 +37,7 @@ from pathlib import Path
 @dataclass
 class GameResult:
     """Result of a single game."""
-    winner: str  # "1" or "2"
+    winner: str  # "b" or "r" (color-based)
     trmph_str: str
     winner_char: str  # 'b', 'r', 'd'
     swap_decision: Optional[str]
@@ -268,22 +271,23 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
 def determine_winner(state: HexGameState, model_1: SimpleModelInference, 
                     model_2: SimpleModelInference, swap: bool) -> Tuple[str, str]:
     """
-    Determine the winner and return (winner_result, winner_char).
-    winner_result: "1" or "2" (model identifier)
-    winner_char: 'b' or 'r' (color/result)
-    Raises RuntimeError if no winner is found (draws are impossible in Hex).
+    Determine the winner of the game.
+    
+    Returns:
+        Tuple of (winner_color, winner_char) where:
+        - winner_color: "b" or "r" (color-based)
+        - winner_char: "b" or "r" (color-based)
     """
     if state.winner == "blue":
-        winner_char = 'b'
-        # Blue player is the first model (model_1) unless there was a swap
-        result = "1" if not swap else "2"
+        winner_color = TRMPH_BLUE_WIN
+        winner_char = TRMPH_BLUE_WIN
     elif state.winner == "red":
-        winner_char = 'r'
-        # Red player is the second model (model_2) unless there was a swap
-        result = "2" if not swap else "1"
+        winner_color = TRMPH_RED_WIN
+        winner_char = TRMPH_RED_WIN
     else:
-        raise RuntimeError("Game ended with no winner, which is impossible in Hex.")
-    return result, winner_char
+        raise ValueError("Game is not over")
+    
+    return winner_color, winner_char
 
 def log_game_result(result: GameResult, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
@@ -345,7 +349,7 @@ def play_single_game(model_1: SimpleModelInference,
     
     # Initialize game state
     state = HexGameState(
-        board=np.zeros((board_size, board_size), dtype=np.int8), 
+        board=np.full((board_size, board_size), EMPTY_PIECE, dtype='U1'), 
         current_player=BLUE_PLAYER
     )
     
@@ -363,11 +367,11 @@ def play_single_game(model_1: SimpleModelInference,
     trmph_str = f"#{board_size},{trmph_moves}"
     
     # Determine winner
-    winner_result, winner_char = determine_winner(state, model_1, model_2, pie_result.swap)
+    winner_color, winner_char = determine_winner(state, model_1, model_2, pie_result.swap)
     
     # Create result
     result = GameResult(
-        winner=winner_result,
+        winner=winner_color,
         trmph_str=trmph_str,
         winner_char=winner_char,
         swap_decision=pie_result.swap_decision,
@@ -378,7 +382,7 @@ def play_single_game(model_1: SimpleModelInference,
         model_name_1 = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
         model_name_2 = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
         print("".join([
-            "*Winner*:", str(winner_char), "(Model ", str(winner_result),
+            "*Winner*:", str(winner_char), "(Model ", str(winner_color),
             "). Swapped=", str(pie_result.swap), ".\n",
             "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
         ]))
@@ -418,17 +422,17 @@ def play_games_with_each_first(
     
     return {
         'model_a_first': {
-            'winner_position': result_1.winner,  # "1" or "2" based on position
-            'winner_model': model_a_path if result_1.winner == "1" else model_b_path,
-            'loser_model': model_b_path if result_1.winner == "1" else model_a_path,
+            'winner_position': result_1.winner,  # "b" or "r" based on color
+            'winner_model': model_a_path if result_1.winner == "b" else model_b_path,
+            'loser_model': model_b_path if result_1.winner == "b" else model_a_path,
             'trmph_str': result_1.trmph_str,
             'winner_char': result_1.winner_char,
             'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
-            'winner_position': result_2.winner,  # "1" or "2" based on position
-            'winner_model': model_b_path if result_2.winner == "1" else model_a_path,
-            'loser_model': model_a_path if result_2.winner == "1" else model_b_path,
+            'winner_position': result_2.winner,  # "b" or "r" based on color
+            'winner_model': model_b_path if result_2.winner == "b" else model_a_path,
+            'loser_model': model_a_path if result_2.winner == "b" else model_b_path,
             'trmph_str': result_2.trmph_str,
             'winner_char': result_2.winner_char,
             'swap_decision': result_2.swap_decision

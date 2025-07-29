@@ -3,7 +3,7 @@ Board format conversion utilities for Hex AI.
 
 This module provides conversion functions between different board representations:
 - 2×N×N tensor format: Used by neural networks (channels for blue/red)
-- N×N array format: Used by game logic (0=empty, 1=blue, 2=red)
+- N×N array format: Used by game logic (-1=empty, 0=blue, 1=red)
 
 The N×N format is more convenient for game logic, adjacency checks, and debugging.
 """
@@ -14,12 +14,8 @@ from typing import Tuple
 
 # Board value constants for N×N format
 from ..config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
-from hex_ai.utils.format_conversion import (
-    board_2nxn_to_nxn, board_nxn_to_2nxn
-)
 
-
-def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> int:
+def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
     """
     Get the piece at a given position in N×N format.
     
@@ -29,7 +25,7 @@ def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> int:
         col: Column index (0-indexed)
         
     Returns:
-        Piece value: 0=empty, 1=blue, 2=red
+        Piece value: 'e'=empty, 'b'=blue, 'r'=red
         
     Raises:
         IndexError: If position is out of bounds

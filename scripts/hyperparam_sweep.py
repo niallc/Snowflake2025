@@ -51,7 +51,7 @@ root_logger.addHandler(stream_handler)
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "batch_size": [256, 1024],
+    "batch_size": [256],
     "max_grad_norm": [20],
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1

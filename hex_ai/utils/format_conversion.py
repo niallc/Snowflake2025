@@ -10,10 +10,9 @@ import torch
 from typing import Tuple
 
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PIECE, RED_PIECE, BLUE_CHANNEL, RED_CHANNEL, 
-    PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
+    BLUE_CHANNEL, RED_CHANNEL, PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 )
-from hex_ai.data_utils import get_player_to_move_from_board
 
 import string
 import logging
@@ -64,7 +63,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         duplicate_action: How to handle duplicate moves ("exception" or "ignore")
         
     Returns:
-        Board matrix with 0=empty, 1=blue, 2=red
+        Board matrix with 'e'=empty, 'b'=blue, 'r'=red (character array)
         
     Raises:
         ValueError: If duplicate_action="exception" and duplicate move found
@@ -73,15 +72,15 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
     bare_moves = strip_trmph_preamble(trmph_text)
     moves = split_trmph_moves(bare_moves)
     
-    # Initialize board
-    board = np.zeros((board_size, board_size), dtype=np.int8)
+    # Initialize board with EMPTY_PIECE ('e')
+    board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
     
     # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
         
         # Check for duplicate moves
-        if board[row, col] != 0: # Changed from EMPTY_PIECE to 0 for consistency with new_code
+        if board[row, col] != EMPTY_PIECE:
             if duplicate_action == "ignore":
                 logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
                 break  # Do not process any moves after a duplicate.
@@ -98,9 +97,9 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
                 logger.error(f"  Board value at position: {board[row, col]}")
                 logger.error(f"  Full trmph string: {trmph_text}")
                 logger.error(f"  All moves: {moves}")
-                raise ValueError(f"Duplicate move '{move}' at {(row, col)} in {trmph_text}")
+                raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
         
-        # Place move (Alternating players. Piece colours are blue=1, red=2 for nxn boards)
+        # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
         player = 0 if (i % 2) == 0 else 1 # Changed from BLUE_PLAYER/RED_PLAYER to 0/1 for consistency with new_code
         board[row, col] = BLUE_PIECE if player == 0 else RED_PIECE
     
@@ -126,25 +125,27 @@ def rowcol_to_tensor(row: int, col: int) -> int:
         raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
     return row * BOARD_SIZE + col
 
-def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
-    row, col = tensor_to_rowcol(tensor_pos)
-    return rowcol_to_trmph(row, col, board_size)
-
 def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
     row, col = trmph_move_to_rowcol(move, board_size)
     return rowcol_to_tensor(row, col)
 
-# --- Board/Tensor Conversion Functions (from board_utils.py) ---
+def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
+    row, col = tensor_to_rowcol(tensor_pos)
+    return rowcol_to_trmph(row, col, board_size)
+
+# --- Board/Tensor Conversion Functions ---
 def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
+    """Convert 2×N×N tensor format to N×N array format."""
     if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
-    board_nxn = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
     # Convert one-hot encoded channels to N×N format
     board_nxn[board_2nxn[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE
     board_nxn[board_2nxn[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
+    """Convert N×N array format to 2×N×N tensor format."""
     if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
     board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
@@ -185,13 +186,12 @@ def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
         torch.Tensor of shape (3, N, N)
     """
     board_2nxn = board_nxn_to_2nxn(board_nxn)
-    return board_2nxn_to_3nxn(board_2nxn) 
-
+    return board_2nxn_to_3nxn(board_2nxn)
 
 def parse_trmph_game_record(line: str) -> tuple[str, str]:
     """
     Parse a single line from a TRMPH file, returning (trmph_url, winner_indicator).
-    Raises ValueError if the format is invalid.
+    Raises ValueError if the format is invalid or if legacy formats are detected.
     """
     line = line.strip()
     if not line:
@@ -200,6 +200,13 @@ def parse_trmph_game_record(line: str) -> tuple[str, str]:
     if len(parts) != 2:
         raise ValueError(f"Invalid TRMPH game record format: {repr(line)}")
     trmph_url, winner_indicator = parts
-    if not winner_indicator.isdigit() or winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
+    
+    # Check for legacy formats and raise exceptions
+    if winner_indicator == "1":
+        raise ValueError(f"Legacy TRMPH_BLUE_WIN value ('1') detected in line: {repr(line)}. Use new format ('b') instead.")
+    elif winner_indicator == "2":
+        raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected in line: {repr(line)}. Use new format ('r') instead.")
+    
+    if winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
         raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
     return trmph_url, winner_indicator 
