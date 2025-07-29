@@ -22,7 +22,7 @@ def main():
                        default="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz",
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/jul29', help='Output directory')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of worker threads')
+    parser.add_argument('--num_workers', type=int, default=1, help='Number of worker threads (use 1 for batched inference)')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for inference')
     parser.add_argument('--cache_size', type=int, default=10000, help='Cache size for model inference')
     parser.add_argument('--search_widths', type=int, nargs='+', default=[3, 2], 
@@ -54,6 +54,19 @@ def main():
     print(f"Batched inference: {not args.no_batched_inference}")
     print(f"Output directory: {args.output_dir}")
     print(f"Timestamp: {timestamp}")
+    
+    # Note about threading configuration
+    if args.num_workers > 1 and not args.no_batched_inference:
+        print(f"\nNOTE: Using {args.num_workers} workers with batched inference.")
+        print("This may not provide significant performance benefits due to GPU serialization.")
+        print("Consider using --num_workers=1 for optimal batched inference performance.")
+    elif args.num_workers == 1 and not args.no_batched_inference:
+        print(f"\nNOTE: Using single-threaded execution with batched inference.")
+        print("This is the recommended configuration for optimal performance.")
+    elif not args.no_batched_inference:
+        print(f"\nNOTE: Using {args.num_workers} workers with individual inference calls.")
+        print("This configuration may provide better performance for non-batched inference.")
+    
     print()
     
     # Initialize self-play engine

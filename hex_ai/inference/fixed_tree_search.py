@@ -66,10 +66,16 @@ class PositionCollector:
         """
         # Thread safety check: ensure we're in the main thread
         if threading.current_thread() is not threading.main_thread():
-            raise RuntimeError(
-                "PositionCollector is not thread-safe and must be used only in the main thread. "
-                "This is a GPU-limited process that benefits from batching, not multi-threading."
+            error_msg = (
+                "CRITICAL ERROR: PositionCollector is not thread-safe and must be used only in the main thread.\n"
+                "This is a GPU-limited process that benefits from batching, not multi-threading.\n"
+                f"Current thread: {threading.current_thread().name}\n"
+                f"Main thread: {threading.main_thread().name}\n"
+                "The SelfPlayEngine is trying to use multi-threading, but PositionCollector requires single-threaded usage.\n"
+                "Please set --num_workers=1 in the self-play script to disable multi-threading."
             )
+            print(error_msg, file=sys.stderr)
+            sys.exit(1)
         
         self.model = model
         # Store (board, callback, metadata) tuples for deferred processing
@@ -80,10 +86,15 @@ class PositionCollector:
     def _check_thread_safety(self, method_name: str):
         """Check if method is called from the correct thread."""
         if threading.current_thread() is not self._creation_thread:
-            raise RuntimeError(
-                f"PositionCollector.{method_name}() called from thread {threading.current_thread().name} "
-                f"but created in thread {self._creation_thread.name}. PositionCollector is not thread-safe."
+            error_msg = (
+                f"CRITICAL ERROR: PositionCollector.{method_name}() called from wrong thread.\n"
+                f"Current thread: {threading.current_thread().name}\n"
+                f"Creation thread: {self._creation_thread.name}\n"
+                "PositionCollector is not thread-safe.\n"
+                "Please set --num_workers=1 in the self-play script to disable multi-threading."
             )
+            print(error_msg, file=sys.stderr)
+            sys.exit(1)
     
     def _check_memory_usage(self):
         """

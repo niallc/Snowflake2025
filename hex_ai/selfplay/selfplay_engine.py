@@ -95,6 +95,12 @@ class SelfPlayEngine:
             print(f"  Temperature: {temperature}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
+            
+        # Warn about multi-threading incompatibility with batched inference
+        if num_workers > 1 and use_batched_inference:
+            print(f"\nWARNING: Multi-threading (num_workers={num_workers}) is incompatible with batched inference.")
+            print("The PositionCollector requires single-threaded usage. Consider setting --num_workers=1")
+            print("or --no_batched_inference to avoid this issue.\n")
 
     def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
         """
