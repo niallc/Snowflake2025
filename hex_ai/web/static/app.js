@@ -16,9 +16,6 @@ const COLORS = {
   LAST_MOVE: '#222', // Keep for backward compatibility but won't use
 };
 
-const BOARD_SIZE = 13;
-const HEX_RADIUS = 16; // px, radius of each hex
-
 // --- State ---
 let state = {
   trmph: `#13,`,
@@ -39,8 +36,21 @@ let state = {
   available_models: [],
   verbose_level: 3, // Debug output level
   computer_enabled: true, // Whether computer moves are enabled
-  move_history: [] // Track move history for undo functionality
+  move_history: [], // Track move history for undo functionality
+  constants: null // Will be populated from backend
 };
+
+// --- Game Constants (will be populated from backend) ---
+let GAME_CONSTANTS = {
+  BOARD_SIZE: 13, // Default fallback
+  PIECE_VALUES: {
+    EMPTY: 'e',
+    BLUE: 'b', 
+    RED: 'r'
+  }
+};
+
+const HEX_RADIUS = 16; // px, radius of each hex
 
 // --- Utility: Get per-player settings ---
 function getCurrentPlayerSettings() {
@@ -65,6 +75,15 @@ function rowcolToTrmph(row, col) {
 }
 
 // --- API Calls ---
+async function fetchConstants() {
+  const resp = await fetch('/api/constants', {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
+}
+
 async function fetchModels() {
   const resp = await fetch('/api/models', {
     method: 'GET',
@@ -78,7 +97,7 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   const resp = await fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, temperature }),
+    body: JSON.stringify({ trmph, model_id, temperature, verbose: state.verbose_level }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -114,12 +133,7 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      trmph, 
-      move, 
-      model_id, 
-      temperature
-    }),
+    body: JSON.stringify({ trmph, move, model_id, temperature, verbose: state.verbose_level }),
   });
   if (!resp.ok) throw new Error('API error');
   return await resp.json();
@@ -137,13 +151,18 @@ async function makeComputerMove(trmph, model_id, search_widths = [], temperature
 
 // --- Board Rendering ---
 function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlayer) {
+  // Debug logging (only if verbose level >= 4)
+  if (state.verbose_level >= 4) {
+    debugBoardState(board, legalMoves, lastMove, winner, lastMovePlayer);
+  }
+  
   container.innerHTML = '';
   // Math for flat-topped hex grid, blue at top/bottom
   const w = HEX_RADIUS * Math.sqrt(3);
   const h = HEX_RADIUS * 1.5;
   // Make the SVG area wider and taller for full edge visibility
-  const svgWidth = 1.5 * (w * (BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS);
-  const svgHeight = 1.2 * (h * (BOARD_SIZE - 1) + 2 * HEX_RADIUS);
+  const svgWidth = 1.5 * (w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS);
+  const svgHeight = 1.2 * (h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS);
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', svgWidth);
   svg.setAttribute('height', svgHeight);
@@ -154,35 +173,35 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // Blue: top and bottom (across the topmost and bottommost hexes)
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
-    hexCenter(0, BOARD_SIZE - 1).x, hexCenter(0, BOARD_SIZE - 1).y - HEX_RADIUS,
+    hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
     COLORS.VERY_DARK_BLUE
   ));
   svg.appendChild(makeEdgeLine(
-    hexCenter(BOARD_SIZE - 1, 0).x, hexCenter(BOARD_SIZE - 1, 0).y + HEX_RADIUS,
-    hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1).x, hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1).y + HEX_RADIUS,
+    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
+    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
     COLORS.VERY_DARK_BLUE
   ));
   // Red: left and right (use pi/4 for offset)
   const redAngle = Math.PI / 4;
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(0, 0).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(BOARD_SIZE - 1, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(BOARD_SIZE - 1, 0).y - HEX_RADIUS * Math.sin(redAngle),
+    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y - HEX_RADIUS * Math.sin(redAngle),
     COLORS.VERY_DARK_RED
   ));
   svg.appendChild(makeEdgeLine(
-    hexCenter(0, BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(0, BOARD_SIZE - 1).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1).y - HEX_RADIUS * Math.sin(redAngle),
+    hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS * Math.sin(redAngle),
+    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS * Math.sin(redAngle),
     COLORS.VERY_DARK_RED
   ));
 
   // Draw hexes
-  for (let row = 0; row < BOARD_SIZE; row++) {
-    for (let col = 0; col < BOARD_SIZE; col++) {
+  for (let row = 0; row < GAME_CONSTANTS.BOARD_SIZE; row++) {
+    for (let col = 0; col < GAME_CONSTANTS.BOARD_SIZE; col++) {
       const { x, y } = hexCenter(row, col);
-      const cell = board[row]?.[col] || 0;
+      const cell = board[row]?.[col] || GAME_CONSTANTS.PIECE_VALUES.EMPTY;
       let fill = '#fff';
-      if (cell === 1) fill = COLORS.DARK_BLUE;
-      if (cell === 2) fill = COLORS.DARK_RED;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.DARK_BLUE;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.DARK_RED;
       
       // Highlight last move with darker color based on player
       if (lastMove && lastMove[0] === row && lastMove[1] === col) {
@@ -193,8 +212,8 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
         }
       }
       
-      if (winner === 'blue' && cell === 1) fill = COLORS.VERY_DARK_BLUE;
-      if (winner === 'red' && cell === 2) fill = COLORS.VERY_DARK_RED;
+      if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.VERY_DARK_BLUE;
+      if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.VERY_DARK_RED;
       const isLegal = legalMoves.includes(rowcolToTrmph(row, col));
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
@@ -445,6 +464,21 @@ function stopAutoStep() {
 
 // --- Controls ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // Load game constants from backend
+  try {
+    const constantsResult = await fetchConstants();
+    GAME_CONSTANTS = {
+      BOARD_SIZE: constantsResult.BOARD_SIZE,
+      PIECE_VALUES: constantsResult.PIECE_VALUES,
+      PLAYER_VALUES: constantsResult.PLAYER_VALUES,
+      WINNER_VALUES: constantsResult.WINNER_VALUES
+    };
+    state.constants = constantsResult;
+    console.log('Loaded game constants:', GAME_CONSTANTS);
+  } catch (err) {
+    console.error('Failed to load constants, using defaults:', err);
+  }
+
   // Load available models
   try {
     const modelsResult = await fetchModels();
@@ -702,4 +736,36 @@ function saveStateForUndo() {
   if (state.move_history.length > 10) {
     state.move_history.shift();
   }
+} 
+
+// --- Debug utilities ---
+function debugBoardState(board, legalMoves, lastMove, winner, lastMovePlayer) {
+  console.log('=== Board Debug Info ===');
+  console.log('Board dimensions:', board.length, 'x', board[0]?.length);
+  console.log('Legal moves count:', legalMoves.length);
+  console.log('Last move:', lastMove);
+  console.log('Last move player:', lastMovePlayer);
+  console.log('Winner:', winner);
+  
+  // Log a sample of board values
+  console.log('Sample board values:');
+  for (let row = 0; row < Math.min(3, board.length); row++) {
+    for (let col = 0; col < Math.min(3, board[row]?.length || 0); col++) {
+      const cell = board[row]?.[col] || 'e';
+      console.log(`  [${row},${col}]: '${cell}' (type: ${typeof cell})`);
+    }
+  }
+  
+  // Count pieces
+  let blueCount = 0, redCount = 0, emptyCount = 0;
+  for (let row = 0; row < board.length; row++) {
+    for (let col = 0; col < board[row]?.length || 0; col++) {
+      const cell = board[row]?.[col] || 'e';
+      if (cell === 'b') blueCount++;
+      else if (cell === 'r') redCount++;
+      else emptyCount++;
+    }
+  }
+  console.log('Piece counts - Blue:', blueCount, 'Red:', redCount, 'Empty:', emptyCount);
+  console.log('========================');
 } 

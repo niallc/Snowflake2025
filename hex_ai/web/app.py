@@ -279,6 +279,26 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
         app.logger.error(f"Computer move failed: {e}")
         return {"success": False, "error": str(e)}
 
+@app.route("/api/constants", methods=["GET"])
+def api_constants():
+    """Return game constants for frontend use."""
+    return jsonify({
+        "BOARD_SIZE": BOARD_SIZE,
+        "PIECE_VALUES": {
+            "EMPTY": EMPTY_PIECE,
+            "BLUE": BLUE_PIECE,
+            "RED": RED_PIECE
+        },
+        "PLAYER_VALUES": {
+            "BLUE": BLUE_PLAYER,
+            "RED": RED_PLAYER
+        },
+        "WINNER_VALUES": {
+            "BLUE": TRMPH_BLUE_WIN,
+            "RED": TRMPH_RED_WIN
+        }
+    })
+
 @app.route("/api/models", methods=["GET"])
 def api_models():
     """Get available models."""
@@ -290,6 +310,7 @@ def api_state():
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")  # Default to model1
     temperature = data.get("temperature", 1.0)  # Default temperature
+    verbose = data.get("verbose", 0)  # Get verbose level
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -300,6 +321,13 @@ def api_state():
     player = state.current_player
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
+
+    # Debug logging for board data (only if verbose >= 4)
+    if verbose >= 4:
+        app.logger.debug(f"Board data being sent to frontend: {board}")
+        app.logger.debug(f"Board type: {type(board)}, Board shape: {len(board)}x{len(board[0]) if board else 0}")
+        if board and len(board) > 0 and len(board[0]) > 0:
+            app.logger.debug(f"Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
     # Add defensive programming to catch any issues
     try:
@@ -343,6 +371,7 @@ def api_apply_move():
     move = data.get("move")
     model_id = data.get("model_id", "model1")
     temperature = data.get("temperature", 1.0)  # Default temperature
+    verbose = data.get("verbose", 0)  # Get verbose level
     
     try:
         state = HexGameState.from_trmph(trmph)
@@ -359,6 +388,13 @@ def api_apply_move():
     player = state.current_player
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
+
+    # Debug logging for board data (only if verbose >= 4)
+    if verbose >= 4:
+        app.logger.debug(f"Apply move - Board data being sent to frontend: {board}")
+        app.logger.debug(f"Apply move - Board type: {type(board)}, Board shape: {len(board)}x{len(board[0]) if board else 0}")
+        if board and len(board) > 0 and len(board[0]) > 0:
+            app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
     # Add defensive programming to catch any issues
     try:

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Board Rendering Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        #board-container { width: 600px; height: 400px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <h1>Board Rendering Test</h1>
+    
+    <div class="test-section">
+        <h3>Test 1: Empty Board</h3>
+        <div id="board1"></div>
+        <button onclick="testEmptyBoard()">Test Empty Board</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test 2: Board with Pieces</h3>
+        <div id="board2"></div>
+        <button onclick="testBoardWithPieces()">Test Board with Pieces</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test 3: Board with Last Move Highlight</h3>
+        <div id="board3"></div>
+        <button onclick="testBoardWithLastMove()">Test Board with Last Move</button>
+    </div>
+
+    <script>
+        // Copy the relevant constants and functions from app.js
+        const COLORS = {
+            LIGHT_BLUE: '#e7fcfc',
+            MEDIUM_BLUE: '#bbeeee',
+            DARK_BLUE: '#8bd6d6',
+            VERY_DARK_BLUE: '#0099ff',
+            DARKER_BLUE: '#0066cc',
+            LIGHT_RED: '#fff4ea',
+            MEDIUM_RED: '#ffe1c8',
+            DARK_RED: '#ffcea5',
+            VERY_DARK_RED: '#ff6600',
+            DARKER_RED: '#cc3300',
+            LIGHT_GRAY: '#cccccc',
+            BOARD_BG: '#f8f8fa',
+            GRID: '#bbb',
+        };
+
+        // Game constants (will be populated from backend)
+        let GAME_CONSTANTS = {
+            BOARD_SIZE: 13, // Default fallback
+            PIECE_VALUES: {
+                EMPTY: 'e',
+                BLUE: 'b', 
+                RED: 'r'
+            }
+        };
+
+        const HEX_RADIUS = 16;
+
+        // Fetch constants from backend
+        async function loadConstants() {
+            try {
+                const response = await fetch('/api/constants');
+                if (response.ok) {
+                    const constants = await response.json();
+                    GAME_CONSTANTS = {
+                        BOARD_SIZE: constants.BOARD_SIZE,
+                        PIECE_VALUES: constants.PIECE_VALUES,
+                        PLAYER_VALUES: constants.PLAYER_VALUES,
+                        WINNER_VALUES: constants.WINNER_VALUES
+                    };
+                    console.log('Loaded constants:', GAME_CONSTANTS);
+                }
+            } catch (err) {
+                console.error('Failed to load constants, using defaults:', err);
+            }
+        }
+
+        function hexCenter(row, col) {
+            const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + HEX_RADIUS * 0.25;
+            const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + HEX_RADIUS * 0.25;
+            return { x, y };
+        }
+
+        function makeHex(cx, cy, r, fill, highlight) {
+            const points = [];
+            for (let i = 0; i < 6; i++) {
+                const angle = Math.PI / 3 * i + Math.PI / 6;
+                points.push([
+                    cx + r * Math.cos(angle),
+                    cy + r * Math.sin(angle)
+                ]);
+            }
+            const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
+            hex.setAttribute('fill', fill);
+            hex.setAttribute('stroke', highlight ? COLORS.MEDIUM_BLUE : COLORS.GRID);
+            hex.setAttribute('stroke-width', highlight ? 4 : 2);
+            return hex;
+        }
+
+        function drawTestBoard(container, board, lastMove, lastMovePlayer) {
+            container.innerHTML = '';
+            
+            const w = HEX_RADIUS * Math.sqrt(3);
+            const h = HEX_RADIUS * 1.5;
+            const svgWidth = 1.5 * (w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS);
+            const svgHeight = 1.2 * (h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS);
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', svgWidth);
+            svg.setAttribute('height', svgHeight);
+            svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+            svg.style.background = COLORS.BOARD_BG;
+
+            // Draw hexes
+            for (let row = 0; row < GAME_CONSTANTS.BOARD_SIZE; row++) {
+                for (let col = 0; col < GAME_CONSTANTS.BOARD_SIZE; col++) {
+                    const { x, y } = hexCenter(row, col);
+                    const cell = board[row]?.[col] || 'e';
+                    let fill = '#fff';
+                    
+                    if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.DARK_BLUE;
+                    if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.DARK_RED;
+                    
+                    // Highlight last move
+                    if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+                        if (lastMovePlayer === 'blue') {
+                            fill = COLORS.DARKER_BLUE;
+                        } else if (lastMovePlayer === 'red') {
+                            fill = COLORS.DARKER_RED;
+                        }
+                    }
+                    
+                    const hex = makeHex(x, y, HEX_RADIUS, fill, false);
+                    svg.appendChild(hex);
+                }
+            }
+            container.appendChild(svg);
+        }
+
+        function testEmptyBoard() {
+            const board = Array(GAME_CONSTANTS.BOARD_SIZE).fill().map(() => Array(GAME_CONSTANTS.BOARD_SIZE).fill(GAME_CONSTANTS.PIECE_VALUES.EMPTY));
+            console.log('Testing empty board:', board);
+            drawTestBoard(document.getElementById('board1'), board, null, null);
+        }
+
+        function testBoardWithPieces() {
+            const board = Array(GAME_CONSTANTS.BOARD_SIZE).fill().map(() => Array(GAME_CONSTANTS.BOARD_SIZE).fill(GAME_CONSTANTS.PIECE_VALUES.EMPTY));
+            // Add some test pieces
+            board[0][0] = GAME_CONSTANTS.PIECE_VALUES.BLUE;  // Blue piece
+            board[1][1] = GAME_CONSTANTS.PIECE_VALUES.RED;  // Red piece
+            board[2][2] = GAME_CONSTANTS.PIECE_VALUES.BLUE;  // Blue piece
+            board[3][3] = GAME_CONSTANTS.PIECE_VALUES.RED;  // Red piece
+            console.log('Testing board with pieces:', board);
+            drawTestBoard(document.getElementById('board2'), board, null, null);
+        }
+
+        function testBoardWithLastMove() {
+            const board = Array(GAME_CONSTANTS.BOARD_SIZE).fill().map(() => Array(GAME_CONSTANTS.BOARD_SIZE).fill(GAME_CONSTANTS.PIECE_VALUES.EMPTY));
+            // Add some test pieces
+            board[0][0] = GAME_CONSTANTS.PIECE_VALUES.BLUE;
+            board[1][1] = GAME_CONSTANTS.PIECE_VALUES.RED;
+            board[2][2] = GAME_CONSTANTS.PIECE_VALUES.BLUE;
+            board[3][3] = GAME_CONSTANTS.PIECE_VALUES.RED;
+            console.log('Testing board with last move highlight:', board);
+            drawTestBoard(document.getElementById('board3'), board, [5, 5], 'blue');
+        }
+
+        // Initialize: load constants then run initial test
+        loadConstants().then(() => {
+            testEmptyBoard();
+        });
+    </script>
+</body>
+</html>
