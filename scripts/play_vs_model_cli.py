@@ -123,7 +123,7 @@ def main():
             display_hex_board(state.board)
             print(f"Current .trmph: {state.to_trmph()}")
             # Show network's confidence (value head) for current player
-            _, _, value_logit = model.infer(state.board)
+            _, _, value_logit = model.simple_infer(state.board)
             current_winner = Winner.BLUE if state.current_player == BLUE_PLAYER else Winner.RED
             value = get_win_prob_from_model_output(value_logit, current_winner)
             player_str = current_winner.name.capitalize()

@@ -18,8 +18,8 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,  # Add the new public function
-    apply_move_to_state_trmph,  # Add move application utilities
 )
+from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move application utilities
 
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
@@ -215,7 +215,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 # Capture debug information during the actual search
                 if verbose >= 1:
                     # Get policy and value for the current state before search
-                    policy_logits, value_logit = model.infer(trmph)
+                    policy_logits, value_logit = model.simple_infer(trmph)
                     policy_probs = policy_logits_to_probs(policy_logits, temperature)
                     
                     # Generate basic debug info from the original state
@@ -246,7 +246,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
             # Simple policy-based move using centralized utilities
             if verbose >= 1:
                 # Get policy and value for the current state before move selection
-                policy_logits, value_logit = model.infer(trmph)
+                policy_logits, value_logit = model.simple_infer(trmph)
                 policy_probs = policy_logits_to_probs(policy_logits, temperature)
                 
                 # Generate basic debug info from the original state
@@ -311,7 +311,7 @@ def api_state():
     # Model inference
     try:
         model = get_model(model_id)
-        policy_logits, value_logit = model.infer(trmph)
+        policy_logits, value_logit = model.simple_infer(trmph)
         # Apply temperature scaling to policy using centralized utility
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         # Map policy to trmph moves
@@ -370,7 +370,7 @@ def api_apply_move():
     # Recompute policy/value for the new state
     try:
         model = get_model(model_id)
-        policy_logits, value_logit = model.infer(new_trmph)
+        policy_logits, value_logit = model.simple_infer(new_trmph)
         # Apply temperature scaling to policy using centralized utility
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
@@ -486,7 +486,7 @@ def api_move():
             # Generate debug information after the move is made (when all data is available)
             if verbose >= 1:
                 # Get policy and value for the state BEFORE the computer move (the state the computer was thinking about)
-                policy_logits, value_logit = model.infer(trmph_before_computer_move)
+                policy_logits, value_logit = model.simple_infer(trmph_before_computer_move)
                 policy_probs = policy_logits_to_probs(policy_logits, computer_temperature)
                 
                 # Generate debug info using the actual search tree from the move selection
@@ -507,7 +507,7 @@ def api_move():
     # Recompute policy/value for final state using centralized utilities
     try:
         model = get_model(model_id)
-        policy_logits, value_logit = model.infer(new_trmph)
+        policy_logits, value_logit = model.simple_infer(new_trmph)
         # Apply temperature scaling to policy using centralized utility
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}

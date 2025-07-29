@@ -14,7 +14,8 @@ from hex_ai.config import (
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
-from hex_ai.data_utils import create_board_from_moves, preprocess_example_for_model, get_player_to_move_from_board
+from hex_ai.data_utils import create_board_from_moves
+from hex_ai.utils.player_utils import get_player_to_move_from_board
 from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 from hex_ai.value_utils import (
     # Add new utilities
@@ -150,58 +151,6 @@ class SimpleModelInference:
         
         return max(1, batch_size)
 
-    def trmph_to_2nxn(self, trmph: str) -> torch.Tensor:
-        board_nxn = fc.parse_trmph_to_board(trmph, board_size=self.board_size)
-        # TODO: This function is legacy and only used internally; prefer board_nxn_to_2nxn for inference
-        return fc.board_nxn_to_2nxn(board_nxn)
-
-    def _is_finished_position(self, board_2ch: np.ndarray) -> Tuple[bool, int]:
-        """
-        Check if a position is finished (one player has won).
-        Returns (is_finished, winner) where winner is BLUE_PLAYER or RED_PLAYER.
-        """
-        # For now, use a simple heuristic: if one player has significantly more pieces
-        # and the board has a reasonable number of pieces, it's likely a finished position
-        blue_pieces = np.sum(board_2ch[BLUE_CHANNEL])  # Use BLUE_CHANNEL constant
-        red_pieces = np.sum(board_2ch[RED_CHANNEL])    # Use RED_CHANNEL constant
-        total_pieces = blue_pieces + red_pieces
-        
-        # If board has a reasonable number of pieces (>10), check for winner
-        if total_pieces > 10:
-            # Simple heuristic: player with more pieces likely won
-            if blue_pieces > red_pieces:
-                return True, BLUE_PLAYER  # Use BLUE_PLAYER constant
-            elif red_pieces > blue_pieces:
-                return True, RED_PLAYER   # Use RED_PLAYER constant
-        
-        return False, -1
-
-    def _create_board_with_correct_player_channel(self, board_2ch: np.ndarray) -> torch.Tensor:
-        """
-        Create a 3-channel board tensor with the correct player-to-move channel.
-        For finished positions, sets the player-to-move to the loser (next player),
-        which is how the model was trained.
-        """
-        is_finished, winner = self._is_finished_position(board_2ch)
-        
-        if is_finished:
-            # For finished positions, set player-to-move to the loser (next player)
-            # This matches how the model was trained on final positions
-            # NOTE: This is the key insight - training data has player-to-move = loser
-            loser = RED_PLAYER if winner == BLUE_PLAYER else BLUE_PLAYER
-            player_to_move = loser
-        else:
-            # For non-finished positions, use normal logic
-            player_to_move = get_player_to_move_from_board(board_2ch)
-            # Convert Player enum to integer for tensor creation
-            player_to_move = player_to_move.value
-        
-        # Create player-to-move channel
-        # NOTE: player_to_move is now an integer (0 for BLUE, 1 for RED)
-        player_channel = np.full((1, self.board_size, self.board_size), float(player_to_move), dtype=board_2ch.dtype)
-        board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
-        return torch.tensor(board_3ch, dtype=torch.float32)
-
     def simple_infer(self, board: Union[str, np.ndarray, torch.Tensor]) -> Tuple[np.ndarray, float]:
         """
         Accepts a board in trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor format.
@@ -220,39 +169,35 @@ class SimpleModelInference:
         
         self.stats['cache_misses'] += 1
         
-        # Convert input to the same format used in training
+        # Convert input to 3-channel tensor format
         if isinstance(board, str):
-            # For TRMPH strings, use the same pipeline as training
-            board_2ch = create_board_from_moves(fc.split_trmph_moves(fc.strip_trmph_preamble(board)))
+            # For TRMPH strings, convert to NxN first, then to 3-channel
+            board_nxn = fc.parse_trmph_to_board(board)
+            input_tensor = fc.board_nxn_to_3nxn(board_nxn)
         elif isinstance(board, np.ndarray):
             if board.shape == (self.board_size, self.board_size):
-                # NxN format - convert to 2-channel using same logic as training
-                # NOTE: NxN boards use BLUE_PIECE (1) and RED_PIECE (2)
-                board_2ch = np.zeros((2, self.board_size, self.board_size), dtype=np.float32)
-                board_2ch[BLUE_CHANNEL] = (board == BLUE_PIECE).astype(np.float32)  # Blue channel
-                board_2ch[RED_CHANNEL] = (board == RED_PIECE).astype(np.float32)   # Red channel
+                # NxN format - convert to 3-channel directly
+                input_tensor = fc.board_nxn_to_3nxn(board)
             elif board.shape == (2, self.board_size, self.board_size):
-                # Already 2-channel format
-                board_2ch = board
+                # 2-channel format - convert to 3-channel
+                board_2ch_tensor = torch.from_numpy(board)
+                input_tensor = fc.board_2nxn_to_3nxn(board_2ch_tensor)
             elif board.shape == (3, self.board_size, self.board_size):
-                # 3-channel format - extract first 2 channels
-                board_2ch = board[:2]
+                # Already 3-channel format
+                input_tensor = torch.from_numpy(board)
             else:
                 raise ValueError(f"Numpy array must have shape ({self.board_size}, {self.board_size}), (2, {self.board_size}, {self.board_size}), or (3, {self.board_size}, {self.board_size})")
         elif isinstance(board, torch.Tensor):
             if board.shape == (2, self.board_size, self.board_size):
-                # Already 2-channel format
-                board_2ch = board.cpu().numpy()
+                # 2-channel format - convert to 3-channel
+                input_tensor = fc.board_2nxn_to_3nxn(board)
             elif board.shape == (3, self.board_size, self.board_size):
-                # 3-channel format - extract first 2 channels
-                board_2ch = board[:2].cpu().numpy()
+                # Already 3-channel format
+                input_tensor = board
             else:
                 raise ValueError(f"Tensor must have shape (2, {self.board_size}, {self.board_size}) or (3, {self.board_size}, {self.board_size})")
         else:
             raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
-
-        # Create the 3-channel board with correct player-to-move channel
-        input_tensor = self._create_board_with_correct_player_channel(board_2ch)
 
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
@@ -311,38 +256,36 @@ class SimpleModelInference:
             # Convert all uncached boards to 3-channel tensors
             input_tensors = []
             for board in uncached_boards:
-                # Convert input to the same format used in training
+                # Use the same conversion logic as simple_infer
                 if isinstance(board, str):
-                    # For TRMPH strings, use the same pipeline as training
-                    board_2ch = create_board_from_moves(fc.split_trmph_moves(fc.strip_trmph_preamble(board)))
+                    # For TRMPH strings, convert to NxN first, then to 3-channel
+                    board_nxn = fc.parse_trmph_to_board(board)
+                    input_tensor = fc.board_nxn_to_3nxn(board_nxn)
                 elif isinstance(board, np.ndarray):
                     if board.shape == (self.board_size, self.board_size):
-                        # NxN format - convert to 2-channel using same logic as training
-                        board_2ch = np.zeros((2, self.board_size, self.board_size), dtype=np.float32)
-                        board_2ch[BLUE_CHANNEL] = (board == BLUE_PIECE).astype(np.float32)  # Blue channel
-                        board_2ch[RED_CHANNEL] = (board == RED_PIECE).astype(np.float32)   # Red channel
+                        # NxN format - convert to 3-channel directly
+                        input_tensor = fc.board_nxn_to_3nxn(board)
                     elif board.shape == (2, self.board_size, self.board_size):
-                        # Already 2-channel format
-                        board_2ch = board
+                        # 2-channel format - convert to 3-channel
+                        board_2ch_tensor = torch.from_numpy(board)
+                        input_tensor = fc.board_2nxn_to_3nxn(board_2ch_tensor)
                     elif board.shape == (3, self.board_size, self.board_size):
-                        # 3-channel format - extract first 2 channels
-                        board_2ch = board[:2]
+                        # Already 3-channel format
+                        input_tensor = torch.from_numpy(board)
                     else:
                         raise ValueError(f"Numpy array must have shape ({self.board_size}, {self.board_size}), (2, {self.board_size}, {self.board_size}), or (3, {self.board_size}, {self.board_size})")
                 elif isinstance(board, torch.Tensor):
                     if board.shape == (2, self.board_size, self.board_size):
-                        # Already 2-channel format
-                        board_2ch = board.cpu().numpy()
+                        # 2-channel format - convert to 3-channel
+                        input_tensor = fc.board_2nxn_to_3nxn(board)
                     elif board.shape == (3, self.board_size, self.board_size):
-                        # 3-channel format - extract first 2 channels
-                        board_2ch = board[:2].cpu().numpy()
+                        # Already 3-channel format
+                        input_tensor = board
                     else:
                         raise ValueError(f"Tensor must have shape (2, {self.board_size}, {self.board_size}) or (3, {self.board_size}, {self.board_size})")
                 else:
                     raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
-
-                # Create the 3-channel board with correct player-to-move channel
-                input_tensor = self._create_board_with_correct_player_channel(board_2ch)
+                
                 input_tensors.append(input_tensor)
             
             # Process in batches

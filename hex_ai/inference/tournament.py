@@ -220,7 +220,7 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
         return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
     
     # Evaluate win prob for blue after first move
-    _, value_logit = model_2.infer(state.board)
+    _, value_logit = model_2.simple_infer(state.board)
     win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
     
     # Decide whether to swap: Red swaps if Blue's position is too good (>= threshold)

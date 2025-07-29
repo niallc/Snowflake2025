@@ -44,7 +44,7 @@ def get_topk_moves(state: HexGameState, model, k: int,
     Returns:
         List of k sampled moves
     """
-    policy_logits, _ = model.infer(state.board)
+    policy_logits, _ = model.simple_infer(state.board)
     policy_probs = temperature_scaled_softmax(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
     

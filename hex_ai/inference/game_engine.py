@@ -484,7 +484,7 @@ def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
     move_values = []
     for move in topk_moves:
         temp_state = apply_move_to_state(state, *move)
-        _, value_logit = model.infer(temp_state.board)
+        _, value_logit = model.simple_infer(temp_state.board)
         move_values.append(value_logit)
     chosen_idx = sample_move_by_value(move_values, temperature)
     return topk_moves[chosen_idx] 

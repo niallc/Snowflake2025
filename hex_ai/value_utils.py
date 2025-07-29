@@ -353,7 +353,7 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     Raises:
         ValueError: If no legal moves are available
     """
-    policy_logits, _ = model.infer(state.board)
+    policy_logits, _ = model.simple_infer(state.board)
     
     # Use centralized utilities for policy processing
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
@@ -485,7 +485,7 @@ def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=
         List of top-k moves [(row, col), ...] or [(row, col), prob] if return_probs
         Returns None if there are no legal moves.
     """
-    policy_logits, _ = model.infer(state.board)
+    policy_logits, _ = model.simple_infer(state.board)
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     legal_moves = state.get_legal_moves()
     if not legal_moves:

@@ -30,7 +30,7 @@ def main():
     infer.display_board(args.trmph)
 
     print("\n--- Model Predictions ---")
-    policy_logits, value_logit = infer.infer(args.trmph)
+    policy_logits, value_logit = infer.simple_infer(args.trmph)
     # Use the updated method that accepts logits directly
     top_moves = infer.get_top_k_moves(policy_logits, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")

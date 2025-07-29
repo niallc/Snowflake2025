@@ -110,7 +110,7 @@ def test_model_inference_and_move_selection():
         print(f"Initial state: moves={len(state.move_history)}, board_sum={state.board.sum()}")
         
         # Test model inference
-        policy_logits, value_logit = model.infer(state.board)
+        policy_logits, value_logit = model.simple_infer(state.board)
         print(f"Policy logits shape: {policy_logits.shape}, value_logit: {value_logit:.3f}")
         
         # Test move selection
