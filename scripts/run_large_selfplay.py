@@ -29,8 +29,6 @@ def main():
                        help='Search widths for minimax (e.g., 3 2 for width 3 at depth 1, width 2 at depth 2)')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for move sampling')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
-    parser.add_argument('--save_essential_only', action='store_true', 
-                       help='Only save essential game data (no detailed moves)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
     parser.add_argument('--no_batched_inference', action='store_true',
@@ -67,7 +65,6 @@ def main():
         search_widths=args.search_widths,
         temperature=args.temperature,
         verbose=args.verbose,
-        save_essential_only=args.save_essential_only,
         streaming_save=args.streaming_save,
         use_batched_inference=not args.no_batched_inference
     )
@@ -88,18 +85,13 @@ def main():
             )
         
         # Save games
-        if not args.save_essential_only and games:
+        if games:
             # Save with detailed move data
             base_filename = f"{args.output_dir}/selfplay_{timestamp}"
             compressed_file, csv_dir = engine.save_games_with_details(games, base_filename)
             print(f"\nSaved detailed games:")
             print(f"  Compressed: {compressed_file}")
             print(f"  CSV details: {csv_dir}")
-        else:
-            # Save essential data only
-            filename = f"{args.output_dir}/selfplay_essential_{timestamp}.pkl.gz"
-            engine.save_games_to_file(games, filename)
-            print(f"\nSaved essential games: {filename}")
         
         # Print final statistics
         total_time = time.time() - start_time
