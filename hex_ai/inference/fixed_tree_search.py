@@ -64,13 +64,40 @@ class PositionCollector:
         Raises:
             RuntimeError: If called from a multi-threaded context
         """
-        # Thread safety check: ensure we're in the main thread
-        if threading.current_thread() is not threading.main_thread():
+        # Thread safety check: allow single worker thread but prevent multi-threading
+        current_thread = threading.current_thread()
+        main_thread = threading.main_thread()
+        
+        # Allow if we're in the main thread OR if we're in a single worker thread
+        # (ThreadPoolExecutor with max_workers=1 creates one worker thread)
+        if current_thread is main_thread:
+            # Main thread - always allowed
+            pass
+        elif current_thread.name.startswith('ThreadPoolExecutor-'):
+            # Check if this is a single worker thread (ThreadPoolExecutor-0_0)
+            # or a multi-threaded worker (ThreadPoolExecutor-0_1, ThreadPoolExecutor-0_2, etc.)
+            if '_0' in current_thread.name and current_thread.name.endswith('_0'):
+                # Single worker thread - acceptable
+                pass
+            else:
+                # Multi-threaded worker - not allowed
+                error_msg = (
+                    "CRITICAL ERROR: PositionCollector is not thread-safe and must be used only in the main thread.\n"
+                    "This is a GPU-limited process that benefits from batching, not multi-threading.\n"
+                    f"Current thread: {current_thread.name}\n"
+                    f"Main thread: {main_thread.name}\n"
+                    "The SelfPlayEngine is trying to use multi-threading, but PositionCollector requires single-threaded usage.\n"
+                    "Please set --num_workers=1 in the self-play script to disable multi-threading."
+                )
+                print(error_msg, file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Other thread types - not allowed
             error_msg = (
                 "CRITICAL ERROR: PositionCollector is not thread-safe and must be used only in the main thread.\n"
                 "This is a GPU-limited process that benefits from batching, not multi-threading.\n"
-                f"Current thread: {threading.current_thread().name}\n"
-                f"Main thread: {threading.main_thread().name}\n"
+                f"Current thread: {current_thread.name}\n"
+                f"Main thread: {main_thread.name}\n"
                 "The SelfPlayEngine is trying to use multi-threading, but PositionCollector requires single-threaded usage.\n"
                 "Please set --num_workers=1 in the self-play script to disable multi-threading."
             )
@@ -85,10 +112,23 @@ class PositionCollector:
         
     def _check_thread_safety(self, method_name: str):
         """Check if method is called from the correct thread."""
-        if threading.current_thread() is not self._creation_thread:
+        current_thread = threading.current_thread()
+        
+        # Allow if we're in the creation thread OR if we're in a single worker thread
+        if current_thread is self._creation_thread:
+            # Same thread as creation - always allowed
+            pass
+        elif (current_thread.name.startswith('ThreadPoolExecutor-') and 
+              self._creation_thread.name.startswith('ThreadPoolExecutor-') and
+              '_0' in current_thread.name and current_thread.name.endswith('_0') and
+              '_0' in self._creation_thread.name and self._creation_thread.name.endswith('_0')):
+            # Both are single worker threads - acceptable
+            pass
+        else:
+            # Different threads - not allowed
             error_msg = (
                 f"CRITICAL ERROR: PositionCollector.{method_name}() called from wrong thread.\n"
-                f"Current thread: {threading.current_thread().name}\n"
+                f"Current thread: {current_thread.name}\n"
                 f"Creation thread: {self._creation_thread.name}\n"
                 "PositionCollector is not thread-safe.\n"
                 "Please set --num_workers=1 in the self-play script to disable multi-threading."
