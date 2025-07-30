@@ -19,6 +19,7 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.data_utils import create_file_lookup_table, get_filename_from_game_id_using_state, get_file_info_from_game_id_using_state
+from hex_ai.value_utils import Player
 
 
 def create_test_trmph_files(temp_dir: Path, num_files: int = 3) -> List[Path]:
@@ -30,9 +31,10 @@ def create_test_trmph_files(temp_dir: Path, num_files: int = 3) -> List[Path]:
         with open(trmph_file, 'w') as f:
             # Write a few simple game records with proper TRMPH format
             # Format: url winner (space-separated, no trailing newline)
-            f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
-            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12m13 2\n")
-            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12 1")
+            # Using new format: 'b' for blue wins, 'r' for red wins
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3 b\n")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12m13 r\n")
+            f.write("http://www.trmph.com/hex/board#13,a1b2c3d4e5f6g7h8i9j10k11l12 b")
             # Note: Last line has no newline to avoid empty line issues
         
         trmph_files.append(trmph_file)
@@ -429,12 +431,13 @@ def test_player_to_move_correctness():
     data_dir = temp_dir / "data"
     data_dir.mkdir()
     output_dir = temp_dir / "output"
+    
     # Write a single test file with a known game
     trmph_file = data_dir / "test_simple.trmph"
     with open(trmph_file, 'w') as f:
         # Blue starts, then Red, then Blue, etc.
-        f.write("http://www.trmph.com/hex/board#13,a1b2c3 1\n")
-        f.write("http://www.trmph.com/hex/board#13,a1b2c3d4 2\n")
+        f.write("http://www.trmph.com/hex/board#13,a1b2c3 b\n")
+        f.write("http://www.trmph.com/hex/board#13,a1b2c3d4 r\n")
     # Run process_all_trmph.py
     cmd = [
         sys.executable, "scripts/process_all_trmph.py",
@@ -451,14 +454,14 @@ def test_player_to_move_correctness():
     for processed_file in processed_files:
         with gzip.open(processed_file, 'rb') as f:
             data = pickle.load(f)
-        for ex in data['examples']:
-            # The number of moves in the position is position_in_game
-            n_moves = ex['metadata']['position_in_game']
-            expected_player = 0 if n_moves % 2 == 0 else 1  # Blue starts
-            assert ex['player_to_move'] == expected_player, (
-                f"player_to_move incorrect for position {n_moves} in {processed_file}: "
-                f"expected {expected_player}, got {ex['player_to_move']}"
-            )
+            for ex in data['examples']:
+                # The number of moves in the position is position_in_game
+                n_moves = ex['metadata']['position_in_game']
+                expected_player = Player.BLUE if n_moves % 2 == 0 else Player.RED  # Blue starts
+                assert ex['player_to_move'] == expected_player, (
+                    f"player_to_move incorrect for position {n_moves} in {processed_file}: "
+                    f"expected {expected_player}, got {ex['player_to_move']}"
+                )
     print("✓ player_to_move values are correct for all test examples.")
 
 

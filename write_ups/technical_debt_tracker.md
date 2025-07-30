@@ -218,6 +218,11 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - hex_ai/inference/simple_model_inference.py:344:    def get_top_k_moves
  - hex_ai/inference/simple_model_inference.py:355:    def get_top_k_legal_moves
 
+### 22. Update scripts/run_large_selfplay.py to handle new self-play & tournament data.
+ - The new data from self play has metadata
+ - Data files are in multiple directories
+ - Tournament may use '1' & '2' for winner annotation instead of the newer (and preferred) 'b' and 'r'.
+
 **Status:** PARTIALLY RESOLVED - Removed duplicate `_get_top_policy_moves` from selfplay_engine.py and renamed `_get_policy_move_values` to `_get_batched_policy_move_values` for clarity. The remaining functions serve different purposes:
 - `select_top_k_moves`: Core utility for selecting top-k moves from legal policy array
 - `get_top_k_moves_with_probs`: Main function that handles policy logits → legal moves → top-k with probabilities

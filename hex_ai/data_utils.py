@@ -30,12 +30,11 @@ from .config import (
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,  
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, get_player_to_move_from_moves, Winner
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, get_player_to_move_from_moves
 from hex_ai.utils.player_utils import get_player_to_move_from_board
 
 logger = logging.getLogger(__name__)
@@ -795,7 +794,6 @@ def get_file_info_from_game_id_using_state(game_id: tuple, state_file_path: Path
 # =========================================================================
 
 from hex_ai.value_utils import Player
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER  # Keep for backward compatibility
 
 def get_valid_policy_target(policy, use_uniform: bool = False):
     """
@@ -892,12 +890,15 @@ def extract_training_examples_with_selector_from_game(
             board_state = create_board_from_moves(moves[:position])
             policy_target = None if position >= len(moves) else create_policy_target(moves[position])
             player_to_move = get_player_to_move_from_moves(moves[:position])
+            # Convert winner string to Winner enum
+            winner_enum = Winner.BLUE if winner_clear == "BLUE" else Winner.RED if winner_clear == "RED" else None
+            
             metadata = {
                 'game_id': game_id,
                 'position_in_game': position,
                 'total_positions': total_positions,
                 'value_sample_tier': value_sample_tiers[i],
-                'winner': winner_clear
+                'winner': winner_enum
             }
             if include_trmph:
                 metadata['trmph_game'] = trmph_text

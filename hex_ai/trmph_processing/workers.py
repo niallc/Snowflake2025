@@ -17,6 +17,7 @@ from hex_ai.file_utils import atomic_write_pickle_gz, sanitize_filename
 from hex_ai.data_utils import load_trmph_file
 from hex_ai.utils.format_conversion import parse_trmph_game_record
 from hex_ai.data_utils import extract_training_examples_with_selector_from_game
+from hex_ai.value_utils import Player, Winner
 
 logger = logging.getLogger(__name__)
 
@@ -100,27 +101,26 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         logger.info(f"Processing {file_path}")
         
         # Load TRMPH file
-        trmph_data = load_trmph_file(file_path)
+        trmph_lines = load_trmph_file(file_path)
         
-        # Parse games from TRMPH data
-        games = parse_trmph_game_record(trmph_data)
-        file_stats['all_games'] = len(games)
-        
-        # Process each game
+        # Process each game line
         all_examples = []
-        for game_idx, game in enumerate(games):
+        for i, game_line in enumerate(trmph_lines):
             try:
+                # Parse the game record
+                trmph_url, winner = parse_trmph_game_record(game_line)
+                
                 # Extract training examples from this game
+                game_id = (file_idx, i+1)  # file_idx and line_idx (1-based)
                 examples = extract_training_examples_with_selector_from_game(
-                    game, 
-                    position_selector=position_selector
+                    trmph_url, winner, game_id, position_selector=position_selector
                 )
                 
                 if examples:
                     # Add source file information to each example
                     for example in examples:
                         example['metadata']['source_file'] = str(file_path)
-                        example['metadata']['game_id'] = f"{file_path.stem}_{game_idx}"
+                        example['metadata']['game_id'] = (file_idx, i+1)  # Use tuple format
                     
                     all_examples.extend(examples)
                     file_stats['valid_games'] += 1
@@ -129,8 +129,10 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                     file_stats['skipped_games'] += 1
                     
             except Exception as e:
-                logger.warning(f"Failed to process game {game_idx} in {file_path}: {e}")
+                logger.warning(f"Failed to process game {i+1} in {file_path}: {e}")
                 file_stats['skipped_games'] += 1
+        
+        file_stats['all_games'] = len(trmph_lines)
         
         # Save processed examples if any were generated
         if all_examples:
@@ -150,7 +152,14 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                 counter += 1
             
             # Save with atomic write
-            atomic_write_pickle_gz(output_path, all_examples)
+            data = {
+                'examples': all_examples,
+                'source_file': str(file_path),
+                'processing_stats': file_stats,
+                'processed_at': datetime.now().isoformat(),
+                'file_size_bytes': 0  # Will be updated after write
+            }
+            atomic_write_pickle_gz(data, output_path)
             logger.info(f"Saved {len(all_examples)} examples to {output_path}")
         
         return file_stats
@@ -197,10 +206,10 @@ def validate_examples_data(examples: list):
         if not hasattr(policy, 'shape') or policy.shape[0] != board_size:
             raise ValueError(f"Policy must have shape ({board_size},), got: {policy.shape}")
     
-    # Validate player_to_move
+    # Validate player_to_move (should be Player enum)
     player_to_move = example['player_to_move']
-    if player_to_move not in [0, 1]:
-        raise ValueError(f"player_to_move must be 0 or 1, got: {player_to_move}")
+    if not isinstance(player_to_move, Player):
+        raise ValueError(f"player_to_move must be Player enum, got: {type(player_to_move)}: {player_to_move}")
     
     # Validate metadata
     metadata = example['metadata']
@@ -209,7 +218,7 @@ def validate_examples_data(examples: list):
         if field not in metadata:
             raise ValueError(f"Metadata missing required field: {field}")
     
-    # Validate winner values
+    # Validate winner values (should be Winner enum or None)
     winner = metadata['winner']
-    if winner not in [0, 1, None]:
-        raise ValueError(f"Winner must be 0, 1, or None, got: {winner}") 
+    if winner is not None and not isinstance(winner, Winner):
+        raise ValueError(f"Winner must be Winner enum or None, got: {type(winner)}: {winner}") 
