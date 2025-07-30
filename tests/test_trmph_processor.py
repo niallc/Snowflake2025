@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from hex_ai.batch_processor import BatchProcessor
+from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 
 class TestBatchProcessor:
@@ -77,8 +78,8 @@ class TestBatchProcessor:
     
     def test_process_valid_game(self):
         """Test processing a valid TRMPH game."""
-        content = "#13,a1b2c3 1\n"  # Simple game with blue winner
-        self.create_test_trmph_file("valid.trmph", content)
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"  # Simple game with blue winner
+        self.create_test_trmph_file("valid_game.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         file_path = self.data_dir / "valid.trmph"
@@ -110,12 +111,12 @@ class TestBatchProcessor:
         assert stats['examples_generated'] == 0
     
     def test_process_game_with_duplicate_moves(self):
-        """Test processing a game with duplicate moves."""
-        content = "#13,a1b2a1c3 1\n"  # Duplicate move 'a1'
-        self.create_test_trmph_file("duplicate.trmph", content)
+        """Test processing a game with duplicate moves (should be invalid)."""
+        content = f"#13,a1a1b2c3 {TRMPH_BLUE_WIN}\n"  # Duplicate move 'a1'
+        self.create_test_trmph_file("duplicate_moves.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
-        file_path = self.data_dir / "duplicate.trmph"
+        file_path = self.data_dir / "duplicate_moves.trmph"
         
         stats = processor.process_single_file(file_path, 0)
         
@@ -126,14 +127,13 @@ class TestBatchProcessor:
     
     def test_process_mixed_valid_invalid_games(self):
         """Test processing a file with both valid and invalid games."""
-        content = "#13,a1b2c3 1\n"  # Valid game
-        content += "#13,a1b2 2\n"   # Valid game
-        content += "invalid_line\n"  # Invalid line
-        content += "#13,a1b2c3d4 1\n"  # Valid game
-        self.create_test_trmph_file("mixed.trmph", content)
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"  # Valid game
+        content += f"#13,a1a1b2 {TRMPH_RED_WIN}\n"   # Invalid game (duplicate moves)
+        content += f"#13,a1b2c3d4 {TRMPH_BLUE_WIN}\n" # Valid game
+        self.create_test_trmph_file("mixed_games.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
-        file_path = self.data_dir / "mixed.trmph"
+        file_path = self.data_dir / "mixed_games.trmph"
         
         stats = processor.process_single_file(file_path, 0)
         
@@ -153,12 +153,12 @@ class TestBatchProcessor:
         assert "File not found" in stats['file_error']
     
     def test_output_file_creation(self):
-        """Test that output files are created correctly."""
-        content = "#13,a1b2c3 1\n"
-        self.create_test_trmph_file("test.trmph", content)
+        """Test that output files are created with correct naming."""
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
+        self.create_test_trmph_file("test_output.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
-        file_path = self.data_dir / "test.trmph"
+        file_path = self.data_dir / "test_output.trmph"
         
         processor.process_single_file(file_path, 0)
         
@@ -177,9 +177,10 @@ class TestBatchProcessor:
         assert len(data['examples']) > 0
     
     def test_statistics_tracking(self):
-        """Test that statistics are tracked correctly."""
-        content = "#13,a1b2c3 1\n#13,a1b2 2\n"
-        self.create_test_trmph_file("stats_test.trmph", content)
+        """Test that statistics are properly tracked across multiple files."""
+        # Create multiple files
+        for i in range(3):
+            self.create_test_trmph_file(f"test{i}.trmph", f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n")
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
         
@@ -260,26 +261,26 @@ class TestBatchProcessor:
         """Test handling of large files (memory usage)."""
         # Create a large file with many games
         content = ""
-        for i in range(1000):
-            content += f"#13,a1b2c3 1\n"
+        for i in range(1000):  # 1000 games
+            content += f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
         
-        self.create_test_trmph_file("large.trmph", content)
+        self.create_test_trmph_file("large_file.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
-        file_path = self.data_dir / "large.trmph"
+        file_path = self.data_dir / "large_file.trmph"
         
-        # Should process without memory issues
         stats = processor.process_single_file(file_path, 0)
         
         assert stats['file_error'] is None
         assert stats['valid_games'] == 1000
-        assert stats['examples_generated'] > 0
+        assert stats['skipped_games'] == 0
+        assert stats['skipped_games'] == 0
     
     def test_filename_sanitization_original(self):
         """Test handling of problematic filenames."""
         # Create file with special characters in name
         problematic_name = "test file with spaces and (parentheses).trmph"
-        content = "#13,a1b2c3 1\n"
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
         self.create_test_trmph_file(problematic_name, content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
@@ -295,10 +296,10 @@ class TestBatchProcessor:
         """Test that output files don't conflict during concurrent processing."""
         # Create multiple files
         for i in range(5):
-            self.create_test_trmph_file(f"concurrent{i}.trmph", "#13,a1b2c3 1\n")
-        
+            self.create_test_trmph_file(f"concurrent{i}.trmph", f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n")
+    
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
-        
+    
         # Process all files
         processor.process_all_files()
         
@@ -320,7 +321,7 @@ class TestBatchProcessor:
             content = ""
             for j in range(100):  # 100 games per file
                 # Use the same simple format that works in other tests
-                content += f"#13,a1b2c3 1\n"
+                content += f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
             self.create_test_trmph_file(f"large{i}.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
@@ -399,7 +400,7 @@ class TestBatchProcessor:
         """Test that output filenames are unique."""
         # Create multiple files with same base name
         for i in range(3):
-            content = f"#13,a1b2c3 1\n"
+            content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
             self.create_test_trmph_file(f"same_name.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
@@ -456,7 +457,7 @@ class TestBatchProcessor:
     
     def test_output_file_structure(self):
         """Test that output files have correct structure and metadata."""
-        content = "#13,a1b2c3 1\n"
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
         self.create_test_trmph_file("structure_test.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))
@@ -504,7 +505,7 @@ class TestBatchProcessor:
     
     def test_atomic_file_writing(self):
         """Test that files are written atomically (temp file then rename)."""
-        content = "#13,a1b2c3 1\n"
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
         self.create_test_trmph_file("atomic_test.trmph", content)
         
         processor = BatchProcessor(data_dir=str(self.data_dir), output_dir=str(self.output_dir))

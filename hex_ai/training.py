@@ -27,7 +27,7 @@ from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
 from .config import (
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
-    BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEVICE
+    BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
 from hex_ai.data_pipeline import discover_processed_files
 from hex_ai.training_utils import get_device
@@ -224,7 +224,7 @@ class Trainer:
                  train_loader: DataLoader,
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
-                 device: str = DEVICE,
+                 device: str = None,
                  enable_system_analysis: bool = True,
                  enable_csv_logging: bool = True,
                  experiment_name: Optional[str] = None,
@@ -253,6 +253,8 @@ class Trainer:
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
         """
+        if device is None:
+            device = get_device()
         logger.debug(f"[Trainer.__init__] device argument = {device}")
         self.model = model.to(device)
         self.train_loader = train_loader
