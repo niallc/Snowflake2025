@@ -4,7 +4,6 @@ from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import (
@@ -16,6 +15,9 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     sample_move_by_value,
     select_policy_move,  # Add the new public function
+)
+from hex_ai.inference.game_engine import (
+    HexGameState,
     apply_move_to_state,  # Add move application utilities
 )
 from hex_ai.config import (

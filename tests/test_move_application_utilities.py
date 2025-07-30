@@ -11,12 +11,14 @@ import numpy as np
 
 from hex_ai.value_utils import (
     apply_move_to_tensor,
+    is_position_empty,
+)
+from hex_ai.inference.game_engine import (
     apply_move_to_state,
     apply_move_to_state_trmph,
     apply_move_to_tensor_trmph,
-    is_position_empty,
+    HexGameState
 )
-from hex_ai.inference.game_engine import HexGameState
 from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_ONEHOT, PIECE_ONEHOT
 
 
@@ -160,7 +162,7 @@ class TestApplyMoveToTensor:
         """Test that using an invalid player raises an error."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         
-        with pytest.raises(ValueError, match="Invalid player"):
+        with pytest.raises(ValueError, match="2 is not a valid Player"):
             apply_move_to_tensor(board_tensor, 0, 0, 2)  # Invalid player ID
     
     def test_invalid_tensor_shape(self):

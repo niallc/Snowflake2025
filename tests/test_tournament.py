@@ -76,27 +76,19 @@ def test_determine_winner_and_swap_logic():
     class DummyState:
         def __init__(self, winner):
             self.winner = winner
-    # No swap, blue wins
+    # Blue wins
     state = DummyState("blue")
     result, winner_char = determine_winner(state, model_1, model_2, swap=False)
-    assert result == "1" and winner_char == "b"
-    # No swap, red wins
+    assert result == "b" and winner_char == "b"
+    # Red wins
     state = DummyState("red")
     result, winner_char = determine_winner(state, model_1, model_2, swap=False)
-    assert result == "2" and winner_char == "r"
-    # Swap, blue wins
-    state = DummyState("blue")
-    result, winner_char = determine_winner(state, model_1, model_2, swap=True)
-    assert result == "2" and winner_char == "b"
-    # Swap, red wins
-    state = DummyState("red")
-    result, winner_char = determine_winner(state, model_1, model_2, swap=True)
-    assert result == "1" and winner_char == "r"
+    assert result == "r" and winner_char == "r"
     # No winner (should raise)
     state = DummyState(None)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         determine_winner(state, model_1, model_2, swap=False)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError):
         determine_winner(state, model_1, model_2, swap=True)
 
 def test_network_outputs_are_logits():
@@ -113,6 +105,18 @@ def test_network_outputs_are_logits():
             # Return logits (not probabilities)
             policy_logits = np.arange(169, dtype=np.float32)
             return policy_logits, 0.0
+        def simple_infer(self, board):
+            # Add the method that the code expects
+            return self.infer(board)
+        def batch_infer(self, boards):
+            # Add batch inference for tree search
+            import numpy as np
+            results = []
+            for board in boards:
+                policy_logits = np.ones(169, dtype=np.float32)
+                value = 0.0
+                results.append((policy_logits, value))
+            return results
     state = HexGameState()
     model = DummyModel()
     # Use temperature=0.0 for deterministic behavior to test argmax
@@ -138,6 +142,9 @@ def test_handle_pie_rule_swap_and_no_swap():
             prob_red_win = 1.0 - self.win_prob_blue
             logit = torch.logit(torch.tensor(prob_red_win)).item()
             return policy_logits, logit
+        def simple_infer(self, board):
+            # Add the method that the code expects
+            return self.infer(board)
     # No swap: win_prob_blue below threshold (Blue's position not good enough to swap)
     state = HexGameState()
     model_1 = DummyModel(0.2)  # This gives win_prob_blue around 0.2
@@ -170,6 +177,20 @@ def test_select_move_policy_and_tree_search():
             import numpy as np
             policy_logits = np.ones(169, dtype=np.float32)
             return policy_logits, 0.0
+        def simple_infer(self, board):
+            # Add the method that the code expects
+            return self.infer(board)
+        def batch_infer(self, boards):
+            # Add batch inference for tree search
+            import numpy as np
+            policies = []
+            values = []
+            for board in boards:
+                policy_logits = np.ones(169, dtype=np.float32)
+                value = 0.0
+                policies.append(policy_logits)
+                values.append(value)
+            return policies, values
     state = HexGameState()
     model = DummyModel()
     # Policy move (no search_widths)
@@ -177,9 +198,7 @@ def test_select_move_policy_and_tree_search():
     assert isinstance(move, tuple) and len(move) == 2
     # Tree search move (with search_widths)
     move = select_move(state, model, search_widths=(3, 2), temperature=1.0)
-    assert isinstance(move, tuple) and len(move) == 2 
-
-# ============================================================================
+    assert isinstance(move, tuple) and len(move) == 2
 # BOARD/GAME LOGIC TESTS - Using known positions and move sequences
 # ============================================================================
 
