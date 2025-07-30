@@ -307,10 +307,10 @@ def sample_move_by_value(move_values: List[float], temperature: float = 1.0) -> 
     chosen_idx = np.random.choice(len(move_values), p=probs)
     return chosen_idx
 
-def _sample_moves_from_policy(policy_logits: np.ndarray, legal_moves: List[Tuple[int, int]], 
-                             board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
+def sample_moves_from_policy(policy_logits: np.ndarray, legal_moves: List[Tuple[int, int]], 
+                            board_size: int, k: int, temperature: float = 1.0) -> List[Tuple[Tuple[int, int], float]]:
     """
-    Core function to sample k moves from policy logits with temperature scaling.
+    Sample k moves from policy logits with temperature scaling.
     
     Args:
         policy_logits: Raw policy logits
@@ -374,7 +374,7 @@ def get_top_k_moves_with_probs(policy_logits: np.ndarray,
     Returns:
         List of ((row, col), probability) tuples for top-k moves
     """
-    return _sample_moves_from_policy(policy_logits, legal_moves, board_size, k, temperature)
+    return sample_moves_from_policy(policy_logits, legal_moves, board_size, k, temperature)
 
 def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int]:
     """

@@ -206,7 +206,8 @@ class SelfPlayEngine:
             List of game data dictionaries
         """
         if not self.streaming_save:
-            return self.generate_games_with_monitoring(num_games, board_size, progress_interval)
+            raise RuntimeError("Streaming save is not enabled. Set self.streaming_save=True to use generate_games_streaming.")
+            # return self.generate_games_with_monitoring(num_games, board_size, progress_interval)
         
         start_time = time.time()
         print(f"Generating {num_games} games with streaming save...")

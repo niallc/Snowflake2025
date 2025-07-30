@@ -23,11 +23,11 @@ def main():
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/jul29', help='Output directory')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of worker threads (use 1 for batched inference)')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for inference')
-    parser.add_argument('--cache_size', type=int, default=10000, help='Cache size for model inference')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
+    parser.add_argument('--cache_size', type=int, default=60000, help='Cache size for model inference')
     parser.add_argument('--search_widths', type=int, nargs='+', default=[3, 2], 
                        help='Search widths for minimax (e.g., 3 2 for width 3 at depth 1, width 2 at depth 2)')
-    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for move sampling')
+    parser.add_argument('--temperature', type=float, default=0.2, help='Temperature for move sampling')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')

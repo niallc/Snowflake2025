@@ -5,10 +5,11 @@ import torch
 import psutil
 import sys
 import threading
+import time
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, _sample_moves_from_policy
+from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, sample_moves_from_policy
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 # Set up logging for debugging
@@ -17,16 +18,18 @@ logger = logging.getLogger(__name__)
 
 # Memory monitoring constants
 MAX_POSITIONS = 10_000_000  # Exit if we try to collect more than 10M positions
-MEMORY_WARNINGS = [1, 5, 10, 15, 19]  # GB thresholds for warnings
+MEMORY_WARNINGS = [2, 6, 10, 14, 18]  # GB thresholds for warnings
 MEMORY_EXIT_THRESHOLD = 20  # GB threshold for exit
 
 
 class PositionCollector:
     """
-    Collects board positions during tree building for batch processing.
+    Collects board positions for batched inference to improve efficiency.
     
-    This class implements a deferred execution pattern for neural network inference
-    to improve performance by batching multiple inference requests together.
+    This class is designed to be used in a single-threaded context where:
+    1. Multiple positions are collected during tree building
+    2. All positions are processed in a single batch inference call
+    3. Results are distributed back to the appropriate callbacks
     
     HOW IT WORKS:
     1. During tree building, instead of immediately calling model.infer() for each position,
@@ -109,6 +112,8 @@ class PositionCollector:
         self.policy_requests = []  # List of (board, callback, metadata) tuples
         self._memory_warnings_shown = set()  # Track which warnings we've already shown
         self._creation_thread = threading.current_thread()  # Track creation thread
+        self._last_memory_check_time = 0  # Track when we last checked memory
+        self._memory_check_cooldown = 2.0  # Don't check memory more than once every 5 seconds
         
     def _check_thread_safety(self, method_name: str):
         """Check if method is called from the correct thread."""
@@ -140,22 +145,45 @@ class PositionCollector:
         """
         Check current memory usage and warn/exit if thresholds are exceeded.
         
+        This method implements rate limiting to prevent flooding the logs with
+        repeated warnings. Memory checks are throttled to once every 5 seconds,
+        but exit threshold checks always run for safety.
+        
+        Returns:
+            str: Status message indicating what was checked or why it was skipped
+            
         Raises:
             RuntimeError: If memory usage exceeds exit threshold
         """
+        current_time = time.time()
+        
         process = psutil.Process()
         memory_gb = process.memory_info().rss / (1024**3)
         
-        # Check for warnings
+        # Always check exit threshold for safety
+        if memory_gb >= MEMORY_EXIT_THRESHOLD:
+            logger.error(f"Memory usage {memory_gb:.1f}GB exceeds exit threshold {MEMORY_EXIT_THRESHOLD}GB")
+            raise RuntimeError(f"Memory usage {memory_gb:.1f}GB exceeds safety limit of {MEMORY_EXIT_THRESHOLD}GB")
+        
+        # Rate limiting: only check warnings if enough time has passed since last check
+        if current_time - self._last_memory_check_time < self._memory_check_cooldown:
+            time_since_last = current_time - self._last_memory_check_time
+            return f"Memory check skipped (checked {time_since_last:.1f}s ago, cooldown: {self._memory_check_cooldown}s)"
+        
+        self._last_memory_check_time = current_time
+        
+        # Check for warnings (rate limited)
+        warnings_shown = 0
         for threshold in MEMORY_WARNINGS:
             if memory_gb >= threshold and threshold not in self._memory_warnings_shown:
                 logger.warning(f"Memory usage is {memory_gb:.1f}GB (threshold: {threshold}GB)")
                 self._memory_warnings_shown.add(threshold)
+                warnings_shown += 1
         
-        # Check for exit condition
-        if memory_gb >= MEMORY_EXIT_THRESHOLD:
-            logger.error(f"Memory usage {memory_gb:.1f}GB exceeds exit threshold {MEMORY_EXIT_THRESHOLD}GB")
-            raise RuntimeError(f"Memory usage {memory_gb:.1f}GB exceeds safety limit of {MEMORY_EXIT_THRESHOLD}GB")
+        if warnings_shown > 0:
+            return f"Memory check completed: {memory_gb:.1f}GB, {warnings_shown} new warning(s) shown"
+        else:
+            return f"Memory check completed: {memory_gb:.1f}GB, no new warnings"
     
     def _check_position_limit(self):
         """
@@ -255,11 +283,19 @@ class PositionCollector:
         process = psutil.Process()
         memory_gb = process.memory_info().rss / (1024**3)
         
+        # Get current memory check status
+        current_time = time.time()
+        time_since_last = current_time - self._last_memory_check_time
+        memory_check_status = "ready" if time_since_last >= self._memory_check_cooldown else f"cooldown ({time_since_last:.1f}s remaining)"
+        
         return {
             'policy_requests': len(self.policy_requests),
             'total_requests': len(self.policy_requests),
             'memory_gb': memory_gb,
-            'memory_warnings_shown': len(self._memory_warnings_shown)
+            'memory_warnings_shown': len(self._memory_warnings_shown),
+            'last_memory_check_time': self._last_memory_check_time,
+            'memory_check_cooldown': self._memory_check_cooldown,
+            'memory_check_status': memory_check_status
         }
 
 
@@ -298,7 +334,7 @@ def get_topk_moves(state: HexGameState, model, k: int,
     legal_moves = state.get_legal_moves()
     
     # Use the core sampling function
-    return _sample_moves_from_policy(policy_logits, legal_moves, state.board.shape[0], k, temperature)
+    return sample_moves_from_policy(policy_logits, legal_moves, state.board.shape[0], k, temperature)
 
 
 def get_topk_moves_from_policy(policy_logits: np.ndarray, state: HexGameState, k: int, 
@@ -319,8 +355,8 @@ def get_topk_moves_from_policy(policy_logits: np.ndarray, state: HexGameState, k
     if not legal_moves:
         return []
     
-    # Use the centralized utility function
-    moves_with_probs = get_top_k_moves_with_probs(
+    # Use the core sampling function directly
+    moves_with_probs = sample_moves_from_policy(
         policy_logits, legal_moves, state.board.shape[0], k, temperature
     )
     
@@ -756,6 +792,9 @@ def minimax_policy_value_search_with_batching(
     # STEP 1: Create position collector for batched inference
     collector = PositionCollector(model)
     
+    # Check memory usage at the start of the search
+    collector._check_memory_usage()
+    
     # STEP 2: Build the search tree with position collection
     # This creates the tree structure but defers all policy inference
     root = build_search_tree_with_collection(state, model, widths, temperature, collector, game_id=game_id)
@@ -769,6 +808,9 @@ def minimax_policy_value_search_with_batching(
     # This is where the actual neural network inference happens
     # All policy requests are processed in a single batch call
     collector.process_batches()
+    
+    # Check memory usage after processing batches
+    collector._check_memory_usage()
     
     if verbose >= 2:
         logger.info("All policy batches processed, tree is now complete")
