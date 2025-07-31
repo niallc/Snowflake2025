@@ -67,7 +67,7 @@ class MiniEpochOrchestrator:
                     val_metrics = self.trainer.validate()
                 # Checkpointing
                 if self.checkpoint_dir is not None:
-                    checkpoint_path = f"{self.checkpoint_dir}/epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
+                    checkpoint_path = self.checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
                     self.trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics, compress=True)
                 # Logging
                 if (mini_epoch_idx % self.log_interval == 0) or (mini_epoch_idx == 0):

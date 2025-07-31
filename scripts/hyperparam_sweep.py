@@ -206,6 +206,7 @@ Examples:
     parser.add_argument("--mini_epoch_batches", type=int, default=MINI_EPOCH_BATCHES, 
                        help="Mini-epoch batches per epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
     
     args = parser.parse_args()
 
@@ -233,6 +234,8 @@ Examples:
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Starting hyperparameter sweep with random seed: {args.random_seed}")
 
     start_time = time.time()
     results = None
@@ -251,7 +254,7 @@ Examples:
             train_ratio=0.8,
             num_epochs=args.epochs,
             early_stopping_patience=None,
-            random_seed=None,
+            random_seed=args.random_seed,
             max_examples_unaugmented=args.max_samples,
             max_validation_examples=args.max_validation_samples,
             experiment_name=None,
