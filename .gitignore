@@ -31,7 +31,11 @@ write_ups/shuffled_data_integration_summary.md
 write_ups/completed_work_archive.md
 write_ups/checkpoint_audit_summary.md
 write_ups/hyperparam_sweep_improvements_guide.md
-
+docs/data_weights_explanation.md
+docs/hyperparam_sweep_improvements_summary.md
+scripts/test_hyperparam_sweep_basic.py
+scripts/test_hyperparam_sweep_improvements.py
+write_ups/tmp_hyperparam_sweep_improvements_guide.md
 
 # VSCode
 .vscode/

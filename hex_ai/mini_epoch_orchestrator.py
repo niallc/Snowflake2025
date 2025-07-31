@@ -22,7 +22,8 @@ class MiniEpochOrchestrator:
         orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500, num_epochs=10)
         orchestrator.run()
     """
-    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_batches=500, num_epochs=1, checkpoint_dir=None, log_interval=1, shutdown_handler=None):
+    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_batches=500, num_epochs=1,
+                 checkpoint_dir=None, log_interval=1, shutdown_handler=None, start_epoch=0):
         self.trainer = trainer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -32,12 +33,13 @@ class MiniEpochOrchestrator:
         self.log_interval = log_interval
         self.logger = logging.getLogger(__name__)
         self.shutdown_handler = shutdown_handler
+        self.start_epoch = start_epoch
 
     def run(self):
         """
         Run the training loop with mini-epoch validation and checkpointing.
         """
-        for epoch in range(self.num_epochs):
+        for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
             batch_iter = iter(self.train_loader)
             batch_count = 0
@@ -110,8 +112,6 @@ class MiniEpochOrchestrator:
                         )
                 mini_epoch_idx += 1
                 # Graceful shutdown check
-                if self.shutdown_handler is not None and self.shutdown_handler.shutdown_requested:
-                    self.logger.info("Graceful shutdown requested. Exiting after current mini-epoch.")
-                    raise GracefulShutdownRequested()
-                if len(mini_epoch_batches) < self.mini_epoch_batches:
-                    break  # End of epoch 
+                if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
+                    self.logger.info("Shutdown requested, stopping training")
+                    raise GracefulShutdownRequested() 
