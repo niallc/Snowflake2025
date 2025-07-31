@@ -66,18 +66,19 @@ class EnvironmentValidator:
         python_path = os.environ.get("PYTHONPATH", "")
         project_root_str = str(self.project_root)
         
-        if not python_path:
-            self.warnings.append(
-                "PYTHONPATH is not set. This may cause import issues.\n"
-                "Consider setting: export PYTHONPATH=."
-            )
-            return False
-        
-        if project_root_str not in python_path.split(os.pathsep):
-            self.issues.append(
-                f"Project root not in PYTHONPATH: {project_root_str}\n"
-                f"Current PYTHONPATH: {python_path}"
-            )
+        # Check if project root is in Python's sys.path (which includes PYTHONPATH)
+        if str(self.project_root) not in sys.path:
+            if not python_path:
+                self.warnings.append(
+                    "PYTHONPATH is not set. This may cause import issues.\n"
+                    "Consider setting: export PYTHONPATH=."
+                )
+            else:
+                self.issues.append(
+                    f"Project root not in Python path: {project_root_str}\n"
+                    f"Current PYTHONPATH: {python_path}\n"
+                    f"Python sys.path: {sys.path[:3]}..."  # Show first few entries
+                )
             return False
         
         self.successes.append(f"PYTHONPATH includes project root: {project_root_str}")

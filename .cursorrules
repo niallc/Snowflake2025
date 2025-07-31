@@ -2,12 +2,26 @@
 
 ## 🚨 CRITICAL: Environment Requirements
 
-To get code and tests to work properly you'll need to:
-1. **Virtual Environment**: Must be running in `hex_ai_env` virtual environment
-2. **PYTHONPATH**: Must be set to include the project root (`.`)
+**ALWAYS run these commands first:**
+```bash
+source hex_ai_env/bin/activate
+export PYTHONPATH=.
+```
+
+**Or use the setup script:**
+```bash
+./scripts/setup_environment.sh
+```
+
+**Then validate the environment:**
+```bash
+python scripts/validate_environment.py
+```
 
 ## Principles
 1. In general and throughout this project I prefer fail fast and catch bugs -- not fallback mechanisms. I'm very keen to avoid silent failures.
+2. **ALWAYS check .cursorrules first** - it contains critical setup instructions
+3. **NEVER use absolute paths** - use `PYTHONPATH=.` for portability
 
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions

@@ -156,10 +156,10 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                 'examples': all_examples,
                 'source_file': str(file_path),
                 'processing_stats': file_stats,
-                'processed_at': datetime.now().isoformat(),
-                'file_size_bytes': 0  # Will be updated after write
+                'processed_at': datetime.now().isoformat()
             }
             atomic_write_pickle_gz(data, output_path)
+            
             logger.info(f"Saved {len(all_examples)} examples to {output_path}")
         
         return file_stats
