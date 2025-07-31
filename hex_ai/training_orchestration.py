@@ -31,10 +31,11 @@ from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_proce
 logger = logging.getLogger(__name__)
 
 
-def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast):
+def create_datasets(train_files, val_files, max_examples_unaugmented,
+                    max_validation_examples, batch_size=256):
     """
-    Create StreamingSequentialShardDataset objects for train and val sets.
-    Returns (train_dataset, val_dataset).
+    Create DataLoader objects from StreamingSequentialShardDataset for train and val sets.
+    Returns (train_loader, val_loader).
     """
     try:
         train_dataset = StreamingSequentialShardDataset(
@@ -47,13 +48,27 @@ def create_datasets(train_files, val_files, max_examples_unaugmented, max_valida
             enable_augmentation=False, # Validation dataset is not augmented
             max_examples_unaugmented=max_validation_examples
         ) if val_files else None
+        
+        # Create DataLoaders from the datasets
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, 
+            batch_size=batch_size,
+            num_workers=0,  # Streaming datasets don't work well with multiple workers
+            pin_memory=False  # Streaming datasets don't benefit from pin_memory
+        )
+        
+        val_loader = None
+        if val_dataset is not None:
+            val_loader = torch.utils.data.DataLoader(
+                val_dataset, 
+                batch_size=batch_size,
+                num_workers=0,
+                pin_memory=False
+            )
     except Exception as e:
-        logger.error(f"Failed to create training/validation datasets: {e}")
-        if fail_fast:
-            raise
-        else:
-            return None, None
-    return train_dataset, val_dataset
+        logger.error(f"Failed to create training/validation dataloaders: {e}")
+        raise
+    return train_loader, val_loader
 
 def find_latest_checkpoint_for_epoch(experiment_dir: Path, target_epoch: int) -> Optional[Path]:
     """
@@ -82,8 +97,8 @@ def find_latest_checkpoint_for_epoch(experiment_dir: Path, target_epoch: int) ->
 
 def run_single_experiment(
     exp_config, 
-    train_dataset, 
-    val_dataset, 
+    train_loader, 
+    val_loader, 
     results_path, 
     num_epochs, 
     mini_epoch_batches, 
@@ -97,8 +112,8 @@ def run_single_experiment(
     
     Args:
         exp_config: Experiment configuration
-        train_dataset: Training dataset
-        val_dataset: Validation dataset
+        train_loader: Training DataLoader
+        val_loader: Validation DataLoader
         results_path: Path to save results
         num_epochs: Number of training epochs
         mini_epoch_batches: Number of mini-epoch batches
@@ -125,17 +140,28 @@ def run_single_experiment(
             raise ValueError(f"Could not extract epoch from checkpoint filename: {checkpoint_path.name}")
     
     # Create model and trainer
-    model = TwoHeadedResNet(
-        board_size=BOARD_SIZE,
-        policy_output_size=POLICY_OUTPUT_SIZE,
-        value_output_size=VALUE_OUTPUT_SIZE,
-        **exp_config['hyperparameters']
-    ).to(device)
+    # Filter hyperparameters for model vs trainer
+    model_params = {}
+    trainer_params = {}
+    
+    # Model parameters
+    if 'resnet_depth' in exp_config['hyperparameters']:
+        model_params['resnet_depth'] = exp_config['hyperparameters']['resnet_depth']
+    if 'dropout_prob' in exp_config['hyperparameters']:
+        model_params['dropout_prob'] = exp_config['hyperparameters']['dropout_prob']
+    
+    # Trainer parameters (everything else except batch_size which is used for DataLoader creation)
+    trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
+                     if k not in model_params and k != 'batch_size'}
+    
+    model = TwoHeadedResNet(**model_params).to(device)
     
     trainer = Trainer(
         model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
         device=device,
-        **exp_config['hyperparameters']
+        **trainer_params
     )
     
     # Load checkpoint if resuming
@@ -146,9 +172,9 @@ def run_single_experiment(
     # Create orchestrator
     orchestrator = MiniEpochOrchestrator(
         trainer=trainer,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        results_path=results_path,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        checkpoint_dir=results_path,
         num_epochs=num_epochs,
         mini_epoch_batches=mini_epoch_batches,
         start_epoch=start_epoch
@@ -156,7 +182,7 @@ def run_single_experiment(
     
     # Run training
     try:
-        result = orchestrator.run(shutdown_handler=shutdown_handler)
+        result = orchestrator.run()
         return result
     except Exception as e:
         logger.error(f"Training failed: {e}")
@@ -189,7 +215,6 @@ def discover_and_split_multiple_data(
     data_dirs: List[str], 
     train_ratio: float = 0.8, 
     random_seed: Optional[int] = None,
-    fail_fast: bool = True,
     skip_files: Optional[List[int]] = None
 ) -> Tuple[List[Path], List[Path], List[Path], List[Dict]]:
     """
@@ -223,10 +248,7 @@ def discover_and_split_multiple_data(
             data_files = discover_processed_files(data_dir, skip_files=skip_files[i])
         except Exception as e:
             logger.error(f"Failed to discover data in {data_dir}: {e}")
-            if fail_fast:
-                raise
-            else:
-                continue
+            raise
         
         if not data_files:
             logger.warning(f"No data files found in {data_dir}")
@@ -331,7 +353,6 @@ def run_hyperparameter_tuning_current_data(
     max_validation_examples: Optional[int] = None,
     experiment_name: Optional[str] = None,
     enable_augmentation: bool = True,
-    fail_fast: bool = True,
     mini_epoch_batches: int = 500,
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
@@ -381,18 +402,21 @@ def run_hyperparameter_tuning_current_data(
     
     # Use new multi-directory data discovery
     train_files, val_files, data_files, data_source_info = discover_and_split_multiple_data(
-        data_dirs, train_ratio, random_seed, fail_fast, skip_files=skip_files
+        data_dirs, train_ratio, random_seed, skip_files=skip_files
     )
     
     if train_files is None or val_files is None:
         return {'error': 'Failed to discover or split data'}
     
-    train_dataset, val_dataset = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast)
+    # Get batch_size from hyperparameters for the first experiment (they should all be the same)
+    batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
+    
+    train_loader, val_loader = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size)
     
     # Remove or guard len() usage for streaming datasets
     logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples.")
     
-    if train_dataset is None:
+    if train_loader is None:
         return {'error': 'Failed to create datasets'}
     
     device = select_device()
@@ -412,8 +436,8 @@ def run_hyperparameter_tuning_current_data(
         try:
             result = run_single_experiment(
                 exp_config,
-                train_dataset,
-                val_dataset,
+                train_loader,
+                val_loader,
                 results_path,
                 num_epochs,
                 mini_epoch_batches,
@@ -446,11 +470,8 @@ def run_hyperparameter_tuning_current_data(
             logger.error(f"Experiment {exp_config['experiment_name']} failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            if fail_fast:
-                logger.error(f"Fail-fast mode enabled: stopping sweep after failure in experiment {exp_config['experiment_name']}")
-                raise
-            else:
-                continue
+            logger.error(f"Fail-fast mode enabled: stopping sweep after failure in experiment {exp_config['experiment_name']}")
+            raise
     
     total_time = time.time() - total_start_time
     overall_results = {

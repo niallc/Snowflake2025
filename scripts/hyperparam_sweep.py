@@ -85,7 +85,7 @@ MAX_SAMPLES = 35_000_000  # Training samples (will be 4x larger with augmentatio
 MAX_VALIDATION_SAMPLES = 925_000  # Validation samples (no augmentation)
 MINI_EPOCH_BATCHES = math.floor(500000 * 2 /256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2
+EPOCHS = 4  # Increased from 2 to allow for more training after resuming from epoch 2
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -125,15 +125,30 @@ def print_sweep_summary(results, results_dir, interrupted=False):
         print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
         # Find best experiment
         if results.get('experiments'):
-            best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
-            print(f"\nBest experiment: {best_exp['experiment_name']}")
-            print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
-            print(f"Hyperparameters: {best_exp['hyperparameters']}")
-            # Show all results sorted by validation loss
-            print(f"\nAll experiments ranked by validation loss:")
-            sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
-            for i, exp in enumerate(sorted_experiments):
-                print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+            # Filter out None results, failed experiments, and experiments without best_val_loss
+            valid_experiments = [exp for exp in results['experiments'] 
+                               if exp is not None and exp.get('status') != 'failed' and 'best_val_loss' in exp]
+            
+            if valid_experiments:
+                best_exp = min(valid_experiments, key=lambda x: x['best_val_loss'])
+                print(f"\nBest experiment: {best_exp['experiment_name']}")
+                print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+                print(f"Hyperparameters: {best_exp['hyperparameters']}")
+                # Show all results sorted by validation loss
+                print(f"\nAll experiments ranked by validation loss:")
+                sorted_experiments = sorted(valid_experiments, key=lambda x: x['best_val_loss'])
+                for i, exp in enumerate(sorted_experiments):
+                    print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+            else:
+                print("\nNo experiments with valid validation loss!")
+            
+            # Show failed experiments if any
+            failed_experiments = [exp for exp in results['experiments'] 
+                                if exp is not None and exp.get('status') == 'failed']
+            if failed_experiments:
+                print(f"\nFailed experiments ({len(failed_experiments)}):")
+                for exp in failed_experiments:
+                    print(f"  - {exp['experiment_name']}: {exp.get('error', 'Unknown error')}")
         else:
             print("\nNo successful experiments!")
     print(f"\nAll results saved to: {results_dir}")
@@ -241,7 +256,6 @@ Examples:
             max_validation_examples=args.max_validation_samples,
             experiment_name=None,
             enable_augmentation=not args.no_augmentation,
-            fail_fast=True,
             resume_from=args.resume_from,
             skip_files=args.skip_files,
             shutdown_handler=shutdown_handler

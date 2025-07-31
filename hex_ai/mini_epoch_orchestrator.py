@@ -39,6 +39,9 @@ class MiniEpochOrchestrator:
         """
         Run the training loop with mini-epoch validation and checkpointing.
         """
+        self.logger.info(f"Starting training: epochs {self.start_epoch} to {self.num_epochs-1} (total {self.num_epochs} epochs)")
+        self.logger.info(f"Mini-epoch batches per epoch: {self.mini_epoch_batches}")
+        
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
             batch_iter = iter(self.train_loader)
@@ -51,8 +54,10 @@ class MiniEpochOrchestrator:
                         mini_epoch_batches.append(next(batch_iter))
                         batch_count += 1
                 except StopIteration:
+                    self.logger.info(f"End of epoch {epoch+1} reached (StopIteration)")
                     pass  # End of epoch
                 if not mini_epoch_batches:
+                    self.logger.info(f"No more data in epoch {epoch+1}, breaking")
                     break  # No more data
                 # Train on this mini-epoch
                 train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch, mini_epoch=mini_epoch_idx)
@@ -114,4 +119,7 @@ class MiniEpochOrchestrator:
                 # Graceful shutdown check
                 if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
                     self.logger.info("Shutdown requested, stopping training")
-                    raise GracefulShutdownRequested() 
+                    raise GracefulShutdownRequested()
+        
+        self.logger.info(f"Training completed: processed {batch_count} total batches across {self.num_epochs - self.start_epoch} epochs")
+        return {'total_batches': batch_count, 'epochs_completed': self.num_epochs - self.start_epoch} 
