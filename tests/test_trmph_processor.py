@@ -110,6 +110,35 @@ class TestTRMPHProcessor:
         output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
         assert len(output_files) == 1
     
+    def test_process_trmph_file_with_headers(self):
+        """Test processing a .trmph file with header lines and TRMPH data."""
+        content = "# Self-play games - 2025-07-29T13:34:04.681729\n"
+        content += "# Model: checkpoints/model.pt.gz\n"
+        content += "# Format: trmph_string winner\n"
+        content += "# Example: #13,a4g7e9e8f8f7h7h6j5 r\n"
+        content += f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"  # Valid TRMPH game
+        content += f"#13,a1b2c3d4 {TRMPH_RED_WIN}\n"  # Another valid TRMPH game
+        
+        self.create_test_trmph_file("test_with_headers.trmph", content)
+        
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir)
+        )
+        processor = TRMPHProcessor(config)
+        
+        results = processor.process_all_files()
+        
+        assert len(results) == 1
+        assert results[0]['success']
+        assert results[0]['stats']['valid_games'] == 2
+        assert results[0]['stats']['skipped_games'] == 4  # 4 header lines
+        assert results[0]['stats']['examples_generated'] > 0
+        
+        # Check that output file was created
+        output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
+        assert len(output_files) == 1
+    
     def test_process_invalid_game_format(self):
         """Test processing a game with invalid format."""
         content = "#13,a1b2c3\n"  # Missing winner

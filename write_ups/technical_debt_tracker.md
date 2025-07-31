@@ -23,13 +23,34 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - [x] Fix file size metadata issues in output files
 - [x] Add comprehensive test coverage for all functionality
 - [x] Document current architecture and usage patterns
+- [x] Add support for new files with headers that use a leading #
 
 **Files modified:**
 - `tests/test_trmph_processor.py` ✅ **COMPLETED**
 - `hex_ai/trmph_processing/workers.py` ✅ **COMPLETED**
 - `write_ups/trmph_processing_cleanup_summary.md` ✅ **CREATED**
 
-**Status:** ✅ **COMPLETED** - All 19 tests passing, pipeline ready for production use
+**Status:** ✅ **COMPLETED** - All 20 tests passing, pipeline ready for production use with new data format
+
+### 1.1. Self-Play Data Preprocessing ✅ COMPLETED
+**Priority:** High  
+**Estimated Time:** 1 day  
+**Impact:** High - enables efficient processing of large self-play datasets
+
+**Issue:** Need to clean up self-play data by removing duplicates and splitting into manageable chunks
+
+**Tasks:**
+- [x] Create preprocessing script to combine multiple .trmph files
+- [x] Implement duplicate detection and removal
+- [x] Add chunking functionality for manageable file sizes
+- [x] Create comprehensive test suite
+- [x] Test on real data (493,617 games → 184,998 unique games, 62.5% duplicates removed)
+
+**Files created:**
+- `scripts/preprocess_selfplay_data.py` ✅ **COMPLETED**
+- `tests/test_preprocess_selfplay_data.py` ✅ **COMPLETED**
+
+**Status:** ✅ **COMPLETED** - Script successfully processed real data, removing 308,619 duplicates
 
 ---
 

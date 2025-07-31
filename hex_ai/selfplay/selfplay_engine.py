@@ -70,7 +70,7 @@ class SelfPlayEngine:
         # Streaming save setup
         if self.streaming_save and self.streaming_file is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.streaming_file = f"data/sf25/jul29/streaming_selfplay_{timestamp}.txt"
+            self.streaming_file = f"data/sf25/jul29/streaming_selfplay_{timestamp}.trmph"
         
         if self.streaming_save:
             os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
