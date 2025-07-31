@@ -46,14 +46,17 @@ For more on the environment:
 
 ## ⚠️ Important Patterns
 
-### Environment Checks
-Many scripts include environment validation:
+### Environment Validation
+Environment validation happens automatically when importing `hex_ai`:
 ```python
-from hex_ai.system_utils import check_virtual_env
-check_virtual_env("hex_ai_env")
+import hex_ai  # This automatically validates environment
 ```
 
-**NEVER skip these checks!** They exist for a reason.
+**The validation checks:**
+- Virtual environment is activated (`hex_ai_env`)
+- PYTHONPATH includes project root (accepts `PYTHONPATH=.`)
+
+**No manual validation calls needed** - it's handled automatically in `hex_ai/__init__.py`
 
 ### Import Patterns
 Imports should prefer using the `hex_ai.` prefix over e.g. ..

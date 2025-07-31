@@ -22,8 +22,7 @@ from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from hex_ai.system_utils import check_virtual_env
-check_virtual_env("hex_ai_env")
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 # Add the hex_ai directory to the path
 sys.path.append('hex_ai')
@@ -427,6 +426,15 @@ def main():
     # Run shuffling process
     shuffler.shuffle_data()
 
+"""
+Example usage:
+  PYTHONPATH=. python scripts/shuffle_processed_data.py \
+    --input-dir data/processed/jul29_unshuffled9 \
+    --output-dir data/processed/jul_29_shuffled \
+    --temp-dir data/processed/temp_buckets \
+    --num-buckets 100 \
+    --no-resume
+"""
 
 if __name__ == "__main__":
     main() 

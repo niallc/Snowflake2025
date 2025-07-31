@@ -19,6 +19,7 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     select_policy_move,  # Add the new public function
 )
+from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move application utilities
 
 # Model checkpoint defaults

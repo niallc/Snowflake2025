@@ -47,30 +47,26 @@ python scripts/preprocess_selfplay_data.py \
 python scripts/process_all_trmph.py \
   --data-dir data/cleaned/jul29 \
   --output-dir data/processed/jul29 \
-  --position-selector all \
-  --combine
+  --position-selector all
 ```
 
 **Expected Output**: 
 - Individual processed files for each chunk
-- Combined dataset file
 - Processing statistics
+- NO combined dataset (removed to prevent memory crashes)
 
-### Step 3: Combine All Processed Data
+### Step 3: Use Individual Processed Files
 ```bash
-# If you have multiple directories, combine them
-python scripts/process_all_trmph.py \
-  --data-dir data/processed \
-  --output-dir data/final_processed \
-  --combine
+# Individual processed files are ready for training
+# No need to combine - this prevents memory crashes
+# Training scripts should be updated to handle multiple files
 ```
 
-### Step 4: Shuffle Data for Training
+### Step 4: Training with Multiple Files
 ```bash
-# Shuffle the combined dataset
-python scripts/shuffle_processed_data.py \
-  --input-file data/final_processed/combined_dataset.pkl.gz \
-  --output-file data/training_data/shuffled_dataset.pkl.gz
+# Training scripts need to be updated to handle multiple files
+# Instead of one large file, use multiple smaller files
+# This prevents memory crashes and allows for better memory management
 ```
 
 ## 📁 Directory Structure

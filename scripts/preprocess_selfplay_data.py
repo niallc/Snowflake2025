@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import List, Set
 import hashlib
 
-from hex_ai.system_utils import check_virtual_env
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 
 def setup_logging():
@@ -165,8 +165,7 @@ def combine_and_clean_files(input_dir: Path, output_dir: Path, chunk_size: int =
 
 def main():
     """Main entry point."""
-    # Check virtual environment
-    check_virtual_env("hex_ai_env")
+    # Environment validation is now handled automatically in hex_ai/__init__.py
     
     # Setup logging
     setup_logging()

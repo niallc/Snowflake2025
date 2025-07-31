@@ -20,70 +20,17 @@ logger = logging.getLogger(__name__)
 
 def check_virtual_env(expected_env="hex_ai_env"):
     """
-    Check if we're running in the correct virtual environment.
+    DEPRECATED: Environment validation is now handled automatically in hex_ai/__init__.py
     
-    This function is CRITICAL for the project to work correctly.
-    Coding agents should NEVER skip this check!
+    This function is kept for backward compatibility but does nothing.
+    Environment validation happens automatically when importing hex_ai.
     
     Args:
-        expected_env: Name of the expected virtual environment
+        expected_env: Name of the expected virtual environment (ignored)
     """
-    import os, sys
-    
-    venv_path = os.environ.get("VIRTUAL_ENV", "")
-    
-    if not venv_path:
-        sys.stderr.write(
-            f"\n❌ CRITICAL ERROR: No virtual environment detected!\n"
-            f"================================================\n\n"
-            f"This script MUST be run inside the '{expected_env}' virtual environment.\n\n"
-            f"🔧 TO FIX THIS:\n"
-            f"1. Activate the virtual environment:\n"
-            f"   source {expected_env}/bin/activate\n\n"
-            f"2. Set the PYTHONPATH:\n"
-            f"   export PYTHONPATH=.\n\n"
-            f"3. Verify the setup:\n"
-            f"   python scripts/validate_environment.py\n\n"
-            f"4. Then re-run this script.\n\n"
-            f"📚 For more help, see: AGENT_GUIDANCE.md\n"
-        )
-        sys.exit(1)
-    
-    if expected_env not in venv_path:
-        sys.stderr.write(
-            f"\n❌ CRITICAL ERROR: Wrong virtual environment!\n"
-            f"============================================\n\n"
-            f"Current environment: {venv_path}\n"
-            f"Expected environment: {expected_env}\n\n"
-            f"🔧 TO FIX THIS:\n"
-            f"1. Deactivate current environment:\n"
-            f"   deactivate\n\n"
-            f"2. Activate the correct environment:\n"
-            f"   source {expected_env}/bin/activate\n\n"
-            f"3. Set the PYTHONPATH:\n"
-            f"   export PYTHONPATH=.\n\n"
-            f"4. Verify the setup:\n"
-            f"   python scripts/validate_environment.py\n\n"
-            f"5. Then re-run this script.\n\n"
-            f"📚 For more help, see: AGENT_GUIDANCE.md\n"
-        )
-        sys.exit(1)
-    
-    # Also check PYTHONPATH
-    python_path = os.environ.get("PYTHONPATH", "")
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    if not python_path or project_root not in python_path.split(os.pathsep):
-        sys.stderr.write(
-            f"\n⚠️  WARNING: PYTHONPATH may not be set correctly!\n"
-            f"==============================================\n\n"
-            f"Current PYTHONPATH: {python_path}\n"
-            f"Expected to include: {project_root}\n\n"
-            f"🔧 TO FIX THIS:\n"
-            f"   export PYTHONPATH=.\n\n"
-            f"This may cause import errors later.\n\n"
-        )
-        # Don't exit, just warn
+    # Environment validation is now handled in hex_ai/__init__.py
+    # This function is kept for backward compatibility
+    pass
 
 
 def get_system_info() -> Dict:

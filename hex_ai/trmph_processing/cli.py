@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 
 # Import hex_ai modules
-from hex_ai.system_utils import check_virtual_env
+# Environment validation is now handled automatically in hex_ai/__init__.py
 from hex_ai.batch_processor import BatchProcessor
 from hex_ai.file_utils import GracefulShutdown
 
@@ -40,7 +40,6 @@ def parse_arguments():
     parser.add_argument("--data-dir", default="data", help="Directory containing .trmph files")
     parser.add_argument("--output-dir", default="data/processed/step1_unshuffled", help="Output directory for processed files")
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
-    parser.add_argument("--combine", action="store_true", help="Create combined dataset after processing")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
     parser.add_argument("--max-workers", type=int, default=6, help="Number of worker processes to use (default: 6)")
@@ -57,8 +56,7 @@ def create_config_from_args(args):
         max_files=args.max_files,
         position_selector=args.position_selector,
         run_tag=args.run_tag,
-        max_workers=1 if args.sequential else args.max_workers,
-        combine_output=args.combine
+        max_workers=1 if args.sequential else args.max_workers
     )
 
 
@@ -68,21 +66,6 @@ def process_files(config):
     processor = TRMPHProcessor(config)
     results = processor.process_all_files()
     return results
-
-
-def create_combined_dataset(config):
-    """Create combined dataset if requested."""
-    logger.info("Creating combined dataset...")
-    shutdown_handler = GracefulShutdown()
-    
-    batch_processor = BatchProcessor(
-        data_dir=config.data_dir,
-        output_dir=config.output_dir,
-        shutdown_handler=shutdown_handler,
-        run_tag=config.run_tag
-    )
-    batch_processor.create_combined_dataset()
-    logger.info("Combined dataset created successfully")
 
 
 def print_output_summary(config, results):
@@ -95,21 +78,13 @@ def print_output_summary(config, results):
     # Count processed files
     processed_files = list(Path(config.output_dir).glob("*_processed.pkl.gz"))
     logger.info(f"  Individual processed files: {len(processed_files)} files in {config.output_dir}/")
-    
-    if config.combine_output:
-        combined_file = Path(config.output_dir) / "combined_dataset.pkl.gz"
-        if combined_file.exists():
-            logger.info(f"  Combined dataset: {combined_file}")
-        else:
-            logger.warning(f"  Combined dataset: NOT CREATED (check logs/trmph_processing.log for errors)")
-    
+
     logger.info("")
 
 
 def main():
     """Main CLI entry point."""
-    # Check virtual environment
-    check_virtual_env("hex_ai_env")
+    # Environment validation is now handled automatically in hex_ai/__init__.py
     
     # Setup logging
     setup_logging()
@@ -127,10 +102,6 @@ def main():
     try:
         # Process files
         results = process_files(config)
-        
-        # Handle combined dataset creation if requested
-        if args.combine:
-            create_combined_dataset(config)
         
         # Print output summary
         print_output_summary(config, results)

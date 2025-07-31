@@ -19,8 +19,7 @@ class ProcessingConfig:
                  max_files: Optional[int] = None,
                  position_selector: str = "all",
                  run_tag: Optional[str] = None,
-                 max_workers: int = 6,
-                 combine_output: bool = False):
+                 max_workers: int = 6):
         """
         Initialize processing configuration.
         
@@ -31,7 +30,6 @@ class ProcessingConfig:
             position_selector: Which positions to extract from each game
             run_tag: Tag for this processing run (default: timestamp)
             max_workers: Number of worker processes to use
-            combine_output: Whether to create combined dataset after processing
         """
         self.data_dir = Path(data_dir)
         self.output_dir = Path(output_dir)
@@ -39,7 +37,6 @@ class ProcessingConfig:
         self.position_selector = position_selector
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.max_workers = max_workers
-        self.combine_output = combine_output
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for multiprocessing serialization."""
@@ -50,7 +47,6 @@ class ProcessingConfig:
             'position_selector': self.position_selector,
             'run_tag': self.run_tag,
             'max_workers': self.max_workers,
-            'combine_output': self.combine_output
         }
     
     @classmethod
@@ -79,5 +75,4 @@ class ProcessingConfig:
                 f"max_files={self.max_files}, "
                 f"position_selector='{self.position_selector}', "
                 f"run_tag='{self.run_tag}', "
-                f"max_workers={self.max_workers}, "
-                f"combine_output={self.combine_output})") 
+                f"max_workers={self.max_workers})") 

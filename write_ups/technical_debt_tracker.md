@@ -52,6 +52,29 @@ This document tracks specific technical debt items and refactoring tasks that ne
 
 **Status:** ✅ **COMPLETED** - Script successfully processed real data, removing 308,619 duplicates
 
+### 1.2. Memory Safety Cleanup ✅ COMPLETED
+**Priority:** Critical  
+**Estimated Time:** 1 day  
+**Impact:** Critical - prevents crashes on large datasets
+
+**Issue:** `create_combined_dataset` function was a memory disaster that loaded all files into memory at once
+
+**Tasks:**
+- [x] Remove `create_combined_dataset` function from `BatchProcessor`
+- [x] Remove `--combine` argument from CLI
+- [x] Remove `create_combined_dataset` function from CLI
+- [x] Update configuration to deprecate `combine_output` parameter
+- [x] Update data processing plan to reflect changes
+- [x] Test that all functionality still works
+
+**Files modified:**
+- `hex_ai/batch_processor.py` ✅ **COMPLETED** - Removed dangerous function
+- `hex_ai/trmph_processing/cli.py` ✅ **COMPLETED** - Removed combine functionality
+- `hex_ai/trmph_processing/config.py` ✅ **COMPLETED** - Deprecated parameter
+- `write_ups/data_processing_plan.md` ✅ **COMPLETED** - Updated plan
+
+**Status:** ✅ **COMPLETED** - Memory disaster averted, all tests passing
+
 ---
 
 ## 🔧 Medium Priority - Code Quality

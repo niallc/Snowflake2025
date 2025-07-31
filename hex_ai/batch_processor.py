@@ -511,58 +511,7 @@ class BatchProcessor:
         logger.info("=" * 60)
         
         return self.stats
-    
-    def create_combined_dataset(self) -> None:
-        """Combine all processed files into a single dataset."""
-        logger.info("Creating combined dataset...")
-        
-        all_examples = []
-        processed_files = list(self.output_dir.glob("*_processed.pkl.gz"))
-        
-        if not processed_files:
-            logger.warning("No processed files found to combine")
-            return
-        
-        logger.info(f"Found {len(processed_files)} processed files to combine")
-        
-        failed_files = []
-        for file_path in processed_files:
-            try:
-                import gzip
-                import pickle
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-                    all_examples.extend(data['examples'])
-                    logger.info(f"  Loaded {len(data['examples'])} examples from {file_path.name}")
-            except Exception as e:
-                logger.error(f"Error loading {file_path}: {e}")
-                failed_files.append(str(file_path))
-        
-        if failed_files:
-            logger.error(f"Failed to load {len(failed_files)} files: {failed_files}")
-            if len(failed_files) > len(processed_files) // 2:
-                logger.error("Too many files failed to load - aborting combined dataset creation")
-                return
-        
-        if all_examples:
-            # Create combined dataset
-            combined_file = self.output_dir / "combined_dataset.pkl.gz"
-            data = {
-                'examples': all_examples,
-                'total_examples': len(all_examples),
-                'source_files': len(processed_files) - len(failed_files),
-                'failed_files': failed_files,
-                'created_at': datetime.now().isoformat()
-            }
-            
-            atomic_write_pickle_gz(data, combined_file)
-            
-            logger.info(f"Created combined dataset with {len(all_examples)} examples")
-            logger.info(f"Saved to {combined_file}")
-            if failed_files:
-                logger.warning(f"Skipped {len(failed_files)} failed files in combined dataset")
-        else:
-            logger.warning("No examples found to combine")
+
 
     def _validate_examples_data(self, examples: list):
         """Validate examples data before saving."""

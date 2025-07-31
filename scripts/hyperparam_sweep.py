@@ -22,9 +22,8 @@ import argparse
 
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
-from hex_ai.system_utils import check_virtual_env
 from hex_ai.error_handling import GracefulShutdownRequested
-check_virtual_env("hex_ai_env")
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 ###### Logging setup ######
 log_dir = Path('logs')

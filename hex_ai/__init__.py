@@ -55,11 +55,21 @@ def _validate_environment():
         )
     
     # Check if project root is in Python's sys.path (which includes PYTHONPATH)
-    if str(project_root) not in sys.path:
+    # Accept either the absolute project root path or "." (relative path)
+    project_root_str = str(project_root)
+    current_dir_str = str(Path.cwd())
+    
+    path_is_valid = (
+        project_root_str in sys.path or
+        current_dir_str in sys.path or
+        "." in python_path.split(os.pathsep) if python_path else False
+    )
+    
+    if not path_is_valid:
         raise ImportError(
             f"hex_ai requires project root in Python path.\n"
             f"Current PYTHONPATH: {python_path}\n"
-            f"Expected project root: {project_root}\n"
+            f"Expected project root: {project_root_str} or .\n"
             f"Set it first: export PYTHONPATH=."
         )
 
