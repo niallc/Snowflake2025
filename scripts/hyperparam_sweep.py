@@ -176,14 +176,25 @@ Examples:
                             "Example: --data_weights 0.7 0.3 means 70%% from first directory, 30%% from second.")
     
     # Resume training arguments
-    parser.add_argument("--resume_from", type=str, 
-                       help="Path to resume training from. Can be either:\n"
-                            "1. A specific checkpoint file (e.g., epoch2_mini36.pt.gz)\n"
-                            "2. An experiment directory (e.g., checkpoints/hyperparameter_tuning/experiment_name)\n"
-                            "   In this case, use --resume_epoch to specify which epoch to resume from.")
-    parser.add_argument("--resume_epoch", type=int, 
-                       help="Epoch to resume from (only used when --resume_from points to a directory). "
-                            "If not specified, will resume from the latest available epoch.")
+    parser.add_argument(
+        '--resume_from', 
+        type=str,
+        help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
+    )
+    
+    parser.add_argument(
+        '--skip_files',
+        type=int,
+        nargs='+',
+        help='Number of files to skip from the beginning of each data directory (one value per directory, e.g., --skip_files 0 200 to skip 0 from first dir, 200 from second)'
+    )
+    
+    parser.add_argument(
+        '--epochs', 
+        type=int, 
+        default=10,
+        help='Number of training epochs'
+    )
     
     # Existing arguments
     parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
@@ -205,10 +216,6 @@ Examples:
         sys.exit(1)
     
     # Validate resume arguments
-    if args.resume_epoch is not None and not args.resume_from:
-        print("ERROR: --resume_epoch can only be used with --resume_from")
-        sys.exit(1)
-    
     if args.resume_from and not Path(args.resume_from).exists():
         print(f"ERROR: Resume path does not exist: {args.resume_from}")
         sys.exit(1)
@@ -242,7 +249,7 @@ Examples:
             print_sweep_summary(results, results_dir, interrupted=True)
             sys.exit(0)
         
-        # Run hyperparameter tuning with fail_fast enabled
+        # Run hyperparameter tuning
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=args.data_dirs,
@@ -258,7 +265,7 @@ Examples:
             enable_augmentation=not args.no_augmentation,
             fail_fast=True,
             resume_from=args.resume_from,
-            resume_epoch=args.resume_epoch,
+            skip_files=args.skip_files,
             shutdown_handler=shutdown_handler
         )
         total_time = time.time() - start_time

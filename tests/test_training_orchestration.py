@@ -17,25 +17,24 @@ from hex_ai.training_orchestration import (
 )
 
 
-class TestDataWeightsValidation:
-    """Test data weights validation in discover_and_split_multiple_data."""
+class TestDataDiscovery:
+    """Test data discovery functionality in discover_and_split_multiple_data."""
     
-    def test_valid_weights(self):
-        """Test that valid weights are accepted."""
-        data_dirs = ["dir1", "dir2", "dir3"]
-        weights = [0.5, 0.3, 0.2]
+    def test_basic_functionality(self):
+        """Test that basic data discovery works without weights."""
+        data_dirs = ["dir1", "dir2"]
         
-        # Should not raise an exception
         with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
             mock_discover.return_value = [Path("file1.pkl.gz")]
+            
             with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
                 mock_estimate.return_value = 1000
+                
                 with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
                     mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
                     
                     result = discover_and_split_multiple_data(
                         data_dirs=data_dirs,
-                        data_weights=weights,
                         train_ratio=0.8,
                         random_seed=42
                     )
@@ -45,62 +44,15 @@ class TestDataWeightsValidation:
                     assert len(train_files) > 0
                     assert len(val_files) > 0
                     assert len(all_files) > 0
-                    assert len(data_source_info) == 3
-    
-    def test_invalid_weight_count(self):
-        """Test that invalid weight count raises ValueError."""
-        data_dirs = ["dir1", "dir2", "dir3"]
-        weights = [0.5, 0.3]  # Only 2 weights for 3 directories
-        
-        with pytest.raises(ValueError, match="Number of data weights"):
-            discover_and_split_multiple_data(
-                data_dirs=data_dirs,
-                data_weights=weights,
-                train_ratio=0.8,
-                random_seed=42
-            )
-    
-    def test_invalid_weight_sum(self):
-        """Test that weights that don't sum to 1.0 raise ValueError."""
-        data_dirs = ["dir1", "dir2", "dir3"]
-        weights = [0.5, 0.3, 0.1]  # Sums to 0.9, not 1.0
-        
-        with pytest.raises(ValueError, match="Data weights must sum to 1.0"):
-            discover_and_split_multiple_data(
-                data_dirs=data_dirs,
-                data_weights=weights,
-                train_ratio=0.8,
-                random_seed=42
-            )
-    
-    def test_equal_weights_default(self):
-        """Test that equal weights are used when weights not specified."""
-        data_dirs = ["dir1", "dir2", "dir3"]
-        
-        with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
-            mock_discover.return_value = [Path("file1.pkl.gz")]
-            with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
-                mock_estimate.return_value = 1000
-                with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
-                    mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
+                    assert len(data_source_info) == 2
                     
-                    result = discover_and_split_multiple_data(
-                        data_dirs=data_dirs,
-                        data_weights=None,  # Should use equal weights
-                        train_ratio=0.8,
-                        random_seed=42
-                    )
-                    
-                    # Should return the expected structure
-                    train_files, val_files, all_files, data_source_info = result
-                    assert len(train_files) > 0
-                    assert len(val_files) > 0
-                    assert len(all_files) > 0
-                    assert len(data_source_info) == 3
-                    
-                    # Check that equal weights were used
+                    # Check that data source info doesn't have weights
                     for info in data_source_info:
-                        assert info['weight'] == pytest.approx(1.0 / 3, rel=1e-6)
+                        assert 'weight' not in info
+                        assert 'directory' in info
+                        assert 'files_count' in info
+                        assert 'total_examples' in info
+                        assert 'skip_files' in info
 
 
 class TestMetadataSaving:
@@ -114,15 +66,15 @@ class TestMetadataSaving:
             data_source_info = [
                 {
                     'directory': 'data/processed/shuffled',
-                    'files': [Path('file1.pkl.gz'), Path('file2.pkl.gz')],
-                    'weight': 0.7,
-                    'examples_estimated': 1000000
+                    'files_count': 2,
+                    'total_examples': 1000000,
+                    'skip_files': 0
                 },
                 {
                     'directory': 'data/processed/jul_29_shuffled',
-                    'files': [Path('file3.pkl.gz')],
-                    'weight': 0.3,
-                    'examples_estimated': 500000
+                    'files_count': 1,
+                    'total_examples': 500000,
+                    'skip_files': 0
                 }
             ]
             
@@ -146,19 +98,19 @@ class TestMetadataSaving:
                 training_config=training_config
             )
             
+            # Check that metadata file was created
             metadata_file = temp_path / "test_experiment" / "experiment_metadata.json"
             assert metadata_file.exists()
             
+            # Check metadata content
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
             
             assert metadata['experiment_name'] == "test_experiment"
             assert metadata['hyperparameters'] == hyperparameters
             assert metadata['training_config'] == training_config
-            assert len(metadata['data_sources']) == 2
-            assert metadata['total_examples'] == 1500000
-            assert metadata['data_weights'] == [0.7, 0.3]
-            assert 'created_at' in metadata
+            assert metadata['data_sources'] == data_source_info
+            assert metadata['total_examples'] == 1500000  # 1000000 + 500000
     
     def test_save_overall_results_with_data_sources(self):
         """Test that overall results include data source information."""
@@ -400,3 +352,106 @@ class TestMemoryEfficiency:
                     # Should only have called gzip.open once (for the sample file)
                     assert mock_gzip.call_count == 1
                     assert mock_pickle.call_count == 1 
+
+
+class TestSkipFiles:
+    """Test skip_files functionality in discover_and_split_multiple_data."""
+    
+    def test_skip_files_functionality(self):
+        """Test that skip_files correctly skips the first N files from each directory."""
+        data_dirs = ["dir1", "dir2"]
+        skip_files = [2, 1]  # Skip 2 from first dir, 1 from second dir
+        
+        with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
+            # Mock to return 5 files for each directory
+            mock_discover.return_value = [Path(f"file{i}.pkl.gz") for i in range(5)]
+            
+            with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
+                mock_estimate.return_value = 1000
+                
+                with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
+                    mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
+                    
+                    result = discover_and_split_multiple_data(
+                        data_dirs=data_dirs,
+                        skip_files=skip_files,
+                        train_ratio=0.8,
+                        random_seed=42
+                    )
+                    
+                    # Should have called discover_processed_files with correct skip_files values
+                    assert mock_discover.call_count == 2
+                    assert mock_discover.call_args_list[0][1]['skip_files'] == 2
+                    assert mock_discover.call_args_list[1][1]['skip_files'] == 1
+                    
+                    # Should return the expected structure
+                    train_files, val_files, all_files, data_source_info = result
+                    assert len(data_source_info) == 2
+                    
+                    # Check that skip_files is recorded in data source info
+                    assert data_source_info[0]['skip_files'] == 2
+                    assert data_source_info[1]['skip_files'] == 1
+    
+    def test_skip_files_validation(self):
+        """Test that skip_files validation works correctly."""
+        from hex_ai.data_pipeline import discover_processed_files
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Create a mock data directory with only 2 files
+            data_dir = temp_path / "test_data"
+            data_dir.mkdir()
+            
+            # Create only 2 files
+            for i in range(2):
+                (data_dir / f"shuffled_{i:03d}.pkl.gz").touch()
+            
+            # Create shuffling_progress.json to indicate shuffled data
+            (data_dir / "shuffling_progress.json").touch()
+            
+            # Should work with skip_files=1
+            files = discover_processed_files(str(data_dir), skip_files=1)
+            assert len(files) == 1
+            
+            # Should raise error when trying to skip more files than exist
+            with pytest.raises(ValueError, match="Cannot skip 3 files when only 2 files exist"):
+                discover_processed_files(str(data_dir), skip_files=3)
+    
+    def test_skip_files_count_validation(self):
+        """Test that skip_files count validation works correctly."""
+        data_dirs = ["dir1", "dir2"]
+        skip_files = [0, 1, 2]  # Wrong count - 3 values for 2 directories
+        
+        with pytest.raises(ValueError, match="Number of skip_files values"):
+            discover_and_split_multiple_data(
+                data_dirs=data_dirs,
+                skip_files=skip_files,
+                train_ratio=0.8,
+                random_seed=42
+            )
+    
+    def test_skip_files_default_behavior(self):
+        """Test that skip_files defaults to 0 for all directories when not provided."""
+        data_dirs = ["dir1", "dir2"]
+        
+        with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
+            mock_discover.return_value = [Path("file1.pkl.gz")]
+            
+            with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
+                mock_estimate.return_value = 1000
+                
+                with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
+                    mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
+                    
+                    result = discover_and_split_multiple_data(
+                        data_dirs=data_dirs,
+                        skip_files=None,  # Should default to [0, 0]
+                        train_ratio=0.8,
+                        random_seed=42
+                    )
+                    
+                    # Should have called discover_processed_files with skip_files=0 for both
+                    assert mock_discover.call_count == 2
+                    for call in mock_discover.call_args_list:
+                        assert call[1]['skip_files'] == 0 

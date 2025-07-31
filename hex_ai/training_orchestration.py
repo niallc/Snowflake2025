@@ -20,6 +20,7 @@ import gzip
 import pickle
 import logging
 import random
+import re
 
 from .models import TwoHeadedResNet
 from .training import Trainer, EarlyStopping
@@ -88,7 +89,6 @@ def run_single_experiment(
     mini_epoch_batches, 
     device, 
     resume_from: Optional[str] = None,
-    resume_epoch: Optional[int] = None,
     shutdown_handler=None
 ):
     """
@@ -103,133 +103,65 @@ def run_single_experiment(
         num_epochs: Number of training epochs
         mini_epoch_batches: Number of mini-epoch batches
         device: Device to use for training
-        resume_from: Optional path to resume from (file or directory)
-        resume_epoch: Optional epoch to resume from (only used with directory)
-        shutdown_handler: Optional shutdown handler
+        resume_from: Path to checkpoint file to resume from
+        shutdown_handler: Handler for graceful shutdown
     """
-    model = TwoHeadedResNet(dropout_prob=exp_config['hyperparameters'].get('dropout_prob', 0.1))
-    
-    # Handle resume logic
-    start_epoch = 0
+    # Determine checkpoint path and start epoch
     checkpoint_path = None
+    start_epoch = 0
     
     if resume_from:
-        resume_path = Path(resume_from)
+        checkpoint_path = Path(resume_from)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {resume_from}")
         
-        if resume_path.is_file():
-            # Resume from specific checkpoint file
-            checkpoint_path = resume_path
-            logger.info(f"Resuming from checkpoint file: {checkpoint_path}")
-            
-        elif resume_path.is_dir():
-            # Resume from experiment directory
-            if resume_epoch is not None:
-                # Find latest checkpoint for specified epoch
-                checkpoint_path = find_latest_checkpoint_for_epoch(resume_path, resume_epoch)
-                if checkpoint_path:
-                    logger.info(f"Found checkpoint for epoch {resume_epoch}: {checkpoint_path}")
-                else:
-                    raise FileNotFoundError(f"No checkpoint found for epoch {resume_epoch} in {resume_path}")
-            else:
-                # Find latest checkpoint overall
-                checkpoint_files = list(resume_path.glob("epoch*_mini*.pt*"))
-                if checkpoint_files:
-                    checkpoint_path = max(checkpoint_files, key=lambda f: f.name)
-                    logger.info(f"Found latest checkpoint: {checkpoint_path}")
-                else:
-                    raise FileNotFoundError(f"No checkpoint files found in {resume_path}")
+        # Extract epoch from checkpoint filename
+        # Expected format: epoch{N}_mini{M}.pt.gz
+        match = re.search(r'epoch(\d+)_mini', checkpoint_path.name)
+        if match:
+            start_epoch = int(match.group(1))
+            logger.info(f"Resuming from epoch {start_epoch} using checkpoint: {checkpoint_path}")
         else:
-            raise FileNotFoundError(f"Resume path does not exist: {resume_from}")
-        
-        # Load the checkpoint
-        if checkpoint_path and checkpoint_path.exists():
-            try:
-                logger.info(f"Loading checkpoint: {checkpoint_path}")
-                checkpoint = torch.load(checkpoint_path, map_location=device)
-                
-                # Load model state
-                model.load_state_dict(checkpoint['model_state_dict'])
-                
-                # Determine start epoch from checkpoint filename
-                # Extract epoch number from filename like "epoch2_mini36.pt.gz"
-                filename = checkpoint_path.name
-                if filename.startswith("epoch") and "_mini" in filename:
-                    epoch_part = filename.split("_mini")[0]
-                    start_epoch = int(epoch_part.replace("epoch", ""))
-                    logger.info(f"Resuming from epoch {start_epoch}")
-                else:
-                    # Fallback to checkpoint metadata
-                    start_epoch = checkpoint.get('epoch', 0) + 1
-                    logger.info(f"Resuming from epoch {start_epoch} (from checkpoint metadata)")
-                
-            except Exception as e:
-                logger.error(f"Failed to load checkpoint {checkpoint_path}: {e}")
-                raise
+            raise ValueError(f"Could not extract epoch from checkpoint filename: {checkpoint_path.name}")
+    
+    # Create model and trainer
+    model = TwoHeadedResNet(
+        board_size=BOARD_SIZE,
+        policy_output_size=POLICY_OUTPUT_SIZE,
+        value_output_size=VALUE_OUTPUT_SIZE,
+        **exp_config['hyperparameters']
+    ).to(device)
     
     trainer = Trainer(
         model=model,
-        train_loader=torch.utils.data.DataLoader(
-            train_dataset,
-            batch_size=exp_config['hyperparameters']['batch_size'],
-            shuffle=False,
-            num_workers=0,
-            drop_last=False
-        ),
-        val_loader=torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=exp_config['hyperparameters']['batch_size'],
-            shuffle=False,
-            num_workers=0,
-            drop_last=False
-        ) if val_dataset else None,
-        learning_rate=exp_config['hyperparameters']['learning_rate'],
         device=device,
-        enable_system_analysis=True,
-        enable_csv_logging=True,
-        experiment_name=exp_config['experiment_name'],
-        policy_weight=exp_config['hyperparameters'].get('policy_weight', 0.15),
-        value_weight=exp_config['hyperparameters'].get('value_weight', 0.85),
-        weight_decay=exp_config['hyperparameters'].get('weight_decay', 1e-4),
-        max_grad_norm=exp_config['hyperparameters'].get('max_grad_norm', 20.0),
-        value_learning_rate_factor=exp_config['hyperparameters'].get('value_learning_rate_factor', 0.1),
-        value_weight_decay_factor=exp_config['hyperparameters'].get('value_weight_decay_factor', 5.0),
-        log_interval_batches=exp_config['hyperparameters'].get('log_interval_batches', 200)
+        **exp_config['hyperparameters']
     )
     
-    exp_dir = results_path / exp_config['experiment_name']
-    exp_dir.mkdir(parents=True, exist_ok=True)
+    # Load checkpoint if resuming
+    if checkpoint_path:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        trainer.load_state_dict(checkpoint['trainer_state'])
+        logger.info(f"Loaded checkpoint from {checkpoint_path}")
     
+    # Create orchestrator
     orchestrator = MiniEpochOrchestrator(
         trainer=trainer,
-        train_loader=trainer.train_loader,
-        val_loader=trainer.val_loader,
-        mini_epoch_batches=mini_epoch_batches,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        results_path=results_path,
         num_epochs=num_epochs,
-        checkpoint_dir=exp_dir,
-        log_interval=1,
-        shutdown_handler=shutdown_handler,
-        start_epoch=start_epoch  # Start from specific epoch if resuming
+        mini_epoch_batches=mini_epoch_batches,
+        start_epoch=start_epoch
     )
     
-    orchestrator.run()
-    logger.info(f"Experiment {exp_config['experiment_name']} completed.")
-    
-    # Collect relevant metrics for sweep summary
-    best_val_loss = trainer.best_val_loss
-    best_train_loss = min(trainer.training_history) if trainer.training_history else None
-    final_val_loss = trainer.best_val_loss  # Could be last val loss if tracked separately
-    final_train_loss = trainer.training_history[-1] if trainer.training_history else None
-    
-    return {
-        'experiment_name': exp_config['experiment_name'],
-        'hyperparameters': exp_config['hyperparameters'],
-        'best_val_loss': best_val_loss,
-        'best_train_loss': best_train_loss,
-        'final_val_loss': final_val_loss,
-        'final_train_loss': final_train_loss,
-        'resumed_from': str(checkpoint_path) if checkpoint_path else None,
-        'start_epoch': start_epoch,
-    }
+    # Run training
+    try:
+        result = orchestrator.run(shutdown_handler=shutdown_handler)
+        return result
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
 
 def select_device():
     """
@@ -256,20 +188,20 @@ def prepare_experiment_config(exp_config, device, max_examples_unaugmented, max_
 
 def discover_and_split_multiple_data(
     data_dirs: List[str], 
-    data_weights: Optional[List[float]] = None,
     train_ratio: float = 0.8, 
     random_seed: Optional[int] = None,
-    fail_fast: bool = True
+    fail_fast: bool = True,
+    skip_files: Optional[List[int]] = None
 ) -> Tuple[List[Path], List[Path], List[Path], List[Dict]]:
     """
     Discover and split data from multiple directories.
     
     Args:
         data_dirs: List of data directories
-        data_weights: Optional weights for each directory (must sum to 1.0)
         train_ratio: Ratio for train/val split
         random_seed: Random seed for reproducible splits
         fail_fast: Whether to fail on first error
+        skip_files: Optional list of files to skip from each directory (one value per directory)
         
     Returns:
         Tuple of (train_files, val_files, all_files, data_source_info)
@@ -278,49 +210,58 @@ def discover_and_split_multiple_data(
     all_data_files = []
     data_source_info = []
     
-    # Validate data weights if provided
-    if data_weights is not None:
-        if len(data_weights) != len(data_dirs):
-            raise ValueError(f"Number of data weights ({len(data_weights)}) must match number of data directories ({len(data_dirs)})")
-        if abs(sum(data_weights) - 1.0) > 1e-6:
-            raise ValueError(f"Data weights must sum to 1.0, got {sum(data_weights)}")
+    # Validate skip_files if provided
+    if skip_files is not None:
+        if len(skip_files) != len(data_dirs):
+            raise ValueError(f"Number of skip_files values ({len(skip_files)}) must match number of data directories ({len(data_dirs)})")
+    else:
+        # Use 0 skip files for all directories if not provided
+        skip_files = [0] * len(data_dirs)
     
+    # Discover files from each directory
     for i, data_dir in enumerate(data_dirs):
         try:
-            data_files = discover_processed_files(data_dir)
-            weight = data_weights[i] if data_weights else 1.0 / len(data_dirs)
-            
-            all_data_files.extend(data_files)
-            data_source_info.append({
-                'directory': data_dir,
-                'files': data_files,
-                'weight': weight,
-                'examples_estimated': estimate_dataset_size(data_files)
-            })
-            
-            logger.info(f"Data source {i+1}/{len(data_dirs)}: {data_dir}")
-            logger.info(f"  - Files: {len(data_files)}")
-            logger.info(f"  - Weight: {weight:.3f}")
-            logger.info(f"  - Estimated examples: {data_source_info[-1]['examples_estimated']:,}")
-            
+            data_files = discover_processed_files(data_dir, skip_files=skip_files[i])
         except Exception as e:
             logger.error(f"Failed to discover data in {data_dir}: {e}")
             if fail_fast:
                 raise
             else:
                 continue
+        
+        if not data_files:
+            logger.warning(f"No data files found in {data_dir}")
+            continue
+        
+        # Estimate dataset size for this directory
+        try:
+            total_examples = estimate_dataset_size(data_files)
+        except Exception as e:
+            logger.warning(f"Failed to estimate dataset size for {data_dir}: {e}")
+            total_examples = 0
+        
+        # Add files to the combined list
+        all_data_files.extend(data_files)
+        
+        # Record data source information
+        data_source_info.append({
+            'directory': data_dir,
+            'files_count': len(data_files),
+            'total_examples': total_examples,
+            'skip_files': skip_files[i]
+        })
+        
+        logger.info(f"Added {len(data_files)} files from {data_dir} (examples: {total_examples:,}, skipped: {skip_files[i]})")
     
     if not all_data_files:
-        raise FileNotFoundError(f"No data files found in any of the provided directories: {data_dirs}")
+        raise ValueError("No data files found in any of the specified directories")
     
     # Create train/val split across all files
     train_files, val_files = create_train_val_split(
         all_data_files, train_ratio, random_seed, max_files_per_split=None
     )
     
-    logger.info(f"Combined data sources: {len(all_data_files)} total files")
-    logger.info(f"  - Train: {len(train_files)} files")
-    logger.info(f"  - Validation: {len(val_files)} files")
+    logger.info(f"Final split: {len(train_files)} train files, {len(val_files)} validation files")
     
     return train_files, val_files, all_data_files, data_source_info
 
@@ -346,12 +287,11 @@ def save_experiment_metadata(
     
     metadata = {
         'experiment_name': experiment_name,
-        'created_at': datetime.now().isoformat(),
+        'timestamp': datetime.now().isoformat(),
         'hyperparameters': hyperparameters,
         'training_config': training_config,
         'data_sources': data_source_info,
-        'total_examples': sum(src['examples_estimated'] for src in data_source_info),
-        'data_weights': [src['weight'] for src in data_source_info]
+        'total_examples': sum(src['total_examples'] for src in data_source_info)
     }
     
     metadata_file = results_path / experiment_name / "experiment_metadata.json"
@@ -383,7 +323,6 @@ def save_overall_results(results_path, overall_results, data_source_info=None):
 def run_hyperparameter_tuning_current_data(
     experiments: List[Dict],
     data_dirs: Union[str, List[str]],  # Updated to support multiple directories
-    data_weights: Optional[List[float]] = None,  # New: Optional weighting
     results_dir: str = "checkpoints/hyperparameter_tuning",
     train_ratio: float = 0.8,
     num_epochs: int = 10,
@@ -395,8 +334,8 @@ def run_hyperparameter_tuning_current_data(
     enable_augmentation: bool = True,
     fail_fast: bool = True,
     mini_epoch_batches: int = 500,
-    resume_from: Optional[str] = None,  # New: Resume from checkpoint
-    resume_epoch: Optional[int] = None,  # New: Resume from specific epoch
+    resume_from: Optional[str] = None,  # New: Resume from checkpoint file
+    skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
     shutdown_handler=None
 ) -> Dict:
     """
@@ -427,7 +366,8 @@ def run_hyperparameter_tuning_current_data(
     # Handle backward compatibility: convert single directory to list
     if isinstance(data_dirs, str):
         data_dirs = [data_dirs]
-        data_weights = None  # Single directory doesn't need weights
+        # data_weights = None  # Single directory doesn't need weights
+        skip_files = None # Single directory doesn't need per-directory skip
     
     if max_validation_examples is None:
         max_validation_examples = max_examples_unaugmented
@@ -442,7 +382,7 @@ def run_hyperparameter_tuning_current_data(
     
     # Use new multi-directory data discovery
     train_files, val_files, data_files, data_source_info = discover_and_split_multiple_data(
-        data_dirs, data_weights, train_ratio, random_seed, fail_fast
+        data_dirs, train_ratio, random_seed, fail_fast, skip_files=skip_files
     )
     
     if train_files is None or val_files is None:
@@ -480,7 +420,6 @@ def run_hyperparameter_tuning_current_data(
                 mini_epoch_batches,
                 device,
                 resume_from=resume_from,
-                resume_epoch=resume_epoch,
                 shutdown_handler=shutdown_handler
             )
             
@@ -498,8 +437,7 @@ def run_hyperparameter_tuning_current_data(
                     'enable_augmentation': enable_augmentation,
                     'train_ratio': train_ratio,
                     'random_seed': random_seed,
-                    'resumed_from': resume_from,
-                    'resume_epoch': resume_epoch
+                    'resumed_from': resume_from
                 }
             )
             
