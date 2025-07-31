@@ -25,112 +25,10 @@ from .models import TwoHeadedResNet
 from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
-from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split
+from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split, estimate_dataset_size
 
 logger = logging.getLogger(__name__)
 
-
-def create_experiment_config_legacy(experiment_name: str,
-                           hyperparams: Dict,
-                           dataset_info: Dict,
-                           device: str) -> Dict:
-    """
-    Create a standardized experiment configuration.
-    
-    Args:
-        experiment_name: Name of the experiment
-        hyperparams: Hyperparameters for the experiment
-        dataset_info: Information about the dataset
-        device: Device being used for training
-        
-    Returns:
-        Experiment configuration dictionary
-    """
-    return {
-        'experiment_name': experiment_name,
-        'hyperparameters': hyperparams,
-        'dataset_info': dataset_info,
-        'device': device,
-        'timestamp': datetime.now().isoformat(),
-        'version': '1.0'  # For tracking format changes
-    }
-
-
-def create_summary_csv(experiment_results: List[Dict], results_path: Path):
-    """
-    Create a summary CSV file with all experiment results.
-    
-    Args:
-        experiment_results: List of experiment result dictionaries
-        results_path: Path to save the summary CSV
-    """
-    summary_file = results_path / "experiment_summary.csv"
-    
-    # Define headers for summary CSV
-    headers = [
-        'experiment_name', 'timestamp', 'date',
-        'learning_rate', 'batch_size', 'dropout_prob', 'weight_decay',
-        'policy_weight', 'value_weight',
-        'best_val_loss', 'best_train_loss', 'final_val_loss', 'final_train_loss',
-        'epochs_trained', 'early_stopped', 'training_time',
-        'device', 'dataset_size'
-    ]
-    
-    with open(summary_file, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        
-        for exp in experiment_results:
-            row = {
-                'experiment_name': exp['experiment_name'],
-                'timestamp': datetime.now().isoformat(),
-                'date': datetime.now().strftime('%Y-%m-%d'),
-                'learning_rate': exp['hyperparameters'].get('learning_rate', ''),
-                'batch_size': exp['hyperparameters'].get('batch_size', ''),
-                'dropout_prob': exp['hyperparameters'].get('dropout_prob', ''),
-                'weight_decay': exp['hyperparameters'].get('weight_decay', ''),
-                'policy_weight': exp['hyperparameters'].get('policy_weight', ''),
-                'value_weight': exp['hyperparameters'].get('value_weight', ''),
-                'best_val_loss': exp['best_val_loss'],
-                'best_train_loss': exp['best_train_loss'],
-                'final_val_loss': exp['final_val_loss'],
-                'final_train_loss': exp['final_train_loss'],
-                'epochs_trained': exp['epochs_trained'],
-                'early_stopped': exp['early_stopped'],
-                'training_time': exp['training_time'],
-                'device': exp.get('device', ''),
-                'dataset_size': exp.get('dataset_size', '')
-            }
-            writer.writerow(row)
-    
-    logger.info(f"Created experiment summary CSV: {summary_file}") 
-
-
-def discover_and_split_data(data_dir, train_ratio, random_seed, fail_fast):
-    """
-    Discover processed files and split into train/val sets.
-    Returns (train_files, val_files, all_files).
-    """
-    try:
-        data_files = discover_processed_files(data_dir)
-    except Exception as e:
-        logger.error(f"Failed to discover processed files in {data_dir}: {e}")
-        if fail_fast:
-            raise
-        else:
-            return None, None, None
-    try:
-        logger.info(f"Creating train/val split (no file limit with streaming)")
-        train_files, val_files = create_train_val_split(
-            data_files, train_ratio, random_seed, max_files_per_split=None
-        )
-    except Exception as e:
-        logger.error(f"Failed to create train/val split: {e}")
-        if fail_fast:
-            raise
-        else:
-            return None, None, data_files
-    return train_files, val_files, data_files
 
 def create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, fail_fast):
     """
@@ -376,7 +274,6 @@ def discover_and_split_multiple_data(
     Returns:
         Tuple of (train_files, val_files, all_files, data_source_info)
     """
-    from hex_ai.data_pipeline import discover_processed_files, estimate_dataset_size
     
     all_data_files = []
     data_source_info = []
@@ -417,7 +314,6 @@ def discover_and_split_multiple_data(
         raise FileNotFoundError(f"No data files found in any of the provided directories: {data_dirs}")
     
     # Create train/val split across all files
-    from hex_ai.data_pipeline import create_train_val_split
     train_files, val_files = create_train_val_split(
         all_data_files, train_ratio, random_seed, max_files_per_split=None
     )

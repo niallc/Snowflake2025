@@ -18,7 +18,7 @@ from hex_ai.training_orchestration import (
 
 
 class TestDataWeightsValidation:
-    """Test data weights validation logic."""
+    """Test data weights validation in discover_and_split_multiple_data."""
     
     def test_valid_weights(self):
         """Test that valid weights are accepted."""
@@ -26,11 +26,11 @@ class TestDataWeightsValidation:
         weights = [0.5, 0.3, 0.2]
         
         # Should not raise an exception
-        with patch('hex_ai.data_pipeline.discover_processed_files') as mock_discover:
+        with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
             mock_discover.return_value = [Path("file1.pkl.gz")]
-            with patch('hex_ai.data_pipeline.estimate_dataset_size') as mock_estimate:
+            with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
                 mock_estimate.return_value = 1000
-                with patch('hex_ai.data_pipeline.create_train_val_split') as mock_split:
+                with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
                     mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
                     
                     result = discover_and_split_multiple_data(
@@ -40,50 +40,48 @@ class TestDataWeightsValidation:
                         random_seed=42
                     )
                     
-                    assert len(result) == 4  # train_files, val_files, all_files, data_source_info
-                    assert len(result[3]) == 3  # data_source_info should have 3 entries
+                    # Should return the expected structure
+                    train_files, val_files, all_files, data_source_info = result
+                    assert len(train_files) > 0
+                    assert len(val_files) > 0
+                    assert len(all_files) > 0
+                    assert len(data_source_info) == 3
     
     def test_invalid_weight_count(self):
-        """Test that wrong number of weights raises ValueError."""
-        data_dirs = ["dir1", "dir2"]
-        weights = [0.5]  # Wrong count
+        """Test that invalid weight count raises ValueError."""
+        data_dirs = ["dir1", "dir2", "dir3"]
+        weights = [0.5, 0.3]  # Only 2 weights for 3 directories
         
-        with patch('hex_ai.data_pipeline.discover_processed_files') as mock_discover:
-            mock_discover.return_value = [Path("file1.pkl.gz")]
-            
-            with pytest.raises(ValueError, match="must match number of data directories"):
-                discover_and_split_multiple_data(
-                    data_dirs=data_dirs,
-                    data_weights=weights,
-                    train_ratio=0.8,
-                    random_seed=42
-                )
+        with pytest.raises(ValueError, match="Number of data weights"):
+            discover_and_split_multiple_data(
+                data_dirs=data_dirs,
+                data_weights=weights,
+                train_ratio=0.8,
+                random_seed=42
+            )
     
     def test_invalid_weight_sum(self):
-        """Test that weights not summing to 1.0 raises ValueError."""
-        data_dirs = ["dir1", "dir2"]
-        weights = [0.5, 0.3]  # Sums to 0.8, not 1.0
+        """Test that weights that don't sum to 1.0 raise ValueError."""
+        data_dirs = ["dir1", "dir2", "dir3"]
+        weights = [0.5, 0.3, 0.1]  # Sums to 0.9, not 1.0
         
-        with patch('hex_ai.data_pipeline.discover_processed_files') as mock_discover:
-            mock_discover.return_value = [Path("file1.pkl.gz")]
-            
-            with pytest.raises(ValueError, match="must sum to 1.0"):
-                discover_and_split_multiple_data(
-                    data_dirs=data_dirs,
-                    data_weights=weights,
-                    train_ratio=0.8,
-                    random_seed=42
-                )
+        with pytest.raises(ValueError, match="Data weights must sum to 1.0"):
+            discover_and_split_multiple_data(
+                data_dirs=data_dirs,
+                data_weights=weights,
+                train_ratio=0.8,
+                random_seed=42
+            )
     
     def test_equal_weights_default(self):
         """Test that equal weights are used when weights not specified."""
         data_dirs = ["dir1", "dir2", "dir3"]
         
-        with patch('hex_ai.data_pipeline.discover_processed_files') as mock_discover:
+        with patch('hex_ai.training_orchestration.discover_processed_files') as mock_discover:
             mock_discover.return_value = [Path("file1.pkl.gz")]
-            with patch('hex_ai.data_pipeline.estimate_dataset_size') as mock_estimate:
+            with patch('hex_ai.training_orchestration.estimate_dataset_size') as mock_estimate:
                 mock_estimate.return_value = 1000
-                with patch('hex_ai.data_pipeline.create_train_val_split') as mock_split:
+                with patch('hex_ai.training_orchestration.create_train_val_split') as mock_split:
                     mock_split.return_value = ([Path("train1.pkl.gz")], [Path("val1.pkl.gz")])
                     
                     result = discover_and_split_multiple_data(
@@ -93,10 +91,16 @@ class TestDataWeightsValidation:
                         random_seed=42
                     )
                     
-                    data_source_info = result[3]
+                    # Should return the expected structure
+                    train_files, val_files, all_files, data_source_info = result
+                    assert len(train_files) > 0
+                    assert len(val_files) > 0
+                    assert len(all_files) > 0
                     assert len(data_source_info) == 3
-                    for source in data_source_info:
-                        assert abs(source['weight'] - 1.0/3) < 1e-6
+                    
+                    # Check that equal weights were used
+                    for info in data_source_info:
+                        assert info['weight'] == pytest.approx(1.0 / 3, rel=1e-6)
 
 
 class TestMetadataSaving:
