@@ -25,6 +25,19 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvi
 pip install -r requirements.txt
 ```
 
+### For Coding Agents
+If you're a coding agent working on this project:
+
+1. **Quick Setup Check**: `python scripts/agent_setup.py`
+2. **Environment Validation**: `python scripts/validate_environment.py`
+3. **Common Commands**: `make help`
+4. **Detailed Guidance**: See `AGENT_GUIDANCE.md`
+
+**⚠️ IMPORTANT**: This project requires:
+- Virtual environment: `hex_ai_env`
+- PYTHONPATH: `export PYTHONPATH=.`
+- Never skip environment checks in code!
+
 ### Training
 ```bash
 # Run hyperparameter tuning
