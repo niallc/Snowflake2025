@@ -145,42 +145,26 @@ def print_sweep_summary(results, results_dir, interrupted=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Hyperparameter sweep for Hex AI training with support for multiple data sources and resume training.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Run hyperparameter tuning with multiple data sources",
         epilog="""
 Examples:
   # Single data directory (backward compatible)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
 
-  # Multiple data directories with equal weights
+  # Multiple data directories
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
 
-  # Multiple data directories with custom weights (must sum to 1.0)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled --data_weights 0.7 0.3
+  # Skip first 200 files from second directory
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled --skip_files 0 200
 
   # Resume training from a specific checkpoint file
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz
-
-  # Resume training from a specific epoch (will find the latest checkpoint for that epoch)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name --resume_epoch 2
         """
     )
     
     # Data source arguments
     parser.add_argument("--data_dirs", type=str, nargs='+', required=True,
-                       help="One or more directories containing processed data files. "
-                            "For multiple directories, you can optionally specify --data_weights.")
-    parser.add_argument("--data_weights", type=float, nargs='+', 
-                       help="Weights for each data directory (must match number of data_dirs and sum to 1.0). "
-                            "If not specified, equal weights are used. "
-                            "Example: --data_weights 0.7 0.3 means 70%% from first directory, 30%% from second.")
-    
-    # Resume training arguments
-    parser.add_argument(
-        '--resume_from', 
-        type=str,
-        help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
-    )
+                       help="One or more directories containing processed data files")
     
     parser.add_argument(
         '--skip_files',
@@ -189,14 +173,14 @@ Examples:
         help='Number of files to skip from the beginning of each data directory (one value per directory, e.g., --skip_files 0 200 to skip 0 from first dir, 200 from second)'
     )
     
+    # Resume training arguments
     parser.add_argument(
-        '--epochs', 
-        type=int, 
-        default=10,
-        help='Number of training epochs'
+        '--resume_from', 
+        type=str,
+        help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
     )
     
-    # Existing arguments
+    # Training arguments
     parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
                        help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
@@ -210,11 +194,6 @@ Examples:
     
     args = parser.parse_args()
 
-    # Validate data source arguments
-    if args.data_weights and len(args.data_weights) != len(args.data_dirs):
-        print(f"ERROR: Number of data weights ({len(args.data_weights)}) must match number of data directories ({len(args.data_dirs)})")
-        sys.exit(1)
-    
     # Validate resume arguments
     if args.resume_from and not Path(args.resume_from).exists():
         print(f"ERROR: Resume path does not exist: {args.resume_from}")
@@ -253,15 +232,14 @@ Examples:
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=args.data_dirs,
-            data_weights=args.data_weights,
             results_dir=args.results_dir,
             train_ratio=0.8,
             num_epochs=args.epochs,
-            early_stopping_patience=None,  # Disable early stopping for now
-            mini_epoch_batches=args.mini_epoch_batches,
-            random_seed=42,
+            early_stopping_patience=None,
+            random_seed=None,
             max_examples_unaugmented=args.max_samples,
             max_validation_examples=args.max_validation_samples,
+            experiment_name=None,
             enable_augmentation=not args.no_augmentation,
             fail_fast=True,
             resume_from=args.resume_from,

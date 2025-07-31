@@ -140,8 +140,7 @@ def run_single_experiment(
     
     # Load checkpoint if resuming
     if checkpoint_path:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        trainer.load_state_dict(checkpoint['trainer_state'])
+        trainer.load_checkpoint(checkpoint_path)
         logger.info(f"Loaded checkpoint from {checkpoint_path}")
     
     # Create orchestrator
