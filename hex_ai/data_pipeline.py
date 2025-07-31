@@ -227,35 +227,38 @@ def estimate_dataset_size(data_files: List[Path], max_files: Optional[int] = Non
     Returns:
         Estimated total number of examples
     """
-    total_examples = 0
-    files_checked = 0
+    if not data_files:
+        return 0
     
-    # Limit the number of files to check for speed
-    files_to_check = data_files[:max_files] if max_files else data_files
+    # Just read one sample file to get the examples per file
+    sample_file = data_files[0]
+    examples_per_file = 0
     
-    for file_path in files_to_check:
-        try:
-            with gzip.open(file_path, 'rb') as f:
-                data = pickle.load(f)
+    try:
+        with gzip.open(sample_file, 'rb') as f:
+            data = pickle.load(f)
+        
+        if 'examples' in data:
+            examples_per_file = len(data['examples'])
+        elif 'processing_stats' in data:
+            # Fallback to processing stats if available
+            stats = data['processing_stats']
+            if 'examples_generated' in stats:
+                examples_per_file = stats['examples_generated']
+        else:
+            # If no metadata available, estimate based on file size
+            file_size = sample_file.stat().st_size
+            examples_per_file = max(1, file_size // 1024)  # Rough estimate: 1KB per example
             
-            if 'examples' in data:
-                total_examples += len(data['examples'])
-            elif 'processing_stats' in data:
-                # Fallback to processing stats if available
-                stats = data['processing_stats']
-                if 'examples_generated' in stats:
-                    total_examples += stats['examples_generated']
-            
-            files_checked += 1
-                    
-        except Exception as e:
-            logger.warning(f"Could not read {file_path}: {e}")
-            continue
+    except Exception as e:
+        logger.warning(f"Could not read sample file {sample_file}: {e}")
+        # Fallback to file size estimation
+        file_size = sample_file.stat().st_size
+        examples_per_file = max(1, file_size // 1024)
     
-    # If we only checked a subset, estimate the total
-    if max_files and files_checked < len(data_files):
-        estimated_total = int(total_examples * len(data_files) / files_checked)
-        logger.info(f"Estimated {estimated_total:,} total examples from {files_checked} sample files")
-        return estimated_total
+    # Multiply by total number of files
+    total_examples = examples_per_file * len(data_files)
+    
+    logger.info(f"Estimated {total_examples:,} total examples from {len(data_files)} files ({examples_per_file:,} per file)")
     
     return total_examples
