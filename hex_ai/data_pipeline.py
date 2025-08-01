@@ -134,16 +134,10 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
 
     def _transform_example(self, board_2ch, policy, value, player=None):
         if player is not None:
-            # Handle Player enum by extracting its value
-            if hasattr(player, 'value'):
-                player_value = player.value
-            else:
-                import warnings
-                warnings.warn(
-                    f"[data_pipeline] WARNING: 'player' should be an Enum, got {type(player)}. Attempting to convert to float.",
-                    RuntimeWarning
-                )
-                player_value = float(player)
+            # Player should always be a Player enum
+            if not hasattr(player, 'value'):
+                raise ValueError(f"Expected Player enum, got {type(player)}. This indicates a bug in the data pipeline.")
+            player_value = player.value
             player_channel = np.full((board_2ch.shape[1], board_2ch.shape[2]), player_value, dtype=np.float32)
             board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
         else:

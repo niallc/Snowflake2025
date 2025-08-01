@@ -59,7 +59,7 @@ def calculate_mini_epoch_samples(
     """Calculate mini-epoch samples based on target samples and min/max constraints."""
     target_mini_epochs = max_samples // target_samples_per_mini_epoch
     num_mini_epochs = max(min_mini_epochs, min(max_mini_epochs, target_mini_epochs))
-    return (max_samples * 4) // num_mini_epochs  # 4x augmentation
+    return max_samples // num_mini_epochs
 
 # Define your sweep grid here (edit as needed)
 SWEEP = {
@@ -98,12 +98,12 @@ MAX_SAMPLES = 1_000_000  # Training samples (will be 4x larger with augmentation
 MAX_VALIDATION_SAMPLES = 95_000  # Validation samples (no augmentation)
 
 # Mini-epoch configuration - more intuitive parameters
-MIN_MINI_EPOCHS_PER_EPOCH = 5      # At least 10 mini-epochs per epoch
-MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 300 mini-epochs per epoch
+MIN_MINI_EPOCHS_PER_EPOCH = 5      # At least 5 mini-epochs per epoch
+MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 200 mini-epochs per epoch
 TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
 
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 1  # Increased from 2 to allow for more training after resuming from epoch 2
+EPOCHS = 1  # training now resets the epoch count this this is the further number of epochs to train
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):

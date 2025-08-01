@@ -30,7 +30,10 @@ from .config import (
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,  
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, get_player_to_move_from_moves, Winner
+from hex_ai.value_utils import (
+    trmph_winner_to_training_value, trmph_winner_to_clear_str,
+    get_player_to_move_from_moves, Winner, Player
+)
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
@@ -293,16 +296,16 @@ def create_augmented_values(value: float) -> list[float]:
     ]
 
 
-def create_augmented_player_to_move(player_to_move: int) -> list[int]:
+def create_augmented_player_to_move(player_to_move: Player) -> list[Player]:
     """
     Create player-to-move values for the 4 board augmentations.
-    - For color-swapping symmetries, swap the player (0 <-> 1).
+    - For color-swapping symmetries, swap the player (BLUE <-> RED).
     """
     return [
-        player_to_move,          # Original
-        player_to_move,          # 180° rotation (no color swap)
-        1 - player_to_move,      # Long diagonal reflection + color swap
-        1 - player_to_move       # Short diagonal reflection + color swap
+        player_to_move,                    # Original
+        player_to_move,                    # 180° rotation (no color swap)
+        Player.RED if player_to_move == Player.BLUE else Player.BLUE,  # Long diagonal reflection + color swap
+        Player.RED if player_to_move == Player.BLUE else Player.BLUE   # Short diagonal reflection + color swap
     ]
 
 
@@ -373,7 +376,9 @@ def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float
     
     return augmented_examples
 
-def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
+def create_augmented_example_with_player_to_move(
+    board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None
+) -> list[tuple[np.ndarray, np.ndarray, float, Player]]:
     """
     Create 4 augmented examples from a single board position, including player-to-move.
     
@@ -399,9 +404,8 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     
     # Compute player-to-move from the board, then create augmented versions
     player_to_move = get_player_to_move_from_board(board, error_tracker)
-    # Convert Player enum to integer for augmentation
-    player_to_move_int = player_to_move.value
-    augmented_player_to_move = create_augmented_player_to_move(player_to_move_int)
+    # Keep as Player enum for augmentation
+    augmented_player_to_move = create_augmented_player_to_move(player_to_move)
     
     # Combine into examples
     examples = []

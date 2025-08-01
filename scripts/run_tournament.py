@@ -23,7 +23,10 @@ Examples:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=200 \
      --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz,epoch2_mini36.pt.gz,epoch3_mini13.pt.gz,epoch3_mini69.pt.gz,epoch3_mini174.pt.gz" \
-     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training,checkpoints/round2_training"
+     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training,checkpoints/round2_training" \
+     --temperature=1.2 \
+     --no-pie-rule \
+     --seed=43
 
 Note: When using --checkpoint_dirs, the number of directories must match the number of checkpoints,
 or you can specify a single directory for all checkpoints.

@@ -43,10 +43,11 @@ class MiniEpochOrchestrator:
         self.logger.info(f"Starting training: epochs {self.start_epoch} to {self.num_epochs-1} (total {self.num_epochs} epochs)")
         self.logger.info(f"Mini-epoch: {self.mini_epoch_samples:,} samples ({self.mini_epoch_batches} batches of size {self.train_loader.batch_size})")
         
+        batch_count = 0  # Initialize batch_count outside the loop
+        
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
             batch_iter = iter(self.train_loader)
-            batch_count = 0
             mini_epoch_idx = 0
             while True:
                 mini_epoch_batches = []

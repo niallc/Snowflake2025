@@ -135,7 +135,11 @@ def run_single_experiment(
         # Expected format: epoch{N}_mini{M}.pt.gz
         match = re.search(r'epoch(\d+)_mini', checkpoint_path.name)
         if match:
-            start_epoch = int(match.group(1))
+            completed_epoch = int(match.group(1))
+            start_epoch = completed_epoch  # Start from the completed epoch (will continue from where we left off)
+            # Adjust num_epochs to ensure we train for the full requested duration
+            # If we want 3 total epochs and completed 2, we need to train for 3 more epochs (2, 3, 4)
+            num_epochs = completed_epoch + num_epochs
             logger.info(f"Resuming from epoch {start_epoch} using checkpoint: {checkpoint_path}")
         else:
             raise ValueError(f"Could not extract epoch from checkpoint filename: {checkpoint_path.name}")
