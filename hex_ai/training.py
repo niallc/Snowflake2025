@@ -592,221 +592,10 @@ class Trainer:
         val_avg = {key: np.mean(values) for key, values in val_metrics.items()}
         return val_avg
     
-    def train(self, num_epochs: int, save_dir: str = "checkpoints", 
-              max_checkpoints: int = 5, compress_checkpoints: bool = True,
-              early_stopping: Optional[EarlyStopping] = None) -> Dict:
-        """
-        Train the model for specified number of epochs.
-        
-        This is the main training method that handles complete training runs with:
-        - Full epoch-based training loops
-        - Automatic checkpointing and validation
-        - Early stopping support
-        - Comprehensive logging and metrics tracking
-        
-        Use this method for:
-        - Complete training runs from scratch
-        - Standard epoch-based training workflows
-        - When you want automatic checkpointing and validation
-        
-        For more granular control (e.g., mini-epochs), use train_on_batches() directly
-        or use MiniEpochOrchestrator which wraps this Trainer.
-        """
-        save_path = Path(save_dir)
-        save_path.mkdir(exist_ok=True)
-        
-        # Start timing
-        self.start_time = datetime.now()
-        
-        # Initialize loss tracking
-        train_losses = []
-        val_losses = []
-        train_policy_losses = []
-        train_value_losses = []
-        val_policy_losses = []
-        val_value_losses = []
-        epoch_times = []  # Store epoch times for later analysis
-        
-        logger.info(f"Starting training for {num_epochs} epochs")
-        logger.info(f"Checkpoint management: max {max_checkpoints} checkpoints, compression: {compress_checkpoints}")
-        if early_stopping:
-            logger.info(f"Early stopping enabled with patience {early_stopping.patience}")
-        
-        early_stopped = False
-        for epoch in range(num_epochs):
-            epoch_start_time = time.time()
-            self.current_epoch = epoch
-            
-            # Training
-            train_metrics = self.train_epoch()
-            
-            # Validation
-            val_metrics = self.validate()
-            
-            # Track losses
-            train_losses.append(train_metrics['total_loss'])
-            train_policy_losses.append(train_metrics['policy_loss'])
-            train_value_losses.append(train_metrics['value_loss'])
-            
-            if val_metrics:
-                val_losses.append(val_metrics['total_loss'])
-                val_policy_losses.append(val_metrics['policy_loss'])
-                val_value_losses.append(val_metrics['value_loss'])
-            else:
-                val_losses.append(float('inf'))  # No validation data
-                val_policy_losses.append(float('inf'))
-                val_value_losses.append(float('inf'))
-            
-            # Print validation losses at end of epoch
-            if val_metrics:
-                print(f"[Epoch {epoch}] Validation Losses: policy={val_metrics['policy_loss']:.4f}, value={val_metrics['value_loss']:.4f}, total={val_metrics['total_loss']:.4f}")
-            
-            # Learning rate scheduler step (use validation loss if available, else training loss)
-            val_loss_for_scheduler = val_metrics['total_loss'] if val_metrics else train_metrics['total_loss']
-            self.scheduler.step(val_loss_for_scheduler)
-            logger.info(f"Current learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
-            
-            # Calculate timing and performance metrics
-            epoch_time = time.time() - epoch_start_time
-            epoch_times.append(epoch_time)
-            total_training_time = (datetime.now() - self.start_time).total_seconds()
-            
-            # Calculate samples per second
-            total_samples = None  # Unknown for streaming datasets
-            samples_per_second = float('nan')  # Unknown for streaming datasets
-            
-            # Get memory usage
-            memory_usage_mb = get_memory_usage()
-            gpu_memory_mb = get_gpu_memory_usage()
-            weight_stats = get_weight_statistics(self.model)
-            gradient_norm = get_gradient_norm(self.model)
-            
-            # Prepare hyperparameters for logging
-            hyperparams = {
-                'learning_rate': self.optimizer.param_groups[0]['lr'],
-                'batch_size': self.train_loader.batch_size,
-                'dataset_size': 'streaming',
-                'network_structure': f"ResNet{self.model.resnet_depth}",
-                'policy_weight': self.criterion.policy_weight,
-                'value_weight': self.criterion.value_weight,
-                'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight,
-                'dropout_prob': self.model.dropout.p,
-                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
-                'max_grad_norm': self.max_grad_norm,
-                'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', 0.1),
-                'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', 5.0)
-            }
-            
-            # Log to CSV if enabled
-            if self.csv_logger:
-                # Prepare gradient and learning rate statistics
-                gradient_stats = {}
-                lr_stats = {}
-                
-                if 'grad_norm_mean' in train_metrics:
-                    gradient_stats = {
-                        'mean': train_metrics['grad_norm_mean'],
-                        'max': train_metrics['grad_norm_max'],
-                        'min': train_metrics['grad_norm_min'],
-                        'std': train_metrics['grad_norm_std']
-                    }
-                
-                if 'lr_mean' in train_metrics:
-                    lr_stats = {
-                        'mean': train_metrics['lr_mean'],
-                        'max': train_metrics['lr_max'],
-                        'min': train_metrics['lr_min'],
-                        'std': train_metrics.get('lr_std', 0.0)  # lr_std might not be calculated
-                    }
-                
-                self.csv_logger.log_epoch(
-                    epoch=epoch,
-                    train_metrics=train_metrics,
-                    val_metrics=val_metrics,
-                    hyperparams=hyperparams,
-                    training_time=total_training_time,
-                    epoch_time=epoch_time,
-                    samples_per_second=samples_per_second,
-                    memory_usage_mb=memory_usage_mb,
-                    gpu_memory_mb=gpu_memory_mb,
-                    gradient_norm=gradient_norm,
-                    weight_stats=weight_stats,
-                    gradient_stats=gradient_stats,
-                    lr_stats=lr_stats,
-                    loss_spikes_count=train_metrics.get('loss_spikes_count', 0),
-                    notes=f"Epoch {epoch} completed"
-                )
-            
-            # Log results with memory info
-            memory_usage_mb = get_memory_usage()
-            logger.info(f"Epoch {epoch}: Train Loss: {train_metrics['total_loss']:.4f} | Memory: {memory_usage_mb:.1f}MB")
-            if val_metrics:
-                logger.info(f"Epoch {epoch}: Val Loss: {val_metrics['total_loss']:.4f}")
-            
-            # Log memory warning if usage is high
-            if memory_usage_mb > 8000:  # 8GB threshold
-                logger.warning(f"High memory usage: {memory_usage_mb:.1f}MB - consider reducing batch size")
-            
-            # Save checkpoint with smart management
-            self._save_checkpoint_smart(save_path, epoch, train_metrics, val_metrics, 
-                                      max_checkpoints, compress_checkpoints)
-            
-            # Update best model if validation loss improved
-            if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
-                self.best_val_loss = val_metrics['total_loss']
-                self.save_checkpoint(save_path / "best_model.pt", train_metrics, val_metrics)
-                logger.info(f"New best model saved with val loss: {self.best_val_loss:.4f}")
-            logger.info(
-                f"Validation Policy Loss: {val_metrics.get('policy_loss', float('nan')):.4f} | "
-                f"Validation Value Loss: {val_metrics.get('value_loss', float('nan')):.4f}"
-            )
-            
-            # Check early stopping
-            if early_stopping and val_metrics:
-                if early_stopping(val_metrics['total_loss'], self.model):
-                    logger.info(f"Early stopping triggered at epoch {epoch}")
-                    early_stopped = True
-                    break
-        
-        # Log experiment summary
-        total_training_time = (datetime.now() - self.start_time).total_seconds()
-        if self.csv_logger:
-            self.csv_logger.log_experiment_summary(
-                best_val_loss=self.best_val_loss,
-                total_epochs=epoch + 1,
-                total_training_time=total_training_time,
-                early_stopped=early_stopped,
-                notes=f"Training completed with {epoch + 1} epochs"
-            )
-        
-        logger.info("Training completed!")
-        
-        # Print compact summary if we used compact logging
-        error_tracker = get_board_state_error_tracker()
-        stats = error_tracker.get_stats()
-        if stats['total_samples'] > 0:
-            logger.info(
-                f"\nData loading summary:\n"
-                f"  {stats['total_samples']} samples, "
-                f"{stats['error_count']} errors "
-                f"({stats['error_rate']:.2%})"
-            )
-        
-        # Return comprehensive results
-        return {
-            "best_val_loss": self.best_val_loss,
-            "train_losses": train_losses,
-            "val_losses": val_losses,
-            "train_policy_losses": train_policy_losses,
-            "train_value_losses": train_value_losses,
-            "val_policy_losses": val_policy_losses,
-            "val_value_losses": val_value_losses,
-            "epochs_trained": len(train_losses),
-            "early_stopped": early_stopped,
-            "total_training_time": total_training_time,
-            "epoch_times": epoch_times, # Return epoch times for analysis
-            "data_stats": stats
-        }
+    # NOTE: The train() method has been removed as it was dead code.
+    # The hyperparameter sweep uses train_on_batches() via MiniEpochOrchestrator.
+    # If you need epoch-based training, use MiniEpochOrchestrator or implement
+    # a new training loop that calls train_on_batches().
     
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict, compress: bool = True):
         """
@@ -1101,55 +890,43 @@ class Trainer:
             batch_times.append(batch_end_time - batch_start_time)
         # Compute averages for the mini-epoch
         mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
+        
+        # CSV logging for mini-epoch
+        if self.csv_logger:
+            # Extract hyperparameters as in MiniEpochOrchestrator
+            hp = {
+                'learning_rate': self.optimizer.param_groups[0]['lr'],
+                'batch_size': self.train_loader.batch_size,
+                'dataset_size': 'N/A',
+                'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
+                'policy_weight': getattr(self.criterion, 'policy_weight', ''),
+                'value_weight': getattr(self.criterion, 'value_weight', ''),
+                'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
+                'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})) .p if hasattr(self.model, 'dropout') else '',
+                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
+                'max_grad_norm': getattr(self, 'max_grad_norm', ''),
+                'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
+                'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
+            }
+            epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
+            self.csv_logger.log_mini_epoch(
+                epoch=epoch_id,
+                train_metrics=mini_epoch_avg,
+                val_metrics=None,  # No validation in train_on_batches
+                hyperparams=hp,
+                training_time=0.0,
+                epoch_time=0.0,
+                samples_per_second=0.0,
+                memory_usage_mb=0.0,
+                gpu_memory_mb=None,
+                gradient_norm=None,
+                weight_stats=None,
+                notes="train_on_batches"
+            )
+        
         return mini_epoch_avg
 
-# See below Note about this code path not being used in run_training.py
-def resume_training(checkpoint_path: str, 
-                   num_epochs: int = 10,
-                   save_dir: str = "checkpoints",
-                   max_checkpoints: int = 5,
-                   compress_checkpoints: bool = True) -> Dict:
-    """
-    Resume training from a checkpoint.
-    
-    Args:
-        checkpoint_path: Path to the checkpoint file
-        num_epochs: Number of additional epochs to train
-        save_dir: Directory to save new checkpoints
-        max_checkpoints: Maximum number of checkpoints to keep
-        compress_checkpoints: Whether to compress checkpoints
-        
-    Returns:
-        Training results dictionary
-    """
-    checkpoint_path = Path(checkpoint_path)
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
-    # Load checkpoint to get model and training state
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    
-    # Extract model and training info
-    model_state = checkpoint['model_state_dict']
-    optimizer_state = checkpoint['optimizer_state_dict']
-    start_epoch = checkpoint['epoch']
-    best_val_loss = checkpoint['best_val_loss']
-    
-    # Create model (we need to know the architecture)
-    model = TwoHeadedResNet()  # Default architecture
-    
-    # Create trainer with dummy data (will be overridden)
-    dummy_shard_files = [Path("dummy_shard.pkl.gz")]
-    trainer = Trainer(model, dummy_shard_files, enable_system_analysis=False)
-    
-    # Load the checkpoint state
-    trainer.model.load_state_dict(model_state)
-    trainer.optimizer.load_state_dict(optimizer_state)
-    trainer.current_epoch = start_epoch
-    trainer.best_val_loss = best_val_loss
-    
-    logger.info(f"Resuming training from epoch {start_epoch}")
-    logger.info(f"Best validation loss so far: {best_val_loss:.4f}")
-    
-    # Continue training
-    return trainer.train(num_epochs, save_dir, max_checkpoints, compress_checkpoints) 
+# NOTE: The resume_training() function has been removed as it was dead code.
+# It relied on the train() method which has also been removed.
+# For resuming training, use the resume_from parameter in the hyperparameter sweep
+# or implement a new resume function that works with train_on_batches(). 
