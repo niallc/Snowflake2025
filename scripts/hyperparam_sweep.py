@@ -17,7 +17,6 @@ import sys
 import os
 import hashlib
 import json
-import math
 import argparse
 
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
@@ -25,10 +24,13 @@ from hex_ai.file_utils import GracefulShutdown
 from hex_ai.error_handling import GracefulShutdownRequested
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
+# Create timestamp for the entire run (without minutes/seconds)
+RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H")
+
 ###### Logging setup ######
 log_dir = Path('logs')
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / ('hex_ai_training_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.log')
+log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
 
 file_handler = logging.FileHandler(log_file, mode='a')
 formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
@@ -48,18 +50,29 @@ root_logger.addHandler(stream_handler)
 #  Sweep Configuration and Parameter Processing
 # =============================================================
 
+def calculate_mini_epoch_samples(
+    max_samples: int,
+    min_mini_epochs: int = 10,
+    max_mini_epochs: int = 300,
+    target_samples_per_mini_epoch: int = 250000
+) -> int:
+    """Calculate mini-epoch samples based on target samples and min/max constraints."""
+    target_mini_epochs = max_samples // target_samples_per_mini_epoch
+    num_mini_epochs = max(min_mini_epochs, min(max_mini_epochs, target_mini_epochs))
+    return (max_samples * 4) // num_mini_epochs  # 4x augmentation
+
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "batch_size": [256],
-    "max_grad_norm": [20],
+    "max_grad_norm": [2.0, 1.0],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
+    "value_learning_rate_factor": [0.2, 1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.2],
     
     # Likely resolved:
     "dropout_prob": [0],
-    "learning_rate": [0.001],
+    "learning_rate": [0.0003, 0.00003],
     # Add more as needed
 }
 
@@ -81,11 +94,16 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 35_000_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 925_000  # Validation samples (no augmentation)
-MINI_EPOCH_BATCHES = math.floor(500000 * 2 /256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
+MAX_SAMPLES = 1_000_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 95_000  # Validation samples (no augmentation)
+
+# Mini-epoch configuration - more intuitive parameters
+MIN_MINI_EPOCHS_PER_EPOCH = 5      # At least 10 mini-epochs per epoch
+MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 300 mini-epochs per epoch
+TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
+
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 4  # Increased from 2 to allow for more training after resuming from epoch 2
+EPOCHS = 1  # Increased from 2 to allow for more training after resuming from epoch 2
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -203,8 +221,12 @@ Examples:
                        help="Max training samples (unaugmented)")
     parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, 
                        help="Max validation samples (unaugmented)")
-    parser.add_argument("--mini_epoch_batches", type=int, default=MINI_EPOCH_BATCHES, 
-                       help="Mini-epoch batches per epoch")
+    parser.add_argument("--min_mini_epochs_per_epoch", type=int, default=MIN_MINI_EPOCHS_PER_EPOCH,
+                       help="Minimum mini-epochs per epoch")
+    parser.add_argument("--max_mini_epochs_per_epoch", type=int, default=MAX_MINI_EPOCHS_PER_EPOCH,
+                       help="Maximum mini-epochs per epoch")
+    parser.add_argument("--target_samples_per_mini_epoch", type=int, default=TARGET_SAMPLES_PER_MINI_EPOCH,
+                       help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
     
@@ -246,6 +268,16 @@ Examples:
             print_sweep_summary(results, results_dir, interrupted=True)
             sys.exit(0)
         
+        # Calculate mini-epoch samples
+        mini_epoch_samples = calculate_mini_epoch_samples(
+            max_samples=args.max_samples,
+            min_mini_epochs=args.min_mini_epochs_per_epoch,
+            max_mini_epochs=args.max_mini_epochs_per_epoch,
+            target_samples_per_mini_epoch=args.target_samples_per_mini_epoch
+        )
+        
+        print(f"Mini-epochs: {args.max_samples // args.target_samples_per_mini_epoch} target, {args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch} range, {mini_epoch_samples:,} samples each")
+        
         # Run hyperparameter tuning
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
@@ -259,9 +291,11 @@ Examples:
             max_validation_examples=args.max_validation_samples,
             experiment_name=None,
             enable_augmentation=not args.no_augmentation,
+            mini_epoch_samples=mini_epoch_samples,
             resume_from=args.resume_from,
             skip_files=args.skip_files,
-            shutdown_handler=shutdown_handler
+            shutdown_handler=shutdown_handler,
+            run_timestamp=RUN_TIMESTAMP
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")

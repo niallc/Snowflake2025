@@ -23,10 +23,11 @@ from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_P
 from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move application utilities
 
 # Model checkpoint defaults
-ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
-THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-CHECKPOINT_FILE1 = "epoch2_mini4.pt.gz"
-CHECKPOINT_FILE2 = "epoch2_mini26.pt.gz"
+ALL_RESULTS_DIR = "checkpoints/"
+THIS_MODEL_DIR = "round2_training"
+# THIS_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
+CHECKPOINT_FILE1 = "epoch3_mini69.pt.gz"
+CHECKPOINT_FILE2 = "epoch3_mini13.pt.gz"
 DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
 DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
 

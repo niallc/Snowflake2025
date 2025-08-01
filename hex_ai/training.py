@@ -234,7 +234,8 @@ class Trainer:
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 0.1,
                  value_weight_decay_factor: float = 5.0,
-                 log_interval_batches: int = 200):
+                 log_interval_batches: int = 200,
+                 run_timestamp: Optional[str] = None):
         """
         Args:
             model: The neural network model to train.
@@ -252,6 +253,7 @@ class Trainer:
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 0.1)
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
+            run_timestamp: Optional timestamp for the entire run to use in log filenames
         """
         if device is None:
             device = get_device()
@@ -261,6 +263,7 @@ class Trainer:
         self.val_loader = val_loader
         self.device = device
         self.max_grad_norm = max_grad_norm
+        self.run_timestamp = run_timestamp
         
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
@@ -302,7 +305,12 @@ class Trainer:
         # CSV logging
         self.csv_logger = None
         if enable_csv_logging:
-            self.csv_logger = TrainingLogger(experiment_name=experiment_name)
+            # Use timestamped CSV filename if run_timestamp is provided
+            if self.run_timestamp:
+                csv_log_file = f"checkpoints/bookkeeping/training_metrics_{self.run_timestamp}.csv"
+            else:
+                csv_log_file = "checkpoints/bookkeeping/training_metrics.csv"
+            self.csv_logger = TrainingLogger(log_file=csv_log_file, experiment_name=experiment_name)
         
         # System analysis
         if enable_system_analysis:
@@ -353,11 +361,24 @@ class Trainer:
         # Enhanced logging setup
         log_dir = Path('logs')
         log_dir.mkdir(exist_ok=True)
-        verbose_log_file = log_dir / 'run_training_verbose.txt'
+        
+        # Use timestamped filenames if run_timestamp is provided
+        if self.run_timestamp:
+            verbose_log_file = log_dir / f'run_training_verbose_{self.run_timestamp}.txt'
+            diagnostic_log_file = log_dir / f'training_diagnostics_{self.run_timestamp}.txt'
+        else:
+            print("WARNING: No run_timestamp found; using default log filenames.", flush=True)
+            verbose_log_file = log_dir / 'run_training_verbose.txt'
+            diagnostic_log_file = log_dir / 'training_diagnostics.txt'
+        
         def log_and_print(msg):
             print(msg)
             with open(verbose_log_file, 'a') as f:
                 f.write(msg + '\n')
+        
+        def log_diagnostic(msg):
+            with open(diagnostic_log_file, 'a') as f:
+                f.write(f"[Epoch {self.current_epoch}] {msg}\n")
 
         self.model.train()
         epoch_losses = []
@@ -366,6 +387,11 @@ class Trainer:
             'value_loss': [],
             'total_loss': []
         }
+        
+        # Enhanced diagnostics tracking
+        gradient_norms = []
+        learning_rates = []
+        loss_spikes = []  # Track when loss increases significantly
         batch_times = []
         batch_data_times = []
         epoch_start_time = time.time()
@@ -374,6 +400,10 @@ class Trainer:
         # For streaming datasets, log every self.log_interval_batches batches
         log_interval = self.log_interval_batches
         special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
+        
+        # Track previous loss for spike detection
+        prev_total_loss = None
+        
         try:
             for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
                 # DEBUG: Dump first batch of epoch 0 for inspection
@@ -405,21 +435,53 @@ class Trainer:
                 with self.mixed_precision.autocast_context():
                     policy_pred, value_pred = self.model(boards)
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                
+                # Enhanced loss spike detection
+                if prev_total_loss is not None:
+                    loss_change = total_loss.item() - prev_total_loss
+                    loss_change_ratio = abs(loss_change) / prev_total_loss if prev_total_loss > 0 else 0
+                    if loss_change_ratio > 0.5:  # 50% change threshold
+                        loss_spikes.append({
+                            'batch': batch_idx,
+                            'prev_loss': prev_total_loss,
+                            'current_loss': total_loss.item(),
+                            'change': loss_change,
+                            'change_ratio': loss_change_ratio
+                        })
+                        log_diagnostic(f"LOSS SPIKE: batch={batch_idx}, prev={prev_total_loss:.4f}, current={total_loss.item():.4f}, change={loss_change:.4f}, ratio={loss_change_ratio:.3f}")
+                
+                prev_total_loss = total_loss.item()
+                
                 # Backward pass with scaling
                 scaled_loss = self.mixed_precision.scale_loss(total_loss)
                 scaled_loss.backward()
                 if batch_callback is not None:
                     batch_callback(self, batch_idx)
+                
+                # Enhanced gradient analysis
+                grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
+                gradient_norms.append(grad_norm_before_clip)
+                
                 # Gradient clipping (configurable)
                 if self.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+                    grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
+                    if grad_norm_before_clip > self.max_grad_norm:
+                        log_diagnostic(f"GRADIENT CLIPPED: batch={batch_idx}, before={grad_norm_before_clip:.4f}, after={grad_norm_after_clip:.4f}, max_norm={self.max_grad_norm}")
+                
                 # Optimizer step with scaling
                 self.mixed_precision.step_optimizer(self.optimizer)
                 self.mixed_precision.update_scaler()
+                
+                # Track learning rates
+                current_lr = self.optimizer.param_groups[0]['lr']
+                learning_rates.append(current_lr)
+                
                 # Track metrics
                 epoch_losses.append(loss_dict['total_loss'])
                 for key in epoch_metrics:
                     epoch_metrics[key].append(loss_dict[key])
+                
                 # Enhanced logging: print every k batches, and at special batches for epoch 0
                 should_log = (
                     (batch_idx % log_interval == 0)
@@ -435,10 +497,13 @@ class Trainer:
                            f"Total Loss: {loss_dict['total_loss']:.4f}, "
                            f"Policy: {loss_dict['policy_loss']:.4f}, "
                            f"Value: {loss_dict['value_loss']:.4f}, "
+                           f"Grad Norm: {grad_norm_before_clip:.4f}, "
+                           f"LR: {current_lr:.6f}, "
                            f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
                            f"Data load: {batch_data_time:.3f}s, "
                            f"Cumulative epoch time: {cum_epoch_time:.1f}s")
                     log_and_print(msg)
+                
                 # Prepare for next batch data timing
                 data_load_start = time.time()
                 batch_end_time = time.time()
@@ -456,6 +521,22 @@ class Trainer:
         epoch_avg['batch_time_min'] = np.min(batch_times) if batch_times else 0
         epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
         epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
+        
+        # Enhanced diagnostics summary
+        if gradient_norms:
+            epoch_avg['grad_norm_mean'] = np.mean(gradient_norms)
+            epoch_avg['grad_norm_max'] = np.max(gradient_norms)
+            epoch_avg['grad_norm_min'] = np.min(gradient_norms)
+            epoch_avg['grad_norm_std'] = np.std(gradient_norms)
+        
+        if learning_rates:
+            epoch_avg['lr_mean'] = np.mean(learning_rates)
+            epoch_avg['lr_min'] = np.min(learning_rates)
+            epoch_avg['lr_max'] = np.max(learning_rates)
+            epoch_avg['lr_std'] = np.std(learning_rates)
+        
+        epoch_avg['loss_spikes_count'] = len(loss_spikes)
+        
         # Log timing summary
         samples_per_sec = float('nan')  # Unknown for streaming datasets
         summary_msg = (f"[Epoch {self.current_epoch}] DONE: epoch_time={epoch_time:.2f}s, "
@@ -465,6 +546,16 @@ class Trainer:
                        f"data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s, "
                        f"samples/sec={samples_per_sec:.1f}")
         log_and_print(summary_msg)
+        
+        # Enhanced diagnostic summary
+        if gradient_norms:
+            diagnostic_summary = (f"DIAGNOSTICS: grad_norm_mean={epoch_avg['grad_norm_mean']:.4f}, "
+                                f"grad_norm_max={epoch_avg['grad_norm_max']:.4f}, "
+                                f"grad_norm_std={epoch_avg['grad_norm_std']:.4f}, "
+                                f"lr_mean={epoch_avg['lr_mean']:.6f}, "
+                                f"loss_spikes={epoch_avg['loss_spikes_count']}")
+            log_diagnostic(diagnostic_summary)
+        
         return epoch_avg
     
     def validate(self) -> Dict[str, float]:
@@ -600,11 +691,34 @@ class Trainer:
                 'value_weight': self.criterion.value_weight,
                 'total_loss_weight': self.criterion.policy_weight + self.criterion.value_weight,
                 'dropout_prob': self.model.dropout.p,
-                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0)
+                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
+                'max_grad_norm': self.max_grad_norm,
+                'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', 0.1),
+                'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', 5.0)
             }
             
             # Log to CSV if enabled
             if self.csv_logger:
+                # Prepare gradient and learning rate statistics
+                gradient_stats = {}
+                lr_stats = {}
+                
+                if 'grad_norm_mean' in train_metrics:
+                    gradient_stats = {
+                        'mean': train_metrics['grad_norm_mean'],
+                        'max': train_metrics['grad_norm_max'],
+                        'min': train_metrics['grad_norm_min'],
+                        'std': train_metrics['grad_norm_std']
+                    }
+                
+                if 'lr_mean' in train_metrics:
+                    lr_stats = {
+                        'mean': train_metrics['lr_mean'],
+                        'max': train_metrics['lr_max'],
+                        'min': train_metrics['lr_min'],
+                        'std': train_metrics.get('lr_std', 0.0)  # lr_std might not be calculated
+                    }
+                
                 self.csv_logger.log_epoch(
                     epoch=epoch,
                     train_metrics=train_metrics,
@@ -617,6 +731,9 @@ class Trainer:
                     gpu_memory_mb=gpu_memory_mb,
                     gradient_norm=gradient_norm,
                     weight_stats=weight_stats,
+                    gradient_stats=gradient_stats,
+                    lr_stats=lr_stats,
+                    loss_spikes_count=train_metrics.get('loss_spikes_count', 0),
                     notes=f"Epoch {epoch} completed"
                 )
             

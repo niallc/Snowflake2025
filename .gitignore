@@ -37,6 +37,8 @@ scripts/test_hyperparam_sweep_basic.py
 scripts/test_hyperparam_sweep_improvements.py
 write_ups/tmp_hyperparam_sweep_improvements_guide.md
 docs/hyperparam_sweep_productionization_summary.md
+write_ups/mcts_test_analysis.md
+write_ups/training_instability_analysis_summary.md
 
 # VSCode
 .vscode/

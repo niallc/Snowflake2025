@@ -1,18 +1,32 @@
 """
 Run a round-robin tournament between selected model checkpoints.
-Each pair plays 10 games (5 as first, 5 as second). Results are logged to disk.
-Win rates and Elo scores are printed at the end, with epoch1_mini1.pt as the Elo baseline (1000).
+Each pair plays N games (N/2 as first, N/2 as second). Results are logged to disk.
+Win rates and Elo scores are printed at the end.
 
-Expected: epoch1_mini1.pt and epoch1_mini5.pt should lose to the others, with 1 being the weakest.
+This script supports comparing models from different directories by specifying
+both checkpoint filenames and their corresponding directories.
 
-This run uses the pie rule, temperature=0.5, and a fixed random seed for reproducibility.
+Examples:
 
-Example full usage:
-PYTHONPATH=. python scripts/run_tournament.py \
-  --num-games=100 \
-  --checkpoints="epoch1_mini4.pt.gz,epoch2_mini16.pt.gz,epoch1_mini1.pt.gz,epoch1_mini9.pt.gz,epoch2_mini5.pt.gz,epoch2_mini9.pt.gz" \
-  --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408,loss_weight_sweep_exp1_bs1024_98234d_20250724_233408" \
-  --temperature=0.25
+1. Compare models from the same directory:
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=50 \
+     --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz,epoch2_mini26.pt.gz"
+
+2. Compare models from different directories:
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=50 \
+     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz,epoch3_mini13.pt.gz,epoch3_mini69.pt.gz" \
+     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training"
+
+3. Compare old vs new training rounds (convenience example):
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=200 \
+     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz,epoch2_mini36.pt.gz,epoch3_mini13.pt.gz,epoch3_mini69.pt.gz,epoch3_mini174.pt.gz" \
+     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training,checkpoints/round2_training"
+
+Note: When using --checkpoint_dirs, the number of directories must match the number of checkpoints,
+or you can specify a single directory for all checkpoints.
 
 """
 import argparse
@@ -40,7 +54,20 @@ DEFAULT_CHECKPOINTS = [
 ]
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Run a round-robin tournament between model checkpoints')
+    parser = argparse.ArgumentParser(
+        description='Run a round-robin tournament between model checkpoints',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Compare models from same directory
+  %(prog)s --num-games=50 --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz"
+  
+  # Compare models from different directories  
+  %(prog)s --num-games=50 \\
+    --checkpoints="epoch2_mini4.pt.gz,epoch3_mini13.pt.gz" \\
+    --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,round2_training"
+        """
+    )
     parser.add_argument('--num-games', type=int, default=50, 
                        help='Number of games per pair (default: 50)')
     parser.add_argument('--checkpoints', type=str, 
@@ -48,20 +75,22 @@ def parse_args():
     parser.add_argument(
         '--checkpoint_dirs', type=str, 
         help=(
-            'Comma-separated list of checkpoint directories (e.g., '
-            '"loss_weight_sweep_exp0_bs256_98f719_20250724_233408,'
-            'loss_weight_sweep_exp1_bs1024_98234d_20250724_233408")'
+            'Comma-separated list of checkpoint directories. Must match number of checkpoints, '
+            'or specify one directory for all checkpoints. (e.g., '
+            '"loss_weight_sweep_exp0_bs256_98f719_20250724_233408,round2_training")'
         )
     )
-    parser.add_argument('--temperature', type=float, default=0.3,
+    parser.add_argument('--temperature', type=float, default=1.2,
                        help='Temperature for move selection (default: 0.3)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed (default: 42)')
     parser.add_argument('--no-pie-rule', action='store_true',
-                       help='Disable pie rule (pie rule is enabled by default; use this flag to disable it)')
+                       help='Disable pie rule (pie rule is enabled by default)')
     parser.add_argument('--verbose', type=int, default=1,
                        help='Verbosity level (default: 1)')
     return parser.parse_args()
+
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -74,19 +103,29 @@ if __name__ == "__main__":
 
     # Build full paths for checkpoint directories
     if args.checkpoint_dirs:
-        CHKPT_DIRS = [os.path.join(CHKPT_BASE_DIR, dir_name.strip()) for dir_name in args.checkpoint_dirs.split(',')]
+        checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
     else:
-        CHKPT_DIRS = [DEFAULT_CHKPT_DIR]
+        checkpoint_dirs = [DEFAULT_CHKPT_DIR]
 
-    # Build checkpoint paths by pairing each checkpoint name with its corresponding directory
-    if len(CHKPT_DIRS) == 1:
-        checkpoint_paths = [os.path.join(CHKPT_DIRS[0], fname) for fname in checkpoint_names]
-    elif len(CHKPT_DIRS) == len(checkpoint_names):
-        checkpoint_paths = [os.path.join(dir_name, fname) for dir_name, fname in zip(CHKPT_DIRS, checkpoint_names)]
+    # Build checkpoint paths
+    if len(checkpoint_dirs) == 1:
+        # Single directory for all checkpoints
+        base_dir = checkpoint_dirs[0]
+        if not base_dir.startswith('checkpoints/'):
+            base_dir = os.path.join(CHKPT_BASE_DIR, base_dir)
+        checkpoint_paths = [os.path.join(base_dir, fname) for fname in checkpoint_names]
+    elif len(checkpoint_dirs) == len(checkpoint_names):
+        # One directory per checkpoint
+        checkpoint_paths = []
+        for dir_name, fname in zip(checkpoint_dirs, checkpoint_names):
+            if not dir_name.startswith('checkpoints/'):
+                dir_name = os.path.join(CHKPT_BASE_DIR, dir_name)
+            checkpoint_paths.append(os.path.join(dir_name, fname))
     else:
-        # If the number of checkpoint directories does not match the number of checkpoint names,
-        # and is not 1, this is ambiguous and should be considered an error.
-        raise ValueError("Number of checkpoint directories must be 1 or match the number of checkpoint names")
+        print(f"ERROR: Number of checkpoint directories ({len(checkpoint_dirs)}) must be 1 or match the number of checkpoints ({len(checkpoint_names)})")
+        print(f"  Provided checkpoint names: {checkpoint_names}")
+        print(f"  Provided checkpoint directories: {checkpoint_dirs}")
+        sys.exit(1)
 
     # Check that all checkpoint paths exist before proceeding
     missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
@@ -96,7 +135,7 @@ if __name__ == "__main__":
             print(f"  {p}")
         print("\nDebug info:")
         print(f"  Provided checkpoint names: {checkpoint_names}")
-        print(f"  Checkpoint directories: {CHKPT_DIRS}")
+        print(f"  Provided checkpoint directories: {checkpoint_dirs}")
         print(f"  Constructed checkpoint paths: {checkpoint_paths}")
         print("\nPlease check that the checkpoint files exist and the paths are correct.")
         sys.exit(1)
@@ -110,7 +149,7 @@ if __name__ == "__main__":
     )
 
     # Create log files with descriptive names
-    timestamp = f"test_{args.num_games}games_{len(checkpoint_names)}models"
+    timestamp = f"tournament_{args.num_games}games_{len(checkpoint_names)}models"
     LOG_DIR = "data/tournament_play"
     LOG_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.log")
     CSV_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.csv")
@@ -120,6 +159,7 @@ if __name__ == "__main__":
 
     print(f"Tournament Configuration:")
     print(f"  Checkpoints: {checkpoint_names}")
+    print(f"  Checkpoint directories: {checkpoint_dirs}")
     print(f"  Number of games per pair: {args.num_games}")
     print(f"  Temperature: {play_config.temperature}")
     print(f"  Pie rule: {play_config.pie_rule}")

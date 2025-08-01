@@ -4,30 +4,31 @@ from hex_ai.error_handling import GracefulShutdownRequested
 
 class MiniEpochOrchestrator:
     """
-    Orchestrates training in mini-epochs, enabling validation and checkpointing at configurable batch intervals.
+    Orchestrates training in mini-epochs, enabling validation and checkpointing at configurable sample intervals.
 
-    This class wraps a Trainer and DataLoader, running training in mini-epochs (N batches), and performing
+    This class wraps a Trainer and DataLoader, running training in mini-epochs (N samples), and performing
     validation/checkpointing after each mini-epoch. It maintains model/optimizer state across the entire run.
 
     Args:
         trainer: The Trainer instance (must provide train_on_batches, validate, save_checkpoint).
         train_loader: DataLoader for training data.
         val_loader: DataLoader for validation data (optional).
-        mini_epoch_batches: Number of batches per mini-epoch (int).
+        mini_epoch_samples: Number of samples per mini-epoch (int).
         num_epochs: Number of full epochs to train.
         checkpoint_dir: Directory to save checkpoints (str or Path).
         log_interval: How often to log progress (in mini-epochs).
 
     Usage:
-        orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500, num_epochs=10)
+        orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_samples=128000, num_epochs=10)
         orchestrator.run()
     """
-    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_batches=500, num_epochs=1,
+    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_samples=128000, num_epochs=1,
                  checkpoint_dir=None, log_interval=1, shutdown_handler=None, start_epoch=0):
         self.trainer = trainer
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.mini_epoch_batches = mini_epoch_batches
+        self.mini_epoch_samples = mini_epoch_samples
+        self.mini_epoch_batches = mini_epoch_samples // train_loader.batch_size
         self.num_epochs = num_epochs
         self.checkpoint_dir = checkpoint_dir
         self.log_interval = log_interval
@@ -40,7 +41,7 @@ class MiniEpochOrchestrator:
         Run the training loop with mini-epoch validation and checkpointing.
         """
         self.logger.info(f"Starting training: epochs {self.start_epoch} to {self.num_epochs-1} (total {self.num_epochs} epochs)")
-        self.logger.info(f"Mini-epoch batches per epoch: {self.mini_epoch_batches}")
+        self.logger.info(f"Mini-epoch: {self.mini_epoch_samples:,} samples ({self.mini_epoch_batches} batches of size {self.train_loader.batch_size})")
         
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")

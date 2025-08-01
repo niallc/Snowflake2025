@@ -101,10 +101,11 @@ def run_single_experiment(
     val_loader, 
     results_path, 
     num_epochs, 
-    mini_epoch_batches, 
+    mini_epoch_samples, 
     device, 
     resume_from: Optional[str] = None,
-    shutdown_handler=None
+    shutdown_handler=None,
+    run_timestamp: Optional[str] = None
 ):
     """
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
@@ -116,7 +117,7 @@ def run_single_experiment(
         val_loader: Validation DataLoader
         results_path: Path to save results
         num_epochs: Number of training epochs
-        mini_epoch_batches: Number of mini-epoch batches
+        mini_epoch_samples: Number of samples per mini-epoch
         device: Device to use for training
         resume_from: Path to checkpoint file to resume from
         shutdown_handler: Handler for graceful shutdown
@@ -161,6 +162,7 @@ def run_single_experiment(
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        run_timestamp=run_timestamp,
         **trainer_params
     )
     
@@ -176,7 +178,7 @@ def run_single_experiment(
         val_loader=val_loader,
         checkpoint_dir=results_path,
         num_epochs=num_epochs,
-        mini_epoch_batches=mini_epoch_batches,
+        mini_epoch_samples=mini_epoch_samples,
         start_epoch=start_epoch
     )
     
@@ -353,10 +355,11 @@ def run_hyperparameter_tuning_current_data(
     max_validation_examples: Optional[int] = None,
     experiment_name: Optional[str] = None,
     enable_augmentation: bool = True,
-    mini_epoch_batches: int = 500,
+    mini_epoch_samples: int = 128000,
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
-    shutdown_handler=None
+    shutdown_handler=None,
+    run_timestamp: Optional[str] = None
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -440,10 +443,11 @@ def run_hyperparameter_tuning_current_data(
                 val_loader,
                 results_path,
                 num_epochs,
-                mini_epoch_batches,
+                mini_epoch_samples,
                 device,
                 resume_from=resume_from,
-                shutdown_handler=shutdown_handler
+                shutdown_handler=shutdown_handler,
+                run_timestamp=run_timestamp
             )
             
             # Save experiment metadata with data source information
@@ -454,7 +458,7 @@ def run_hyperparameter_tuning_current_data(
                 exp_config['hyperparameters'],
                 {
                     'num_epochs': num_epochs,
-                    'mini_epoch_batches': mini_epoch_batches,
+                    'mini_epoch_samples': mini_epoch_samples,
                     'max_examples_unaugmented': max_examples_unaugmented,
                     'max_validation_examples': max_validation_examples,
                     'enable_augmentation': enable_augmentation,

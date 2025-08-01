@@ -72,7 +72,7 @@ class SimpleModelInference:
         checkpoint_path: str,
         device: str = None,
         model_type: str = "resnet18",
-        cache_size: int = 10000,
+        cache_size: int = 30000,
         max_batch_size: int = 1000,
         enable_caching: bool = True
     ):
