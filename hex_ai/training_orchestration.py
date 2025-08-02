@@ -173,6 +173,7 @@ def run_single_experiment(
         val_loader=val_loader,
         device=device,
         run_timestamp=run_timestamp,
+        shutdown_handler=shutdown_handler,
         **trainer_params
     )
     
@@ -195,7 +196,8 @@ def run_single_experiment(
         checkpoint_dir=experiment_checkpoint_dir,
         num_epochs=num_epochs,
         mini_epoch_samples=mini_epoch_samples,
-        start_epoch=start_epoch
+        start_epoch=start_epoch,
+        shutdown_handler=shutdown_handler
     )
     
     # Run training
