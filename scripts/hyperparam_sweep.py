@@ -192,6 +192,9 @@ Examples:
 
   # Resume training from a specific checkpoint file
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz
+
+  # Use data shards in sorted order (no shuffling)
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --no_shuffle_shards
         """
     )
     
@@ -236,6 +239,7 @@ Examples:
                        help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
+    parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
     args = parser.parse_args()
 
@@ -324,7 +328,8 @@ Examples:
             skip_files=args.skip_files,
             shutdown_handler=shutdown_handler,
             run_timestamp=RUN_TIMESTAMP,
-            override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters
+            override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters,
+            shuffle_shards=not args.no_shuffle_shards
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")

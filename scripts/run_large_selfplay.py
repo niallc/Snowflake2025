@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--model_path', type=str, 
                        default="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz",
                        help='Path to model checkpoint')
-    parser.add_argument('--output_dir', type=str, default='data/sf25/jul29', help='Output directory')
+    parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of worker threads (use 1 for batched inference)')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
     parser.add_argument('--cache_size', type=int, default=60000, help='Cache size for model inference')
@@ -79,7 +79,8 @@ def main():
         temperature=args.temperature,
         verbose=args.verbose,
         streaming_save=args.streaming_save,
-        use_batched_inference=not args.no_batched_inference
+        use_batched_inference=not args.no_batched_inference,
+        output_dir=args.output_dir
     )
     
     start_time = time.time()

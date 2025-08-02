@@ -27,12 +27,14 @@ from .training import Trainer, EarlyStopping
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split, estimate_dataset_size
+from hex_ai.error_handling import GracefulShutdownRequested
 
 logger = logging.getLogger(__name__)
 
 
 def create_datasets(train_files, val_files, max_examples_unaugmented,
-                    max_validation_examples, batch_size=256, log_shard_transitions=True):
+                    max_validation_examples, batch_size=256, log_shard_transitions=True,
+                    shuffle_shards: bool = True, random_seed: Optional[int] = None):
     """
     Create DataLoader objects from StreamingSequentialShardDataset for train and val sets.
     Returns (train_loader, val_loader).
@@ -42,13 +44,17 @@ def create_datasets(train_files, val_files, max_examples_unaugmented,
             train_files, 
             enable_augmentation=True, 
             max_examples_unaugmented=max_examples_unaugmented,
-            log_shard_transitions=log_shard_transitions
+            log_shard_transitions=log_shard_transitions,
+            shuffle_shards=shuffle_shards,
+            random_seed=random_seed
         )
         val_dataset = StreamingSequentialShardDataset(
             val_files, 
             enable_augmentation=False, # Validation dataset is not augmented
             max_examples_unaugmented=max_validation_examples,
-            log_shard_transitions=log_shard_transitions
+            log_shard_transitions=log_shard_transitions,
+            shuffle_shards=shuffle_shards,
+            random_seed=random_seed
         ) if val_files else None
         
         # Create DataLoaders from the datasets
@@ -235,7 +241,8 @@ def discover_and_split_multiple_data(
     data_dirs: List[str], 
     train_ratio: float = 0.8, 
     random_seed: Optional[int] = None,
-    skip_files: Optional[List[int]] = None
+    skip_files: Optional[List[int]] = None,
+    shuffle_shards: bool = True
 ) -> Tuple[List[Path], List[Path], List[Path], List[Dict]]:
     """
     Discover and split data from multiple directories.
@@ -244,8 +251,8 @@ def discover_and_split_multiple_data(
         data_dirs: List of data directories
         train_ratio: Ratio for train/val split
         random_seed: Random seed for reproducible splits
-        fail_fast: Whether to fail on first error
         skip_files: Optional list of files to skip from each directory (one value per directory)
+        shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         
     Returns:
         Tuple of (train_files, val_files, all_files, data_source_info)
@@ -299,7 +306,8 @@ def discover_and_split_multiple_data(
     
     # Create train/val split across all files
     train_files, val_files = create_train_val_split(
-        all_data_files, train_ratio, random_seed, max_files_per_split=None
+        all_data_files, train_ratio, random_seed, max_files_per_split=None, 
+        shuffle_shards=shuffle_shards
     )
     
     logger.info(f"Final split: {len(train_files)} train files, {len(val_files)} validation files")
@@ -376,6 +384,7 @@ def run_hyperparameter_tuning_current_data(
     mini_epoch_samples: int = 128000,
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
+    shuffle_shards: bool = True,  # New: Control whether to shuffle data shards
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
     override_checkpoint_hyperparameters: bool = False
@@ -386,7 +395,6 @@ def run_hyperparameter_tuning_current_data(
     Args:
         experiments: List of experiment configurations
         data_dirs: Single data directory (str) or list of data directories (List[str])
-        data_weights: Optional weights for each data directory (must match number of data_dirs)
         results_dir: Directory to save results
         train_ratio: Ratio for train/val split
         num_epochs: Number of training epochs
@@ -396,11 +404,13 @@ def run_hyperparameter_tuning_current_data(
         max_validation_examples: Maximum validation examples
         experiment_name: Optional experiment name
         enable_augmentation: Whether to enable data augmentation
-        fail_fast: Whether to fail on first error
-        mini_epoch_batches: Number of mini-epoch batches
+        mini_epoch_samples: Number of samples per mini-epoch
         resume_from: Optional path to resume from (file or directory)
-        resume_epoch: Optional epoch to resume from (only used with directory)
+        skip_files: Optional list of files to skip from each directory (one value per directory)
+        shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         shutdown_handler: Shutdown handler for graceful termination
+        run_timestamp: Optional timestamp for the run
+        override_checkpoint_hyperparameters: Whether to override checkpoint hyperparameters
         
     Returns:
         Dictionary containing overall results
@@ -424,7 +434,7 @@ def run_hyperparameter_tuning_current_data(
     
     # Use new multi-directory data discovery
     train_files, val_files, data_files, data_source_info = discover_and_split_multiple_data(
-        data_dirs, train_ratio, random_seed, skip_files=skip_files
+        data_dirs, train_ratio, random_seed, skip_files=skip_files, shuffle_shards=shuffle_shards
     )
     
     if train_files is None or val_files is None:
@@ -433,7 +443,8 @@ def run_hyperparameter_tuning_current_data(
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
     
-    train_loader, val_loader = create_datasets(train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size)
+    train_loader, val_loader = create_datasets(
+        train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size, shuffle_shards=shuffle_shards, random_seed=random_seed)
     
     # Remove or guard len() usage for streaming datasets
     logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples.")
@@ -490,6 +501,9 @@ def run_hyperparameter_tuning_current_data(
             
             all_results.append(result)
             
+        except GracefulShutdownRequested:
+            logger.info(f"Experiment {exp_config['experiment_name']} interrupted due to graceful shutdown request")
+            raise
         except Exception as e:
             logger.error(f"Experiment {exp_config['experiment_name']} failed: {e}")
             import traceback

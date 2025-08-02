@@ -26,7 +26,7 @@ class SelfPlayEngine:
                  cache_size: int = 10000, search_widths: List[int] = None, 
                  temperature: float = 1.0, verbose: int = 1, 
                  streaming_save: bool = False, streaming_file: str = None,
-                 use_batched_inference: bool = True):
+                 use_batched_inference: bool = True, output_dir: str = None):
         """
         Initialize the self-play engine.
         
@@ -41,6 +41,7 @@ class SelfPlayEngine:
             streaming_save: Save games incrementally to avoid data loss
             streaming_file: File path for streaming save (auto-generated if None)
             use_batched_inference: Whether to use batched inference for better performance
+            output_dir: Output directory for streaming files (used if streaming_file is None)
         """
         self.model_path = model_path
         self.num_workers = num_workers
@@ -52,6 +53,7 @@ class SelfPlayEngine:
         self.streaming_save = streaming_save
         self.streaming_file = streaming_file
         self.use_batched_inference = use_batched_inference
+        self.output_dir = output_dir
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -70,7 +72,10 @@ class SelfPlayEngine:
         # Streaming save setup
         if self.streaming_save and self.streaming_file is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.streaming_file = f"data/sf25/jul29/streaming_selfplay_{timestamp}.trmph"
+            if self.output_dir:
+                self.streaming_file = f"{self.output_dir}/streaming_selfplay_{timestamp}.trmph"
+            else:
+                self.streaming_file = f"data/sf25/selfplay_default/streaming_selfplay_{timestamp}.trmph"
         
         if self.streaming_save:
             os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)

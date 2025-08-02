@@ -11,8 +11,8 @@ library(rlang)
 # Configuration
 root_dir <- "~/Documents/programming/Snowflake2025"
 bookkeeping_dir <- file.path(root_dir, "checkpoints/bookkeeping/")
-plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_01")
-run_tag <- "aug1st_sweep_2025_08_01"
+plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_02")
+run_tag <- "aug2nd_sweep_2025_08_02"
 
 # Ensure plots directory exists
 if (!dir.exists(plots_dir)) {
@@ -158,7 +158,199 @@ create_loss_plot <- function(data, loss_type = "policy", title = NULL) {
       legend.position = c(0.98, 0.98),
       legend.justification = c("right", "top"),
       legend.background = element_rect(fill = "white", color = "black"),
-      legend.box.margin = margin(5, 5, 5, 5)
+      legend.box.margin = margin(5, 5, 5, 5),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
+    )
+  
+  return(plot)
+}
+
+# Function to create gradient clipping plot
+create_gradient_clipping_plot <- function(data) {
+  # Check if gradient columns exist
+  if (!all(c("gradient_norm", "post_clip_gradient_norm", "max_grad_norm") %in% colnames(data))) {
+    warning("Gradient clipping columns not found in data")
+    return(NULL)
+  }
+  
+  # Convert to numeric and filter out NA values
+  plot_data <- data %>%
+    mutate(
+      gradient_norm = as.numeric(gradient_norm),
+      post_clip_gradient_norm = as.numeric(post_clip_gradient_norm),
+      max_grad_norm = as.numeric(max_grad_norm)
+    ) %>%
+    filter(!is.na(gradient_norm) & !is.na(post_clip_gradient_norm))
+  
+  if (nrow(plot_data) == 0) {
+    warning("No valid gradient clipping data found")
+    return(NULL)
+  }
+  
+  # Create plot
+  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+    geom_line(aes(y = gradient_norm), linewidth = 1, linetype = "solid") +
+    geom_line(aes(y = post_clip_gradient_norm), linewidth = 1, linetype = "dashed") +
+    geom_hline(aes(yintercept = max_grad_norm), linetype = "dotted", color = "red", linewidth = 1) +
+    ggtitle("Gradient Norms: Pre-clip vs Post-clip") +
+    labs(
+      color = "Configuration",
+      x = "Mini-Epoch",
+      y = "Gradient Norm",
+      caption = "Solid = Pre-clip, Dashed = Post-clip, Red dotted = Max gradient norm"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = c(0.98, 0.98),
+      legend.justification = c("right", "top"),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.box.margin = margin(5, 5, 5, 5),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
+    )
+  
+  return(plot)
+}
+
+# Function to create learning rate statistics plot
+create_lr_stats_plot <- function(data) {
+  # Check if LR columns exist
+  if (!all(c("lr_mean", "lr_min", "lr_max") %in% colnames(data))) {
+    warning("Learning rate statistics columns not found in data")
+    return(NULL)
+  }
+  
+  # Convert to numeric and filter out NA values
+  plot_data <- data %>%
+    mutate(
+      lr_mean = as.numeric(lr_mean),
+      lr_min = as.numeric(lr_min),
+      lr_max = as.numeric(lr_max)
+    ) %>%
+    filter(!is.na(lr_mean))
+  
+  if (nrow(plot_data) == 0) {
+    warning("No valid learning rate data found")
+    return(NULL)
+  }
+  
+  # Create plot
+  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+    geom_line(aes(y = lr_mean), linewidth = 1) +
+    geom_ribbon(aes(ymin = lr_min, ymax = lr_max, fill = run_label), alpha = 0.2) +
+    ggtitle("Learning Rate Statistics by Mini-Epoch") +
+    labs(
+      color = "Configuration",
+      fill = "Configuration",
+      x = "Mini-Epoch",
+      y = "Learning Rate",
+      caption = "Line = Mean, Shaded area = Min to Max range"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = c(0.98, 0.98),
+      legend.justification = c("right", "top"),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.box.margin = margin(5, 5, 5, 5),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
+    )
+  
+  return(plot)
+}
+
+# Function to create weight statistics plot
+create_weight_stats_plot <- function(data) {
+  # Check if weight columns exist
+  if (!all(c("weight_norm_mean", "weight_norm_std") %in% colnames(data))) {
+    warning("Weight statistics columns not found in data")
+    return(NULL)
+  }
+  
+  # Convert to numeric and filter out NA values
+  plot_data <- data %>%
+    mutate(
+      weight_norm_mean = as.numeric(weight_norm_mean),
+      weight_norm_std = as.numeric(weight_norm_std)
+    ) %>%
+    filter(!is.na(weight_norm_mean))
+  
+  if (nrow(plot_data) == 0) {
+    warning("No valid weight statistics data found")
+    return(NULL)
+  }
+  
+  # Create plot
+  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+    geom_line(aes(y = weight_norm_mean), linewidth = 1) +
+    geom_ribbon(aes(ymin = weight_norm_mean - weight_norm_std, 
+                    ymax = weight_norm_mean + weight_norm_std, 
+                    fill = run_label), alpha = 0.2) +
+    ggtitle("Weight Norm Statistics by Mini-Epoch") +
+    labs(
+      color = "Configuration",
+      fill = "Configuration",
+      x = "Mini-Epoch",
+      y = "Weight Norm",
+      caption = "Line = Mean, Shaded area = ±1 standard deviation"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = c(0.98, 0.98),
+      legend.justification = c("right", "top"),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.box.margin = margin(5, 5, 5, 5),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
+    )
+  
+  return(plot)
+}
+
+# Function to create gradient statistics plot
+create_gradient_stats_plot <- function(data) {
+  # Check if gradient statistics columns exist
+  if (!all(c("gradient_norm_mean", "gradient_norm_std") %in% colnames(data))) {
+    warning("Gradient statistics columns not found in data")
+    return(NULL)
+  }
+  
+  # Convert to numeric and filter out NA values
+  plot_data <- data %>%
+    mutate(
+      gradient_norm_mean = as.numeric(gradient_norm_mean),
+      gradient_norm_std = as.numeric(gradient_norm_std)
+    ) %>%
+    filter(!is.na(gradient_norm_mean))
+  
+  if (nrow(plot_data) == 0) {
+    warning("No valid gradient statistics data found")
+    return(NULL)
+  }
+  
+  # Create plot
+  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+    geom_line(aes(y = gradient_norm_mean), linewidth = 1) +
+    geom_ribbon(aes(ymin = gradient_norm_mean - gradient_norm_std, 
+                    ymax = gradient_norm_mean + gradient_norm_std, 
+                    fill = run_label), alpha = 0.2) +
+    ggtitle("Gradient Norm Statistics by Mini-Epoch") +
+    labs(
+      color = "Configuration",
+      fill = "Configuration",
+      x = "Mini-Epoch",
+      y = "Gradient Norm",
+      caption = "Line = Mean, Shaded area = ±1 standard deviation"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = c(0.98, 0.98),
+      legend.justification = c("right", "top"),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.box.margin = margin(5, 5, 5, 5),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
     )
   
   return(plot)
@@ -194,7 +386,9 @@ create_best_val_value_loss_barplot <- function(combined_data) {
       axis.text.y = element_text(size = 8),
       plot.title = element_text(size = 14, face = "bold"),
       panel.grid.major.y = element_blank(),
-      panel.grid.minor = element_blank()
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
     )
   
   return(list(plot = plot, data = best_val_losses))
@@ -231,7 +425,7 @@ main <- function() {
   }
   
   # Look for all training metrics files from the recent sweep
-  metrics_files <- list.files(bookkeeping_dir, pattern = "training_metrics_20250801_.*\\.csv$", full.names = TRUE)
+  metrics_files <- list.files(bookkeeping_dir, pattern = "training_metrics_20250802_.*\\.csv$", full.names = TRUE)
   
   if (length(metrics_files) == 0) {
     stop("No training_metrics CSV files found in bookkeeping directory")
@@ -305,6 +499,41 @@ main <- function() {
   best_val_filename <- get_unique_filename(file.path(plots_dir, paste0("best_val_value_loss_barplot_", run_tag)))
   ggsave(best_val_filename, plot = best_val_plot, width = 12, height = 8, dpi = 150)
   cat("Saved best validation value loss bar plot:", best_val_filename, "\n")
+  
+  # Create diagnostic plots
+  cat("Creating diagnostic plots...\n")
+  
+  # Gradient clipping plot
+  gradient_clipping_plot <- create_gradient_clipping_plot(validation_data)
+  if (!is.null(gradient_clipping_plot)) {
+    gradient_clipping_filename <- get_unique_filename(file.path(plots_dir, paste0("gradient_clipping_", run_tag)))
+    ggsave(gradient_clipping_filename, plot = gradient_clipping_plot, width = 10, height = 6, dpi = 150)
+    cat("Saved gradient clipping plot:", gradient_clipping_filename, "\n")
+  }
+  
+  # Learning rate statistics plot
+  lr_stats_plot <- create_lr_stats_plot(validation_data)
+  if (!is.null(lr_stats_plot)) {
+    lr_stats_filename <- get_unique_filename(file.path(plots_dir, paste0("learning_rate_stats_", run_tag)))
+    ggsave(lr_stats_filename, plot = lr_stats_plot, width = 10, height = 6, dpi = 150)
+    cat("Saved learning rate statistics plot:", lr_stats_filename, "\n")
+  }
+  
+  # Weight statistics plot
+  weight_stats_plot <- create_weight_stats_plot(validation_data)
+  if (!is.null(weight_stats_plot)) {
+    weight_stats_filename <- get_unique_filename(file.path(plots_dir, paste0("weight_stats_", run_tag)))
+    ggsave(weight_stats_filename, plot = weight_stats_plot, width = 10, height = 6, dpi = 150)
+    cat("Saved weight statistics plot:", weight_stats_filename, "\n")
+  }
+  
+  # Gradient statistics plot
+  gradient_stats_plot <- create_gradient_stats_plot(validation_data)
+  if (!is.null(gradient_stats_plot)) {
+    gradient_stats_filename <- get_unique_filename(file.path(plots_dir, paste0("gradient_stats_", run_tag)))
+    ggsave(gradient_stats_filename, plot = gradient_stats_plot, width = 10, height = 6, dpi = 150)
+    cat("Saved gradient statistics plot:", gradient_stats_filename, "\n")
+  }
   
   # Print top 3 best models
   top_3_models <- print_top_3_models(best_val_losses)
