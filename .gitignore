@@ -39,6 +39,10 @@ write_ups/tmp_hyperparam_sweep_improvements_guide.md
 docs/hyperparam_sweep_productionization_summary.md
 write_ups/mcts_test_analysis.md
 write_ups/training_instability_analysis_summary.md
+scripts/analyze_shard_spike_correlation.py
+scripts/analyze_training_performance.py
+scripts/investigate_spikes.py
+
 
 # VSCode
 .vscode/

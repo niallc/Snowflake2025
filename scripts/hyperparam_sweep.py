@@ -64,15 +64,15 @@ def calculate_mini_epoch_samples(
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "batch_size": [256],
-    "max_grad_norm": [2.0, 1.0],
+    "max_grad_norm": [1.0, 0.2, 3.0],
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [0.2, 1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.2],
+    "learning_rate": [0.00003, 0.0003],
     
     # Likely resolved:
     "dropout_prob": [0],
-    "learning_rate": [0.0003, 0.00003],
     # Add more as needed
 }
 
@@ -213,6 +213,13 @@ Examples:
         help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
     )
     
+    parser.add_argument(
+        '--override_checkpoint_hyperparameters',
+        action='store_true',
+        help='When resuming from checkpoint, override checkpoint hyperparameters with sweep hyperparameters. '
+             'This resets optimizer state for clean hyperparameter experiments but may affect training stability.'
+    )
+    
     # Training arguments
     parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
                        help="Directory to save experiment results")
@@ -236,6 +243,27 @@ Examples:
     if args.resume_from and not Path(args.resume_from).exists():
         print(f"ERROR: Resume path does not exist: {args.resume_from}")
         sys.exit(1)
+
+    # Check for potential hyperparameter conflicts when resuming
+    if args.resume_from and not args.override_checkpoint_hyperparameters:
+        # This is a simplified check - in practice, you might want to load the checkpoint
+        # and compare actual values, but this gives a good warning
+        varying_hyperparams = [k for k, v in SWEEP.items() if len(v) > 1]
+        optimizer_related_params = ['learning_rate', 'value_learning_rate_factor', 'value_weight_decay_factor', 'weight_decay']
+        conflicting_params = [p for p in varying_hyperparams if p in optimizer_related_params]
+        
+        if conflicting_params:
+            print(f"\nWARNING: Resume checkpoint may contain different hyperparameters than sweep:")
+            print(f"  Varying sweep parameters: {conflicting_params}")
+            print(f"  These parameters are stored in optimizer state and will override sweep values.")
+            print(f"\nTo use sweep hyperparameters instead of checkpoint hyperparameters, add:")
+            print(f"  --override_checkpoint_hyperparameters")
+            print(f"\nTo continue with checkpoint hyperparameters (current behavior), proceed as-is.")
+            print(f"\nNote: Using checkpoint hyperparameters may result in duplicate training runs.")
+            response = input("\nContinue anyway? (y/N): ")
+            if response.lower() != 'y':
+                print("Aborting. Please specify --override_checkpoint_hyperparameters if you want to use sweep hyperparameters.")
+                sys.exit(0)
 
     shutdown_handler = GracefulShutdown()
 
@@ -295,7 +323,8 @@ Examples:
             resume_from=args.resume_from,
             skip_files=args.skip_files,
             shutdown_handler=shutdown_handler,
-            run_timestamp=RUN_TIMESTAMP
+            run_timestamp=RUN_TIMESTAMP,
+            override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")

@@ -1,5 +1,5 @@
 # Training Performance Plotting Script
-# This script reads training metrics from multiple experiment directories and creates
+# This script reads training metrics from the centralized bookkeeping directory and creates
 # comparative plots of policy and value losses across different hyperparameter configurations.
 
 library(ggplot2)
@@ -10,9 +10,9 @@ library(rlang)
 
 # Configuration
 root_dir <- "~/Documents/programming/Snowflake2025"
-main_res_dir <- file.path(root_dir, "checkpoints/hyperparameter_tuning/")
-plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_07_18")
-run_tag <- "low_val_lr_2025_07_19"
+bookkeeping_dir <- file.path(root_dir, "checkpoints/bookkeeping/")
+plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_01")
+run_tag <- "aug1st_sweep_2025_08_01"
 
 # Ensure plots directory exists
 if (!dir.exists(plots_dir)) {
@@ -32,91 +32,31 @@ get_unique_filename <- function(base_path, extension = ".png") {
   return(paste0(base_path, "_", counter, extension))
 }
 
-# Function to extract meaningful differences between run names
-extract_run_differences <- function(run_names) {
-  if (length(run_names) <= 1) {
-    return(setNames(run_names, run_names))
-  }
+# Function to extract meaningful differences between experiment configurations
+extract_experiment_differences <- function(data) {
+  # Get unique combinations of the varying parameters
+  varying_params <- c("learning_rate", "max_grad_norm", "value_learning_rate_factor")
   
-  # Manual mapping for known runs (add more as needed)
-  manual_labels <- c(
-    "sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.0002_value_weight_decay_factor250.0_20250719_062756" = "wd=0.0001, v_lr_f=0.0002, v_wd_f=250",
-    "sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.01_value_weight_decay_factor25.0_20250719_052409" = "wd=0.0001, v_lr_f=0.01, v_wd_f=25",
-    "sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0002_value_learning_rate_factor0.1_value_weight_decay_factor2.0_20250719_000919" = "wd=0.0002, v_lr_f=0.1, v_wd_f=2",
-    "sweep_run_0_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0002_value_learning_rate_factor0.1_value_weight_decay_factor2.0_20250719_002329" = "wd=0.0002, v_lr_f=0.1, v_wd_f=2",
-    "sweep_run_1_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0001_value_learning_rate_factor0.0002_value_weight_decay_factor10.0_20250719_062756" = "wd=0.0001, v_lr_f=0.0002, v_wd_f=10",
-    "sweep_run_1_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0002_value_learning_rate_factor0.1_value_weight_decay_factor5.0_20250719_002329" = "wd=0.0002, v_lr_f=0.1, v_wd_f=5",
-    "sweep_run_2_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0002_value_learning_rate_factor0.5_value_weight_decay_factor2.0_20250719_002329" = "wd=0.0002, v_lr_f=0.5, v_wd_f=2",
-    "sweep_run_3_learning_rate0.001_batch_size256_max_grad_norm20_dropout_prob0_weight_decay0.0002_value_learning_rate_factor0.5_value_weight_decay_factor5.0_20250719_002329" = "wd=0.0002, v_lr_f=0.5, v_wd_f=5"
-  )
+  # Create a unique identifier for each configuration
+  config_groups <- data %>%
+    select(all_of(varying_params)) %>%
+    distinct() %>%
+    mutate(
+      config_id = row_number(),
+      # Create readable labels
+      label = paste0(
+        "lr=", sprintf("%.5f", learning_rate),
+        ", mgn=", max_grad_norm,
+        ", vlrf=", value_learning_rate_factor
+      )
+    )
   
-  # Check if we have manual labels for all runs
-  if (all(run_names %in% names(manual_labels))) {
-    return(manual_labels[run_names])
-  }
+  # Join back to original data
+  result <- data %>%
+    left_join(config_groups, by = varying_params) %>%
+    mutate(run_label = label)
   
-  # Fallback to automatic extraction for unknown runs
-  return(extract_run_differences_auto(run_names))
-}
-
-# Automatic extraction function (fallback)
-extract_run_differences_auto <- function(run_names) {
-  if (length(run_names) <= 1) {
-    return(setNames(run_names, run_names))
-  }
-  
-  # Try to extract parameters using regex patterns for structured names
-  # Pattern: sweep_run_X_learning_rateY_batch_sizeZ_max_grad_normW_dropout_probA_weight_decayB_value_learning_rate_factorC_value_weight_decay_factorD_timestamp
-  unique_labels <- sapply(run_names, function(run_name) {
-    # Extract key parameters using regex
-    wd_match <- str_extract(run_name, "weight_decay([0-9.]+)")
-    v_lr_f_match <- str_extract(run_name, "value_learning_rate_factor([0-9.]+)")
-    v_wd_f_match <- str_extract(run_name, "value_weight_decay_factor([0-9.]+)")
-    dropout_match <- str_extract(run_name, "dropout_prob([0-9.]+)")
-    
-    # Build descriptive label
-    parts <- character(0)
-    
-    if (!is.na(wd_match)) {
-      wd_val <- str_extract(wd_match, "[0-9.]+")
-      parts <- c(parts, paste0("wd=", wd_val))
-    }
-    
-    if (!is.na(v_lr_f_match)) {
-      v_lr_val <- str_extract(v_lr_f_match, "[0-9.]+")
-      parts <- c(parts, paste0("v_lr_f=", v_lr_val))
-    }
-    
-    if (!is.na(v_wd_f_match)) {
-      v_wd_val <- str_extract(v_wd_f_match, "[0-9.]+")
-      parts <- c(parts, paste0("v_wd_f=", v_wd_val))
-    }
-    
-    if (!is.na(dropout_match)) {
-      dropout_val <- str_extract(dropout_match, "[0-9.]+")
-      if (as.numeric(dropout_val) > 0) {
-        parts <- c(parts, paste0("dropout=", dropout_val))
-      }
-    }
-    
-    if (length(parts) == 0) {
-      # Fallback to original logic for unstructured names
-      name_parts <- strsplit(run_name, "_")[[1]]
-      meaningful_parts <- name_parts[grepl("weight_decay|dropout|value_lr|value_wd|learning_rate|batch_size", name_parts)]
-      if (length(meaningful_parts) > 0) {
-        return(paste(meaningful_parts, collapse = ", "))
-      } else {
-        return(paste(name_parts, collapse = "_"))
-      }
-    }
-    
-    return(paste(parts, collapse = ", "))
-  })
-  
-  # Ensure uniqueness
-  unique_labels <- make.unique(unique_labels, sep = "_")
-  
-  return(setNames(unique_labels, run_names))
+  return(result)
 }
 
 # Function to read and validate training metrics
@@ -130,7 +70,7 @@ read_training_metrics <- function(file_path) {
     data <- read.csv(file_path, stringsAsFactors = FALSE)
     
     # Check for required columns
-    required_cols <- c("epoch", "policy_loss", "val_policy_loss", "value_loss", "val_value_loss")
+    required_cols <- c("epoch", "policy_loss", "value_loss")
     missing_cols <- setdiff(required_cols, colnames(data))
     
     if (length(missing_cols) > 0) {
@@ -138,8 +78,31 @@ read_training_metrics <- function(file_path) {
       return(NULL)
     }
     
-    # Ensure epoch is numeric and handle conversion warnings
-    data$epoch <- suppressWarnings(as.numeric(data$epoch))
+    # Handle epoch parsing - extract both epoch and mini-epoch from strings like "3_mini4"
+    data$epoch_numeric <- sapply(data$epoch, function(x) {
+      if (is.na(x) || x == "") return(NA)
+      # Extract the main epoch number (before the underscore)
+      parts <- strsplit(as.character(x), "_")[[1]]
+      if (length(parts) > 0) {
+        # Try to extract numeric part
+        num_part <- as.numeric(parts[1])
+        if (!is.na(num_part)) return(num_part)
+      }
+      return(NA)
+    })
+    
+    # Extract mini-epoch number from strings like "3_mini4"
+    data$mini_epoch_numeric <- sapply(data$epoch, function(x) {
+      if (is.na(x) || x == "") return(NA)
+      # Look for "mini" followed by a number
+      mini_match <- str_extract(as.character(x), "mini([0-9]+)")
+      if (!is.na(mini_match)) {
+        # Extract the number after "mini"
+        mini_num <- as.numeric(str_extract(mini_match, "[0-9]+"))
+        if (!is.na(mini_num)) return(mini_num)
+      }
+      return(NA)
+    })
     
     # Also ensure loss columns are numeric
     for (col in c("policy_loss", "val_policy_loss", "value_loss", "val_value_loss")) {
@@ -149,12 +112,18 @@ read_training_metrics <- function(file_path) {
     }
     
     # Remove rows with NA values in key columns
-    data <- data[complete.cases(data[, required_cols]), ]
+    data <- data[complete.cases(data[, c("epoch_numeric", "mini_epoch_numeric", "policy_loss", "value_loss")]), ]
     
     if (nrow(data) == 0) {
       warning(paste("No valid data found in", file_path))
       return(NULL)
     }
+    
+    # Replace epoch with numeric version and add mini_epoch
+    data$epoch <- data$epoch_numeric
+    data$mini_epoch <- data$mini_epoch_numeric
+    data$epoch_numeric <- NULL
+    data$mini_epoch_numeric <- NULL
     
     return(data)
   }, error = function(e) {
@@ -174,14 +143,14 @@ create_loss_plot <- function(data, loss_type = "policy", title = NULL) {
   val_col <- paste0("val_", loss_type, "_loss")
   
   # Create plot using modern ggplot2 syntax
-  plot <- ggplot(data, aes(x = epoch, color = run_label)) +
+  plot <- ggplot(data, aes(x = mini_epoch, color = run_label)) +
     geom_line(aes(y = !!sym(train_col)), linewidth = 1) +
     geom_point(aes(y = !!sym(train_col))) +
     geom_line(aes(y = !!sym(val_col)), linetype = "dotted", linewidth = 1) +
     ggtitle(title) +
     labs(
       color = "Configuration",
-      x = "Epoch",
+      x = "Mini-Epoch",
       y = paste(str_to_title(loss_type), "Loss")
     ) +
     theme_minimal() +
@@ -199,9 +168,10 @@ create_loss_plot <- function(data, loss_type = "policy", title = NULL) {
 create_best_val_value_loss_barplot <- function(combined_data) {
   # Extract the best validation value loss for each run
   best_val_losses <- combined_data %>%
-    group_by(run_label, original_dir) %>%
+    group_by(run_label) %>%
     summarise(
       best_val_value_loss = min(val_value_loss, na.rm = TRUE),
+      mini_epoch_of_best = mini_epoch[which.min(val_value_loss)],
       epoch_of_best = epoch[which.min(val_value_loss)],
       .groups = 'drop'
     ) %>%
@@ -242,8 +212,7 @@ print_top_3_models <- function(best_val_losses) {
   for (i in 1:nrow(top_3)) {
     cat(sprintf("\n%d. %s\n", i, top_3$run_label[i]))
     cat(sprintf("   Best Validation Value Loss: %.6f\n", top_3$best_val_value_loss[i]))
-    cat(sprintf("   Achieved at Epoch: %d\n", top_3$epoch_of_best[i]))
-    cat(sprintf("   Directory: %s\n", top_3$original_dir[i]))
+    cat(sprintf("   Achieved at Epoch %d, Mini-Epoch %d\n", top_3$epoch_of_best[i], top_3$mini_epoch_of_best[i]))
   }
   
   cat("\n")
@@ -256,44 +225,37 @@ print_top_3_models <- function(best_val_losses) {
 main <- function() {
   cat("Starting training performance analysis...\n")
   
-  # Find all subdirectories with training metrics
-  if (!dir.exists(main_res_dir)) {
-    stop(paste("Main results directory not found:", main_res_dir))
+  # Find the most recent training metrics file
+  if (!dir.exists(bookkeeping_dir)) {
+    stop(paste("Bookkeeping directory not found:", bookkeeping_dir))
   }
   
-  all_sub_dirs <- list.dirs(main_res_dir, full.names = FALSE, recursive = FALSE)
-  valid_dirs <- character(0)
+  # Look for all training metrics files from the recent sweep
+  metrics_files <- list.files(bookkeeping_dir, pattern = "training_metrics_20250801_.*\\.csv$", full.names = TRUE)
   
-  for (sub_dir in all_sub_dirs) {
-    metrics_file <- file.path(main_res_dir, sub_dir, "training_metrics.csv")
-    if (file.exists(metrics_file)) {
-      valid_dirs <- c(valid_dirs, sub_dir)
-    }
+  if (length(metrics_files) == 0) {
+    stop("No training_metrics CSV files found in bookkeeping directory")
   }
   
-  if (length(valid_dirs) == 0) {
-    stop("No training_metrics.csv files found in any subdirectories")
-  }
+  # Sort by modification time
+  file_info <- file.info(metrics_files)
+  metrics_files <- metrics_files[order(file_info$mtime, decreasing = TRUE)]
   
-  cat("Found", length(valid_dirs), "directories with training metrics\n")
-  
-  # Extract meaningful run labels
-  run_labels <- extract_run_differences(valid_dirs)
+  cat("Found", length(metrics_files), "training metrics files\n")
   
   # Read all training data
   all_data <- list()
   successful_reads <- 0
   
-  for (sub_dir in valid_dirs) {
-    metrics_file <- file.path(main_res_dir, sub_dir, "training_metrics.csv")
-    data <- read_training_metrics(metrics_file)
+  for (file_path in metrics_files) {
+    cat("Reading:", basename(file_path), "\n")
+    data <- read_training_metrics(file_path)
     
     if (!is.null(data)) {
-      data$run_label <- run_labels[sub_dir]
-      data$original_dir <- sub_dir
-      all_data[[sub_dir]] <- data
+      data$source_file <- basename(file_path)
+      all_data[[basename(file_path)]] <- data
       successful_reads <- successful_reads + 1
-      cat("Successfully read:", sub_dir, "->", run_labels[sub_dir], "\n")
+      cat("  Successfully read", nrow(data), "rows\n")
     }
   }
   
@@ -301,29 +263,42 @@ main <- function() {
     stop("No valid training data could be read")
   }
   
-  cat("Successfully read data from", successful_reads, "runs\n")
-  
   # Combine all data
   combined_data <- bind_rows(all_data)
+  cat("Combined data has", nrow(combined_data), "total rows\n")
+  
+  # Extract experiment differences and create run labels
+  data_with_labels <- extract_experiment_differences(combined_data)
+  
+  # Filter to only include rows with validation data (mini-epoch rows)
+  validation_data <- data_with_labels %>%
+    filter(!is.na(val_value_loss) & val_value_loss > 0)
+  
+  if (nrow(validation_data) == 0) {
+    stop("No validation data found in the metrics files")
+  }
+  
+  cat("Found", nrow(validation_data), "validation data points\n")
+  cat("Unique configurations:", length(unique(validation_data$run_label)), "\n")
   
   # Create plots
   cat("Creating plots...\n")
   
   # Policy loss plot
-  policy_plot <- create_loss_plot(combined_data, "policy", "Policy Loss by Epoch")
-  policy_filename <- get_unique_filename(file.path(plots_dir, paste0("policy_loss_by_epoch_", run_tag)))
+  policy_plot <- create_loss_plot(validation_data, "policy", "Policy Loss by Mini-Epoch")
+  policy_filename <- get_unique_filename(file.path(plots_dir, paste0("policy_loss_by_mini_epoch_", run_tag)))
   ggsave(policy_filename, plot = policy_plot, width = 10, height = 6, dpi = 150)
   cat("Saved policy loss plot:", policy_filename, "\n")
   
   # Value loss plot
-  value_plot <- create_loss_plot(combined_data, "value", "Value Loss by Epoch")
-  value_filename <- get_unique_filename(file.path(plots_dir, paste0("value_loss_by_epoch_", run_tag)))
+  value_plot <- create_loss_plot(validation_data, "value", "Value Loss by Mini-Epoch")
+  value_filename <- get_unique_filename(file.path(plots_dir, paste0("value_loss_by_mini_epoch_", run_tag)))
   ggsave(value_filename, plot = value_plot, width = 10, height = 6, dpi = 150)
   cat("Saved value loss plot:", value_filename, "\n")
   
   # Create best validation value loss bar plot
   cat("Creating best validation value loss bar plot...\n")
-  best_val_plot_result <- create_best_val_value_loss_barplot(combined_data)
+  best_val_plot_result <- create_best_val_value_loss_barplot(validation_data)
   best_val_plot <- best_val_plot_result$plot
   best_val_losses <- best_val_plot_result$data
   
@@ -336,18 +311,47 @@ main <- function() {
   
   # Print summary
   cat("\nSummary:\n")
-  cat("- Total runs found:", length(valid_dirs), "\n")
-  cat("- Successful reads:", successful_reads, "\n")
-  cat("- Unique configurations:", length(unique(combined_data$run_label)), "\n")
-  cat("- Total epochs across all runs:", nrow(combined_data), "\n")
+  cat("- Total validation data points:", nrow(validation_data), "\n")
+  cat("- Unique configurations:", length(unique(validation_data$run_label)), "\n")
   cat("- Best overall validation value loss:", min(best_val_losses$best_val_value_loss), "\n")
   cat("- Worst overall validation value loss:", max(best_val_losses$best_val_value_loss), "\n")
   
-  # Return the combined data and best losses for further analysis if needed
+  # Show configuration details
+  cat("\nConfiguration Details:\n")
+  config_summary <- validation_data %>%
+    select(learning_rate, max_grad_norm, value_learning_rate_factor, run_label) %>%
+    distinct() %>%
+    arrange(run_label)
+  
+  for (i in 1:nrow(config_summary)) {
+    cat(sprintf("%d. %s\n", i, config_summary$run_label[i]))
+  }
+  
+  # Show data sources
+  cat("\nData Sources:\n")
+  source_summary <- validation_data %>%
+    group_by(source_file) %>%
+    summarise(
+      n_rows = n(),
+      n_configs = n_distinct(run_label),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(n_rows))
+  
+  for (i in 1:nrow(source_summary)) {
+    cat(sprintf("%d. %s: %d rows, %d configs\n", 
+                i, source_summary$source_file[i], 
+                source_summary$n_rows[i], 
+                source_summary$n_configs[i]))
+  }
+  
+  # Return the data for further analysis if needed
   invisible(list(
-    combined_data = combined_data,
+    validation_data = validation_data,
     best_val_losses = best_val_losses,
-    top_3_models = top_3_models
+    top_3_models = top_3_models,
+    config_summary = config_summary,
+    source_summary = source_summary
   ))
 }
 

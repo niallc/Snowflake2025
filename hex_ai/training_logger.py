@@ -195,11 +195,13 @@ class TrainingLogger:
                   memory_usage_mb: float = 0.0,
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
+                  post_clip_gradient_norm: Optional[float] = None,
                   weight_stats: Optional[Dict[str, float]] = None,
                   notes: str = "",
                   gradient_stats: Optional[Dict[str, float]] = None,
                   lr_stats: Optional[Dict[str, float]] = None,
-                  loss_spikes_count: int = 0) -> None:
+                  loss_spikes_count: int = 0,
+                  best_val_loss: Optional[float] = None) -> None:
         """
         Log metrics for a single mini-epoch (or chunk).
         Args are the same as log_epoch, but epoch can be a string.
@@ -238,10 +240,11 @@ class TrainingLogger:
             'gpu_memory_mb': gpu_memory_mb or '',
             # Training state
             'early_stopped': False,
-            'best_val_loss': '',
+            'best_val_loss': best_val_loss or '',
             'epochs_trained': '',
             # Model statistics
             'gradient_norm': gradient_norm or '',
+            'post_clip_gradient_norm': post_clip_gradient_norm or '',
             'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
             'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
             'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',

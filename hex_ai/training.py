@@ -265,6 +265,11 @@ class Trainer:
         self.max_grad_norm = max_grad_norm
         self.run_timestamp = run_timestamp
         
+        # Store hyperparameters for logging
+        self.value_learning_rate_factor = value_learning_rate_factor
+        self.value_weight_decay_factor = value_weight_decay_factor
+        self.original_learning_rate = learning_rate  # Store the original learning rate
+        
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
         
@@ -630,8 +635,16 @@ class Trainer:
             # Save as uncompressed file
             torch.save(checkpoint, path)
     
-    def load_checkpoint(self, path: Path):
-        """Load model checkpoint."""
+    def load_checkpoint(self, path: Path, override_checkpoint_hyperparameters: bool = False):
+        """
+        Load model checkpoint.
+        
+        Args:
+            path: Path to the checkpoint file
+            override_checkpoint_hyperparameters: If True, reset optimizer state to use current hyperparameters
+                                               instead of checkpoint hyperparameters. This ensures clean
+                                               hyperparameter experiments but may affect training stability.
+        """
         # Check if file is gzipped by reading the first two bytes
         def is_gzipped(filepath):
             with open(filepath, 'rb') as f:
@@ -645,10 +658,20 @@ class Trainer:
             checkpoint = torch.load(path, map_location=self.device, weights_only=False)
             
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if override_checkpoint_hyperparameters:
+            logger.warning("Overriding checkpoint hyperparameters - optimizer state will be reset")
+            logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
+            logger.info(f"Using hyperparameter value_learning_rate_factor: {self.value_learning_rate_factor}")
+            logger.info(f"Using hyperparameter value_weight_decay_factor: {self.value_weight_decay_factor}")
+            # Don't load optimizer state - let it use current hyperparameters
+        else:
+            # Load optimizer state (preserves checkpoint hyperparameters)
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            logger.info(f"Loaded checkpoint from epoch {checkpoint['epoch']} with checkpoint hyperparameters")
+        
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
-        logger.info(f"Loaded checkpoint from epoch {self.current_epoch}")
 
     def _save_checkpoint_smart(self, save_path: Path, epoch: int, 
                               train_metrics: Dict, val_metrics: Dict,
@@ -696,7 +719,7 @@ class Trainer:
                 except Exception:
                     pass
 
-    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None) -> Dict[str, float]:
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None, val_metrics=None) -> Dict[str, float]:
         """
         Train the model on a provided iterable of batches (mini-epoch).
 
@@ -733,6 +756,9 @@ class Trainer:
             'value_loss': [],
             'total_loss': []
         }
+        # Track gradient norms for diagnostic purposes
+        gradient_norms = []
+        
         # --- Progress logging setup ---
         start_time = time.time()
         next_log_batch = 1
@@ -807,9 +833,54 @@ class Trainer:
             # Backward pass: compute gradients for this batch
             scaled_loss = self.mixed_precision.scale_loss(total_loss)
             scaled_loss.backward()
+            
+            # Calculate gradient norm before clipping (for diagnostic purposes)
+            pre_clip_gradient_norm = None
+            try:
+                total_norm = 0.0
+                param_count = 0
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                        param_count += 1
+                if param_count > 0:
+                    pre_clip_gradient_norm = total_norm ** (1. / 2)
+                    gradient_norms.append(pre_clip_gradient_norm)
+            except Exception as e:
+                print(f"[train_on_batches] Warning: Failed to calculate pre-clip gradient norm: {e}")
+            
             # Clip gradients to avoid exploding gradients (if configured)
             if self.max_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+                
+                # Calculate gradient norm after clipping (to verify clipping worked)
+                post_clip_gradient_norm = None
+                try:
+                    total_norm = 0.0
+                    param_count = 0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                            param_count += 1
+                    if param_count > 0:
+                        post_clip_gradient_norm = total_norm ** (1. / 2)
+                except Exception as e:
+                    print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
+                
+                # Store both values for logging
+                if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
+                    gradient_norms.append(post_clip_gradient_norm)  # Use post-clip for statistics
+                    # Store both values for debugging
+                    if not hasattr(self, 'gradient_clipping_debug'):
+                        self.gradient_clipping_debug = []
+                    self.gradient_clipping_debug.append({
+                        'pre_clip': pre_clip_gradient_norm,
+                        'post_clip': post_clip_gradient_norm,
+                        'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
+                    })
+            
             # Optimizer step: update model parameters using accumulated gradients
             self.mixed_precision.step_optimizer(self.optimizer)
             # Update mixed precision scaler (if used)
@@ -891,6 +962,63 @@ class Trainer:
         # Compute averages for the mini-epoch
         mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
         
+        # Calculate diagnostic metrics for stability analysis
+        gradient_norm = None
+        post_clip_gradient_norm = None
+        gradient_stats = None
+        weight_stats = None
+        lr_stats = None
+        gpu_memory_mb = None
+        best_val_loss = None
+        
+        # Update best validation loss if validation metrics are provided
+        if val_metrics and 'total_loss' in val_metrics:
+            current_val_loss = val_metrics['total_loss']
+            if not hasattr(self, 'best_val_loss') or self.best_val_loss is None:
+                self.best_val_loss = current_val_loss
+            elif current_val_loss < self.best_val_loss:
+                self.best_val_loss = current_val_loss
+            best_val_loss = self.best_val_loss
+        
+        # Calculate gradient statistics from collected norms
+        if gradient_norms:
+            gradient_norm = gradient_norms[-1]  # Use the last gradient norm (post-clip)
+            post_clip_gradient_norm = gradient_norm  # This is the post-clip value
+            gradient_stats = {
+                'mean': float(np.mean(gradient_norms)),
+                'min': float(np.min(gradient_norms)),
+                'max': float(np.max(gradient_norms)),
+                'std': float(np.std(gradient_norms))
+            }
+        
+        # Calculate weight statistics
+        weight_norms = []
+        for p in self.model.parameters():
+            if p.data is not None:
+                weight_norms.append(p.data.norm(2).item())
+        if weight_norms:
+            weight_stats = {
+                'mean': float(np.mean(weight_norms)),
+                'std': float(np.std(weight_norms))
+            }
+        
+        # Calculate learning rate statistics
+        lr_values = [group['lr'] for group in self.optimizer.param_groups if 'lr' in group]
+        if lr_values:
+            lr_stats = {
+                'mean': float(np.mean(lr_values)),
+                'min': float(np.min(lr_values)),
+                'max': float(np.max(lr_values)),
+                'std': float(np.std(lr_values))
+            }
+        
+        # Calculate GPU memory usage
+        if torch.cuda.is_available() and hasattr(torch.cuda, 'memory_allocated'):
+            gpu_memory_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            # MPS doesn't have memory_allocated, so we'll skip this
+            pass
+        
         # CSV logging for mini-epoch
         if self.csv_logger:
             # Extract hyperparameters as in MiniEpochOrchestrator
@@ -909,24 +1037,27 @@ class Trainer:
                 'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
             }
             epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
+            
+            # Calculate training time for this mini-epoch
+            mini_epoch_time = sum(batch_times)
+            
             self.csv_logger.log_mini_epoch(
                 epoch=epoch_id,
                 train_metrics=mini_epoch_avg,
-                val_metrics=None,  # No validation in train_on_batches
+                val_metrics=val_metrics,  # Pass val_metrics here
                 hyperparams=hp,
-                training_time=0.0,
-                epoch_time=0.0,
-                samples_per_second=0.0,
-                memory_usage_mb=0.0,
-                gpu_memory_mb=None,
-                gradient_norm=None,
-                weight_stats=None,
+                training_time=mini_epoch_time,
+                epoch_time=mini_epoch_time,
+                samples_per_second=0.0,  # Would need to calculate based on samples processed
+                memory_usage_mb=0.0,  # Would need to calculate system memory usage
+                gpu_memory_mb=gpu_memory_mb,
+                gradient_norm=gradient_norm,
+                post_clip_gradient_norm=post_clip_gradient_norm,
+                weight_stats=weight_stats,
+                gradient_stats=gradient_stats,  # Add the missing parameter
+                lr_stats=lr_stats,  # Add the missing parameter
+                best_val_loss=best_val_loss,  # Add the best validation loss
                 notes="train_on_batches"
             )
         
         return mini_epoch_avg
-
-# NOTE: The resume_training() function has been removed as it was dead code.
-# It relied on the train() method which has also been removed.
-# For resuming training, use the resume_from parameter in the hyperparameter sweep
-# or implement a new resume function that works with train_on_batches(). 

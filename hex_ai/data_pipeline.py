@@ -31,7 +31,48 @@ logger = logging.getLogger(__name__)
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
 
 
-
+class ShardLogger:
+    """
+    Tracks and logs data shard transitions during training.
+    """
+    def __init__(self, log_shard_transitions: bool = True):
+        self.log_shard_transitions = log_shard_transitions
+        self.current_shard = None
+        self.shard_transitions = []
+        self.logger = logging.getLogger(__name__)
+    
+    def log_shard_start(self, file_path: Path, file_idx: int, total_shards: int, approx_batch_count: int = None):
+        """Log when a new shard starts being processed."""
+        if not self.log_shard_transitions:
+            return
+        
+        shard_info = {
+            'file_path': str(file_path),
+            'file_name': file_path.name,
+            'file_idx': file_idx,
+            'total_shards': total_shards,
+            'approx_batch_count': approx_batch_count,
+            'timestamp': None  # Could add timestamp if needed
+        }
+        
+        self.current_shard = shard_info
+        self.shard_transitions.append(shard_info)
+        
+        # Log to console and file
+        log_msg = f"[SHARD_START] Processing shard {file_idx+1}/{total_shards}: {file_path.name}"
+        if approx_batch_count is not None:
+            log_msg += f" (batch {approx_batch_count})"
+        
+        print(log_msg)  # Always print to console
+        self.logger.info(log_msg)
+    
+    def get_current_shard_info(self):
+        """Get information about the currently active shard."""
+        return self.current_shard
+    
+    def get_shard_transitions(self):
+        """Get all recorded shard transitions."""
+        return self.shard_transitions
 
 
 class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
@@ -53,8 +94,16 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
             - When max_examples_unaugmented is reached or dataset is exhausted.
             - A summary at the end of iteration (total examples, total shards).
         If False, only logs errors and critical events.
+        log_shard_transitions: If True, logs when each new shard starts being processed.
     """
-    def __init__(self, data_files: List[Path], enable_augmentation: bool = True, max_examples_unaugmented: Optional[int] = None, verbose: bool = False):
+    def __init__(
+        self,
+        data_files: List[Path],
+        enable_augmentation: bool = True,
+        max_examples_unaugmented: Optional[int] = None,
+        verbose: bool = False,
+        log_shard_transitions: bool = True
+    ):
         super().__init__()
         self.data_files = data_files
         self.enable_augmentation = enable_augmentation
@@ -63,6 +112,8 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
         self.logger = logging.getLogger(__name__)
         self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
+        self.shard_logger = ShardLogger(log_shard_transitions)
+        self.approx_batch_count = 0  # Track batch count for shard logging
 
     def __iter__(self):
         """
@@ -79,10 +130,16 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
             except Exception as e:
                 self.logger.error(f"Failed to load shard {file_path}: {e}")
                 raise RuntimeError(f"Failed to load shard {file_path}: {e}")
+            
             file_examples = data['examples'] if 'examples' in data else []
             total_shards_loaded += 1
+            
+            # Log shard start
+            self.shard_logger.log_shard_start(file_path, file_idx, num_shards, self.approx_batch_count)
+            
             if self.verbose:
                 self.logger.info(f"[StreamingSequentialShardDataset] Loaded {len(file_examples)} examples from {file_path.name} (shard {file_idx+1}/{num_shards})")
+            
             shard_yielded = 0
             for ex_idx, ex in enumerate(file_examples):
                 for aug_idx in range(self.augmentation_factor):
@@ -97,10 +154,21 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
                     yield self._get_augmented_tensor_for_index(ex, aug_idx, error_tracker)
                     total_yielded += 1
                     shard_yielded += 1
+                    
+                    # Update batch count (assuming we know batch size from DataLoader)
+                    # This is approximate since we don't have direct access to batch size here
+                    if total_yielded % 256 == 0:  # Assuming batch_size=256
+                        self.approx_batch_count += 1
+            
             if self.verbose:
                 self.logger.info(f"[StreamingSequentialShardDataset] Finished shard {file_idx+1}/{num_shards}: yielded {shard_yielded} examples (augmented), running total: {total_yielded}")
+        
         if self.verbose:
             self.logger.info(f"[StreamingSequentialShardDataset] Iteration complete: total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
+
+    def get_shard_logger(self):
+        """Get the shard logger instance."""
+        return self.shard_logger
 
     def __len__(self):
         # HACK: PyTorch DataLoader sometimes calls __len__ even for IterableDataset. Return a large dummy value.
@@ -116,6 +184,12 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         policy = ex['policy']
         value = ex['value']
         player_to_move = ex.get('player_to_move', None)
+        
+        # Convert integer player_to_move to Player enum if needed (for backward compatibility)
+        if player_to_move is not None and isinstance(player_to_move, int):
+            from hex_ai.value_utils import Player
+            player_to_move = Player(player_to_move)
+        
         board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
         if self.enable_augmentation:
             augmented_examples = create_augmented_example_with_player_to_move(

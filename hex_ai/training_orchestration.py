@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_datasets(train_files, val_files, max_examples_unaugmented,
-                    max_validation_examples, batch_size=256):
+                    max_validation_examples, batch_size=256, log_shard_transitions=True):
     """
     Create DataLoader objects from StreamingSequentialShardDataset for train and val sets.
     Returns (train_loader, val_loader).
@@ -41,12 +41,14 @@ def create_datasets(train_files, val_files, max_examples_unaugmented,
         train_dataset = StreamingSequentialShardDataset(
             train_files, 
             enable_augmentation=True, 
-            max_examples_unaugmented=max_examples_unaugmented
+            max_examples_unaugmented=max_examples_unaugmented,
+            log_shard_transitions=log_shard_transitions
         )
         val_dataset = StreamingSequentialShardDataset(
             val_files, 
             enable_augmentation=False, # Validation dataset is not augmented
-            max_examples_unaugmented=max_validation_examples
+            max_examples_unaugmented=max_validation_examples,
+            log_shard_transitions=log_shard_transitions
         ) if val_files else None
         
         # Create DataLoaders from the datasets
@@ -105,7 +107,8 @@ def run_single_experiment(
     device, 
     resume_from: Optional[str] = None,
     shutdown_handler=None,
-    run_timestamp: Optional[str] = None
+    run_timestamp: Optional[str] = None,
+    override_checkpoint_hyperparameters: bool = False
 ):
     """
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
@@ -121,6 +124,9 @@ def run_single_experiment(
         device: Device to use for training
         resume_from: Path to checkpoint file to resume from
         shutdown_handler: Handler for graceful shutdown
+        run_timestamp: Optional timestamp for the run
+        override_checkpoint_hyperparameters: If True, reset optimizer state to use current hyperparameters
+                                           instead of checkpoint hyperparameters
     """
     # Determine checkpoint path and start epoch
     checkpoint_path = None
@@ -172,7 +178,7 @@ def run_single_experiment(
     
     # Load checkpoint if resuming
     if checkpoint_path:
-        trainer.load_checkpoint(checkpoint_path)
+        trainer.load_checkpoint(checkpoint_path, override_checkpoint_hyperparameters=override_checkpoint_hyperparameters)
         logger.info(f"Loaded checkpoint from {checkpoint_path}")
     
     # Create orchestrator
@@ -363,7 +369,8 @@ def run_hyperparameter_tuning_current_data(
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
     shutdown_handler=None,
-    run_timestamp: Optional[str] = None
+    run_timestamp: Optional[str] = None,
+    override_checkpoint_hyperparameters: bool = False
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -451,7 +458,8 @@ def run_hyperparameter_tuning_current_data(
                 device,
                 resume_from=resume_from,
                 shutdown_handler=shutdown_handler,
-                run_timestamp=run_timestamp
+                run_timestamp=run_timestamp,
+                override_checkpoint_hyperparameters=override_checkpoint_hyperparameters
             )
             
             # Save experiment metadata with data source information
