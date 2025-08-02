@@ -181,12 +181,18 @@ def run_single_experiment(
         trainer.load_checkpoint(checkpoint_path, override_checkpoint_hyperparameters=override_checkpoint_hyperparameters)
         logger.info(f"Loaded checkpoint from {checkpoint_path}")
     
+    # Create experiment-specific checkpoint directory
+    experiment_name = exp_config.get('experiment_name', 'unknown_experiment')
+    experiment_checkpoint_dir = results_path / experiment_name
+    experiment_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created experiment checkpoint directory: {experiment_checkpoint_dir}")
+    
     # Create orchestrator
     orchestrator = MiniEpochOrchestrator(
         trainer=trainer,
         train_loader=train_loader,
         val_loader=val_loader,
-        checkpoint_dir=results_path,
+        checkpoint_dir=experiment_checkpoint_dir,
         num_epochs=num_epochs,
         mini_epoch_samples=mini_epoch_samples,
         start_epoch=start_epoch

@@ -72,7 +72,11 @@ class MiniEpochOrchestrator:
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
-                    checkpoint_path = self.checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
+                    from hex_ai.file_utils import get_unique_checkpoint_path
+                    from pathlib import Path
+                    checkpoint_dir = Path(self.checkpoint_dir)
+                    base_checkpoint_path = checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
+                    checkpoint_path = get_unique_checkpoint_path(base_checkpoint_path)
                     self.trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics, compress=True)
                 
                 # Logging

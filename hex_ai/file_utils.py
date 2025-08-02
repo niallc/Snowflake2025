@@ -223,3 +223,42 @@ def save_progress_report(stats: Dict[str, Any], output_dir: Path, shutdown_handl
         
     except Exception as e:
         logger.error(f"Failed to save progress report: {e}") 
+
+
+def get_unique_checkpoint_path(base_path: Path) -> Path:
+    """
+    Get a unique checkpoint path by appending timestamp if the file already exists.
+    
+    Args:
+        base_path: The desired checkpoint path (e.g., Path("epoch3_mini19.pt.gz"))
+        
+    Returns:
+        A unique path that won't overwrite existing files.
+        If base_path doesn't exist, returns base_path.
+        If base_path exists, returns base_path with timestamp appended.
+        
+    Example:
+        If "epoch3_mini19.pt.gz" exists, returns "epoch3_mini19_250802_1041.pt.gz"
+    """
+    if not base_path.exists():
+        return base_path
+    
+    # Extract stem and suffix
+    stem = base_path.stem
+    suffix = base_path.suffix
+    
+    # Generate timestamp (yymmdd_hrmin format)
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%y%m%d_%H%M")
+    
+    # Create new path with timestamp
+    new_stem = f"{stem}_{timestamp}"
+    new_path = base_path.parent / f"{new_stem}{suffix}"
+    
+    # If this path also exists, add seconds to make it unique
+    if new_path.exists():
+        timestamp_with_seconds = datetime.now().strftime("%y%m%d_%H%M%S")
+        new_stem = f"{stem}_{timestamp_with_seconds}"
+        new_path = base_path.parent / f"{new_stem}{suffix}"
+    
+    return new_path 
