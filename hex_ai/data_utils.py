@@ -30,12 +30,15 @@ from .config import (
     PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,  
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str
+from hex_ai.value_utils import (
+    trmph_winner_to_training_value, trmph_winner_to_clear_str,
+    get_player_to_move_from_moves, Winner, Player
+)
 from hex_ai.utils.format_conversion import (
     strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, parse_trmph_to_board,
     rowcol_to_trmph, tensor_to_rowcol, rowcol_to_tensor, tensor_to_trmph, trmph_to_tensor
 )
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, get_player_to_move_from_moves
+from hex_ai.utils.player_utils import get_player_to_move_from_board
 
 logger = logging.getLogger(__name__)
 
@@ -107,162 +110,19 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     
     elif format_type == "visual":
         # Create a visual representation
-        symbols = {0: ".", 1: "B", 2: "R"}
+        symbols = {EMPTY_PIECE: ".", BLUE_PIECE: "B", RED_PIECE: "R"}
         lines = []
         for row in range(BOARD_SIZE):
             line = " " * row  # Indent for hex shape
             for col in range(BOARD_SIZE):
-                line += symbols[board_2d[row, col]] + " "
+                piece = board_2d[row, col]
+                line += symbols[piece] + " "
             lines.append(line)
         return "\n".join(lines)
     
     else:
         raise ValueError(f"Unknown format_type: {format_type}")
 
-
-def strip_trmph_preamble(trmph_text: str) -> str:
-    """
-    Remove the preamble from a trmph string (e.g., 'http://...#13,a1b2c3' -> 'a1b2c3').
-    """
-    # Warning, though a trmph URL contains just the preamble and then moves
-    # our data files also contain a space and then an integer 1 or 2, to indicate the winner.
-    # This function strips the preamble to start with the move sequence and .search returns
-    # the index of the comma after the board size.
-    # When we return trmph_text[match.end():] we get the move sequence.
-    # if called on a full line of input data, this would then include the space 
-    # and the winner annotation.
-    # More typically we will call this function on a single move sequence.
-    match = TRMPH_BOARD_PATTERN.search(trmph_text)
-    if not match:
-        raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
-    return trmph_text[match.end():]
-
-
-def split_trmph_moves(bare_moves: str) -> list[str]:
-    """
-    Split a bare trmph move string into a list of moves (e.g., 'a1b2c3' -> ['a1','b2','c3']).
-    """
-    moves = []
-    i = 0
-    while i < len(bare_moves):
-        if bare_moves[i] not in TRLETTERS:
-            raise ValueError(f"Expected letter at position {i} in {bare_moves}")
-        j = i + 1
-        while j < len(bare_moves) and bare_moves[j].isdigit():
-            j += 1
-        moves.append(bare_moves[i:j])
-        i = j
-    return moves
-
-
-def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, int]:
-    """
-    Convert a trmph move (e.g., 'a1') to (row, col) coordinates (0-indexed).
-    """
-    if len(move) < 2 or len(move) > 4:
-        raise ValueError(f"Invalid trmph move: {move}")
-    letter = move[0]
-    number = int(move[1:])
-    if letter not in TRLETTERS:
-        raise ValueError(f"Invalid letter in move: {move}")
-    if not (1 <= number <= board_size):
-        raise ValueError(f"Invalid number in move: {move}")
-    row = number - 1
-    col = LETTERS.index(letter)
-    return row, col
-
-
-def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
-    """
-    Convert (row, col) coordinates to trmph move.
-    
-    Args:
-        row: Row index (0-12)
-        col: Column index (0-12)
-        board_size: Size of the board
-        
-    Returns:
-        Trmph move string
-        
-    Example:
-        (0, 0) → "a1"
-        (12, 12) → "m13"
-    """
-    if not (0 <= row < board_size) or not (0 <= col < board_size):
-        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {board_size}")
-    
-    letter = LETTERS[col]
-    number = str(row + 1)
-    return letter + number
-
-
-def tensor_to_rowcol(tensor_pos: int) -> Tuple[int, int]:
-    """
-    Convert tensor position index to (row, col).
-    
-    Args:
-        tensor_pos: Position in flattened tensor (0-168)
-        
-    Returns:
-        (row, col) coordinates
-    """
-    if not (0 <= tensor_pos < BOARD_SIZE * BOARD_SIZE):
-        raise ValueError(f"Invalid tensor position: {tensor_pos}")
-    
-    row = tensor_pos // BOARD_SIZE
-    col = tensor_pos % BOARD_SIZE
-    return row, col
-
-
-def rowcol_to_tensor(row: int, col: int) -> int:
-    """
-    Convert (row, col) to tensor position index.
-    
-    Args:
-        row: Row index (0-12)
-        col: Column index (0-12)
-        
-    Returns:
-        Position in flattened tensor (0-168)
-    """
-    if not (0 <= row < BOARD_SIZE) or not (0 <= col < BOARD_SIZE):
-        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
-    
-    return row * BOARD_SIZE + col
-
-
-def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
-    """
-    Convert tensor position index to trmph move.
-    
-    Args:
-        tensor_pos: Position in flattened tensor (0-168)
-        board_size: Size of the board
-        
-    Returns:
-        Trmph move string
-        
-    Example:
-        0 → "a1"
-        168 → "m13"
-    """
-    row, col = tensor_to_rowcol(tensor_pos)
-    return rowcol_to_trmph(row, col, board_size)
-
-
-def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
-    """
-    Convert trmph move to tensor position index.
-    
-    Args:
-        move: Trmph move (e.g., 'a1')
-        board_size: Size of the board
-        
-    Returns:
-        Position in flattened tensor (0-168)
-    """
-    row, col = trmph_move_to_rowcol(move, board_size)
-    return rowcol_to_tensor(row, col)
 
 
 # ============================================================================
@@ -436,16 +296,16 @@ def create_augmented_values(value: float) -> list[float]:
     ]
 
 
-def create_augmented_player_to_move(player_to_move: int) -> list[int]:
+def create_augmented_player_to_move(player_to_move: Player) -> list[Player]:
     """
     Create player-to-move values for the 4 board augmentations.
-    - For color-swapping symmetries, swap the player (0 <-> 1).
+    - For color-swapping symmetries, swap the player (BLUE <-> RED).
     """
     return [
-        player_to_move,          # Original
-        player_to_move,          # 180° rotation (no color swap)
-        1 - player_to_move,      # Long diagonal reflection + color swap
-        1 - player_to_move       # Short diagonal reflection + color swap
+        player_to_move,                    # Original
+        player_to_move,                    # 180° rotation (no color swap)
+        Player.RED if player_to_move == Player.BLUE else Player.BLUE,  # Long diagonal reflection + color swap
+        Player.RED if player_to_move == Player.BLUE else Player.BLUE   # Short diagonal reflection + color swap
     ]
 
 
@@ -516,7 +376,9 @@ def create_augmented_example(board: np.ndarray, policy: np.ndarray, value: float
     
     return augmented_examples
 
-def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None) -> list[tuple[np.ndarray, np.ndarray, float, int]]:
+def create_augmented_example_with_player_to_move(
+    board: np.ndarray, policy: np.ndarray, value: float, error_tracker=None
+) -> list[tuple[np.ndarray, np.ndarray, float, Player]]:
     """
     Create 4 augmented examples from a single board position, including player-to-move.
     
@@ -542,6 +404,7 @@ def create_augmented_example_with_player_to_move(board: np.ndarray, policy: np.n
     
     # Compute player-to-move from the board, then create augmented versions
     player_to_move = get_player_to_move_from_board(board, error_tracker)
+    # Keep as Player enum for augmentation
     augmented_player_to_move = create_augmented_player_to_move(player_to_move)
     
     # Combine into examples
@@ -720,14 +583,10 @@ def extract_training_examples_from_game(
         moves = remove_repeated_moves(moves)
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
-        # TODO: Replace magic numbers "1" and "2" with constants from hex_ai/config.py (TRMPH_BLUE_WIN, TRMPH_RED_WIN)
-        if winner_from_file not in ["1", "2"]:
+        if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
-        # TODO: Replace magic numbers with utility functions for winner string and value target
-        # winner_clear = trmph_winner_to_clear_str(winner_from_file)
-        # value_target = trmph_winner_to_training_value(winner_from_file)
-        winner_clear = "BLUE" if winner_from_file == "1" else "RED"
-        value_target = 0.0 if winner_from_file == "1" else 1.0
+        winner_clear = trmph_winner_to_clear_str(winner_from_file)
+        value_target = trmph_winner_to_training_value(winner_from_file)
         total_positions = len(moves) + 1
         value_sample_tiers = assign_value_sample_tiers(total_positions)
         position_indices = list(range(total_positions))
@@ -938,45 +797,7 @@ def get_file_info_from_game_id_using_state(game_id: tuple, state_file_path: Path
 # Player-to-move Channel Utility
 # =========================================================================
 
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
-
-def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> int:
-    """
-    Given a (2, N, N) board, return BLUE_PLAYER if it's blue's move, RED_PLAYER if it's red's move.
-    Uses error tracking to handle invalid board states gracefully.
-    Args:
-        board_2ch: np.ndarray of shape (2, N, N), blue and red channels
-        error_tracker: Optional BoardStateErrorTracker instance
-    Returns:
-        int: BLUE_PLAYER or RED_PLAYER
-    """
-    if board_2ch.shape[0] != 2:
-        raise ValueError(f"Expected board with 2 channels, got shape {board_2ch.shape}")
-    
-    blue_count = int(np.sum(board_2ch[0]))
-    red_count = int(np.sum(board_2ch[1]))
-    
-    if blue_count == red_count:
-        return BLUE_PLAYER
-    elif blue_count == red_count + 1:
-        return RED_PLAYER
-    else:
-        # Invalid board state - use error tracking if available
-        error_msg = f"Invalid board state: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red."
-        
-        if error_tracker is not None:
-            error_tracker.record_error(
-                board_state=board_2ch,
-                error_msg=error_msg,
-                file_info=getattr(error_tracker, '_current_file', "Unknown"),
-                sample_info=getattr(error_tracker, '_current_sample', "Unknown")
-            )
-            # Return a default value to continue processing
-            # Assume it's blue's turn if we can't determine
-            return BLUE_PLAYER
-        else:
-            # Fall back to original behavior if no error tracker
-            raise ValueError(error_msg)
+from hex_ai.value_utils import Player
 
 def get_valid_policy_target(policy, use_uniform: bool = False):
     """
@@ -988,7 +809,6 @@ def get_valid_policy_target(policy, use_uniform: bool = False):
     Returns:
         np.ndarray of shape (BOARD_SIZE * BOARD_SIZE,)
     """
-    from .config import BOARD_SIZE
     N = BOARD_SIZE * BOARD_SIZE
     if policy is None:
         if use_uniform:
@@ -1013,10 +833,11 @@ def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
         policy: torch.FloatTensor (BOARD_SIZE * BOARD_SIZE,)
         value: torch.FloatTensor (scalar or shape (1,))
     """
-    from .config import BOARD_SIZE
     board_2ch = ex['board']
     player_to_move = get_player_to_move_from_board(board_2ch)
-    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move), dtype=board_2ch.dtype)
+    # Convert Player enum to integer for tensor creation
+    player_to_move_int = player_to_move.value
+    player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move_int), dtype=board_2ch.dtype)
     board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
     board = torch.tensor(board_3ch, dtype=torch.float32)
     policy = get_valid_policy_target(ex['policy'], use_uniform=use_uniform_policy)
@@ -1073,12 +894,15 @@ def extract_training_examples_with_selector_from_game(
             board_state = create_board_from_moves(moves[:position])
             policy_target = None if position >= len(moves) else create_policy_target(moves[position])
             player_to_move = get_player_to_move_from_moves(moves[:position])
+            # Convert winner string to Winner enum
+            winner_enum = Winner.BLUE if winner_clear == "BLUE" else Winner.RED if winner_clear == "RED" else None
+            
             metadata = {
                 'game_id': game_id,
                 'position_in_game': position,
                 'total_positions': total_positions,
                 'value_sample_tier': value_sample_tiers[i],
-                'winner': winner_clear
+                'winner': winner_enum
             }
             if include_trmph:
                 metadata['trmph_game'] = trmph_text
@@ -1094,3 +918,86 @@ def extract_training_examples_with_selector_from_game(
     except Exception as e:
         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         raise ValueError(f"Failed to process game: {e}")
+
+
+def load_examples_from_pkl(file_path):
+    """Load examples from a .pkl.gz file with an 'examples' key."""
+    import gzip
+    import pickle
+    
+    with gzip.open(file_path, 'rb') as f:
+        data = pickle.load(f)
+    if 'examples' in data:
+        return data['examples']
+    else:
+        raise ValueError(f"No 'examples' key found in {file_path}")
+
+
+def extract_single_game_to_new_pkl(src_file, game_index=0, num_games_to_extract=1, output_dir="data/exampleData"):
+    """
+    Safely extract one or more games from a .pkl.gz file, checking that each next board is a strict superset (one new piece) or completely empty (new game).
+    Args:
+        src_file: Path to source .pkl.gz file
+        game_index: Index of the first game to extract (0-based)
+        num_games_to_extract: Number of games to extract (default 1)
+        output_dir: Directory to save the new file(s) (default: data/exampleData)
+    Returns:
+        List of paths to the new .pkl.gz file(s)
+    Raises:
+        ValueError if an unexpected board transition is found.
+    """
+    import gzip
+    import pickle
+    import os
+    import numpy as np
+    
+    with gzip.open(src_file, 'rb') as f:
+        data = pickle.load(f)
+    examples = data['examples']
+    n = len(examples)
+    game_starts = [0]
+    games_found = 0
+    target_games = game_index + num_games_to_extract
+    
+    for i in range(1, n):
+        prev_board = examples[i-1][0]
+        curr_board = examples[i][0]
+        # Only consider first two channels for piece placement
+        prev_pieces = (prev_board[:2] > 0)
+        curr_pieces = (curr_board[:2] > 0)
+        prev_count = np.sum(prev_pieces)
+        curr_count = np.sum(curr_pieces)
+        # Check for new game (completely empty board)
+        if np.sum(curr_pieces) == 0:
+            game_starts.append(i)
+            games_found += 1
+            # Stop if we've found enough games
+            if games_found >= target_games:
+                break
+            continue
+        # Check for strict superset (one new piece)
+        diff = curr_pieces.astype(int) - prev_pieces.astype(int)
+        if curr_count == prev_count + 1 and np.all((diff == 0) | (diff == 1)) and np.sum(diff) == 1:
+            continue
+        # If neither, fail
+        raise ValueError(f"Unexpected board transition at index {i}: not a new game, not a strict superset.\nPrev count: {prev_count}, Curr count: {curr_count}")
+    
+    # Add end index for the last game we found
+    if games_found < target_games:
+        game_starts.append(n)
+        games_found += 1
+    
+    # Extract the requested games
+    os.makedirs(output_dir, exist_ok=True)
+    out_files = []
+    for k in range(num_games_to_extract):
+        idx = game_index + k
+        if idx >= len(game_starts) - 1:
+            raise IndexError(f"Requested game_index {idx} out of range (found {len(game_starts)-1} games)")
+        start_idx, end_idx = game_starts[idx], game_starts[idx+1]
+        game_examples = examples[start_idx:end_idx]
+        out_file = os.path.join(output_dir, f"single_game_{idx}_from_{os.path.basename(src_file)}")
+        with gzip.open(out_file, 'wb') as f:
+            pickle.dump({'examples': game_examples}, f)
+        out_files.append(out_file)
+    return out_files

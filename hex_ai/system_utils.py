@@ -19,16 +19,18 @@ logger = logging.getLogger(__name__)
 
 
 def check_virtual_env(expected_env="hex_ai_env"):
-    import os, sys
-    venv_path = os.environ.get("VIRTUAL_ENV", "")
-    if not venv_path or expected_env not in venv_path:
-        sys.stderr.write(
-            f"\nERROR: This script must be run inside the '{expected_env}' virtual environment.\n"
-            f"Please activate it first by running:\n\n"
-            f"    source {expected_env}/bin/activate\n\n"
-            f"Then re-run this script.\n"
-        )
-        sys.exit(1)
+    """
+    DEPRECATED: Environment validation is now handled automatically in hex_ai/__init__.py
+    
+    This function is kept for backward compatibility but does nothing.
+    Environment validation happens automatically when importing hex_ai.
+    
+    Args:
+        expected_env: Name of the expected virtual environment (ignored)
+    """
+    # Environment validation is now handled in hex_ai/__init__.py
+    # This function is kept for backward compatibility
+    pass
 
 
 def get_system_info() -> Dict:

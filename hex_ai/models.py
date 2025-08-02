@@ -68,7 +68,10 @@ class TwoHeadedResNet(nn.Module):
     
     This model uses a ResNet backbone with two separate heads:
     - Policy head: Predicts move probabilities (169 outputs for 13x13 board)
-    - Value head: Predicts win probability (1 output)
+    - Value head: Predicts Red's win probability (1 output)
+    
+    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
+    The output is a raw logit that should be passed through sigmoid to get the probability.
     
     The architecture follows modern best practices with:
     - Global average pooling after the ResNet body
@@ -151,7 +154,7 @@ class TwoHeadedResNet(nn.Module):
         Returns:
             Tuple of (policy_logits, value_logit):
             - policy_logits: Shape (batch_size, 169)
-            - value_logit: Shape (batch_size, 1)
+            - value_logit: Shape (batch_size, 1) - Raw logit for Red's win probability
         """
         # Input convolution
         x = F.relu(self.input_bn(self.input_conv(x)))

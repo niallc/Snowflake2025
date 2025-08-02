@@ -17,19 +17,20 @@ import sys
 import os
 import hashlib
 import json
-import math
 import argparse
 
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.file_utils import GracefulShutdown
-from hex_ai.system_utils import check_virtual_env
 from hex_ai.error_handling import GracefulShutdownRequested
-check_virtual_env("hex_ai_env")
+# Environment validation is now handled automatically in hex_ai/__init__.py
+
+# Create timestamp for the entire run (without minutes/seconds)
+RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H")
 
 ###### Logging setup ######
 log_dir = Path('logs')
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / ('hex_ai_training_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.log')
+log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
 
 file_handler = logging.FileHandler(log_file, mode='a')
 formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
@@ -49,18 +50,29 @@ root_logger.addHandler(stream_handler)
 #  Sweep Configuration and Parameter Processing
 # =============================================================
 
+def calculate_mini_epoch_samples(
+    max_samples: int,
+    min_mini_epochs: int = 10,
+    max_mini_epochs: int = 300,
+    target_samples_per_mini_epoch: int = 250000
+) -> int:
+    """Calculate mini-epoch samples based on target samples and min/max constraints."""
+    target_mini_epochs = max_samples // target_samples_per_mini_epoch
+    num_mini_epochs = max(min_mini_epochs, min(max_mini_epochs, target_mini_epochs))
+    return max_samples // num_mini_epochs
+
 # Define your sweep grid here (edit as needed)
 SWEEP = {
-    "batch_size": [256, 1024],
-    "max_grad_norm": [20],
+    "batch_size": [256],
+    "max_grad_norm": [1.0, 0.2, 3.0],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
+    "value_learning_rate_factor": [0.2, 1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.2],
+    "learning_rate": [0.00003, 0.0003],
     
     # Likely resolved:
     "dropout_prob": [0],
-    "learning_rate": [0.001],
     # Add more as needed
 }
 
@@ -82,11 +94,16 @@ SHORT_LABELS = {
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 35_000_000  # Training samples (will be 4x larger with augmentation)
-MAX_VALIDATION_SAMPLES = 925_000  # Validation samples (no augmentation)
-MINI_EPOCH_BATCHES = math.floor(500000 * 2 /256) # The total samples per epoch is batch_size (see sweep) * mini_epoch_batches
+MAX_SAMPLES = 1_000_000  # Training samples (will be 4x larger with augmentation)
+MAX_VALIDATION_SAMPLES = 95_000  # Validation samples (no augmentation)
+
+# Mini-epoch configuration - more intuitive parameters
+MIN_MINI_EPOCHS_PER_EPOCH = 5      # At least 5 mini-epochs per epoch
+MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 200 mini-epochs per epoch
+TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
+
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2
+EPOCHS = 1  # training now resets the epoch count this this is the further number of epochs to train
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -126,15 +143,30 @@ def print_sweep_summary(results, results_dir, interrupted=False):
         print(f"Successful experiments: {results.get('successful_experiments', 'N/A')}/{results.get('num_experiments', 'N/A')}")
         # Find best experiment
         if results.get('experiments'):
-            best_exp = min(results['experiments'], key=lambda x: x['best_val_loss'])
-            print(f"\nBest experiment: {best_exp['experiment_name']}")
-            print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
-            print(f"Hyperparameters: {best_exp['hyperparameters']}")
-            # Show all results sorted by validation loss
-            print(f"\nAll experiments ranked by validation loss:")
-            sorted_experiments = sorted(results['experiments'], key=lambda x: x['best_val_loss'])
-            for i, exp in enumerate(sorted_experiments):
-                print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+            # Filter out None results, failed experiments, and experiments without best_val_loss
+            valid_experiments = [exp for exp in results['experiments'] 
+                               if exp is not None and exp.get('status') != 'failed' and 'best_val_loss' in exp]
+            
+            if valid_experiments:
+                best_exp = min(valid_experiments, key=lambda x: x['best_val_loss'])
+                print(f"\nBest experiment: {best_exp['experiment_name']}")
+                print(f"Best validation loss: {best_exp['best_val_loss']:.6f}")
+                print(f"Hyperparameters: {best_exp['hyperparameters']}")
+                # Show all results sorted by validation loss
+                print(f"\nAll experiments ranked by validation loss:")
+                sorted_experiments = sorted(valid_experiments, key=lambda x: x['best_val_loss'])
+                for i, exp in enumerate(sorted_experiments):
+                    print(f"{i+1}. {exp['experiment_name']}: {exp['best_val_loss']:.6f}")
+            else:
+                print("\nNo experiments with valid validation loss!")
+            
+            # Show failed experiments if any
+            failed_experiments = [exp for exp in results['experiments'] 
+                                if exp is not None and exp.get('status') == 'failed']
+            if failed_experiments:
+                print(f"\nFailed experiments ({len(failed_experiments)}):")
+                for exp in failed_experiments:
+                    print(f"  - {exp['experiment_name']}: {exp.get('error', 'Unknown error')}")
         else:
             print("\nNo successful experiments!")
     print(f"\nAll results saved to: {results_dir}")
@@ -145,15 +177,93 @@ def print_sweep_summary(results, results_dir, interrupted=False):
 # =============================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data/processed/shuffled", help="Directory containing processed data files")
-    parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", help="Directory to save experiment results")
+    parser = argparse.ArgumentParser(
+        description="Run hyperparameter tuning with multiple data sources",
+        epilog="""
+Examples:
+  # Single data directory (backward compatible)
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
+
+  # Multiple data directories
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
+
+  # Skip first 200 files from second directory
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled --skip_files 0 200
+
+  # Resume training from a specific checkpoint file
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz
+        """
+    )
+    
+    # Data source arguments
+    parser.add_argument("--data_dirs", type=str, nargs='+', required=True,
+                       help="One or more directories containing processed data files")
+    
+    parser.add_argument(
+        '--skip_files',
+        type=int,
+        nargs='+',
+        help='Number of files to skip from the beginning of each data directory (one value per directory, e.g., --skip_files 0 200 to skip 0 from first dir, 200 from second)'
+    )
+    
+    # Resume training arguments
+    parser.add_argument(
+        '--resume_from', 
+        type=str,
+        help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
+    )
+    
+    parser.add_argument(
+        '--override_checkpoint_hyperparameters',
+        action='store_true',
+        help='When resuming from checkpoint, override checkpoint hyperparameters with sweep hyperparameters. '
+             'This resets optimizer state for clean hyperparameter experiments but may affect training stability.'
+    )
+    
+    # Training arguments
+    parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
+                       help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
-    parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, help="Max training samples (unaugmented)")
-    parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, help="Max validation samples (unaugmented)")
-    parser.add_argument("--mini_epoch_batches", type=int, default=MINI_EPOCH_BATCHES, help="Mini-epoch batches per epoch")
+    parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, 
+                       help="Max training samples (unaugmented)")
+    parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, 
+                       help="Max validation samples (unaugmented)")
+    parser.add_argument("--min_mini_epochs_per_epoch", type=int, default=MIN_MINI_EPOCHS_PER_EPOCH,
+                       help="Minimum mini-epochs per epoch")
+    parser.add_argument("--max_mini_epochs_per_epoch", type=int, default=MAX_MINI_EPOCHS_PER_EPOCH,
+                       help="Maximum mini-epochs per epoch")
+    parser.add_argument("--target_samples_per_mini_epoch", type=int, default=TARGET_SAMPLES_PER_MINI_EPOCH,
+                       help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
+    
     args = parser.parse_args()
+
+    # Validate resume arguments
+    if args.resume_from and not Path(args.resume_from).exists():
+        print(f"ERROR: Resume path does not exist: {args.resume_from}")
+        sys.exit(1)
+
+    # Check for potential hyperparameter conflicts when resuming
+    if args.resume_from and not args.override_checkpoint_hyperparameters:
+        # This is a simplified check - in practice, you might want to load the checkpoint
+        # and compare actual values, but this gives a good warning
+        varying_hyperparams = [k for k, v in SWEEP.items() if len(v) > 1]
+        optimizer_related_params = ['learning_rate', 'value_learning_rate_factor', 'value_weight_decay_factor', 'weight_decay']
+        conflicting_params = [p for p in varying_hyperparams if p in optimizer_related_params]
+        
+        if conflicting_params:
+            print(f"\nWARNING: Resume checkpoint may contain different hyperparameters than sweep:")
+            print(f"  Varying sweep parameters: {conflicting_params}")
+            print(f"  These parameters are stored in optimizer state and will override sweep values.")
+            print(f"\nTo use sweep hyperparameters instead of checkpoint hyperparameters, add:")
+            print(f"  --override_checkpoint_hyperparameters")
+            print(f"\nTo continue with checkpoint hyperparameters (current behavior), proceed as-is.")
+            print(f"\nNote: Using checkpoint hyperparameters may result in duplicate training runs.")
+            response = input("\nContinue anyway? (y/N): ")
+            if response.lower() != 'y':
+                print("Aborting. Please specify --override_checkpoint_hyperparameters if you want to use sweep hyperparameters.")
+                sys.exit(0)
 
     shutdown_handler = GracefulShutdown()
 
@@ -174,6 +284,8 @@ if __name__ == "__main__":
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Starting hyperparameter sweep with random seed: {args.random_seed}")
 
     start_time = time.time()
     results = None
@@ -183,21 +295,36 @@ if __name__ == "__main__":
             interrupted = True
             print_sweep_summary(results, results_dir, interrupted=True)
             sys.exit(0)
-        # Run hyperparameter tuning with fail_fast enabled
+        
+        # Calculate mini-epoch samples
+        mini_epoch_samples = calculate_mini_epoch_samples(
+            max_samples=args.max_samples,
+            min_mini_epochs=args.min_mini_epochs_per_epoch,
+            max_mini_epochs=args.max_mini_epochs_per_epoch,
+            target_samples_per_mini_epoch=args.target_samples_per_mini_epoch
+        )
+        
+        print(f"Mini-epochs: {args.max_samples // args.target_samples_per_mini_epoch} target, {args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch} range, {mini_epoch_samples:,} samples each")
+        
+        # Run hyperparameter tuning
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
-            data_dir=args.data_dir,
+            data_dirs=args.data_dirs,
             results_dir=args.results_dir,
             train_ratio=0.8,
             num_epochs=args.epochs,
-            early_stopping_patience=None,  # Disable early stopping for now
-            mini_epoch_batches=args.mini_epoch_batches,
-            random_seed=42,
+            early_stopping_patience=None,
+            random_seed=args.random_seed,
             max_examples_unaugmented=args.max_samples,
             max_validation_examples=args.max_validation_samples,
+            experiment_name=None,
             enable_augmentation=not args.no_augmentation,
-            fail_fast=True,
-            shutdown_handler=shutdown_handler
+            mini_epoch_samples=mini_epoch_samples,
+            resume_from=args.resume_from,
+            skip_files=args.skip_files,
+            shutdown_handler=shutdown_handler,
+            run_timestamp=RUN_TIMESTAMP,
+            override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")

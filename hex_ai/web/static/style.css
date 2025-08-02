@@ -1,0 +1,257 @@
+.player-settings {
+  background: #f4f8ff;
+  border: 1px solid #dde6f7;
+  border-radius: 8px;
+  padding: 10px 16px 10px 16px;
+  margin-bottom: 12px;
+  margin-top: 8px;
+}
+.player-label {
+  font-weight: bold;
+  color: #0077cc;
+  margin-bottom: 4px;
+}
+.player-settings:last-child .player-label {
+  color: #ff6600;
+}
+
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f8f8fa;
+  margin: 0;
+  padding: 0;
+}
+
+#app-container {
+  max-width: 900px;
+  margin: 30px auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  padding: 24px 24px 32px 24px;
+}
+
+#board-section {
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+#config-section {
+  margin-top: 0;
+}
+
+h1 {
+  text-align: center;
+  margin-top: 0;
+  color: #2a3a4a;
+}
+
+h3 {
+  margin: 0 0 12px 0;
+  color: #2a3a4a;
+  font-size: 1.1em;
+}
+
+#status-line {
+  text-align: center;
+  font-size: 1.2em;
+  margin-bottom: 18px;
+  min-height: 1.5em;
+}
+
+/* Control Panels */
+.control-panel {
+  background: #f8f8fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.model-row, .computer-move-row, .search-width-row, .temperature-row, .auto-step-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.model-row:last-child, .computer-move-row:last-child, .search-width-row:last-child, .temperature-row:last-child, .auto-step-row:last-child {
+  margin-bottom: 0;
+}
+
+.model-row label, .computer-move-row label, .search-width-row label, .temperature-row label, .auto-step-row label {
+  min-width: 120px;
+  font-weight: 500;
+  color: #2a3a4a;
+}
+
+select, input[type="number"], input[type="text"] {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.9em;
+  background: #fff;
+}
+
+select:focus, input:focus {
+  outline: none;
+  border-color: #8bd6d6;
+  box-shadow: 0 0 0 2px rgba(139, 214, 214, 0.2);
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.btn-primary {
+  background: #0099ff !important;
+  color: white !important;
+  font-weight: 500;
+  padding: 8px 16px !important;
+}
+
+.btn-primary:hover {
+  background: #0077cc !important;
+}
+
+.btn-primary:disabled {
+  background: #ccc !important;
+  cursor: not-allowed;
+}
+
+small {
+  color: #666;
+  font-size: 0.8em;
+}
+
+#board-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+#controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+button {
+  background: #bbeeee;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 1em;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+button:hover {
+  background: #8bd6d6;
+}
+
+#trmph-string {
+  font-family: monospace;
+  font-size: 1em;
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+/* Debug Panel Styles */
+.debug-panel {
+  background: #f8f8fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.debug-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.debug-row:last-child {
+  margin-bottom: 0;
+}
+
+.debug-row label {
+  min-width: 120px;
+  font-weight: 500;
+  color: #2a3a4a;
+}
+
+.btn-secondary {
+  background: #6c757d;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.btn-secondary:hover {
+  background: #5a6268;
+}
+
+#debug-content {
+  font-family: monospace;
+  font-size: 0.85em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 12px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.debug-section {
+  margin-bottom: 16px;
+  padding: 8px;
+  border-left: 3px solid #0077cc;
+  background: #f8f9fa;
+}
+
+.debug-section h4 {
+  margin: 0 0 8px 0;
+  color: #0077cc;
+  font-size: 1em;
+}
+
+.debug-value {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.debug-warning {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.debug-error {
+  color: #dc3545;
+  font-weight: bold;
+}
+
+.debug-move {
+  color: #0077cc;
+  font-weight: bold;
+}
+
+.debug-probability {
+  color: #6f42c1;
+  font-weight: bold;
+} 

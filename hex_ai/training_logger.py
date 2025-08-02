@@ -41,7 +41,8 @@ class TrainingLogger:
             # Hyperparameters
             'learning_rate', 'batch_size', 'dataset_size', 'network_structure',
             'policy_weight', 'value_weight', 'total_loss_weight',
-            'dropout_prob', 'weight_decay',
+            'dropout_prob', 'weight_decay', 'max_grad_norm',
+            'value_learning_rate_factor', 'value_weight_decay_factor',
             
             # Training metrics
             'policy_loss', 'value_loss', 'total_loss',
@@ -55,7 +56,10 @@ class TrainingLogger:
             'early_stopped', 'best_val_loss', 'epochs_trained',
             
             # Model statistics
-            'gradient_norm', 'weight_norm_mean', 'weight_norm_std',
+            'gradient_norm', 'gradient_norm_mean', 'gradient_norm_max', 'gradient_norm_min', 'gradient_norm_std',
+            'weight_norm_mean', 'weight_norm_std',
+            'lr_mean', 'lr_min', 'lr_max', 'lr_std',
+            'loss_spikes_count',
             
             # Additional info
             'notes'
@@ -86,7 +90,10 @@ class TrainingLogger:
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
                   weight_stats: Optional[Dict[str, float]] = None,
-                  notes: str = "") -> None:
+                  notes: str = "",
+                  gradient_stats: Optional[Dict[str, float]] = None,
+                  lr_stats: Optional[Dict[str, float]] = None,
+                  loss_spikes_count: int = 0) -> None:
         """
         Log metrics for a single epoch.
         
@@ -103,6 +110,9 @@ class TrainingLogger:
             gradient_norm: L2 norm of gradients (optional)
             weight_stats: Model weight statistics (optional)
             notes: Additional notes
+            gradient_stats: Detailed gradient statistics (optional)
+            lr_stats: Learning rate statistics (optional)
+            loss_spikes_count: Number of loss spikes detected (optional)
         """
         # Prepare row data
         row = {
@@ -122,6 +132,9 @@ class TrainingLogger:
             'total_loss_weight': hyperparams.get('total_loss_weight', ''),
             'dropout_prob': hyperparams.get('dropout_prob', ''),
             'weight_decay': hyperparams.get('weight_decay', ''),
+            'max_grad_norm': hyperparams.get('max_grad_norm', ''),
+            'value_learning_rate_factor': hyperparams.get('value_learning_rate_factor', ''),
+            'value_weight_decay_factor': hyperparams.get('value_weight_decay_factor', ''),
             
             # Training metrics
             'policy_loss': train_metrics.get('policy_loss', ''),
@@ -145,8 +158,17 @@ class TrainingLogger:
             
             # Model statistics
             'gradient_norm': gradient_norm or '',
+            'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
+            'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
+            'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',
+            'gradient_norm_std': gradient_stats.get('std', '') if gradient_stats else '',
             'weight_norm_mean': weight_stats.get('mean', '') if weight_stats else '',
             'weight_norm_std': weight_stats.get('std', '') if weight_stats else '',
+            'lr_mean': lr_stats.get('mean', '') if lr_stats else '',
+            'lr_min': lr_stats.get('min', '') if lr_stats else '',
+            'lr_max': lr_stats.get('max', '') if lr_stats else '',
+            'lr_std': lr_stats.get('std', '') if lr_stats else '',
+            'loss_spikes_count': loss_spikes_count,
             
             # Additional info
             'notes': notes
@@ -173,8 +195,13 @@ class TrainingLogger:
                   memory_usage_mb: float = 0.0,
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
+                  post_clip_gradient_norm: Optional[float] = None,
                   weight_stats: Optional[Dict[str, float]] = None,
-                  notes: str = "") -> None:
+                  notes: str = "",
+                  gradient_stats: Optional[Dict[str, float]] = None,
+                  lr_stats: Optional[Dict[str, float]] = None,
+                  loss_spikes_count: int = 0,
+                  best_val_loss: Optional[float] = None) -> None:
         """
         Log metrics for a single mini-epoch (or chunk).
         Args are the same as log_epoch, but epoch can be a string.
@@ -195,6 +222,9 @@ class TrainingLogger:
             'total_loss_weight': hyperparams.get('total_loss_weight', ''),
             'dropout_prob': hyperparams.get('dropout_prob', ''),
             'weight_decay': hyperparams.get('weight_decay', ''),
+            'max_grad_norm': hyperparams.get('max_grad_norm', ''),
+            'value_learning_rate_factor': hyperparams.get('value_learning_rate_factor', ''),
+            'value_weight_decay_factor': hyperparams.get('value_weight_decay_factor', ''),
             # Training metrics
             'policy_loss': train_metrics.get('policy_loss', ''),
             'value_loss': train_metrics.get('value_loss', ''),
@@ -210,12 +240,22 @@ class TrainingLogger:
             'gpu_memory_mb': gpu_memory_mb or '',
             # Training state
             'early_stopped': False,
-            'best_val_loss': '',
+            'best_val_loss': best_val_loss or '',
             'epochs_trained': '',
             # Model statistics
             'gradient_norm': gradient_norm or '',
+            'post_clip_gradient_norm': post_clip_gradient_norm or '',
+            'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
+            'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
+            'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',
+            'gradient_norm_std': gradient_stats.get('std', '') if gradient_stats else '',
             'weight_norm_mean': weight_stats.get('mean', '') if weight_stats else '',
             'weight_norm_std': weight_stats.get('std', '') if weight_stats else '',
+            'lr_mean': lr_stats.get('mean', '') if lr_stats else '',
+            'lr_min': lr_stats.get('min', '') if lr_stats else '',
+            'lr_max': lr_stats.get('max', '') if lr_stats else '',
+            'lr_std': lr_stats.get('std', '') if lr_stats else '',
+            'loss_spikes_count': loss_spikes_count,
             # Additional info
             'notes': notes
         }

@@ -17,7 +17,7 @@ class MockTrainer:
         self.validate_calls = 0
         self.checkpoints = []
 
-    def train_on_batches(self, batch_iterable):
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None):
         # Record the number of batches in this mini-epoch
         self.train_calls.append(len(list(batch_iterable)))
         return {'total_loss': 1.0, 'policy_loss': 0.5, 'value_loss': 0.5}

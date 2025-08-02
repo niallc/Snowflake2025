@@ -11,7 +11,7 @@ This module tests complex scenarios including:
 import pytest
 import numpy as np
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.data_utils import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
+from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
 
 
 from hex_ai.config import (

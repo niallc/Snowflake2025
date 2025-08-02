@@ -1,36 +1,43 @@
-# Core PyTorch dependencies
+# Core PyTorch dependencies (required for both training and inference)
 torch>=2.0.0
 
-# Data processing and scientific computing
+# Data processing and scientific computing (required for both training and inference)
 numpy>=1.21.0
+scipy>=1.7.0
 
-# Progress bars
+# Progress bars (required for both training and inference)
 tqdm>=4.64.0
 
-# System monitoring
+# System monitoring (required for both training and inference)
 psutil>=5.9.0
 
-# Testing (optional - for development)
+# =============================
+# UI / Inference Dependencies
+# =============================
+# Only needed for interactive play, web API, or CLI tools
+flask>=2.0.0
+flask-cors>=3.0.10
+requests>=2.28.0
+
+# =============================
+# Training-Only Dependencies
+# =============================
+# (Add any training-specific libraries here)
+# e.g. wandb, matplotlib, etc.
+
+# =============================
+# Development / Testing (Optional)
+# =============================
 # pytest>=7.0.0
 # pytest-cov>=4.0.0
-
-# Development tools (optional - for development)
 # black>=22.0.0
 # flake8>=5.0.0
 # mypy>=1.0.0
-
-# Optional: For faster data loading
 # numba>=0.56.0
-
-# Optional: For visualization (if needed later)
 # matplotlib>=3.5.0
 # seaborn>=0.11.0
 # plotly>=5.0.0
-
-# Optional: For experiment tracking (if needed later)
 # wandb>=0.15.0
-
-# Optional: For Jupyter notebooks (if needed later)
 # jupyter>=1.0.0
 # notebook>=6.4.0
 # ipykernel>=6.0.0

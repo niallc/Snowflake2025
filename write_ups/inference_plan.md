@@ -1,3 +1,73 @@
+# Update 2025-07-25: Inference Plan Progress and Next Steps
+
+## Web-Based Hex UI Progress (July 2025)
+
+### Backend API
+- Flask backend exposes `/api/state` and `/api/move` endpoints for interactive play and model inference.
+- Endpoints use existing Hex game logic, model inference, and TRMPH utilities for robust, maintainable integration.
+- CORS and static file serving are configured for local development and browser-based UI.
+- Automated integration tests verify API correctness and error handling.
+
+### Frontend Implementation
+- Modular vanilla JS frontend (in `hex_ai/web/static/`) renders a 13x13 Hex board using SVG.
+- Board is fully interactive: click-to-move, reset, and TRMPH string copy supported.
+- Board orientation and edge indicators match standard Hex conventions (blue = top/bottom, red = left/right).
+- SVG board is responsive, visually appealing, and uses a color palette inspired by Taerim's nimbus.
+- Edge lines are mathematically calculated for correct angles and vivid color intensity.
+- All game logic and model moves are handled via backend API calls for maintainability and extensibility.
+
+### Static Asset Testing
+- Automated tests verify that all static assets (`index.html`, `style.css`, `app.js`, `favicon.ico`) are served correctly by the backend.
+- This ensures the web UI is robust to deployment and server changes.
+
+### Visual and Usability Improvements
+- Hexes are now flat-topped, tesselate perfectly, and are correctly rotated for classic Hex appearance.
+- Edge indicators are vivid and precisely aligned.
+- SVG area is sized for full board and edge visibility.
+- The UI is modular and ready for future enhancements (coordinate labels, move history, analysis, etc.).
+
+---
+
+# Update 2025-07-25: Inference Plan Progress and Next Steps
+
+## Current State
+- **Model**: A trained model checkpoint is available at:
+  - `checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini30.pt`
+- **Board Size**: The model is currently trained for 13x13 Hex. Support for other sizes is possible in the future, but 13x13 is the default.
+- **Simple Inference**: A basic CLI script (`scripts/simple_inference_cli.py`) exists for running inference on static positions. Both policy and value heads are performing well in spot checks.
+- **Interactive Play**: A simple interactive-play mode is now available via `scripts/play_vs_model_cli.py`, allowing a human to play against the model in the terminal.
+
+## New Plan: Interactive Play
+- **Goal**: Enable interactive play against the trained model, starting with a simple CLI interface and progressing to a browser-based, point-and-click UI.
+- **Current Implementation**:
+  - CLI script to play human vs model (`scripts/play_vs_model_cli.py`).
+  - Board displayed in ASCII (using `hex_ai/inference/board_display.py`).
+  - After each move, output the board's `.trmph` representation (using `hex_ai/utils/format_conversion.py`).
+  - Model move selection: take top-k (e.g., 20) policy moves, evaluate with value head, pick the best (with some randomness for variety).
+- **Next Step**: Develop a browser-based, point-and-click interface (e.g., using Flask) for easier and more engaging play.
+
+## Future Directions
+- **Point-and-Click Web UI**: Build a browser-based interface for interactive play (not yet implemented).
+- **Tournament System**: Implement a tournament structure to compare different model checkpoints and engine configurations (e.g., different search depths/breadths). Not yet implemented.
+- **MCTS**: Implement Monte Carlo Tree Search for stronger move selection. This is a major planned upgrade, not yet implemented.
+- **Self-Play Pipeline**: Develop a self-play pipeline to generate new training data and enable reinforcement learning. Not yet implemented.
+- **Scalability**: Batch inference, efficient data pipelines, and distributed play for RL.
+- **Advanced Features**: Pie rule, support for other board sizes, online deployment, and more.
+
+## What Has Changed
+- The codebase has evolved significantly since the original plan. Many utilities and data formats have been consolidated and modernized.
+- The immediate focus is now on usability and interactive play, rather than just batch inference or self-play.
+- The plan is more incremental: start with a simple CLI, then add a browser-based UI, then expand to tournaments, MCTS, and self-play.
+
+## Next Steps
+1. Develop a browser-based, point-and-click interface for interactive play.
+2. Implement a tournament structure to compare models and engine configs.
+3. Implement MCTS for stronger move selection.
+4. Build a self-play pipeline for new data generation and RL.
+5. Continue to expand scalability and advanced features as needed.
+
+---
+
 # Hex AI Inference/Generation Plan
 
 ## Overview
@@ -130,23 +200,26 @@ class SelfPlayConfig:
 
 **Purpose**: Evaluate model performance and compare configurations
 
-**Features**:
+**Current Implementation (2025-07-25):**
+- Modular system in `hex_ai/inference/tournament.py` for round-robin tournaments between model checkpoints.
+- Flexible design: easy to extend to compare play configs (e.g., search widths, MCTS, etc.)
+- Uses `HexGameState` and `SimpleModelInference` for game logic and inference.
+- Tracks win rates and (optionally) Elo ratings for each configuration.
+- Alternates colors for fairness (each model plays both as first and second).
+- Example usage provided in the module for quick testing.
+
+**Planned/Documented TODOs:**
+- Batch model inference for efficiency (currently sequential, but code is structured for future batching).
+- Incremental winner detection (UnionFind) to avoid recomputation after every move.
+- Support for additional tournament types (Swiss, knockout, double elimination).
+- Logging and checkpointing for long tournaments.
+- Support for play config/algorithm sweeps (not just checkpoint comparison).
+
+**Features:**
 - Round-robin tournaments
-- Elo rating system
-- Performance metrics
+- Elo rating system (optional, simple version)
+- Performance metrics (win rate, Elo)
 - Model comparison
-
-**Tournament Types**:
-- **Round-robin**: All models play each other
-- **Swiss system**: For large model pools
-- **Knockout**: Single elimination
-- **Double elimination**: More robust ranking
-
-**Metrics**:
-- Win rate
-- Elo rating
-- Average game length
-- Move quality analysis
 
 ### 3. Human Play (`human_play.py`)
 
@@ -433,3 +506,36 @@ Next steps:
 2. Implement basic game engine and model wrapper
 3. Test with existing checkpoints
 4. Iterate and refine based on performance 
+
+# TEMPORARY: Stepwise Plan for Browser-Based Point-and-Click Hex Interface (Flask)
+
+## Rationale
+- Start with a robust, modular backend API using Flask, reusing all existing game and inference logic.
+- Separate backend and frontend concerns for maintainability and extensibility.
+- Enable the "URL = TRMPH" feature for easy interoperability with other tools and representations.
+
+## Step 1: Minimal Flask Backend API
+- Expose endpoints:
+  - `/` (GET): Serves the frontend (can be static HTML for now).
+  - `/api/state` (POST): Accepts a TRMPH string, returns board state, win probabilities, etc.
+  - `/api/move` (POST): Accepts a TRMPH string and a move, returns updated state (board, model move, win probabilities, new TRMPH string).
+- Reuse `HexGameState`, `SimpleModelInference`, and TRMPH utilities for all game/model logic.
+- Keep all game/model logic in backend modules, not in Flask routes.
+
+## Step 2: Minimal HTML/JS Frontend
+- Renders a clickable 13x13 Hex board.
+- Reads/writes the TRMPH string from/to the URL (enabling "URL = TRMPH").
+- Calls the backend API to process moves and update the board.
+
+## Next Steps
+- Scaffold the Flask backend and endpoints, reusing existing code.
+- Once the backend is working, build the frontend to consume the API and implement the point-and-click interface.
+- Iterate and expand features as needed (analysis, model selection, etc.). 
+
+---
+
+## Notes to coding agents
+- Try to reuse existing utilities and avoid code duplication
+- Keep code modular and maintainable
+- Have pipelines fail fast, to avoid silent failures and aid debugging. Don't implement fallbacks for missing or corrupted elements with meaningful impact.
+- Focus on correctness and testability over efficiency

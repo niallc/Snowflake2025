@@ -7,22 +7,22 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.value_utils import ValuePerspective
+from hex_ai.value_utils import ValuePerspective, get_win_prob_from_model_output, Winner, get_policy_probs_from_logits
+from hex_ai.models import TwoHeadedResNet
 
 def main():
     parser = argparse.ArgumentParser(description="Hex AI Simple Inference CLI")
     parser.add_argument('--trmph', type=str, required=True, help='TRMPH string or link describing the board')
     parser.add_argument('--model_dir', type=str, default="checkpoints/hex_ai_MainTraining_15M_samples_20250715_005413/bs_512_wd_5e-4_policy_0.2_value_0.8/", help='Directory containing the model checkpoint')
-    parser.add_argument('--model_file', type=str, default="best_model.pt", help='Model checkpoint file name')
+    parser.add_argument('--model_file', type=str, default="best_model.pt.gz", help='Model checkpoint file name')
     parser.add_argument('--topk', type=int, default=3, help='Number of top policy moves to display')
     parser.add_argument('--device', type=str, default=None, help='Device to use (cpu, cuda, mps)')
-    parser.add_argument('--legacy-model', action='store_true', help='Use legacy 2-channel model for old checkpoints')
+
     args = parser.parse_args()
 
     model_path = f"{args.model_dir.rstrip('/')}/{args.model_file}"
     print(f"model_path = {model_path}")
     print("Using current model architecture")
-    from hex_ai.models import TwoHeadedResNet
     # model = TwoHeadedResNet()  # Redundant, not used
     infer = SimpleModelInference(model_path, device=args.device)
 
@@ -30,14 +30,17 @@ def main():
     infer.display_board(args.trmph)
 
     print("\n--- Model Predictions ---")
-    policy_probs, value, raw_value = infer.infer(args.trmph)
-    top_moves = infer.get_top_k_moves(policy_probs, k=args.topk)
+    policy_logits, value_logit = infer.simple_infer(args.trmph)
+    # Use the updated method that accepts logits directly
+    top_moves = infer.get_top_k_moves(policy_logits, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")
-    # When printing value, clarify that it is probability Blue wins, and use the value returned from infer (already in Blue win perspective)
-    print(f"\nValue estimate (Probability Blue Wins): {value*100:.1f}%\n")  # value is always probability blue wins (TRAINING_BLUE_WIN=0.0, TRAINING_RED_WIN=1.0)
-    print(f"Raw value logit: {raw_value}")
+    print(f"Value head (logit): {value_logit:.3f}")
+    blue_prob = get_win_prob_from_model_output(value_logit, Winner.BLUE)
+    red_prob = get_win_prob_from_model_output(value_logit, Winner.RED)
+    print(f"Value head (probability Blue wins): {blue_prob:.3f}")
+    print(f"Value head (probability Red wins): {red_prob:.3f}")
 
 if __name__ == "__main__":
     # For command line execution, don't forget to run
@@ -66,8 +69,8 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
-    modelFile="epoch1_mini1.pt"
-    boardPos=${blueFinal}
+    modelFile="epoch1_mini1.pt.gz"
+    boardPos=${redFinal}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \
     --trmph ${boardPos} \

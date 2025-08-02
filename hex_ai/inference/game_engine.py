@@ -1,25 +1,29 @@
 """
 Game engine for Hex AI.
 
-This module provides the core game logic, state management, and move validation
-for Hex games. It integrates with the existing data_utils for coordinate conversions
-and ports the Union-Find winner detection from legacy code.
+This module provides the core game logic for Hex, including board representation,
+move validation, winner detection, and game state management.
 """
 
-import torch
 import numpy as np
+import torch
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 from collections import namedtuple
 
-from .board_utils import (
-    board_2nxn_to_nxn, board_nxn_to_2nxn,
-    has_piece_at, is_empty, place_piece, board_to_string
+from hex_ai.config import (
+    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, VERBOSE_LEVEL, EMPTY_PIECE
 )
-from ..config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER
-from ..data_utils import rowcol_to_trmph, trmph_move_to_rowcol
-from ..config import BOARD_SIZE
-VERBOSE_LEVEL = 3
+from hex_ai.inference.board_utils import (
+    is_empty, place_piece, board_to_string
+)
+from hex_ai.utils.format_conversion import (
+    board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
+)
+from hex_ai.value_utils import (
+    get_top_k_legal_moves, sample_move_by_value, apply_move_to_tensor
+)
+
 
 # Edge coordinates for Union-Find
 LEFT_EDGE = -1
@@ -81,9 +85,9 @@ class UnionFind:
 @dataclass
 class HexGameState:
     """
-    Represents the state of a Hex game using N×N trinary format.
+    Represents the state of a Hex game using N×N character format.
     """
-    board: np.ndarray = field(default_factory=lambda: np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8))
+    board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1'))
     current_player: int = BLUE_PLAYER
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
@@ -92,7 +96,6 @@ class HexGameState:
     @property
     def board_2nxn(self) -> torch.Tensor:
         """Get board in 2×N×N format for compatibility with tests (legacy, do not use for inference)."""
-        from hex_ai.utils.format_conversion import board_nxn_to_2nxn
         return board_nxn_to_2nxn(self.board)
 
     def is_valid_move(self, row: int, col: int) -> bool:
@@ -278,7 +281,6 @@ class HexGameState:
 
     def get_board_tensor(self) -> torch.Tensor:
         """Convert board to 3×N×N tensor for neural net input (with player-to-move channel)."""
-        from hex_ai.utils.format_conversion import board_nxn_to_3nxn
         return board_nxn_to_3nxn(self.board)
 
     def to_trmph(self) -> str:
@@ -292,26 +294,15 @@ class HexGameState:
     
     @classmethod
     def from_trmph(cls, trmph: str) -> 'HexGameState':
-        """Create game state from TRMPH format."""
-        # Parse TRMPH format
+        """Create game state from TRMPH format using split_trmph_moves utility."""
         if not trmph.startswith("#13,"):
             raise ValueError("Invalid TRMPH format")
-        
         moves_str = trmph[4:]  # Remove "#13," prefix
-        moves = []
-        
-        # Parse moves (each move is 2 characters)
-        for i in range(0, len(moves_str), 2):
-            if i + 1 < len(moves_str):
-                move = moves_str[i:i+2]
-                row, col = trmph_move_to_rowcol(move)
-                moves.append((row, col))
-        
-        # Create state and apply moves
+        moves = split_trmph_moves(moves_str)
         state = cls()
-        for row, col in moves:
+        for move in moves:
+            row, col = trmph_move_to_rowcol(move)
             state = state.make_move(row, col)
-        
         return state
 
     def __str__(self) -> str:
@@ -402,3 +393,98 @@ class HexGameEngine:
             True if the game is over
         """
         return state.game_over 
+
+def apply_move_to_state(state, row: int, col: int) -> 'HexGameState':
+    """
+    Apply a move to a HexGameState and return the new state.
+    
+    This is the primary function for applying moves to game states.
+    It handles the move validation and state updates.
+    
+    Args:
+        state: HexGameState instance
+        row: Row index (0-12)
+        col: Column index (0-12)
+        
+    Returns:
+        New HexGameState with the move applied
+        
+    Raises:
+        ValueError: If move is invalid
+    """
+    if not state.is_valid_move(row, col):
+        raise ValueError(f"Invalid move: ({row}, {col})")
+    
+    # Use the existing make_move method which handles all the game logic
+    return state.make_move(row, col)
+
+
+def apply_move_to_state_trmph(state, trmph_move: str) -> 'HexGameState':
+    """
+    Apply a TRMPH move to a HexGameState and return the new state.
+    
+    This is a wrapper that converts TRMPH to row,col coordinates.
+    
+    Args:
+        state: HexGameState instance
+        trmph_move: TRMPH format move (e.g., "a1", "b2")
+        
+    Returns:
+        New HexGameState with the move applied
+        
+    Raises:
+        ValueError: If TRMPH move is invalid or move is invalid
+    """
+    
+    try:
+        row, col = trmph_move_to_rowcol(trmph_move)
+        return apply_move_to_state(state, row, col)
+    except Exception as e:
+        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}")
+
+
+def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, player: int) -> torch.Tensor:
+    """
+    Apply a TRMPH move to a 3-channel board tensor and return the new tensor.
+    
+    This is a wrapper that converts TRMPH to row,col coordinates.
+    
+    Args:
+        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
+        trmph_move: TRMPH format move (e.g., "a1", "b2")
+        player: Player making the move (BLUE_PLAYER=0 or RED_PLAYER=1)
+        
+    Returns:
+        New board tensor with the move applied
+        
+    Raises:
+        ValueError: If TRMPH move is invalid or move is invalid
+    """
+    
+    try:
+        row, col = trmph_move_to_rowcol(trmph_move)
+        return apply_move_to_tensor(board_tensor, row, col, player)
+    except Exception as e:
+        raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 
+
+def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
+    """
+    Select a move by evaluating the value head on the top-k policy moves and sampling among them.
+    Args:
+        model: Model instance (must have .simple_infer() method)
+        state: Game state (must have .board and .get_legal_moves())
+        top_k: Number of top moves to consider
+        temperature: Temperature for policy and value sampling
+    Returns:
+        (row, col) tuple for the selected move, or None if no legal moves
+    """
+    topk_moves = get_top_k_legal_moves(model, state, top_k=top_k, temperature=temperature)
+    if not topk_moves:
+        return None
+    move_values = []
+    for move in topk_moves:
+        temp_state = apply_move_to_state(state, *move)
+        _, value_logit = model.simple_infer(temp_state.board)
+        move_values.append(value_logit)
+    chosen_idx = sample_move_by_value(move_values, temperature)
+    return topk_moves[chosen_idx] 

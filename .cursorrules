@@ -1,0 +1,78 @@
+# Snowflake2025 - Cursor Rules for AI Agents
+
+## 🚨 CRITICAL: Environment Requirements
+
+**ALWAYS run these commands first:**
+```bash
+source hex_ai_env/bin/activate
+export PYTHONPATH=.
+```
+
+**Or use the setup script:**
+```bash
+./scripts/setup_environment.sh
+```
+
+**Then validate the environment:**
+```bash
+python scripts/validate_environment.py
+```
+
+## Principles
+1. In general and throughout this project I prefer fail fast and catch bugs -- not fallback mechanisms. I'm very keen to avoid silent failures.
+2. Be very careful about memory usage when handling the data. A common pattern is for coding agents ot try to read in all of the data to calculate things. *NEVER READ IN LARGE AMOUNTS OF DATA at once*.
+3. Try to have one code path, don't have lots of alternatives. When we update, clean up old code paths.
+4. Use `PYTHONPATH=.` for portability, rather than absolute paths
+
+For more on the environment:
+1. See `AGENT_GUIDANCE.md` for more setup instructions
+2. Run `python scripts/validate_environment.py` to check setup
+3. **Understand structure**: Review `scripts/agent_setup.py` for project overview
+
+## 📁 Project Structure
+
+- `hex_ai/` - Core library modules (models, training, inference, etc.)
+- `scripts/` - Entry point scripts (training, tournaments, self-play, data processing)
+- `tests/` - Test suite
+- `data/` - Game data
+- `checkpoints/` - Model checkpoints
+- `write_ups/technical_debt_tracker.md` - Known issues and cleanup tasks
+
+## 🎯 Main Entry Points
+
+- **Training**: `scripts/hyperparam_sweep.py`
+- **Tournaments**: `scripts/run_tournament.py`
+- **Self-play**: `scripts/run_large_selfplay.py`
+- **Data Processing**: `scripts/process_all_trmph.py`
+
+## ⚠️ Important Patterns
+
+### Environment Validation
+Environment validation happens automatically when importing `hex_ai`:
+```python
+import hex_ai  # This automatically validates environment
+```
+
+**The validation checks:**
+- Virtual environment is activated (`hex_ai_env`)
+- PYTHONPATH includes project root (accepts `PYTHONPATH=.`)
+
+**No manual validation calls needed** - it's handled automatically in `hex_ai/__init__.py`
+
+### Import Patterns
+Imports should prefer using the `hex_ai.` prefix over e.g. ..
+```python
+from hex_ai.models import HexModel
+from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
+```
+
+### Testing
+Tests must be run with PYTHONPATH set:
+```bash
+PYTHONPATH=. pytest tests/
+```
+
+## 📝 Code Style Guidelines
+
+1. **Use type hints** - Most functions have type annotations
+2. **Add docstrings** - Follow existing documentation style

@@ -25,6 +25,19 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvi
 pip install -r requirements.txt
 ```
 
+### For Coding Agents
+If you're a coding agent working on this project:
+
+1. **Quick Setup Check**: `python scripts/agent_setup.py`
+2. **Environment Validation**: `python scripts/validate_environment.py`
+3. **Common Commands**: `make help`
+4. **Detailed Guidance**: See `AGENT_GUIDANCE.md`
+
+**⚠️ IMPORTANT**: This project requires:
+- Virtual environment: `hex_ai_env`
+- PYTHONPATH: `export PYTHONPATH=.`
+- Never skip environment checks in code!
+
 ### Training
 ```bash
 # Run hyperparameter tuning
@@ -35,6 +48,9 @@ python monitor_progress.py
 
 # Train with specific configuration
 python train_real_data.py
+
+# Validate checkpoints
+python scripts/validate_checkpoints.py --audit-all
 ```
 
 ### Data Processing
@@ -64,6 +80,8 @@ Snowflake2025/
 - **Memory-Safe**: Built-in memory monitoring and emergency shutdown
 - **Experiment Tracking**: CSV logging of all training metrics
 - **Smart Checkpointing**: Strategic checkpoint retention to save space
+- **Checkpoint Validation**: Tools to validate and audit checkpoint files
+- **Checkpoint Compression**: Automatic gzip compression with 27.7% average space savings
 - **GPU Acceleration**: Full CUDA support for faster training
 - **Cross-Platform**: Works on macOS and Windows
 
@@ -71,6 +89,7 @@ Snowflake2025/
 
 - `WINDOWS_SETUP.md` - Complete Windows setup guide
 - `hex_ai/data_formats.md` - Data format specifications
+- `docs/checkpoint_format_specification.md` - Checkpoint format and validation
 
 ## Running Tests
 
