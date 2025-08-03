@@ -5,6 +5,7 @@ import numpy as np
 from flask_cors import CORS
 import logging
 from typing import Tuple
+from datetime import datetime
 
 
 from hex_ai.utils import format_conversion as fc
@@ -21,6 +22,8 @@ from hex_ai.value_utils import (
 )
 from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move application utilities
+from hex_ai.web.model_browser import create_model_browser
+from hex_ai.file_utils import add_recent_model
 
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/"
@@ -46,18 +49,90 @@ MODEL_PATHS = {
     "model2": os.environ.get("HEX_MODEL_PATH2", DEFAULT_CHKPT_PATH2),
 }
 
+# Global model browser instance
+MODEL_BROWSER = create_model_browser()
+
+# Dynamic model registry for user-selected models
+DYNAMIC_MODELS = {}
+
 # --- Model Management ---
 def get_model(model_id="model1"):
     """Get or create a model instance for the given model_id."""
-    global MODELS
-    if model_id not in MODELS:
-        try:
-            MODELS[model_id] = SimpleModelInference(MODEL_PATHS[model_id])
-            app.logger.info(f"Loaded model {model_id} from {MODEL_PATHS[model_id]}")
-        except Exception as e:
-            app.logger.error(f"Failed to load model {model_id}: {e}")
-            raise
-    return MODELS[model_id]
+    global MODELS, DYNAMIC_MODELS
+    
+    app.logger.debug(f"get_model called with model_id: {model_id}")
+    app.logger.debug(f"Available dynamic models: {list(DYNAMIC_MODELS.keys())}")
+    app.logger.debug(f"Available predefined models: {list(MODEL_PATHS.keys())}")
+    app.logger.debug(f"Currently loaded models: {list(MODELS.keys())}")
+    
+    # Check if it's a dynamic model (user-selected)
+    if model_id in DYNAMIC_MODELS:
+        model_path = DYNAMIC_MODELS[model_id]
+        app.logger.debug(f"Found dynamic model {model_id} -> {model_path}")
+        
+        if model_id not in MODELS:
+            try:
+                app.logger.debug(f"Loading dynamic model {model_id} from {model_path}")
+                
+                # Handle relative paths by prepending checkpoints directory
+                if not os.path.isabs(model_path):
+                    full_model_path = os.path.join("checkpoints", model_path)
+                    app.logger.debug(f"Converted relative path to: {full_model_path}")
+                else:
+                    full_model_path = model_path
+                
+                # Check if file exists before loading
+                if not os.path.exists(full_model_path):
+                    raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
+                
+                app.logger.debug(f"File exists, attempting to load with SimpleModelInference")
+                MODELS[model_id] = SimpleModelInference(full_model_path)
+                app.logger.info(f"Successfully loaded dynamic model {model_id} from {full_model_path}")
+            except Exception as e:
+                app.logger.error(f"Failed to load dynamic model {model_id} from {full_model_path}: {e}")
+                app.logger.error(f"Exception type: {type(e).__name__}")
+                import traceback
+                app.logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
+        else:
+            app.logger.debug(f"Model {model_id} already loaded")
+        return MODELS[model_id]
+    
+    # Check if it's a predefined model
+    if model_id in MODEL_PATHS:
+        app.logger.debug(f"Found predefined model {model_id} -> {MODEL_PATHS[model_id]}")
+        if model_id not in MODELS:
+            try:
+                app.logger.debug(f"Loading predefined model {model_id} from {MODEL_PATHS[model_id]}")
+                MODELS[model_id] = SimpleModelInference(MODEL_PATHS[model_id])
+                app.logger.info(f"Successfully loaded model {model_id} from {MODEL_PATHS[model_id]}")
+            except Exception as e:
+                app.logger.error(f"Failed to load model {model_id}: {e}")
+                raise
+        return MODELS[model_id]
+    
+    # If model_id is a direct path, try to load it
+    if os.path.exists(model_id):
+        app.logger.debug(f"Model_id appears to be a direct path: {model_id}")
+        if model_id not in MODELS:
+            try:
+                app.logger.debug(f"Loading model from direct path {model_id}")
+                MODELS[model_id] = SimpleModelInference(model_id)
+                app.logger.info(f"Successfully loaded model from path {model_id}")
+            except Exception as e:
+                app.logger.error(f"Failed to load model from path {model_id}: {e}")
+                raise
+        return MODELS[model_id]
+    
+    app.logger.error(f"Unknown model_id: {model_id}")
+    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, predefined={list(MODEL_PATHS.keys())}")
+    raise ValueError(f"Unknown model_id: {model_id}")
+
+def register_dynamic_model(model_id: str, model_path: str):
+    """Register a dynamically selected model."""
+    global DYNAMIC_MODELS
+    DYNAMIC_MODELS[model_id] = model_path
+    app.logger.info(f"Registered dynamic model {model_id} -> {model_path}")
 
 def get_available_models():
     """Return list of available model configurations."""
@@ -67,7 +142,7 @@ def get_available_models():
     ]
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                       search_widths, temperature, verbose, model_move=None, search_tree=None):
+                       search_widths, temperature, verbose, model_move=None, search_tree=None, model_id=None):
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
     
@@ -93,6 +168,14 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "search_widths": search_widths,
             "model_move": model_move
         }
+        
+        # Add model information
+        if model_id:
+            debug_info["model_info"] = {
+                "model_id": model_id,
+                "model_type": type(model).__name__,
+                "model_path": DYNAMIC_MODELS.get(model_id, MODEL_PATHS.get(model_id, "unknown"))
+            }
         
         # Use existing utilities to get policy analysis
         legal_moves = state.get_legal_moves()
@@ -192,10 +275,15 @@ def moves_to_trmph(moves):
 def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, verbose=0):
     """Make one computer move and return the new state."""
     try:
+        app.logger.debug(f"make_computer_move called with model_id: {model_id}")
+        app.logger.debug(f"Current dynamic models: {DYNAMIC_MODELS}")
+        
         state = HexGameState.from_trmph(trmph)
+        app.logger.debug(f"Game state created, game_over: {state.game_over}")
         
         # If game is over, return current state
         if state.game_over:
+            app.logger.debug("Game is over, returning current state")
             return {
                 "success": True,
                 "new_trmph": trmph,
@@ -207,7 +295,17 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 "game_over": True
             }
         
-        model = get_model(model_id)
+        app.logger.debug(f"Attempting to get model with model_id: {model_id}")
+        try:
+            model = get_model(model_id)
+            app.logger.debug(f"Successfully got model: {type(model)}")
+        except Exception as e:
+            app.logger.error(f"Failed to get model {model_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Model loading failed: {e}"
+            }
+        
         debug_info = {}
         
         # Use tree search if search_widths provided, otherwise use simple policy
@@ -222,7 +320,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                     
                     # Generate basic debug info from the original state
                     debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, None)  # No search tree yet
+                                                  search_widths, temperature, verbose, None, None, model_id)  # No search tree yet
                 
                 best_move, _, search_tree = minimax_policy_value_search(
                     state, model, search_widths, batch_size=1000, temperature=temperature,
@@ -238,7 +336,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 # Update debug info with search tree if available
                 if verbose >= 2 and search_tree is not None:
                     debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, search_tree)
+                                                  search_widths, temperature, verbose, None, search_tree, model_id)
             except Exception as e:
                 app.logger.warning(f"Tree search failed, falling back to policy: {e}")
                 # Fallback to policy-based move using centralized utilities
@@ -253,7 +351,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 
                 # Generate basic debug info from the original state
                 debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                              search_widths, temperature, verbose, None)
+                                              search_widths, temperature, verbose, None, None, model_id)
             
             best_move = select_policy_move(state, model, temperature)
             best_move_trmph = fc.rowcol_to_trmph(*best_move)
@@ -305,6 +403,135 @@ def api_constants():
 def api_models():
     """Get available models."""
     return jsonify({"models": get_available_models()})
+
+@app.route("/api/model-browser/recent", methods=["GET"])
+def api_recent_models():
+    """Get recently used models."""
+    try:
+        recent_models = MODEL_BROWSER.get_recent_models()
+        return jsonify({"recent_models": recent_models})
+    except Exception as e:
+        app.logger.error(f"Error getting recent models: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/model-browser/directories", methods=["GET"])
+def api_model_directories():
+    """Get all directories containing models."""
+    try:
+        directories = MODEL_BROWSER.get_directories()
+        return jsonify({"directories": directories})
+    except Exception as e:
+        app.logger.error(f"Error getting directories: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/model-browser/directory/<path:directory>", methods=["GET"])
+def api_models_in_directory(directory):
+    """Get all models in a specific directory."""
+    try:
+        models = MODEL_BROWSER.get_models_in_directory(directory)
+        return jsonify({"models": models})
+    except Exception as e:
+        app.logger.error(f"Error getting models in directory {directory}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/model-browser/search", methods=["GET"])
+def api_search_models():
+    """Search models by query."""
+    query = request.args.get("q", "")
+    try:
+        models = MODEL_BROWSER.search_models(query)
+        return jsonify({"models": models})
+    except Exception as e:
+        app.logger.error(f"Error searching models: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/model-browser/validate", methods=["POST"])
+def api_validate_model():
+    """Validate a model path."""
+    data = request.get_json()
+    model_path = data.get("model_path")
+    
+    if not model_path:
+        return jsonify({"error": "model_path required"}), 400
+    
+    try:
+        validation = MODEL_BROWSER.validate_model(model_path)
+        return jsonify(validation)
+    except Exception as e:
+        app.logger.error(f"Error validating model {model_path}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/model-browser/select", methods=["POST"])
+def api_select_model():
+    """Select a model and add it to recent models."""
+    data = request.get_json()
+    model_path = data.get("model_path")
+    model_id = data.get("model_id")  # Optional: client can specify model_id
+    
+    app.logger.debug(f"api_select_model called with data: {data}")
+    
+    if not model_path:
+        app.logger.error("No model_path provided")
+        return jsonify({"error": "model_path required"}), 400
+    
+    try:
+        app.logger.debug(f"Validating model path: {model_path}")
+        # Validate the model
+        validation = MODEL_BROWSER.validate_model(model_path)
+        app.logger.debug(f"Validation result: {validation}")
+        
+        if not validation['valid']:
+            app.logger.error(f"Model validation failed: {validation['error']}")
+            return jsonify({"success": False, "error": validation['error']}), 400
+        
+        # Generate model_id if not provided
+        if not model_id:
+            model_id = f"model_{int(datetime.now().timestamp())}"
+        
+        app.logger.debug(f"Using model_id: {model_id}")
+        app.logger.debug(f"Model path: {model_path}")
+        
+        # Register the dynamic model
+        register_dynamic_model(model_id, model_path)
+        app.logger.debug(f"Registered dynamic model. Current DYNAMIC_MODELS: {DYNAMIC_MODELS}")
+        
+        # Add to recent models
+        add_recent_model(model_path)
+        
+        # Test loading the model immediately to catch any issues
+        app.logger.debug("Testing model loading...")
+        try:
+            test_model = get_model(model_id)
+            app.logger.debug(f"Model loading test successful: {type(test_model)}")
+        except Exception as e:
+            app.logger.error(f"Model loading test failed: {e}")
+            # Remove from dynamic models if loading fails
+            if model_id in DYNAMIC_MODELS:
+                del DYNAMIC_MODELS[model_id]
+            return jsonify({"success": False, "error": f"Model loading test failed: {e}"}), 500
+        
+        return jsonify({
+            "success": True,
+            "model_id": model_id,
+            "model_path": model_path,
+            "model_info": validation
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error selecting model {model_path}: {e}")
+        import traceback
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/model-browser/refresh", methods=["POST"])
+def api_refresh_models():
+    """Force refresh of model cache."""
+    try:
+        models = MODEL_BROWSER.get_all_models(force_refresh=True)
+        return jsonify({"models": models, "count": len(models)})
+    except Exception as e:
+        app.logger.error(f"Error refreshing models: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/state", methods=["POST"])
 def api_state():
@@ -529,7 +756,7 @@ def api_move():
                 
                 # Generate debug info using the actual search tree from the move selection
                 debug_info = generate_debug_info(state_before_computer_move, model, policy_logits, value_logit, policy_probs, 
-                                              computer_search_widths, computer_temperature, verbose, model_move, search_tree)
+                                              computer_search_widths, computer_temperature, verbose, model_move, search_tree, computer_model_id)
             
         except Exception as e:
             app.logger.error(f"Model move failed: {e}")

@@ -25,10 +25,55 @@
         <div class="model-row">
           <label for="blue-model">Blue Player:</label>
           <select id="blue-model"></select>
+          <button id="blue-model-browse" class="btn-secondary">Browse</button>
         </div>
         <div class="model-row">
           <label for="red-model">Red Player:</label>
           <select id="red-model"></select>
+          <button id="red-model-browse" class="btn-secondary">Browse</button>
+        </div>
+      </div>
+      
+      <!-- Model Browser Modal -->
+      <div id="model-browser-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Model Browser</h3>
+            <span class="close">&times;</span>
+          </div>
+          <div class="modal-body">
+            <!-- Recent Models Section -->
+            <div class="browser-section">
+              <h4>Recent Models</h4>
+              <div id="recent-models-list" class="model-list"></div>
+            </div>
+            
+            <!-- Search Section -->
+            <div class="browser-section">
+              <h4>Search Models</h4>
+              <div class="search-controls">
+                <input type="text" id="model-search" placeholder="Search by directory, filename, or path...">
+                <button id="search-btn" class="btn-secondary">Search</button>
+              </div>
+              <div id="search-results" class="model-list"></div>
+            </div>
+            
+            <!-- Directory Browser Section -->
+            <div class="browser-section">
+              <h4>Browse by Directory</h4>
+              <div class="directory-controls">
+                <select id="directory-select">
+                  <option value="">Select directory...</option>
+                </select>
+                <button id="refresh-dirs-btn" class="btn-secondary">Refresh</button>
+              </div>
+              <div id="directory-models" class="model-list"></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="select-model-btn" class="btn-primary" disabled>Select Model</button>
+            <button id="cancel-model-btn" class="btn-secondary">Cancel</button>
+          </div>
         </div>
       </div>
       <!-- Computer Move Controls -->

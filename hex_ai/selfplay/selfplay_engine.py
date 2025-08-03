@@ -15,7 +15,8 @@ from datetime import datetime
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER, TRMPH_PREFIX, TRMPH_RED_WIN, TRMPH_BLUE_WIN
+from hex_ai.value_utils import validate_trmph_winner
 from hex_ai.training_utils import get_device
 
 
@@ -133,12 +134,61 @@ class SelfPlayEngine:
             state = state.make_move(*move)
         
         # Game data - TRMPH string and winner
+        if state.winner == "red":
+            winner_char = TRMPH_RED_WIN
+        elif state.winner == "blue":
+            winner_char = TRMPH_BLUE_WIN
+        else:
+            raise ValueError(f"Unexpected winner value: {state.winner!r} (expected 'red' or 'blue')")
+        
         game_data = {
             'trmph': state.to_trmph(),
-            'winner': 'r' if state.winner == RED_PLAYER else 'b'
+            'winner': winner_char
         }
         
         return game_data
+
+    def _validate_game_data(self, game_data: Dict[str, Any], game_id: Optional[int] = None) -> None:
+        """
+        Validate game data structure and content.
+        
+        Args:
+            game_data: Game data dictionary to validate
+            game_id: Optional game ID for error reporting
+            
+        Raises:
+            ValueError: If game data is invalid
+        """
+        if not isinstance(game_data, dict):
+            raise ValueError(f"Game data must be a dictionary, got {type(game_data)}")
+        
+        required_keys = {'trmph', 'winner'}
+        missing_keys = required_keys - set(game_data.keys())
+        if missing_keys:
+            raise ValueError(f"Game data missing required keys: {missing_keys}")
+        
+        winner = game_data.get('winner')
+        trmph = game_data.get('trmph')
+        
+        # Use constants for winner validation and check for legacy values
+        try:
+            validate_trmph_winner(winner)
+        except ValueError as e:
+            game_info = f" (game {game_id})" if game_id is not None else ""
+            raise ValueError(f"Invalid winner{game_info}: {e}")
+        
+        valid_winners = {TRMPH_RED_WIN, TRMPH_BLUE_WIN}
+        if winner not in valid_winners:
+            game_info = f" (game {game_id})" if game_id is not None else ""
+            raise ValueError(f"Invalid winner{game_info}: {winner!r} (expected {TRMPH_RED_WIN!r} or {TRMPH_BLUE_WIN!r})")
+        
+        if not trmph or not isinstance(trmph, str):
+            game_info = f" (game {game_id})" if game_id is not None else ""
+            raise ValueError(f"Invalid TRMPH{game_info}: {trmph!r} (expected non-empty string)")
+        
+        if not trmph.startswith(TRMPH_PREFIX):
+            game_info = f" (game {game_id})" if game_id is not None else ""
+            raise ValueError(f"Invalid TRMPH format{game_info}: must start with {TRMPH_PREFIX!r}")
 
     def generate_games_with_monitoring(self, num_games: int, board_size: int = 13, 
                                      progress_interval: int = 10) -> List[Dict[str, Any]]:
@@ -172,6 +222,7 @@ class SelfPlayEngine:
                 game_id = future_to_game_id[future]
                 try:
                     game_data = future.result()
+                    self._validate_game_data(game_data, game_id)
                     games.append(game_data)
                     completed += 1
                     
@@ -233,6 +284,7 @@ class SelfPlayEngine:
                 game_id = future_to_game_id[future]
                 try:
                     game_data = future.result()
+                    self._validate_game_data(game_data, game_id)
                     games.append(game_data)
                     
                     # Save immediately to avoid data loss
@@ -331,11 +383,8 @@ class SelfPlayEngine:
             writer.writerow(['game_id', 'winner', 'final_trmph'])
             
             for i, game in enumerate(games):
-                writer.writerow([
-                    i,
-                    game.get('winner', 'unknown'),
-                    game.get('trmph', '')
-                ])
+                self._validate_game_data(game, i)
+                writer.writerow([i, game['winner'], game['trmph']])
         
         if self.verbose >= 1:
             print(f"Saved detailed move data:")
@@ -347,11 +396,10 @@ class SelfPlayEngine:
         if not self.streaming_save:
             return
             
-        trmph = game_data.get('trmph', '')
-        winner = game_data.get('winner', '')
+        self._validate_game_data(game_data)
         
         with open(self.streaming_file, 'a') as f:
-            f.write(f"{trmph} {winner}\n")
+            f.write(f"{game_data['trmph']} {game_data['winner']}\n")
 
     def clear_cache(self):
         """Clear the model's inference cache."""

@@ -107,6 +107,7 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
                        verbose = 3) {
+  console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -140,6 +141,7 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 }
 
 async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0) {
+  console.log(`makeComputerMove called with model_id: ${model_id}`);
   const resp = await fetch('/api/computer_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -474,7 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       WINNER_VALUES: constantsResult.WINNER_VALUES
     };
     state.constants = constantsResult;
-    console.log('Loaded game constants:', GAME_CONSTANTS);
+    console.log('Loadedx game constants:', GAME_CONSTANTS);
   } catch (err) {
     console.error('Failed to load constants, using defaults:', err);
   }
@@ -639,6 +641,15 @@ function displayDebugInfo(debugInfo) {
   
   let output = '';
   
+  // Model information
+  if (debugInfo.model_info) {
+    output += '=== MODEL INFORMATION ===\n';
+    output += `Model ID: ${debugInfo.model_info.model_id}\n`;
+    output += `Model Type: ${debugInfo.model_info.model_type}\n`;
+    output += `Model Path: ${debugInfo.model_info.model_path}\n`;
+    output += '\n';
+  }
+  
   // Basic information
   if (debugInfo.basic) {
     output += '=== BASIC INFORMATION ===\n';
@@ -769,3 +780,308 @@ function debugBoardState(board, legalMoves, lastMove, winner, lastMovePlayer) {
   console.log('Piece counts - Blue:', blueCount, 'Red:', redCount, 'Empty:', emptyCount);
   console.log('========================');
 } 
+
+// --- Model Browser Functionality ---
+
+// Model browser state
+let modelBrowserState = {
+  modalOpen: false,
+  selectedModel: null,
+  currentPlayer: null, // 'blue' or 'red'
+  recentModels: [],
+  searchResults: [],
+  directoryModels: []
+};
+
+// API calls for model browser
+async function fetchRecentModels() {
+  try {
+    const response = await fetch('/api/model-browser/recent');
+    if (!response.ok) throw new Error('Failed to fetch recent models');
+    const data = await response.json();
+    return data.recent_models || [];
+  } catch (error) {
+    console.error('Error fetching recent models:', error);
+    return [];
+  }
+}
+
+async function fetchModelDirectories() {
+  try {
+    const response = await fetch('/api/model-browser/directories');
+    if (!response.ok) throw new Error('Failed to fetch directories');
+    const data = await response.json();
+    return data.directories || [];
+  } catch (error) {
+    console.error('Error fetching directories:', error);
+    return [];
+  }
+}
+
+async function fetchModelsInDirectory(directory) {
+  try {
+    const response = await fetch(`/api/model-browser/directory/${encodeURIComponent(directory)}`);
+    if (!response.ok) throw new Error('Failed to fetch models in directory');
+    const data = await response.json();
+    return data.models || [];
+  } catch (error) {
+    console.error('Error fetching models in directory:', error);
+    return [];
+  }
+}
+
+async function searchModels(query) {
+  try {
+    const response = await fetch(`/api/model-browser/search?q=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error('Failed to search models');
+    const data = await response.json();
+    return data.models || [];
+  } catch (error) {
+    console.error('Error searching models:', error);
+    return [];
+  }
+}
+
+async function selectModel(modelPath, modelId) {
+  try {
+    const response = await fetch('/api/model-browser/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_path: modelPath, model_id: modelId })
+    });
+    if (!response.ok) throw new Error('Failed to select model');
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error selecting model:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Modal management
+function openModelBrowser(player) {
+  modelBrowserState.modalOpen = true;
+  modelBrowserState.currentPlayer = player;
+  modelBrowserState.selectedModel = null;
+  
+  document.getElementById('model-browser-modal').style.display = 'block';
+  document.getElementById('select-model-btn').disabled = true;
+  
+  // Load initial data
+  loadRecentModels();
+  loadDirectories();
+}
+
+function closeModelBrowser() {
+  modelBrowserState.modalOpen = false;
+  modelBrowserState.selectedModel = null;
+  modelBrowserState.currentPlayer = null;
+  
+  document.getElementById('model-browser-modal').style.display = 'none';
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('directory-models').innerHTML = '';
+  document.getElementById('model-search').value = '';
+}
+
+// Load and display recent models
+async function loadRecentModels() {
+  const recentModels = await fetchRecentModels();
+  modelBrowserState.recentModels = recentModels;
+  
+  const container = document.getElementById('recent-models-list');
+  if (recentModels.length === 0) {
+    container.innerHTML = '<div class="empty-list">No recent models</div>';
+  } else {
+    container.innerHTML = recentModels.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Load and display directories
+async function loadDirectories() {
+  const directories = await fetchModelDirectories();
+  const select = document.getElementById('directory-select');
+  
+  // Clear existing options except the first one
+  select.innerHTML = '<option value="">Select directory...</option>';
+  
+  directories.forEach(dir => {
+    const option = document.createElement('option');
+    option.value = dir;
+    option.textContent = dir;
+    select.appendChild(option);
+  });
+}
+
+// Load models in selected directory
+async function loadDirectoryModels(directory) {
+  const models = await fetchModelsInDirectory(directory);
+  modelBrowserState.directoryModels = models;
+  
+  const container = document.getElementById('directory-models');
+  if (models.length === 0) {
+    container.innerHTML = '<div class="empty-list">No models found in this directory</div>';
+  } else {
+    container.innerHTML = models.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Search models
+async function performSearch(query) {
+  if (!query.trim()) {
+    document.getElementById('search-results').innerHTML = '';
+    return;
+  }
+  
+  const models = await searchModels(query);
+  modelBrowserState.searchResults = models;
+  
+  const container = document.getElementById('search-results');
+  if (models.length === 0) {
+    container.innerHTML = '<div class="empty-list">No models found matching your search</div>';
+  } else {
+    container.innerHTML = models.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Create model item HTML
+function createModelItem(model) {
+  const epochInfo = model.epoch && model.mini ? 
+    `<span class="model-item-epoch">E${model.epoch} M${model.mini}</span>` : '';
+  
+  return `
+    <div class="model-item" data-model-path="${model.relative_path}">
+      <div class="model-item-header">
+        <div class="model-item-name">${model.filename}${epochInfo}</div>
+        <div class="model-item-size">${model.size_mb} MB</div>
+      </div>
+      <div class="model-item-path">${model.relative_path}</div>
+    </div>
+  `;
+}
+
+// Handle model selection
+function selectModelItem(modelPath) {
+  modelBrowserState.selectedModel = modelPath;
+  document.getElementById('select-model-btn').disabled = false;
+  
+  // Update visual selection
+  document.querySelectorAll('.model-item').forEach(item => {
+    item.classList.remove('selected');
+  });
+  
+  const selectedItem = document.querySelector(`[data-model-path="${modelPath}"]`);
+  if (selectedItem) {
+    selectedItem.classList.add('selected');
+  }
+}
+
+// Apply selected model
+async function applySelectedModel() {
+  if (!modelBrowserState.selectedModel || !modelBrowserState.currentPlayer) {
+    return;
+  }
+  
+  const modelId = `model_${Date.now()}`; // Generate unique ID
+  console.log(`Attempting to select model: ${modelBrowserState.selectedModel} with ID: ${modelId}`);
+  
+  const result = await selectModel(modelBrowserState.selectedModel, modelId);
+  console.log('Model selection result:', result);
+  
+  if (result.success) {
+    // Update the appropriate model dropdown
+    const modelName = modelBrowserState.selectedModel.split('/').pop();
+    
+    if (modelBrowserState.currentPlayer === 'blue') {
+      state.blue_model_id = result.model_id;
+      updateModelDropdown('blue-model', result.model_id, modelName);
+      console.log(`Set blue model to: ${result.model_id}`);
+    } else {
+      state.red_model_id = result.model_id;
+      updateModelDropdown('red-model', result.model_id, modelName);
+      console.log(`Set red model to: ${result.model_id}`);
+    }
+    
+    closeModelBrowser();
+    updateUI();
+  } else {
+    console.error('Model selection failed:', result.error);
+    alert(`Error selecting model: ${result.error}`);
+  }
+}
+
+// Update model dropdown
+function updateModelDropdown(selectId, modelId, modelName) {
+  const select = document.getElementById(selectId);
+  
+  // Check if option already exists
+  let option = select.querySelector(`option[value="${modelId}"]`);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = modelId;
+    select.appendChild(option);
+  }
+  
+  option.textContent = modelName;
+  select.value = modelId;
+}
+
+// Event listeners for model browser
+document.addEventListener('DOMContentLoaded', function() {
+  // Browse buttons
+  document.getElementById('blue-model-browse').addEventListener('click', () => {
+    openModelBrowser('blue');
+  });
+  
+  document.getElementById('red-model-browse').addEventListener('click', () => {
+    openModelBrowser('red');
+  });
+  
+  // Modal close
+  document.querySelector('.close').addEventListener('click', closeModelBrowser);
+  document.getElementById('cancel-model-btn').addEventListener('click', closeModelBrowser);
+  
+  // Click outside modal to close
+  document.getElementById('model-browser-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'model-browser-modal') {
+      closeModelBrowser();
+    }
+  });
+  
+  // Model selection
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.model-item')) {
+      const modelItem = e.target.closest('.model-item');
+      const modelPath = modelItem.dataset.modelPath;
+      selectModelItem(modelPath);
+    }
+  });
+  
+  // Search functionality
+  document.getElementById('search-btn').addEventListener('click', () => {
+    const query = document.getElementById('model-search').value;
+    performSearch(query);
+  });
+  
+  document.getElementById('model-search').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      const query = e.target.value;
+      performSearch(query);
+    }
+  });
+  
+  // Directory selection
+  document.getElementById('directory-select').addEventListener('change', (e) => {
+    const directory = e.target.value;
+    if (directory) {
+      loadDirectoryModels(directory);
+    } else {
+      document.getElementById('directory-models').innerHTML = '';
+    }
+  });
+  
+  // Refresh directories
+  document.getElementById('refresh-dirs-btn').addEventListener('click', loadDirectories);
+  
+  // Select model button
+  document.getElementById('select-model-btn').addEventListener('click', applySelectedModel);
+}); 
