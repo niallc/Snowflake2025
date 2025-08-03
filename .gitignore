@@ -42,6 +42,7 @@ write_ups/training_instability_analysis_summary.md
 scripts/analyze_shard_spike_correlation.py
 scripts/analyze_training_performance.py
 scripts/investigate_spikes.py
+scripts/fix_winner_labels_safe.py
 
 
 # VSCode

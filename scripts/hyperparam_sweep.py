@@ -64,12 +64,12 @@ def calculate_mini_epoch_samples(
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "batch_size": [256],
-    "max_grad_norm": [1.0, 0.2, 3.0],
+    "max_grad_norm": [5],
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [0.2, 1],  # Value head learns slower if this is < 1
+    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.2],
-    "learning_rate": [0.00003, 0.0003],
+    "learning_rate": [0.001],
     
     # Likely resolved:
     "dropout_prob": [0],
@@ -103,7 +103,7 @@ MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 200 mini-epochs per epoch
 TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
 
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 1  # training now resets the epoch count this this is the further number of epochs to train
+EPOCHS = 2  # training now resets the epoch count this this is the further number of epochs to train
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):

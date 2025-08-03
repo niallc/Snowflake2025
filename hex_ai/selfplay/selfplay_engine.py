@@ -15,7 +15,7 @@ from datetime import datetime
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER, TRMPH_PREFIX, TRMPH_RED_WIN, TRMPH_BLUE_WIN
+from hex_ai.config import TRMPH_PREFIX, TRMPH_RED_WIN, TRMPH_BLUE_WIN
 from hex_ai.value_utils import validate_trmph_winner
 from hex_ai.training_utils import get_device
 
