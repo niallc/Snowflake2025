@@ -69,8 +69,8 @@ if __name__ == "__main__":
     earlyGameR="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8"
     earlyGameRMove="https://trmph.com/hex/board#13,a2f8g7g8h7h8i9j7e7d9b10c8c7"
         
-    modelFile="epoch1_mini1.pt.gz"
-    boardPos=${redFinal}
+    modelFile="epoch2_mini16.pt.gz"
+    boardPos=${blueWin}
     
     PYTHONPATH=. python scripts/simple_inference_cli.py \
     --trmph ${boardPos} \

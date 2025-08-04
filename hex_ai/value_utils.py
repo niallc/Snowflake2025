@@ -223,6 +223,16 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     scaled_logits = logits / temperature
     # Apply softmax
     probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
+    
+    # Validate that we got reasonable probabilities
+    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
+        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
+    
+    # Note: This check is redundant since softmax should never return all zeros for finite input
+    # But it's kept as a safety check for edge cases
+    if np.sum(probs) == 0:
+        raise ValueError(f"All probabilities are zero! Logits min/max: {logits.min():.6f}/{logits.max():.6f}, temperature: {temperature}")
+    
     return probs
 
 def get_player_to_move_from_moves(moves: list) -> Player:

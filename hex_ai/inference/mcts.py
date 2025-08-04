@@ -66,16 +66,18 @@ class MCTSNode:
 class NeuralMCTS:
     """MCTS engine guided by a neural network."""
     
-    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4):
+    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, verbose: int = 0):
         """
         Initialize the MCTS engine.
         
         Args:
             model: Neural network model for policy and value predictions
             exploration_constant: PUCT exploration constant (default: 1.4)
+            verbose: Verbosity level (0=quiet, 1=basic, 2=detailed, 3=debug, 4=extreme debug)
         """
         self.model = model
         self.exploration_constant = exploration_constant
+        self.verbose = verbose
         self.logger = logging.getLogger(__name__)
         
         # Statistics tracking
@@ -99,7 +101,8 @@ class NeuralMCTS:
         Returns:
             Root node with populated search tree
         """
-        self.logger.info(f"Starting MCTS search with {num_simulations} simulations")
+        if self.verbose >= 1:
+            self.logger.info(f"Starting MCTS search with {num_simulations} simulations")
         self.stats['start_time'] = time.time()
         self.stats['total_simulations'] = 0
         
@@ -112,7 +115,7 @@ class NeuralMCTS:
             self.stats['total_simulations'] += 1
             
             # Log progress every 100 simulations
-            if (sim_idx + 1) % 100 == 0:
+            if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
                 elapsed = time.time() - self.stats['start_time']
                 sims_per_sec = (sim_idx + 1) / elapsed
                 self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations ({sims_per_sec:.1f} sims/sec)")
@@ -121,8 +124,9 @@ class NeuralMCTS:
         total_time = self.stats['end_time'] - self.stats['start_time']
         sims_per_sec = num_simulations / total_time
         
-        self.logger.info(f"MCTS search completed: {num_simulations} simulations in {total_time:.2f}s ({sims_per_sec:.1f} sims/sec)")
-        self.logger.info(f"Total neural network inferences: {self.stats['total_inferences']}")
+        if self.verbose >= 1:
+            self.logger.info(f"MCTS search completed: {num_simulations} simulations in {total_time:.2f}s ({sims_per_sec:.1f} sims/sec)")
+            self.logger.info(f"Total neural network inferences: {self.stats['total_inferences']}")
         
         return root
 
@@ -151,6 +155,15 @@ class NeuralMCTS:
         """
         if not node.children:
             raise ValueError("Cannot select child from node with no children")
+        
+        # Verbose debug logging
+        if self.verbose >= 3:
+            self.logger.info(f"DEBUG: === SELECTING CHILD ===")
+            self.logger.info(f"DEBUG: Node state - current_player: {node.state.current_player}")
+            self.logger.info(f"DEBUG: Node state - game_over: {node.state.game_over}")
+            self.logger.info(f"DEBUG: Node state - winner: {node.state.winner}")
+            self.logger.info(f"DEBUG: Number of children: {len(node.children)}")
+            self.logger.info(f"DEBUG: Children moves: {list(node.children.keys())[:10]}...")  # Show first 10
         
         best_score = -float('inf')
         best_child = None
@@ -199,6 +212,17 @@ class NeuralMCTS:
         # Apply softmax and filter for legal moves
         legal_moves = node.state.get_legal_moves()
         node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
+        
+        # Verbose debug logging
+        if self.verbose >= 3:
+            self.logger.info(f"DEBUG: === EXPANDING NODE ===")
+            self.logger.info(f"DEBUG: Node state - current_player: {node.state.current_player}")
+            self.logger.info(f"DEBUG: Node state - game_over: {node.state.game_over}")
+            self.logger.info(f"DEBUG: Node state - winner: {node.state.winner}")
+            self.logger.info(f"DEBUG: Policy logits shape: {policy_logits.shape}")
+            self.logger.info(f"DEBUG: Policy logits min/max: {policy_logits.min():.4f}/{policy_logits.max():.4f}")
+            self.logger.info(f"DEBUG: Legal moves count: {len(legal_moves)}")
+            self.logger.info(f"DEBUG: Top 5 policy priors: {sorted(node.policy_priors.items(), key=lambda x: x[1], reverse=True)[:5]}")
 
         # Create child nodes for all legal moves
         for move, prior in node.policy_priors.items():
@@ -207,7 +231,12 @@ class NeuralMCTS:
             child_state = child_state.make_move(*move) 
             node.children[move] = MCTSNode(state=child_state, parent=node, move=move)
             
-        self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}")
+            # Verbose debug logging for child creation
+            if self.verbose >= 4 and len(node.children) <= 5:
+                self.logger.info(f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}")
+            
+        if self.verbose >= 2:
+            self.logger.info(f"Expanded node with {len(node.children)} children, value={value:.4f}")
         
         # The value is from the perspective of the current player at 'node'.
         return value
@@ -287,16 +316,25 @@ class NeuralMCTS:
             prior = policy_probs[index]
             move_priors[move] = prior
             total_prior += prior
+            
+            # Verbose debug logging for policy priors
+            if self.verbose >= 4 and len(move_priors) <= 5:
+                self.logger.info(f"DEBUG: Move {move} (row={row}, col={col}) -> index={index} -> prior={prior:.6f}")
         
         # Normalize to ensure probabilities sum to 1
         if total_prior > 0:
             for move in move_priors:
                 move_priors[move] /= total_prior
         else:
-            # If all priors are zero, use uniform distribution
-            uniform_prior = 1.0 / len(legal_moves)
-            for move in legal_moves:
-                move_priors[move] = uniform_prior
+            # If all priors are zero, this indicates a serious problem
+            error_msg = f"CRITICAL: All policy priors are zero! This indicates a bug."
+            error_msg += f"\nPolicy logits min/max: {policy_logits.min():.6f}/{policy_logits.max():.6f}"
+            error_msg += f"\nPolicy probs min/max: {policy_probs.min():.6f}/{policy_probs.max():.6f}"
+            error_msg += f"\nLegal moves count: {len(legal_moves)}"
+            error_msg += f"\nFirst 10 legal moves: {legal_moves[:10]}"
+            
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
         
         return move_priors
 

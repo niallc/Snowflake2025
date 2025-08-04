@@ -72,7 +72,7 @@ def create_state_from_trmph(trmph_text: str) -> HexGameState:
     return state, display_board
 
 
-def test_mcts_on_position(model_path: str, trmph_position: str, num_simulations: int = 100):
+def test_mcts_on_position(model_path: str, trmph_position: str, num_simulations: int = 100, verbose: int = 0):
     """
     Test MCTS on a specific position.
     
@@ -80,6 +80,7 @@ def test_mcts_on_position(model_path: str, trmph_position: str, num_simulations:
         model_path: Path to the model checkpoint
         trmph_position: Position in trmph format
         num_simulations: Number of MCTS simulations to run
+        verbose: Verbosity level (0=quiet, 1=basic, 2=detailed, 3=debug, 4=extreme debug)
     """
     logger.info(f"Testing MCTS on position: {trmph_position}")
     logger.info(f"Number of simulations: {num_simulations}")
@@ -93,7 +94,7 @@ def test_mcts_on_position(model_path: str, trmph_position: str, num_simulations:
         return False
     
     # Create MCTS engine
-    mcts = NeuralMCTS(model=model, exploration_constant=1.4)
+    mcts = NeuralMCTS(model=model, exploration_constant=1.4, verbose=verbose)
     logger.info("MCTS engine created")
     
     # Create state from trmph position
@@ -148,15 +149,17 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Test MCTS on specific positions")
-    parser.add_argument("model_path", help="Path to model checkpoint")
+    parser.add_argument("--model_path", help="Path to model checkpoint", default="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz")
     parser.add_argument("--position", type=str, 
                        default="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7",
                        help="Position in trmph format")
-    parser.add_argument("--simulations", type=int, default=100, help="Number of MCTS simulations")
+    parser.add_argument("--simulations", type=int, default=5, help="Number of MCTS simulations")
+    parser.add_argument("--verbose", type=int, default=0, choices=[0, 1, 2, 3, 4], 
+                       help="Verbosity level (0=quiet, 1=basic, 2=detailed, 3=debug, 4=extreme debug)")
     
     args = parser.parse_args()
     
-    success = test_mcts_on_position(args.model_path, args.position, args.simulations)
+    success = test_mcts_on_position(args.model_path, args.position, args.simulations, args.verbose)
     
     if success:
         logger.info("MCTS position test completed successfully")
