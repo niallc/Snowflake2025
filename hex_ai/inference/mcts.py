@@ -16,6 +16,7 @@ import numpy as np
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
+from hex_ai.utils.format_conversion import rowcol_to_tensor
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,10 @@ class NeuralMCTS:
             
             puct_score = q_value + ucb_component
             
-            self.logger.debug(f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, UCB={ucb_component:.4f}, total={puct_score:.4f}")
+            self.logger.debug(
+                f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, "
+                f"UCB={ucb_component:.4f}, total={puct_score:.4f}"
+            )
             
             if puct_score > best_score:
                 best_score = puct_score
@@ -278,7 +282,9 @@ class NeuralMCTS:
         
         for move in legal_moves:
             row, col = move
-            prior = policy_probs[row, col]
+            # Convert 2D coordinates to 1D index
+            index = rowcol_to_tensor(row, col)
+            prior = policy_probs[index]
             move_priors[move] = prior
             total_prior += prior
         

@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 from hex_ai.inference.game_engine import HexGameState
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE
 
 @pytest.fixture
 def empty_state():
@@ -9,7 +10,7 @@ def empty_state():
 def test_initial_state(empty_state):
     state = empty_state
     assert state.board.shape == (13, 13)
-    assert state.current_player == 0  # Blue
+    assert state.current_player == BLUE_PLAYER  # Blue
     assert state.move_history == []
     assert not state.game_over
     assert state.winner is None
@@ -17,13 +18,13 @@ def test_initial_state(empty_state):
 def test_make_move_and_switch_player(empty_state):
     state = empty_state
     state2 = state.make_move(0, 0)
-    assert state2.board[0, 0] == 1  # Blue piece
-    assert state2.current_player == 1  # Red
+    assert state2.board[0, 0] == BLUE_PIECE  # Blue piece
+    assert state2.current_player == RED_PLAYER  # Red
     assert state2.move_history == [(0, 0)]
     # Red moves
     state3 = state2.make_move(0, 1)
-    assert state3.board[0, 1] == 2  # Red piece
-    assert state3.current_player == 0  # Blue
+    assert state3.board[0, 1] == RED_PIECE  # Red piece
+    assert state3.current_player == BLUE_PLAYER  # Blue
     assert state3.move_history == [(0, 0), (0, 1)]
 
 def test_blue_win_detection():

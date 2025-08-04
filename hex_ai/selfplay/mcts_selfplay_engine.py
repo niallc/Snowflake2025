@@ -88,7 +88,12 @@ class MCTSSelfPlayEngine:
         
         # Play until game is over
         while not state.game_over:
-            player_name = "Blue" if state.current_player == BLUE_PLAYER else "Red"
+            if state.current_player == BLUE_PLAYER:
+                player_name = "Blue"
+            elif state.current_player == RED_PLAYER:
+                player_name = "Red"
+            else:
+                raise ValueError(f"Unknown player value: {state.current_player}")
             
             if self.verbose >= 2:
                 self.logger.debug(f"{player_name}'s turn")

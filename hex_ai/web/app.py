@@ -27,12 +27,13 @@ from hex_ai.file_utils import add_recent_model
 
 # Model checkpoint defaults
 ALL_RESULTS_DIR = "checkpoints/"
-THIS_MODEL_DIR = "round2_training"
+THIS_MODEL_DIR1 = "hyperparameter_tuning/Aug2nd_extra_logging/loss_weight_sweep_exp0__99914b_20250803_164153"
+THIS_MODEL_DIR2 = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
 # THIS_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-CHECKPOINT_FILE1 = "epoch3_mini69.pt.gz"
-CHECKPOINT_FILE2 = "epoch3_mini13.pt.gz"
-DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE1}"
-DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR}/{CHECKPOINT_FILE2}"
+CHECKPOINT_FILE1 = "epoch4_mini1.pt.gz"
+CHECKPOINT_FILE2 = "epoch2_mini16.pt.gz"
+DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR1}/{CHECKPOINT_FILE1}"
+DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR2}/{CHECKPOINT_FILE2}"
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
