@@ -744,56 +744,55 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   
   let output = '';
   
-  // MCTS Search Statistics
+  // MCTS Search Statistics (condensed)
   if (mctsDebugInfo.search_stats) {
     output += '=== MCTS SEARCH STATISTICS ===\n';
-    output += `Number of Simulations: ${mctsDebugInfo.search_stats.num_simulations}\n`;
-    output += `Search Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s\n`;
-    output += `Total Inferences: ${mctsDebugInfo.search_stats.total_inferences}\n`;
-    output += `Exploration Constant: ${mctsDebugInfo.search_stats.exploration_constant}\n`;
-    output += `Temperature: ${mctsDebugInfo.search_stats.temperature}\n`;
-    output += '\n';
+    output += `Simulations: ${mctsDebugInfo.search_stats.num_simulations} | `;
+    output += `Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s | `;
+    output += `Inferences: ${mctsDebugInfo.search_stats.total_inferences} | `;
+    output += `Exploration: ${mctsDebugInfo.search_stats.exploration_constant} | `;
+    output += `Temperature: ${mctsDebugInfo.search_stats.temperature}\n\n`;
   }
   
   // Move Selection
   if (mctsDebugInfo.move_selection) {
     output += '=== MOVE SELECTION ===\n';
-    output += `Selected Move: ${mctsDebugInfo.move_selection.selected_move}\n`;
-    output += `Selected Move Coordinates: (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n`;
-    output += '\n';
+    output += `Selected: ${mctsDebugInfo.move_selection.selected_move} (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
   }
   
-  // Tree Statistics
+  // Tree Statistics (condensed)
   if (mctsDebugInfo.tree_statistics) {
     output += '=== TREE STATISTICS ===\n';
-    output += `Total Nodes: ${mctsDebugInfo.tree_statistics.total_nodes}\n`;
-    output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth}\n`;
-    output += `Total Visits: ${mctsDebugInfo.tree_statistics.total_visits}\n`;
-    output += '\n';
+    output += `Nodes: ${mctsDebugInfo.tree_statistics.total_nodes} | `;
+    output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth} | `;
+    output += `Total Visits: ${mctsDebugInfo.tree_statistics.total_visits}\n\n`;
   }
   
   // Move Probabilities
   if (mctsDebugInfo.move_probabilities) {
     output += '=== MOVE PROBABILITIES ===\n';
     
-    // MCTS visit counts and probabilities
+    // MCTS visit counts (top moves only)
     if (mctsDebugInfo.move_probabilities.mcts_visits) {
       output += 'MCTS Visit Counts:\n';
       const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
         .sort(([,a], [,b]) => b - a);
       
-      // Filter out moves with 0 visits
-      const nonZeroVisits = sortedVisits.filter(([, visits]) => visits > 0);
+      // Show only moves with visits > 0, limit to top 10
+      const nonZeroVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(0, 10);
       
       if (nonZeroVisits.length > 0) {
         nonZeroVisits.forEach(([move, visits]) => {
-          output += `  ${move}: ${visits} visits\n`;
+          const prob = visits / mctsDebugInfo.tree_statistics.total_visits * 100;
+          output += `  ${move}: ${visits} visits (${prob.toFixed(1)}%)\n`;
         });
         
-        // Add summary for zero-visit moves if any exist
-        const zeroVisits = sortedVisits.filter(([, visits]) => visits === 0);
-        if (zeroVisits.length > 0) {
-          output += `  (all other nodes had 0 visits)\n`;
+        // Add summary for remaining moves
+        const remainingVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(10);
+        if (remainingVisits.length > 0) {
+          const totalRemaining = remainingVisits.reduce((sum, [, visits]) => sum + visits, 0);
+          const remainingProb = totalRemaining / mctsDebugInfo.tree_statistics.total_visits * 100;
+          output += `  ... and ${remainingVisits.length} more moves (${remainingProb.toFixed(1)}%)\n`;
         }
       } else {
         output += '  (no moves were visited)\n';
@@ -801,10 +800,12 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
       output += '\n';
     }
     
+    // Direct policy probabilities (top moves only)
     if (mctsDebugInfo.move_probabilities.direct_policy) {
-      output += 'Direct Policy Probabilities:\n';
+      output += 'Direct Policy Probabilities (Top 10):\n';
       const sortedDirect = Object.entries(mctsDebugInfo.move_probabilities.direct_policy)
-        .sort(([,a], [,b]) => b - a);
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 10);
       sortedDirect.forEach(([move, prob]) => {
         const probPercent = (prob * 100).toFixed(2);
         output += `  ${move}: ${probPercent}%\n`;
@@ -813,15 +814,16 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     }
   }
   
-  // Comparison
+  // Comparison (top differences only)
   if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct) {
     output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
     const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
-      .sort(([,a], [,b]) => b.difference - a.difference);
+      .sort(([,a], [,b]) => Math.abs(b.difference) - Math.abs(a.difference))
+      .slice(0, 10); // Show top 10 biggest differences
     sortedComparison.forEach(([move, data]) => {
-      const mctsPercent = (data.mcts_probability * 100).toFixed(2);
-      const directPercent = (data.direct_probability * 100).toFixed(2);
-      const diffPercent = (data.difference * 100).toFixed(2);
+      const mctsPercent = (data.mcts_probability * 100).toFixed(1);
+      const directPercent = (data.direct_probability * 100).toFixed(1);
+      const diffPercent = (data.difference * 100).toFixed(1);
       const diffSign = data.difference >= 0 ? '+' : '';
       output += `  ${move}: MCTS ${mctsPercent}% vs Direct ${directPercent}% (${diffSign}${diffPercent}%)\n`;
     });
@@ -834,8 +836,17 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     const winRate = mctsDebugInfo.win_rate_analysis;
     output += `Root Value: ${winRate.root_value.toFixed(4)}\n`;
     output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
-    output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n`;
-    output += '\n';
+    output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n\n`;
+  }
+  
+  // Summary
+  if (mctsDebugInfo.summary) {
+    output += '=== SUMMARY ===\n';
+    const summary = mctsDebugInfo.summary;
+    output += `Top MCTS Move: ${summary.top_mcts_move || 'N/A'}\n`;
+    output += `Top Direct Move: ${summary.top_direct_move || 'N/A'}\n`;
+    output += `Moves Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
+    output += `Search Efficiency: ${summary.search_efficiency.toFixed(2)} inferences/simulation\n\n`;
   }
   
   // Move Sequence Analysis

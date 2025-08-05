@@ -449,8 +449,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         legal_move_probs = {}
         for move in legal_moves:
             move_trmph = fc.rowcol_to_trmph(*move)
-            if move_trmph in policy_probs:
-                legal_move_probs[move_trmph] = policy_probs[move_trmph]
+            # Convert (row, col) to tensor index to access policy_probs array
+            tensor_idx = fc.rowcol_to_tensor(*move)
+            if 0 <= tensor_idx < len(policy_probs):
+                legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
         # Get MCTS visit counts for all legal moves
         mcts_visit_counts = {}
@@ -514,6 +516,13 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                     for alt in move_sequence_analysis["alternative_lines"]
                 ],
                 "pv_length": move_sequence_analysis["pv_length"]
+            },
+            "summary": {
+                "top_mcts_move": max(mcts_visit_counts.items(), key=lambda x: x[1])[0] if mcts_visit_counts else None,
+                "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
+                "moves_explored": len([v for v in mcts_visit_counts.values() if v > 0]),
+                "total_legal_moves": len(legal_moves),
+                "search_efficiency": search_stats.get('total_inferences', 0) / num_simulations if num_simulations > 0 else 0
             }
         }
         
