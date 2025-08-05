@@ -91,10 +91,13 @@ class PipelineConfig:
         # Generate data directories for this run
         if self.selfplay_dir is None:
             self.selfplay_dir = str(Path(self.base_data_dir) / "sf25" / f"selfplay_{self.run_timestamp}")
-        self.cleaned_dir = str(Path(self.base_data_dir) / "cleaned" / f"run_{self.run_timestamp}")
-        self.processed_dir = str(Path(self.base_data_dir) / "processed" / f"run_{self.run_timestamp}")
-        self.shuffled_dir = str(Path(self.base_data_dir) / "processed" / f"shuffled_{self.run_timestamp}")
-        self.temp_dir = str(Path(self.base_data_dir) / "processed" / f"temp_buckets_{self.run_timestamp}")
+        
+        # Generate predictable output directory names based on input
+        input_name = Path(self.selfplay_dir).name if self.selfplay_dir else f"run_{self.run_timestamp}"
+        self.cleaned_dir = str(Path(self.base_data_dir) / "cleaned" / f"cleaned_{input_name}")
+        self.processed_dir = str(Path(self.base_data_dir) / "processed" / f"processed_{input_name}")
+        self.shuffled_dir = str(Path(self.base_data_dir) / "processed" / f"shuffled_{input_name}")
+        self.temp_dir = str(Path(self.base_data_dir) / "processed" / f"temp_buckets_{input_name}")
     
     def validate(self, check_model: bool = True, check_data: bool = True):
         """Validate configuration (called when actually running the pipeline)."""
@@ -254,6 +257,17 @@ class PreprocessingStep:
         self.logger.info(f"Output directory: {self.config.cleaned_dir}")
         self.logger.info(f"Chunk size: {self.config.chunk_size}")
         
+        # Check if output already exists
+        if Path(self.config.cleaned_dir).exists() and list(Path(self.config.cleaned_dir).glob("*.trmph")):
+            raise FileExistsError(
+                f"Output directory already exists and contains data: {self.config.cleaned_dir}\n"
+                f"This suggests the data has already been processed. To avoid wasting compute time,\n"
+                f"either:\n"
+                f"1. Use a different --selfplay-dir\n"
+                f"2. Remove the existing output directory\n"
+                f"3. Use --no-preprocessing to skip this step"
+            )
+        
         # Create output directory
         Path(self.config.cleaned_dir).mkdir(parents=True, exist_ok=True)
         
@@ -284,6 +298,17 @@ class TRMPHProcessingStep:
         self.logger.info(f"Output directory: {self.config.processed_dir}")
         self.logger.info(f"Position selector: {self.config.position_selector}")
         self.logger.info(f"Max workers: {self.config.max_workers_trmph}")
+        
+        # Check if output already exists
+        if Path(self.config.processed_dir).exists() and list(Path(self.config.processed_dir).glob("*.pkl.gz")):
+            raise FileExistsError(
+                f"Output directory already exists and contains data: {self.config.processed_dir}\n"
+                f"This suggests the data has already been processed. To avoid wasting compute time,\n"
+                f"either:\n"
+                f"1. Use a different --selfplay-dir\n"
+                f"2. Remove the existing output directory\n"
+                f"3. Use --no-trmph-processing to skip this step"
+            )
         
         # Create output directory
         Path(self.config.processed_dir).mkdir(parents=True, exist_ok=True)
@@ -325,6 +350,17 @@ class ShufflingStep:
         self.logger.info(f"Input directory: {input_dir}")
         self.logger.info(f"Output directory: {self.config.shuffled_dir}")
         self.logger.info(f"Number of buckets: {self.config.num_buckets_shuffle}")
+        
+        # Check if output already exists
+        if Path(self.config.shuffled_dir).exists() and list(Path(self.config.shuffled_dir).glob("*.pkl.gz")):
+            raise FileExistsError(
+                f"Output directory already exists and contains data: {self.config.shuffled_dir}\n"
+                f"This suggests the data has already been processed. To avoid wasting compute time,\n"
+                f"either:\n"
+                f"1. Use a different --selfplay-dir\n"
+                f"2. Remove the existing output directory\n"
+                f"3. Use --no-shuffling to skip this step"
+            )
         
         # Create output directory
         Path(self.config.shuffled_dir).mkdir(parents=True, exist_ok=True)
@@ -374,16 +410,36 @@ class TrainingStep:
         # Create shutdown handler
         shutdown_handler = GracefulShutdown()
         
+        # Create experiment configurations from sweep
+        from scripts.hyperparam_sweep import SWEEP, all_param_combinations, make_experiment_name
+        
+        all_configs = list(all_param_combinations(SWEEP))
+        experiments = []
+        for i, config in enumerate(all_configs):
+            # Compute value_weight so that policy_weight + value_weight = 1
+            config = dict(config)  # Make a copy to avoid mutating the sweep dict
+            if "policy_weight" in config:
+                config["value_weight"] = 1.0 - config["policy_weight"]
+            exp_name = make_experiment_name(config, i, tag="pipeline_sweep")
+            experiments.append({
+                'experiment_name': exp_name,
+                'hyperparameters': config
+            })
+        
         # Run training
-        all_data_dirs = [new_shuffled_dir] + self.config.data_sources
-        all_skip_files = [0] + self.config.skip_files  # 0 for new data
+        if new_shuffled_dir:
+            all_data_dirs = [new_shuffled_dir] + self.config.data_sources
+            all_skip_files = [0] + self.config.skip_files  # 0 for new data
+        else:
+            all_data_dirs = self.config.data_sources
+            all_skip_files = self.config.skip_files
         
         results = run_hyperparameter_tuning_current_data(
-            experiments=[],  # Will use default sweep configuration
+            experiments=experiments,
             data_dirs=all_data_dirs,
             results_dir=results_dir,
             train_ratio=0.8,
-            num_epochs=5,  # Default from hyperparam_sweep
+            num_epochs=2,  # Default from hyperparam_sweep
             early_stopping_patience=None,
             random_seed=42,
             max_examples_unaugmented=self.config.max_samples,
@@ -485,13 +541,26 @@ class TrainingPipeline:
                 shuffled_dir = None
             
             # Step 5: Training (optional)
-            if self.config.run_training and shuffled_dir:
+            if self.config.run_training:
                 self.current_step = 5
                 self.logger.info(f"\nStarting step {self.current_step}: Training")
-                results_dir = self.training_step.run(shuffled_dir)
+                
+                # Use newly shuffled data if available, otherwise use existing data sources
+                if shuffled_dir:
+                    training_data_dir = shuffled_dir
+                    self.logger.info(f"Using newly shuffled data: {training_data_dir}")
+                elif self.config.data_sources:
+                    # When no new shuffled data, just use existing data sources (no duplication)
+                    training_data_dir = None
+                    self.logger.info(f"Using existing data sources: {self.config.data_sources}")
+                else:
+                    self.logger.error("No training data available")
+                    raise ValueError("No training data available - need either shuffled data or data sources")
+                
+                results_dir = self.training_step.run(training_data_dir)
                 self.step_results['training'] = results_dir
             else:
-                self.logger.info("Skipping training (disabled or no shuffled data)")
+                self.logger.info("Skipping training (disabled)")
                 results_dir = None
             
             # Cleanup intermediate files

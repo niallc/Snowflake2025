@@ -15,7 +15,7 @@ import numpy as np
 
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.value_utils import policy_logits_to_probs_2d, get_top_k_legal_moves
+from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
 
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
@@ -39,6 +39,9 @@ class MCTSNode:
     
     # Children management
     children: Dict[Tuple[int, int], 'MCTSNode'] = field(default_factory=dict)
+    
+    # Depth tracking for move count penalty
+    depth: int = 0
 
     @property
     def mean_value(self) -> float:
@@ -60,23 +63,32 @@ class MCTSNode:
         """Update node statistics after backpropagation."""
         self.visits += 1
         self.total_value += value
-        logger.debug(f"Updated node {self.move}: visits={self.visits}, total_value={self.total_value:.4f}, mean_value={self.mean_value:.4f}")
+    
+    def get_depth(self) -> int:
+        """Calculate the depth of this node from the root."""
+        if self.parent is None:
+            return 0
+        return self.parent.get_depth() + 1
 
 
 class NeuralMCTS:
     """MCTS engine guided by a neural network."""
     
-    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, verbose: int = 0):
+    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, win_value: float = 1.5, discount_factor: float = 0.98, verbose: int = 0):
         """
         Initialize the MCTS engine.
         
         Args:
             model: Neural network model for policy and value predictions
             exploration_constant: PUCT exploration constant (default: 1.4)
+            win_value: Value assigned to winning terminal states (default: 1.5)
+            discount_factor: Discount factor for move count penalty (default: 0.98)
             verbose: Verbosity level (0=quiet, 1=basic, 2=detailed, 3=debug, 4=extreme debug)
         """
         self.model = model
         self.exploration_constant = exploration_constant
+        self.win_value = win_value
+        self.discount_factor = discount_factor
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
         
@@ -88,7 +100,7 @@ class NeuralMCTS:
             'end_time': None
         }
         
-        self.logger.info(f"Initialized NeuralMCTS with exploration_constant={exploration_constant}")
+        self.logger.info(f"Initialized NeuralMCTS with exploration_constant={exploration_constant}, win_value={win_value}, discount_factor={discount_factor}")
 
     def search(self, root_state: HexGameState, num_simulations: int) -> MCTSNode:
         """
@@ -156,14 +168,14 @@ class NeuralMCTS:
         if not node.children:
             raise ValueError("Cannot select child from node with no children")
         
-        # Verbose debug logging
-        if self.verbose >= 3:
-            self.logger.info(f"DEBUG: === SELECTING CHILD ===")
-            self.logger.info(f"DEBUG: Node state - current_player: {node.state.current_player}")
-            self.logger.info(f"DEBUG: Node state - game_over: {node.state.game_over}")
-            self.logger.info(f"DEBUG: Node state - winner: {node.state.winner}")
-            self.logger.info(f"DEBUG: Number of children: {len(node.children)}")
-            self.logger.info(f"DEBUG: Children moves: {list(node.children.keys())[:10]}...")  # Show first 10
+        # Verbose debug logging (only at extreme debug level)
+        if self.verbose >= 4:
+            self.logger.debug(f"DEBUG: === SELECTING CHILD ===")
+            self.logger.debug(f"DEBUG: Node state - current_player: {node.state.current_player}")
+            self.logger.debug(f"DEBUG: Node state - game_over: {node.state.game_over}")
+            self.logger.debug(f"DEBUG: Node state - winner: {node.state.winner}")
+            self.logger.debug(f"DEBUG: Number of children: {len(node.children)}")
+            self.logger.debug(f"DEBUG: Children moves: {list(node.children.keys())[:10]}...")  # Show first 10
         
         best_score = -float('inf')
         best_child = None
@@ -213,26 +225,27 @@ class NeuralMCTS:
         legal_moves = node.state.get_legal_moves()
         node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
         
-        # Verbose debug logging
-        if self.verbose >= 3:
-            self.logger.info(f"DEBUG: === EXPANDING NODE ===")
-            self.logger.info(f"DEBUG: Node state - current_player: {node.state.current_player}")
-            self.logger.info(f"DEBUG: Node state - game_over: {node.state.game_over}")
-            self.logger.info(f"DEBUG: Node state - winner: {node.state.winner}")
-            self.logger.info(f"DEBUG: Policy logits shape: {policy_logits.shape}")
-            self.logger.info(f"DEBUG: Policy logits min/max: {policy_logits.min():.4f}/{policy_logits.max():.4f}")
-            self.logger.info(f"DEBUG: Legal moves count: {len(legal_moves)}")
-            self.logger.info(f"DEBUG: Top 5 policy priors: {sorted(node.policy_priors.items(), key=lambda x: x[1], reverse=True)[:5]}")
+        # Verbose debug logging (only at extreme debug level)
+        if self.verbose >= 4:
+            self.logger.debug(f"DEBUG: === EXPANDING NODE ===")
+            self.logger.debug(f"DEBUG: Node state - current_player: {node.state.current_player}")
+            self.logger.debug(f"DEBUG: Node state - game_over: {node.state.game_over}")
+            self.logger.debug(f"DEBUG: Node state - winner: {node.state.winner}")
+            self.logger.debug(f"DEBUG: Policy logits shape: {policy_logits.shape}")
+            self.logger.debug(f"DEBUG: Policy logits min/max: {policy_logits.min():.4f}/{policy_logits.max():.4f}")
+            self.logger.debug(f"DEBUG: Legal moves count: {len(legal_moves)}")
+            self.logger.debug(f"DEBUG: Top 5 policy priors: {sorted(node.policy_priors.items(), key=lambda x: x[1], reverse=True)[:5]}")
 
         # Create child nodes for all legal moves
         for move, prior in node.policy_priors.items():
             # make_move returns a new, independent state object.
             child_state = node.state.make_move(*move)
-            node.children[move] = MCTSNode(state=child_state, parent=node, move=move)
+            child_depth = node.get_depth() + 1
+            node.children[move] = MCTSNode(state=child_state, parent=node, move=move, depth=child_depth)
             
             # Verbose debug logging for child creation
             if self.verbose >= 4 and len(node.children) <= 5:
-                self.logger.info(f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}")
+                self.logger.debug(f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}, depth: {child_depth}")
             
         if self.verbose >= 2:
             self.logger.info(f"Expanded node with {len(node.children)} children, value={value:.4f}")
@@ -250,7 +263,12 @@ class NeuralMCTS:
         """
         current_node = node
         while current_node is not None:
-            current_node.update_statistics(value)
+            # Apply discount factor based on depth (move count penalty)
+            depth = current_node.get_depth()
+            discounted_value = value * (self.discount_factor ** depth)
+            
+            current_node.update_statistics(discounted_value)
+            
             # IMPORTANT: The value is from the perspective of the player at the current node.
             # For the parent, this outcome has the opposite value.
             # We negate the value BEFORE moving to the parent.
@@ -266,7 +284,7 @@ class NeuralMCTS:
             state: Terminal game state
             
         Returns:
-            Value from the perspective of the player who just moved (1.0 for win, -1.0 for loss, 0.0 for draw)
+            Value from the perspective of the player who just moved (win_value for win, -win_value for loss, 0.0 for draw)
         """
         if not state.game_over:
             raise ValueError("Cannot get terminal value for non-terminal state")
@@ -286,23 +304,27 @@ class NeuralMCTS:
         
         # Return value from perspective of player who just moved
         if just_moved_won:
-            return 1.0  # Player who just moved won
+            return self.win_value  # Player who just moved won
         else:
-            return -1.0  # Player who just moved lost
+            return -self.win_value  # Player who just moved lost
 
     def _get_priors_for_legal_moves(self, policy_logits: np.ndarray, legal_moves: List[Tuple[int, int]]) -> Dict[Tuple[int, int], float]:
         """
         Extract prior probabilities for legal moves from policy logits.
         
         Args:
-            policy_logits: Raw policy logits from neural network
+            policy_logits: Raw policy logits from neural network (1D array, flattened from 2D board)
             legal_moves: List of legal moves
             
         Returns:
             Dictionary mapping moves to prior probabilities
         """
-        # Convert logits to 2D probabilities
-        policy_probs = policy_logits_to_probs_2d(policy_logits)
+        # Ensure policy_logits is 1D
+        if policy_logits.ndim != 1:
+            raise ValueError(f"Expected 1D policy_logits, got shape {policy_logits.shape}")
+        
+        # Convert 1D logits to probabilities using temperature scaling
+        policy_probs = policy_logits_to_probs(policy_logits, temperature=1.0)
         
         # Extract probabilities for legal moves
         move_priors = {}
@@ -310,14 +332,15 @@ class NeuralMCTS:
         
         for move in legal_moves:
             row, col = move
-            # Access policy probabilities directly with 2D coordinates
-            prior = policy_probs[row, col]
+            # Convert 2D coordinates to 1D index
+            move_index = row * 13 + col  # Assuming 13x13 board
+            prior = policy_probs[move_index]
             move_priors[move] = prior
             total_prior += prior
             
             # Verbose debug logging for policy priors
             if self.verbose >= 4 and len(move_priors) <= 5:
-                self.logger.info(f"DEBUG: Move {move} (row={row}, col={col}) -> prior={prior:.6f}")
+                self.logger.debug(f"DEBUG: Move {move} (row={row}, col={col}) -> prior={prior:.6f}")
         
         # Normalize to ensure probabilities sum to 1
         if total_prior > 0:
@@ -400,4 +423,90 @@ class NeuralMCTS:
             stats['total_time'] = stats['end_time'] - stats['start_time']
             if stats['total_simulations'] > 0:
                 stats['simulations_per_second'] = stats['total_simulations'] / stats['total_time']
-        return stats 
+        return stats
+    
+    def get_principal_variation(self, root: MCTSNode, max_depth: int = 10) -> List[Tuple[int, int]]:
+        """
+        Extract the principal variation (most likely move sequence) from the MCTS tree.
+        
+        Args:
+            root: Root node of the search tree
+            max_depth: Maximum depth to explore
+            
+        Returns:
+            List of moves representing the principal variation
+        """
+        if not root.children:
+            return []
+        
+        pv = []
+        current_node = root
+        depth = 0
+        
+        while current_node.children and depth < max_depth:
+            # Find the child with the highest visit count (most likely move)
+            best_move = max(current_node.children.keys(), 
+                          key=lambda move: current_node.children[move].visits)
+            
+            pv.append(best_move)
+            current_node = current_node.children[best_move]
+            depth += 1
+            
+            # Stop if we reach a terminal state
+            if current_node.state.game_over:
+                break
+        
+        return pv
+    
+    def get_move_sequence_analysis(self, root: MCTSNode, max_depth: int = 5) -> Dict[str, Any]:
+        """
+        Get detailed analysis of the most likely move sequences.
+        
+        Args:
+            root: Root node of the search tree
+            max_depth: Maximum depth to analyze
+            
+        Returns:
+            Dictionary with move sequence analysis
+        """
+        if not root.children:
+            return {"principal_variation": [], "alternative_lines": []}
+        
+        # Get principal variation
+        pv = self.get_principal_variation(root, max_depth)
+        
+        # Get alternative lines (second best moves at each level)
+        alternative_lines = []
+        current_node = root
+        depth = 0
+        
+        while current_node.children and depth < max_depth:
+            # Sort children by visit count
+            sorted_children = sorted(current_node.children.items(), 
+                                   key=lambda x: x[1].visits, reverse=True)
+            
+            if len(sorted_children) >= 2:
+                # Add second best move as alternative
+                second_best_move, second_best_node = sorted_children[1]
+                total_visits = sum(child.visits for child in current_node.children.values())
+                if total_visits > 0:
+                    alternative_lines.append({
+                        "depth": depth,
+                        "move": second_best_move,
+                        "visits": second_best_node.visits,
+                        "value": second_best_node.mean_value,
+                        "probability": second_best_node.visits / total_visits
+                    })
+            
+            # Follow principal variation
+            if depth < len(pv):
+                current_node = current_node.children[pv[depth]]
+            else:
+                break
+            depth += 1
+        
+        return {
+            "principal_variation": pv,
+            "alternative_lines": alternative_lines,
+            "pv_length": len(pv)
+        } 

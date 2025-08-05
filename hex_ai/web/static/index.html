@@ -14,8 +14,23 @@
       <div id="board-container"></div>
       <div id="controls">
         <button id="reset-btn">Reset</button>
+        <button id="undo-btn">Undo Last Move</button>
         <span>TRMPH: <input id="trmph-string" type="text" readonly size="40"></span>
         <button id="copy-trmph">Copy</button>
+      </div>
+      
+      <!-- TRMPH Sequence Input -->
+      <div id="trmph-sequence-section" class="control-panel">
+        <h3>Apply TRMPH Sequence</h3>
+        <div class="trmph-input-row">
+          <label for="trmph-sequence-input">Paste TRMPH moves (e.g., "a1b2c3"):</label>
+          <textarea id="trmph-sequence-input" placeholder="Paste TRMPH move sequence here..." rows="3" cols="50"></textarea>
+        </div>
+        <div class="trmph-button-row">
+          <button id="apply-trmph-sequence" class="btn-primary">Apply Sequence</button>
+          <button id="clear-trmph-sequence" class="btn-secondary">Clear</button>
+        </div>
+        <div id="trmph-sequence-status" class="status-message"></div>
       </div>
     </div>
     <div id="config-section">
@@ -81,9 +96,22 @@
         <h3>Computer Move Settings</h3>
         <div class="player-settings">
           <div class="player-label">Blue:</div>
+          <div class="search-method-row">
+            <label for="blue-use-mcts">Use MCTS:</label>
+            <input id="blue-use-mcts" type="checkbox">
+            <small>Use MCTS instead of fixed-tree search</small>
+          </div>
           <div class="search-width-row">
             <label for="blue-search-widths">Search Widths:</label>
             <input id="blue-search-widths" type="text" placeholder="10,10,5" value="">
+          </div>
+          <div class="mcts-row">
+            <label for="blue-num-simulations">MCTS Simulations:</label>
+            <input id="blue-num-simulations" type="number" value="200" min="10" max="2000" step="10">
+          </div>
+          <div class="mcts-row">
+            <label for="blue-exploration-constant">Exploration Constant:</label>
+            <input id="blue-exploration-constant" type="number" value="1.4" min="0.1" max="5.0" step="0.1">
           </div>
           <div class="temperature-row">
             <label for="blue-temperature">Temperature:</label>
@@ -92,9 +120,22 @@
         </div>
         <div class="player-settings">
           <div class="player-label">Red:</div>
+          <div class="search-method-row">
+            <label for="red-use-mcts">Use MCTS:</label>
+            <input id="red-use-mcts" type="checkbox">
+            <small>Use MCTS instead of fixed-tree search</small>
+          </div>
           <div class="search-width-row">
             <label for="red-search-widths">Search Widths:</label>
             <input id="red-search-widths" type="text" placeholder="10,10,5" value="">
+          </div>
+          <div class="mcts-row">
+            <label for="red-num-simulations">MCTS Simulations:</label>
+            <input id="red-num-simulations" type="number" value="200" min="10" max="2000" step="10">
+          </div>
+          <div class="mcts-row">
+            <label for="red-exploration-constant">Exploration Constant:</label>
+            <input id="red-exploration-constant" type="number" value="1.4" min="0.1" max="5.0" step="0.1">
           </div>
           <div class="temperature-row">
             <label for="red-temperature">Temperature:</label>
@@ -104,7 +145,7 @@
         <div class="computer-move-row">
           <button id="step-btn" class="btn-primary">Step (Computer Move)</button>
           <label for="step-delay">Delay (ms):</label>
-          <input id="step-delay" type="number" value="100" min="0" max="5000" step="100">
+          <input id="step-delay" type="number" value="0" min="0" max="5000" step="100">
         </div>
         <div class="auto-step-row">
           <label for="auto-step-checkbox">Auto-step:</label>
@@ -132,7 +173,6 @@
           <small>Toggle computer moves on/off for manual testing</small>
         </div>
         <div class="debug-row">
-          <button id="undo-btn" class="btn-secondary">Undo Last Move</button>
           <button id="clear-btn" class="btn-secondary">Clear Board</button>
         </div>
       </div>

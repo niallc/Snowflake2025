@@ -31,6 +31,13 @@ let state = {
   red_search_widths: [],
   blue_temperature: 0.2,
   red_temperature: 0.2,
+  // MCTS settings
+  blue_use_mcts: false,
+  red_use_mcts: false,
+  blue_num_simulations: 200,
+  red_num_simulations: 200,
+  blue_exploration_constant: 1.4,
+  red_exploration_constant: 1.4,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
@@ -58,13 +65,19 @@ function getCurrentPlayerSettings() {
     return {
       model_id: state.blue_model_id,
       search_widths: state.blue_search_widths,
-      temperature: state.blue_temperature
+      temperature: state.blue_temperature,
+      use_mcts: state.blue_use_mcts,
+      num_simulations: state.blue_num_simulations,
+      exploration_constant: state.blue_exploration_constant
     };
   } else {
     return {
       model_id: state.red_model_id,
       search_widths: state.red_search_widths,
-      temperature: state.red_temperature
+      temperature: state.red_temperature,
+      use_mcts: state.red_use_mcts,
+      num_simulations: state.red_num_simulations,
+      exploration_constant: state.red_exploration_constant
     };
   }
 }
@@ -106,6 +119,8 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
 async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
+                       blue_use_mcts = false, blue_num_simulations = 200, blue_exploration_constant = 1.4,
+                       red_use_mcts = false, red_num_simulations = 200, red_exploration_constant = 1.4,
                        verbose = 3) {
   console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
@@ -120,9 +135,15 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
       blue_model_id,
       blue_search_widths,
       blue_temperature,
+      blue_use_mcts,
+      blue_num_simulations,
+      blue_exploration_constant,
       red_model_id,
       red_search_widths,
       red_temperature,
+      red_use_mcts,
+      red_num_simulations,
+      red_exploration_constant,
       verbose
     }),
   });
@@ -140,15 +161,36 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0) {
-  console.log(`makeComputerMove called with model_id: ${model_id}`);
-  const resp = await fetch('/api/computer_move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
-  });
-  if (!resp.ok) throw new Error('API error');
-  return await resp.json();
+async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0,
+                               use_mcts = false, num_simulations = 200, exploration_constant = 1.4) {
+  console.log(`makeComputerMove called with model_id: ${model_id}, use_mcts: ${use_mcts}`);
+  
+  if (use_mcts) {
+    // Use MCTS endpoint
+    const resp = await fetch('/api/mcts_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        trmph, 
+        model_id, 
+        num_simulations, 
+        exploration_constant, 
+        temperature, 
+        verbose 
+      }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  } else {
+    // Use fixed-tree search endpoint
+    const resp = await fetch('/api/computer_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  }
 }
 
 // --- Board Rendering ---
@@ -220,7 +262,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
-      if (isLegal && !winner && !state.auto_step_active) {
+      if (isLegal && !state.auto_step_active) {
         hex.classList.add('clickable');
         hex.addEventListener('click', onCellClick);
       }
@@ -291,21 +333,35 @@ function updateUI() {
   // TRMPH
   document.getElementById('trmph-string').value = state.trmph;
   
-  // Update step button
+  // Update step button - keep it enabled even when game is over
   const stepBtn = document.getElementById('step-btn');
   if (state.winner) {
-    stepBtn.textContent = 'Game Over';
-    stepBtn.disabled = true;
+    stepBtn.textContent = 'Game Over (Step Still Works)';
   } else {
     stepBtn.textContent = 'Step (Computer Move)';
-    stepBtn.disabled = false;
   }
+  stepBtn.disabled = false;
   
   // Update debug controls
   const verboseLevel = document.getElementById('verbose-level');
   const computerToggle = document.getElementById('computer-toggle');
   if (verboseLevel) verboseLevel.value = state.verbose_level;
   if (computerToggle) computerToggle.textContent = state.computer_enabled ? 'ON' : 'OFF';
+
+  // Update MCTS controls
+  const blueUseMcts = document.getElementById('blue-use-mcts');
+  const blueNumSimulations = document.getElementById('blue-num-simulations');
+  const blueExplorationConstant = document.getElementById('blue-exploration-constant');
+  const redUseMcts = document.getElementById('red-use-mcts');
+  const redNumSimulations = document.getElementById('red-num-simulations');
+  const redExplorationConstant = document.getElementById('red-exploration-constant');
+  
+  if (blueUseMcts) blueUseMcts.checked = state.blue_use_mcts;
+  if (blueNumSimulations) blueNumSimulations.value = state.blue_num_simulations;
+  if (blueExplorationConstant) blueExplorationConstant.value = state.blue_exploration_constant;
+  if (redUseMcts) redUseMcts.checked = state.red_use_mcts;
+  if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
+  if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
@@ -313,16 +369,12 @@ function updateUI() {
     debugOutput.style.display = state.verbose_level > 0 ? 'block' : 'none';
   }
   
-  // Disable controls during auto-step (but allow interruption)
-  const controls = document.querySelectorAll('select, input:not(#auto-step-checkbox), button:not(#step-btn)');
-  controls.forEach(control => {
-    control.disabled = state.auto_step_active;
-  });
+  // Keep all controls active - no need to disable them during auto-step or game over
 }
 
 // --- Event Handlers ---
 async function onCellClick(e) {
-  if (state.auto_step_active || state.winner) return;
+  if (state.auto_step_active) return;
   
   const row = parseInt(e.target.getAttribute('data-row'));
   const col = parseInt(e.target.getAttribute('data-col'));
@@ -356,18 +408,27 @@ async function onCellClick(e) {
     
     // Step 2: If game is not over and computer is enabled, get the computer move
     if (!state.winner && state.computer_enabled) {
+      // Save state for undo functionality before computer move
+      saveStateForUndo();
+      
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerSearchWidths, computerTemperature;
+      let computerModelId, computerSearchWidths, computerTemperature, computerUseMcts, computerNumSimulations, computerExplorationConstant;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
         computerSearchWidths = state.blue_search_widths;
         computerTemperature = state.blue_temperature;
+        computerUseMcts = state.blue_use_mcts;
+        computerNumSimulations = state.blue_num_simulations;
+        computerExplorationConstant = state.blue_exploration_constant;
       } else {
         computerModelId = state.red_model_id;
         computerSearchWidths = state.red_search_widths;
         computerTemperature = state.red_temperature;
+        computerUseMcts = state.red_use_mcts;
+        computerNumSimulations = state.red_num_simulations;
+        computerExplorationConstant = state.red_exploration_constant;
       }
       
       // Make computer move with verbose output
@@ -376,7 +437,10 @@ async function onCellClick(e) {
         computerModelId, 
         computerSearchWidths, 
         computerTemperature,
-        state.verbose_level
+        state.verbose_level,
+        computerUseMcts,
+        computerNumSimulations,
+        computerExplorationConstant
       );
       
       if (computerResult.success) {
@@ -391,6 +455,8 @@ async function onCellClick(e) {
         // Display debug information if available
         if (computerResult.debug_info) {
           displayDebugInfo(computerResult.debug_info);
+        } else if (computerResult.mcts_debug_info) {
+          displayMCTSDebugInfo(computerResult.mcts_debug_info);
         }
         
         updateUI();
@@ -413,11 +479,23 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
+  const { model_id, search_widths, temperature, use_mcts, num_simulations, exploration_constant } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
+  // Save state for undo functionality before computer move
+  saveStateForUndo();
+  
   try {
-    const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature, state.verbose_level);
+    const result = await makeComputerMove(
+      state.trmph, 
+      model_id, 
+      search_widths, 
+      temperature, 
+      state.verbose_level,
+      use_mcts,
+      num_simulations,
+      exploration_constant
+    );
     
     if (result.success) {
       state.trmph = result.new_trmph;
@@ -431,6 +509,8 @@ async function stepComputerMove() {
       // Display debug information if available
       if (result.debug_info) {
         displayDebugInfo(result.debug_info);
+      } else if (result.mcts_debug_info) {
+        displayMCTSDebugInfo(result.mcts_debug_info);
       }
       
       updateUI();
@@ -558,6 +638,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.red_temperature = parseFloat(e.target.value);
   });
 
+  // MCTS controls
+  // Blue MCTS settings
+  document.getElementById('blue-use-mcts').addEventListener('change', (e) => {
+    state.blue_use_mcts = e.target.checked;
+  });
+  document.getElementById('blue-num-simulations').addEventListener('input', (e) => {
+    state.blue_num_simulations = parseInt(e.target.value);
+  });
+  document.getElementById('blue-exploration-constant').addEventListener('input', (e) => {
+    state.blue_exploration_constant = parseFloat(e.target.value);
+  });
+
+  // Red MCTS settings
+  document.getElementById('red-use-mcts').addEventListener('change', (e) => {
+    state.red_use_mcts = e.target.checked;
+  });
+  document.getElementById('red-num-simulations').addEventListener('input', (e) => {
+    state.red_num_simulations = parseInt(e.target.value);
+  });
+  document.getElementById('red-exploration-constant').addEventListener('input', (e) => {
+    state.red_exploration_constant = parseFloat(e.target.value);
+  });
+
   // Step button handler
   document.getElementById('step-btn').addEventListener('click', async () => {
     await stepComputerMove();
@@ -633,6 +736,134 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- Debug Output Functions ---
+function displayMCTSDebugInfo(mctsDebugInfo) {
+  if (!mctsDebugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // MCTS Search Statistics
+  if (mctsDebugInfo.search_stats) {
+    output += '=== MCTS SEARCH STATISTICS ===\n';
+    output += `Number of Simulations: ${mctsDebugInfo.search_stats.num_simulations}\n`;
+    output += `Search Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s\n`;
+    output += `Total Inferences: ${mctsDebugInfo.search_stats.total_inferences}\n`;
+    output += `Exploration Constant: ${mctsDebugInfo.search_stats.exploration_constant}\n`;
+    output += `Temperature: ${mctsDebugInfo.search_stats.temperature}\n`;
+    output += '\n';
+  }
+  
+  // Move Selection
+  if (mctsDebugInfo.move_selection) {
+    output += '=== MOVE SELECTION ===\n';
+    output += `Selected Move: ${mctsDebugInfo.move_selection.selected_move}\n`;
+    output += `Selected Move Coordinates: (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n`;
+    output += '\n';
+  }
+  
+  // Tree Statistics
+  if (mctsDebugInfo.tree_statistics) {
+    output += '=== TREE STATISTICS ===\n';
+    output += `Total Nodes: ${mctsDebugInfo.tree_statistics.total_nodes}\n`;
+    output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth}\n`;
+    output += `Total Visits: ${mctsDebugInfo.tree_statistics.total_visits}\n`;
+    output += '\n';
+  }
+  
+  // Move Probabilities
+  if (mctsDebugInfo.move_probabilities) {
+    output += '=== MOVE PROBABILITIES ===\n';
+    
+    // MCTS visit counts and probabilities
+    if (mctsDebugInfo.move_probabilities.mcts_visits) {
+      output += 'MCTS Visit Counts:\n';
+      const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
+        .sort(([,a], [,b]) => b - a);
+      
+      // Filter out moves with 0 visits
+      const nonZeroVisits = sortedVisits.filter(([, visits]) => visits > 0);
+      
+      if (nonZeroVisits.length > 0) {
+        nonZeroVisits.forEach(([move, visits]) => {
+          output += `  ${move}: ${visits} visits\n`;
+        });
+        
+        // Add summary for zero-visit moves if any exist
+        const zeroVisits = sortedVisits.filter(([, visits]) => visits === 0);
+        if (zeroVisits.length > 0) {
+          output += `  (all other nodes had 0 visits)\n`;
+        }
+      } else {
+        output += '  (no moves were visited)\n';
+      }
+      output += '\n';
+    }
+    
+    if (mctsDebugInfo.move_probabilities.direct_policy) {
+      output += 'Direct Policy Probabilities:\n';
+      const sortedDirect = Object.entries(mctsDebugInfo.move_probabilities.direct_policy)
+        .sort(([,a], [,b]) => b - a);
+      sortedDirect.forEach(([move, prob]) => {
+        const probPercent = (prob * 100).toFixed(2);
+        output += `  ${move}: ${probPercent}%\n`;
+      });
+      output += '\n';
+    }
+  }
+  
+  // Comparison
+  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct) {
+    output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
+    const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
+      .sort(([,a], [,b]) => b.difference - a.difference);
+    sortedComparison.forEach(([move, data]) => {
+      const mctsPercent = (data.mcts_probability * 100).toFixed(2);
+      const directPercent = (data.direct_probability * 100).toFixed(2);
+      const diffPercent = (data.difference * 100).toFixed(2);
+      const diffSign = data.difference >= 0 ? '+' : '';
+      output += `  ${move}: MCTS ${mctsPercent}% vs Direct ${directPercent}% (${diffSign}${diffPercent}%)\n`;
+    });
+    output += '\n';
+  }
+  
+  // Win Rate Analysis
+  if (mctsDebugInfo.win_rate_analysis) {
+    output += '=== WIN RATE ANALYSIS ===\n';
+    const winRate = mctsDebugInfo.win_rate_analysis;
+    output += `Root Value: ${winRate.root_value.toFixed(4)}\n`;
+    output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
+    output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n`;
+    output += '\n';
+  }
+  
+  // Move Sequence Analysis
+  if (mctsDebugInfo.move_sequence_analysis) {
+    output += '=== MOVE SEQUENCE ANALYSIS ===\n';
+    const seqAnalysis = mctsDebugInfo.move_sequence_analysis;
+    
+    if (seqAnalysis.principal_variation && seqAnalysis.principal_variation.length > 0) {
+      output += `Principal Variation (${seqAnalysis.pv_length} moves):\n`;
+      seqAnalysis.principal_variation.forEach((move, index) => {
+        output += `  ${index + 1}. ${move}\n`;
+      });
+      output += '\n';
+    }
+    
+    if (seqAnalysis.alternative_lines && seqAnalysis.alternative_lines.length > 0) {
+      output += 'Alternative Lines:\n';
+      seqAnalysis.alternative_lines.forEach(alt => {
+        const probPercent = (alt.probability * 100).toFixed(1);
+        output += `  Depth ${alt.depth + 1}: ${alt.move} (${alt.visits} visits, ${probPercent}%, value: ${alt.value.toFixed(4)})\n`;
+      });
+      output += '\n';
+    }
+  }
+  
+  debugContent.textContent = output;
+}
+
 function displayDebugInfo(debugInfo) {
   if (!debugInfo || state.verbose_level === 0) return;
   
@@ -747,6 +978,8 @@ function saveStateForUndo() {
   if (state.move_history.length > 10) {
     state.move_history.shift();
   }
+  
+
 } 
 
 // --- Debug utilities ---
@@ -1025,6 +1258,82 @@ function updateModelDropdown(selectId, modelId, modelName) {
   select.value = modelId;
 }
 
+// --- TRMPH Sequence Functions ---
+async function applyTrmphSequence() {
+  const trmphSequenceInput = document.getElementById('trmph-sequence-input');
+  const statusElement = document.getElementById('trmph-sequence-status');
+  const trmphSequence = trmphSequenceInput.value.trim();
+  
+  if (!trmphSequence) {
+    showTrmphStatus('Please enter a TRMPH sequence', 'error');
+    return;
+  }
+  
+  try {
+    showTrmphStatus('Applying TRMPH sequence...', 'info');
+    
+    const response = await fetch('/api/apply_trmph_sequence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        trmph_sequence: trmphSequence,
+        model_id: getCurrentPlayerSettings().model_id,
+        temperature: getCurrentPlayerSettings().temperature,
+        verbose: state.verbose_level
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to apply TRMPH sequence');
+    }
+    
+    const result = await response.json();
+    
+    if (result.success !== undefined && !result.success) {
+      throw new Error(result.error || 'Failed to apply TRMPH sequence');
+    }
+    
+    // Update state with the new board state
+    state.trmph = result.new_trmph;
+    state.board = result.board;
+    state.player = result.player;
+    state.legal_moves = result.legal_moves;
+    state.winner = result.winner;
+    state.policy = result.policy;
+    state.value = result.value;
+    state.win_prob = result.win_prob;
+    
+    // Update the TRMPH string display
+    document.getElementById('trmph-string').value = state.trmph;
+    
+    // Update the UI
+    updateUI();
+    
+    // Show success message
+    const movesApplied = result.moves_applied || 0;
+    const gameStatus = result.game_over ? ' (Game Over)' : '';
+    showTrmphStatus(`Successfully applied ${movesApplied} moves${gameStatus}`, 'success');
+    
+  } catch (error) {
+    console.error('Error applying TRMPH sequence:', error);
+    showTrmphStatus(`Error: ${error.message}`, 'error');
+  }
+}
+
+function clearTrmphSequence() {
+  document.getElementById('trmph-sequence-input').value = '';
+  document.getElementById('trmph-sequence-status').innerHTML = '';
+  document.getElementById('trmph-sequence-status').className = 'status-message';
+}
+
+function showTrmphStatus(message, type) {
+  const statusElement = document.getElementById('trmph-sequence-status');
+  statusElement.textContent = message;
+  statusElement.className = `status-message ${type}`;
+}
+
 // Event listeners for model browser
 document.addEventListener('DOMContentLoaded', function() {
   // Browse buttons
@@ -1084,4 +1393,8 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Select model button
   document.getElementById('select-model-btn').addEventListener('click', applySelectedModel);
+  
+  // TRMPH sequence functionality
+  document.getElementById('apply-trmph-sequence').addEventListener('click', applyTrmphSequence);
+  document.getElementById('clear-trmph-sequence').addEventListener('click', clearTrmphSequence);
 }); 
