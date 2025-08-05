@@ -59,6 +59,7 @@ class PipelineConfig:
     base_data_dir: str = "data"
     data_sources: List[str] = field(default_factory=lambda: ["data/processed/shuffled"])
     skip_files: List[int] = field(default_factory=lambda: [0])
+    selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
     # Processing configuration
     chunk_size: int = 10000
@@ -88,7 +89,8 @@ class PipelineConfig:
         self.model_full_path = os.path.join(self.model_path, self.model_filename)
         
         # Generate data directories for this run
-        self.selfplay_dir = str(Path(self.base_data_dir) / "sf25" / f"selfplay_{self.run_timestamp}")
+        if self.selfplay_dir is None:
+            self.selfplay_dir = str(Path(self.base_data_dir) / "sf25" / f"selfplay_{self.run_timestamp}")
         self.cleaned_dir = str(Path(self.base_data_dir) / "cleaned" / f"run_{self.run_timestamp}")
         self.processed_dir = str(Path(self.base_data_dir) / "processed" / f"run_{self.run_timestamp}")
         self.shuffled_dir = str(Path(self.base_data_dir) / "processed" / f"shuffled_{self.run_timestamp}")
@@ -444,6 +446,10 @@ class TrainingPipeline:
                 self.logger.info(f"\nStarting step {self.current_step}: Self-play")
                 selfplay_dir = self.selfplay_step.run()
                 self.step_results['selfplay'] = selfplay_dir
+            elif self.config.selfplay_dir is not None:
+                self.logger.info(f"Using existing self-play directory: {self.config.selfplay_dir}")
+                selfplay_dir = self.config.selfplay_dir
+                self.step_results['selfplay'] = selfplay_dir
             else:
                 self.logger.info("Skipping self-play (disabled)")
                 selfplay_dir = None
@@ -573,6 +579,9 @@ Examples:
   # Use multiple data sources (like original bash script)
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --data-sources data/processed/shuffled data/processed/jul_29_shuffled --skip-files 0 200
   
+  # Use existing raw self-play data
+  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --selfplay-dir data/sf25/aug_04 --no-selfplay
+  
   # Use only new data (no existing data)
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --data-sources
         """
@@ -593,6 +602,7 @@ Examples:
     
     # Data configuration
     parser.add_argument("--base-data-dir", default="data", help="Base directory for data")
+    parser.add_argument("--selfplay-dir", help="Use existing raw self-play directory (skip self-play generation)")
     parser.add_argument("--data-sources", type=str, nargs='+', default=["data/processed/shuffled"], 
                        help="Existing data directories to use for training")
     parser.add_argument("--skip-files", type=int, nargs='+', default=[0], 
@@ -645,13 +655,14 @@ def main():
             base_data_dir=args.base_data_dir,
             data_sources=args.data_sources,
             skip_files=args.skip_files,
+            selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
             position_selector=args.position_selector,
             max_workers_trmph=args.max_workers_trmph,
             num_buckets_shuffle=args.num_buckets_shuffle,
             max_samples=args.max_samples,
             results_dir=args.results_dir,
-            run_selfplay=not args.no_selfplay,
+            run_selfplay=not args.no_selfplay and args.selfplay_dir is None,
             run_preprocessing=not args.no_preprocessing,
             run_trmph_processing=not args.no_trmph_processing,
             run_shuffling=not args.no_shuffling,
