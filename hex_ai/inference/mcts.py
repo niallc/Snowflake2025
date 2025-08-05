@@ -15,8 +15,8 @@ import numpy as np
 
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
-from hex_ai.utils.format_conversion import rowcol_to_tensor
+from hex_ai.value_utils import policy_logits_to_probs_2d, get_top_k_legal_moves
+
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class MCTSNode:
     """Represents a node in the MCTS search tree."""
     # Core state
-    state: HexGameState  # The game state this node represents. MUST be a deep copy.
+    state: HexGameState  # The game state this node represents.
     parent: Optional['MCTSNode'] = None
     move: Optional[Tuple[int, int]] = None  # The move that led from parent to this node.
 
@@ -209,7 +209,7 @@ class NeuralMCTS:
         self.stats['total_inferences'] += 1
         policy_logits, value = self.model.simple_infer(node.state.get_board_tensor())
         
-        # Apply softmax and filter for legal moves
+        # Apply softmax and filter for legal moves using 2D approach
         legal_moves = node.state.get_legal_moves()
         node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
         
@@ -226,9 +226,8 @@ class NeuralMCTS:
 
         # Create child nodes for all legal moves
         for move, prior in node.policy_priors.items():
-            # IMPORTANT: The new state must be a deep copy.
-            child_state = copy.deepcopy(node.state)
-            child_state = child_state.make_move(*move) 
+            # make_move returns a new, independent state object.
+            child_state = node.state.make_move(*move)
             node.children[move] = MCTSNode(state=child_state, parent=node, move=move)
             
             # Verbose debug logging for child creation
@@ -302,8 +301,8 @@ class NeuralMCTS:
         Returns:
             Dictionary mapping moves to prior probabilities
         """
-        # Convert logits to probabilities
-        policy_probs = policy_logits_to_probs(policy_logits)
+        # Convert logits to 2D probabilities
+        policy_probs = policy_logits_to_probs_2d(policy_logits)
         
         # Extract probabilities for legal moves
         move_priors = {}
@@ -311,15 +310,14 @@ class NeuralMCTS:
         
         for move in legal_moves:
             row, col = move
-            # Convert 2D coordinates to 1D index
-            index = rowcol_to_tensor(row, col)
-            prior = policy_probs[index]
+            # Access policy probabilities directly with 2D coordinates
+            prior = policy_probs[row, col]
             move_priors[move] = prior
             total_prior += prior
             
             # Verbose debug logging for policy priors
             if self.verbose >= 4 and len(move_priors) <= 5:
-                self.logger.info(f"DEBUG: Move {move} (row={row}, col={col}) -> index={index} -> prior={prior:.6f}")
+                self.logger.info(f"DEBUG: Move {move} (row={row}, col={col}) -> prior={prior:.6f}")
         
         # Normalize to ensure probabilities sum to 1
         if total_prior > 0:

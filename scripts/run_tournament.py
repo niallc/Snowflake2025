@@ -154,11 +154,11 @@ if __name__ == "__main__":
     # Create log files with descriptive names
     timestamp = f"tournament_{args.num_games}games_{len(checkpoint_names)}models"
     LOG_DIR = "data/tournament_play"
-    LOG_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.log")
+    GAMES_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.trmph")
     CSV_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.csv")
     
     # Ensure log directory exists
-    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
     print(f"Tournament Configuration:")
     print(f"  Checkpoints: {checkpoint_names}")
@@ -167,13 +167,13 @@ if __name__ == "__main__":
     print(f"  Temperature: {play_config.temperature}")
     print(f"  Pie rule: {play_config.pie_rule}")
     print(f"  Random seed: {play_config.random_seed}")
-    print(f"  Results: {LOG_FILE}, {CSV_FILE}")
+    print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
     result = run_round_robin_tournament(
         config,
         verbose=args.verbose,
-        log_file=LOG_FILE,
+        log_file=GAMES_FILE,
         csv_file=CSV_FILE,
         play_config=play_config
     )
