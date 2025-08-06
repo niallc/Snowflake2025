@@ -46,6 +46,12 @@ scripts/fix_winner_labels_safe.py
 scripts/test_pipeline.py
 scripts/example_pipeline_usage.py
 write_ups/pipeline_code_review.md
+scripts/deprecated/example_pipeline_usage.py
+scripts/deprecated/test_pipeline.py
+write_ups/redundant/mcts_test_analysis.md
+write_ups/redundant/pipeline_code_review.md
+write_ups/redundant/tmp_hyperparam_sweep_improvements_guide.md
+write_ups/redundant/training_instability_analysis_summary.md
 
 # VSCode
 .vscode/

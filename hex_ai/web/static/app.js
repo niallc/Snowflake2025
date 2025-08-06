@@ -41,7 +41,7 @@ let state = {
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
-  verbose_level: 3, // Debug output level
+  verbose_level: 1, // Debug output level
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
   constants: null // Will be populated from backend
@@ -121,7 +121,7 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
                        blue_use_mcts = false, blue_num_simulations = 200, blue_exploration_constant = 1.4,
                        red_use_mcts = false, red_num_simulations = 200, red_exploration_constant = 1.4,
-                       verbose = 3) {
+                       verbose = 1) {
   console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
     method: 'POST',

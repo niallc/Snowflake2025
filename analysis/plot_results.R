@@ -11,8 +11,13 @@ library(rlang)
 # Configuration
 root_dir <- "~/Documents/programming/Snowflake2025"
 bookkeeping_dir <- file.path(root_dir, "checkpoints/bookkeeping/")
-plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_02")
-run_tag <- "aug2nd_sweep_2025_08_02"
+plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_06")
+run_tag <- "aug2nd_sweep_2025_08_06"
+
+# Look for all training metrics files from the recent sweep
+METRICS_FILES <- list.files(bookkeeping_dir, pattern = "training_metrics_20250805_162626\\.csv$", full.names = TRUE)
+# 
+
 
 # Ensure plots directory exists
 if (!dir.exists(plots_dir)) {
@@ -132,25 +137,62 @@ read_training_metrics <- function(file_path) {
   })
 }
 
+# Helper function to handle x-axis selection for plots
+get_plot_x_axis <- function(data) {
+  # Check if we have multiple epochs with the same mini_epoch values
+  epoch_mini_epoch_counts <- data %>%
+    group_by(run_label, mini_epoch) %>%
+    summarise(n_epochs = n_distinct(epoch), .groups = 'drop') %>%
+    filter(n_epochs > 1)
+  
+  if (nrow(epoch_mini_epoch_counts) > 0) {
+    warning("Multiple epochs found for same mini_epoch values. Creating composite x-axis.")
+    
+    # Create a composite x-axis that includes both epoch and mini_epoch
+    plot_data <- data %>%
+      mutate(
+        # Create a composite x value: epoch + mini_epoch/100
+        # This ensures unique x values while preserving the relationship
+        composite_x = epoch + mini_epoch/100
+      )
+    
+    return(list(
+      data = plot_data,
+      x_var = "composite_x",
+      x_label = "Epoch.Mini-Epoch"
+    ))
+  } else {
+    return(list(
+      data = data,
+      x_var = "mini_epoch",
+      x_label = "Mini-Epoch"
+    ))
+  }
+}
+
 # Function to create loss plot
 create_loss_plot <- function(data, loss_type = "policy", title = NULL) {
   if (is.null(title)) {
-    title <- paste(str_to_title(loss_type), "Loss by Epoch")
+    title <- paste(str_to_title(loss_type), "Loss by Mini-Epoch")
   }
   
   # Determine which columns to use
   train_col <- paste0(loss_type, "_loss")
   val_col <- paste0("val_", loss_type, "_loss")
   
-  # Create plot using modern ggplot2 syntax
-  plot <- ggplot(data, aes(x = mini_epoch, color = run_label)) +
+  # Get appropriate x-axis configuration
+  x_config <- get_plot_x_axis(data)
+  plot_data <- x_config$data
+  
+  # Create plot using the appropriate x-axis
+  plot <- ggplot(plot_data, aes(x = !!sym(x_config$x_var), color = run_label)) +
     geom_line(aes(y = !!sym(train_col)), linewidth = 1) +
     geom_point(aes(y = !!sym(train_col))) +
     geom_line(aes(y = !!sym(val_col)), linetype = "dotted", linewidth = 1) +
     ggtitle(title) +
     labs(
       color = "Configuration",
-      x = "Mini-Epoch",
+      x = x_config$x_label,
       y = paste(str_to_title(loss_type), "Loss")
     ) +
     theme_minimal() +
@@ -188,15 +230,19 @@ create_gradient_clipping_plot <- function(data) {
     return(NULL)
   }
   
-  # Create plot
-  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+  # Get appropriate x-axis configuration
+  x_config <- get_plot_x_axis(plot_data)
+  plot_data <- x_config$data
+  
+  # Create plot using the appropriate x-axis
+  plot <- ggplot(plot_data, aes(x = !!sym(x_config$x_var), color = run_label)) +
     geom_line(aes(y = gradient_norm), linewidth = 1, linetype = "solid") +
     geom_line(aes(y = post_clip_gradient_norm), linewidth = 1, linetype = "dashed") +
     geom_hline(aes(yintercept = max_grad_norm), linetype = "dotted", color = "red", linewidth = 1) +
     ggtitle("Gradient Norms: Pre-clip vs Post-clip") +
     labs(
       color = "Configuration",
-      x = "Mini-Epoch",
+      x = x_config$x_label,
       y = "Gradient Norm",
       caption = "Solid = Pre-clip, Dashed = Post-clip, Red dotted = Max gradient norm"
     ) +
@@ -235,15 +281,19 @@ create_lr_stats_plot <- function(data) {
     return(NULL)
   }
   
-  # Create plot
-  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+  # Get appropriate x-axis configuration
+  x_config <- get_plot_x_axis(plot_data)
+  plot_data <- x_config$data
+  
+  # Create plot using the appropriate x-axis
+  plot <- ggplot(plot_data, aes(x = !!sym(x_config$x_var), color = run_label)) +
     geom_line(aes(y = lr_mean), linewidth = 1) +
     geom_ribbon(aes(ymin = lr_min, ymax = lr_max, fill = run_label), alpha = 0.2) +
     ggtitle("Learning Rate Statistics by Mini-Epoch") +
     labs(
       color = "Configuration",
       fill = "Configuration",
-      x = "Mini-Epoch",
+      x = x_config$x_label,
       y = "Learning Rate",
       caption = "Line = Mean, Shaded area = Min to Max range"
     ) +
@@ -281,8 +331,12 @@ create_weight_stats_plot <- function(data) {
     return(NULL)
   }
   
-  # Create plot
-  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+  # Get appropriate x-axis configuration
+  x_config <- get_plot_x_axis(plot_data)
+  plot_data <- x_config$data
+  
+  # Create plot using the appropriate x-axis
+  plot <- ggplot(plot_data, aes(x = !!sym(x_config$x_var), color = run_label)) +
     geom_line(aes(y = weight_norm_mean), linewidth = 1) +
     geom_ribbon(aes(ymin = weight_norm_mean - weight_norm_std, 
                     ymax = weight_norm_mean + weight_norm_std, 
@@ -291,7 +345,7 @@ create_weight_stats_plot <- function(data) {
     labs(
       color = "Configuration",
       fill = "Configuration",
-      x = "Mini-Epoch",
+      x = x_config$x_label,
       y = "Weight Norm",
       caption = "Line = Mean, Shaded area = ±1 standard deviation"
     ) +
@@ -329,8 +383,12 @@ create_gradient_stats_plot <- function(data) {
     return(NULL)
   }
   
-  # Create plot
-  plot <- ggplot(plot_data, aes(x = mini_epoch, color = run_label)) +
+  # Get appropriate x-axis configuration
+  x_config <- get_plot_x_axis(plot_data)
+  plot_data <- x_config$data
+  
+  # Create plot using the appropriate x-axis
+  plot <- ggplot(plot_data, aes(x = !!sym(x_config$x_var), color = run_label)) +
     geom_line(aes(y = gradient_norm_mean), linewidth = 1) +
     geom_ribbon(aes(ymin = gradient_norm_mean - gradient_norm_std, 
                     ymax = gradient_norm_mean + gradient_norm_std, 
@@ -339,7 +397,7 @@ create_gradient_stats_plot <- function(data) {
     labs(
       color = "Configuration",
       fill = "Configuration",
-      x = "Mini-Epoch",
+      x = x_config$x_label,
       y = "Gradient Norm",
       caption = "Line = Mean, Shaded area = ±1 standard deviation"
     ) +
@@ -424,24 +482,21 @@ main <- function() {
     stop(paste("Bookkeeping directory not found:", bookkeeping_dir))
   }
   
-  # Look for all training metrics files from the recent sweep
-  metrics_files <- list.files(bookkeeping_dir, pattern = "training_metrics_20250802_.*\\.csv$", full.names = TRUE)
-  
-  if (length(metrics_files) == 0) {
+  if (length(METRICS_FILES) == 0) {
     stop("No training_metrics CSV files found in bookkeeping directory")
   }
   
   # Sort by modification time
-  file_info <- file.info(metrics_files)
-  metrics_files <- metrics_files[order(file_info$mtime, decreasing = TRUE)]
+  file_info <- file.info(METRICS_FILES)
+  METRICS_FILES <- METRICS_FILES[order(file_info$mtime, decreasing = TRUE)]
   
-  cat("Found", length(metrics_files), "training metrics files\n")
+  cat("Found", length(METRICS_FILES), "training metrics files\n")
   
   # Read all training data
   all_data <- list()
   successful_reads <- 0
   
-  for (file_path in metrics_files) {
+  for (file_path in METRICS_FILES) {
     cat("Reading:", basename(file_path), "\n")
     data <- read_training_metrics(file_path)
     

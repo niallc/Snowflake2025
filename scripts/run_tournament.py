@@ -33,6 +33,7 @@ or you can specify a single directory for all checkpoints.
 
 """
 import argparse
+from datetime import datetime
 import os
 import sys
 from hex_ai.inference.tournament import (
@@ -152,7 +153,10 @@ if __name__ == "__main__":
     )
 
     # Create log files with descriptive names
-    timestamp = f"tournament_{args.num_games}games_{len(checkpoint_names)}models"
+    timestamp = (
+        f"tournament_{args.num_games}games_{len(checkpoint_names)}models_"
+        f"{datetime.now().strftime('%y%m%d_%H')}"
+    )
     LOG_DIR = "data/tournament_play"
     GAMES_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.trmph")
     CSV_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.csv")
