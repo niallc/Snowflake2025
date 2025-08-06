@@ -6,7 +6,7 @@ import operator
 from functools import reduce
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.board_display import display_hex_board
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph, apply_move_to_state, select_top_value_head_move
 from hex_ai.file_utils import GracefulShutdown
 import sys
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
@@ -23,21 +23,17 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     sample_move_by_value,
-    select_policy_move,  # Add the new public function
-    apply_move_to_state_trmph, apply_move_to_state,  # Add move application utilities
-    select_top_value_head_move
+    select_policy_move  # Add the new public function
 )
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.inference.board_display import ansi_colored
 from hex_ai.utils.format_conversion import trmph_move_to_rowcol, rowcol_to_trmph
+from hex_ai.inference.model_config import get_model_path
 
 DEFAULT_BOARD_SIZE = 13
 DEFAULT_TOP_K = 20
 
-all_results_dir="checkpoints/hyperparameter_tuning/"
-this_model_dir="loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-checkpoint_file="epoch1_mini35.pt.gz"
-DEFAULT_CHKPT_PATH=f"{all_results_dir}/{this_model_dir}/{checkpoint_file}"
+DEFAULT_CHKPT_PATH = get_model_path("current_best")
 
 def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
     while True:

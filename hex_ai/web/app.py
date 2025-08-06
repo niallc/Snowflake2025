@@ -16,26 +16,21 @@ from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.inference.mcts import NeuralMCTS  # Add MCTS import
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.value_utils import (
-    # Add new utilities
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
-    select_policy_move,  # Add the new public function
+    select_policy_move,
 )
 from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.inference.game_engine import apply_move_to_state_trmph  # Add move application utilities
+from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
+from hex_ai.inference.model_config import get_default_model_paths
 
-# Model checkpoint defaults
-ALL_RESULTS_DIR = "checkpoints/"
-THIS_MODEL_DIR1 = "hyperparameter_tuning/Aug2nd_extra_logging/loss_weight_sweep_exp0__99914b_20250803_164153"
-THIS_MODEL_DIR2 = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-# THIS_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-CHECKPOINT_FILE1 = "epoch4_mini1.pt.gz"
-CHECKPOINT_FILE2 = "epoch2_mini16.pt.gz"
-DEFAULT_CHKPT_PATH1 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR1}/{CHECKPOINT_FILE1}"
-DEFAULT_CHKPT_PATH2 = f"{ALL_RESULTS_DIR}/{THIS_MODEL_DIR2}/{CHECKPOINT_FILE2}"
+# Model checkpoint defaults from central configuration
+DEFAULT_MODEL_PATHS = get_default_model_paths()
+DEFAULT_CHKPT_PATH1 = DEFAULT_MODEL_PATHS["model1"]
+DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -139,9 +134,13 @@ def register_dynamic_model(model_id: str, model_path: str):
 
 def get_available_models():
     """Return list of available model configurations."""
+    # Extract filenames from paths for display
+    model1_filename = os.path.basename(MODEL_PATHS["model1"])
+    model2_filename = os.path.basename(MODEL_PATHS["model2"])
+    
     return [
-        {"id": "model1", "name": f"Model 1 ({CHECKPOINT_FILE1})", "path": MODEL_PATHS["model1"]},
-        {"id": "model2", "name": f"Model 2 ({CHECKPOINT_FILE2})", "path": MODEL_PATHS["model2"]},
+        {"id": "model1", "name": f"Model 1 ({model1_filename})", "path": MODEL_PATHS["model1"]},
+        {"id": "model2", "name": f"Model 2 ({model2_filename})", "path": MODEL_PATHS["model2"]},
     ]
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 

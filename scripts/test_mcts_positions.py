@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hex_ai.inference.mcts import NeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.inference.model_config import get_model_path
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.utils.format_conversion import parse_trmph_to_board
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
@@ -149,7 +150,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Test MCTS on specific positions")
-    parser.add_argument("--model_path", help="Path to model checkpoint", default="checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz")
+    parser.add_argument("--model_path", help="Path to model checkpoint", default=get_model_path("current_best"))
     parser.add_argument("--position", type=str, 
                        default="https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7",
                        help="Position in trmph format")

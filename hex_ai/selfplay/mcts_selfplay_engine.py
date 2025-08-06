@@ -86,6 +86,9 @@ class MCTSSelfPlayEngine:
         
         self.logger.info("Starting new game")
         
+        # Initialize root node for tree reuse
+        root = None
+        
         # Play until game is over
         while not state.game_over:
             if state.current_player == BLUE_PLAYER:
@@ -100,11 +103,25 @@ class MCTSSelfPlayEngine:
             
             # Run MCTS search
             search_start = time.time()
-            root = self.mcts.search(state, self.num_simulations)
+            if root is None:
+                # First move: create new root
+                if self.verbose >= 2:
+                    self.logger.debug("Creating new MCTS root node")
+                root = self.mcts.search(state, self.num_simulations)
+            else:
+                # Subsequent moves: reuse existing tree
+                # The root should already represent the current state
+                # Just run additional simulations on the existing tree
+                if self.verbose >= 2:
+                    self.logger.debug(f"Reusing existing MCTS tree (root visits: {root.visits})")
+                root = self.mcts.search(root, self.num_simulations)
             search_time = time.time() - search_start
             
             # Get search statistics
             search_stats = self.mcts.get_search_statistics()
+            
+            # Reset statistics for next move
+            self.mcts.reset_search_statistics()
             
             # Select move
             selected_move = self.mcts.select_move(root, temperature=self.temperature)
@@ -118,9 +135,18 @@ class MCTSSelfPlayEngine:
                                 f"(search time: {search_time:.2f}s, "
                                 f"inferences: {search_stats.get('total_inferences', 0)})")
             
-            # Make move
+            # Make move and update root for tree reuse
             state = state.make_move(*selected_move)
             moves.append(selected_move)
+            
+            # Update root to the selected child and detach from parent
+            if selected_move in root.children:
+                root = root.children[selected_move]
+                root.detach_parent()
+            else:
+                # Fallback: create new root if child doesn't exist
+                self.logger.warning(f"Selected move {selected_move} not found in root children, creating new root")
+                root = None
             
             # Update statistics
             self.stats['total_moves'] += 1

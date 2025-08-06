@@ -9,7 +9,8 @@ from hex_ai.value_utils import get_win_prob_from_model_output, Winner
 import numpy as np
 
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
-THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
+from hex_ai.inference.model_config import get_model_dir
+THIS_MODEL_DIR = get_model_dir("previous_best").replace("checkpoints/", "")
 CHKPT_FILENAMES = [
     "epoch1_mini1.pt",
     "epoch1_mini5.pt"

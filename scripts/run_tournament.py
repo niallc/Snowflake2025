@@ -39,10 +39,11 @@ import sys
 from hex_ai.inference.tournament import (
     TournamentConfig, run_round_robin_tournament, TournamentPlayConfig
 )
+from hex_ai.inference.model_config import get_model_dir
 
 # Directory containing checkpoints
 CHKPT_BASE_DIR = "checkpoints/hyperparameter_tuning"
-DEFAULT_CHKPT_DIR = os.path.join(CHKPT_BASE_DIR, "loss_weight_sweep_exp0_bs256_98f719_20250724_233408")
+DEFAULT_CHKPT_DIR = get_model_dir("current_best")
 
 # Default list of checkpoints to compare
 DEFAULT_CHECKPOINTS = [

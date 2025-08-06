@@ -5,7 +5,8 @@ import re
 import pytest
 
 # Adjust these paths as needed for your environment
-MODEL_DIR = "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
+from hex_ai.inference.model_config import get_model_dir
+MODEL_DIR = get_model_dir("previous_best")
 MODEL_FILE = "epoch1_mini30.pt"
 SCRIPT_PATH = os.path.join("scripts", "simple_inference_cli.py")
 

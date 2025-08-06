@@ -69,6 +69,10 @@ class MCTSNode:
         if self.parent is None:
             return 0
         return self.parent.get_depth() + 1
+    
+    def detach_parent(self):
+        """Detach this node from its parent, making it a new root."""
+        self.parent = None
 
 
 class NeuralMCTS:
@@ -102,12 +106,12 @@ class NeuralMCTS:
         
         self.logger.info(f"Initialized NeuralMCTS with exploration_constant={exploration_constant}, win_value={win_value}, discount_factor={discount_factor}")
 
-    def search(self, root_state: HexGameState, num_simulations: int) -> MCTSNode:
+    def search(self, root_state_or_node, num_simulations: int) -> MCTSNode:
         """
-        Run MCTS search from a root state to build up statistics.
+        Run MCTS search from a root state or existing node to build up statistics.
         
         Args:
-            root_state: Starting game state
+            root_state_or_node: Either a HexGameState (for new search) or MCTSNode (for continuing search)
             num_simulations: Number of MCTS simulations to run
             
         Returns:
@@ -118,8 +122,15 @@ class NeuralMCTS:
         self.stats['start_time'] = time.time()
         self.stats['total_simulations'] = 0
         
-        # Create root node with deep copy of state
-        root = MCTSNode(state=copy.deepcopy(root_state))
+        # Handle both HexGameState and MCTSNode inputs
+        if isinstance(root_state_or_node, HexGameState):
+            # Create new root node with deep copy of state
+            root = MCTSNode(state=copy.deepcopy(root_state_or_node))
+        elif isinstance(root_state_or_node, MCTSNode):
+            # Continue search from existing node
+            root = root_state_or_node
+        else:
+            raise ValueError(f"Expected HexGameState or MCTSNode, got {type(root_state_or_node)}")
         
         # Run simulations
         for sim_idx in range(num_simulations):
@@ -424,6 +435,13 @@ class NeuralMCTS:
             if stats['total_simulations'] > 0:
                 stats['simulations_per_second'] = stats['total_simulations'] / stats['total_time']
         return stats
+    
+    def reset_search_statistics(self):
+        """Reset search statistics for the next search."""
+        self.stats['total_simulations'] = 0
+        self.stats['total_inferences'] = 0
+        self.stats['start_time'] = None
+        self.stats['end_time'] = None
     
     def get_principal_variation(self, root: MCTSNode, max_depth: int = 10) -> List[Tuple[int, int]]:
         """

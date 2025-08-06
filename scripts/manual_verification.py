@@ -43,6 +43,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching, PositionCollector
 from hex_ai.value_utils import get_top_k_moves_with_probs
+from hex_ai.inference.model_config import get_model_path
 
 def manual_verification_3x2():
     """
@@ -66,7 +67,7 @@ def manual_verification_3x2():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create initial state
@@ -153,7 +154,7 @@ def test_position_collector_manual():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create test positions
@@ -214,7 +215,7 @@ def interactive_debug_mode():
     print("Enter 'q' to quit, or follow the prompts.")
     
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     while True:

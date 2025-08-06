@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER, EMPTY_PIECE
+from hex_ai.inference.model_config import get_model_path
 
 
 def create_test_boards(num_boards=20):
@@ -45,8 +46,8 @@ def test_enhanced_inference():
     
     # Try to find a model checkpoint
     model_paths = [
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz",
-        "checkpoints/final_only/loss_weight_sweep_exp0_do0_pw0.2_794e88_20250723_230725/epoch1_mini1.pt.gz",
+        get_model_path("current_best"),
+        get_model_path("previous_best"),
         "checkpoints/latest.pt.gz"
     ]
     
@@ -179,8 +180,8 @@ def test_memory_management():
     
     # Find model
     model_paths = [
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz",
-        "checkpoints/final_only/loss_weight_sweep_exp0_do0_pw0.2_794e88_20250723_230725/epoch1_mini1.pt.gz",
+        get_model_path("current_best"),
+        get_model_path("previous_best"),
     ]
     
     model_path = None

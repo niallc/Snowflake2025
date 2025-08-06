@@ -500,9 +500,10 @@ def run_round_robin_tournament(
 # Example usage (to be moved to CLI or script):
 if __name__ == "__main__":
     # Example: compare two checkpoints
+    from hex_ai.inference.model_config import get_model_path
     checkpoints = [
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini30.pt",
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch1_mini35.pt"
+        get_model_path("previous_best"),
+        get_model_path("current_best")
     ]
     config = TournamentConfig(checkpoint_paths=checkpoints, num_games=4)
     result = run_round_robin_tournament(config, verbose=1)
