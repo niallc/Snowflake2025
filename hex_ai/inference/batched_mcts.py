@@ -103,7 +103,12 @@ class BatchedMCTSNode:
     
     def remove_virtual_loss(self, amount: int = 1):
         """Remove virtual loss after evaluation is complete."""
-        self.virtual_loss = max(0, self.virtual_loss - amount)
+        if amount == self.virtual_loss:
+            # Remove all virtual loss (common case after evaluation)
+            self.virtual_loss = 0
+        else:
+            # Remove specified amount (for partial removal if needed)
+            self.virtual_loss = max(0, self.virtual_loss - amount)
 
 
 class BatchedNeuralMCTS:
@@ -178,7 +183,12 @@ class BatchedNeuralMCTS:
         
         # Run simulations
         for sim_idx in range(num_simulations):
-            self._run_simulation(root)
+            # Execute selection phase to get leaf node
+            leaf_node = self._execute_selection_phase(root)
+            
+            # Expand and evaluate the leaf node (backpropagation handled by callback)
+            self._expand_and_evaluate(leaf_node)
+            
             self.stats['total_simulations'] += 1
             
             # Process batch periodically or when queue is large enough
@@ -225,16 +235,46 @@ class BatchedNeuralMCTS:
         
         return root
 
+    def _execute_selection_phase(self, root: BatchedMCTSNode) -> BatchedMCTSNode:
+        """
+        Execute the selection phase of MCTS: traverse the tree from root to a leaf node.
+        
+        This method only performs selection and returns the selected leaf node.
+        It does not perform backpropagation - that is handled by the evaluation callback.
+        
+        Args:
+            root: Root node of the search tree
+            
+        Returns:
+            Selected leaf node
+        """
+        # Selection: Traverse the tree using PUCT until a leaf node is found.
+        leaf_node = self._select(root)
+        return leaf_node
+
     def _run_simulation(self, root: BatchedMCTSNode) -> None:
-        """Run a single MCTS simulation."""
+        """
+        DEPRECATED: This method is replaced by the new orchestration in search().
+        
+        The old implementation had a critical bug where placeholder values were
+        backpropagated immediately, and true network values were never propagated
+        to ancestors. This method is kept for backward compatibility but should
+        not be used.
+        
+        Use the new approach where search() orchestrates the simulation loop:
+        1. _execute_selection_phase() handles selection
+        2. _expand_and_evaluate() handles expansion and queues evaluation
+        3. Backpropagation is handled by the evaluation callback
+        """
         # 1. Selection: Traverse the tree using PUCT until a leaf node is found.
         leaf_node = self._select(root)
         
         # 2. Expansion & Evaluation: If the game is not over, expand the leaf and get its value from the NN.
-        value = self._expand_and_evaluate(leaf_node)
+        # Note: This now returns None and handles backpropagation in the callback
+        self._expand_and_evaluate(leaf_node)
         
-        # 3. Backpropagation: Update statistics up the tree from the leaf.
-        self._backpropagate(leaf_node, value)
+        # 3. Backpropagation: This is now handled by the evaluation callback
+        # No manual backpropagation needed here
 
     def _select(self, node: BatchedMCTSNode) -> BatchedMCTSNode:
         """Traverse the tree from the root to a leaf node."""
@@ -284,18 +324,22 @@ class BatchedNeuralMCTS:
         return best_child
 
     # TODO (P3): Add brief explanation of the design, e.g. callback deferring evaluation.
-    def _expand_and_evaluate(self, node: BatchedMCTSNode) -> float:
+    def _expand_and_evaluate(self, node: BatchedMCTSNode) -> None:
         """
-        Expand a leaf node, create its children, and return the evaluated value.
+        Expand a leaf node and queue it for evaluation.
+        
+        This method handles the expansion and evaluation phases of MCTS.
+        Backpropagation is handled by the evaluation callback when the
+        neural network result arrives.
         
         Args:
             node: Leaf node to expand
-            
-        Returns:
-            Value of the node from the perspective of the current player
         """
         if node.is_terminal():
-            return self._terminal_value(node.state)
+            # For terminal nodes, we need to backpropagate immediately
+            value = self._terminal_value(node.state)
+            self._backpropagate(node, value)
+            return
 
         # Handle different node states
         if node.node_state == NodeState.UNEXPANDED:
@@ -305,7 +349,7 @@ class BatchedNeuralMCTS:
             
             # TODO (P3): Add further explanation of the callback.
             def evaluation_callback(policy_logits: np.ndarray, value: float):
-                """Callback to handle evaluation results."""
+                """Callback to handle evaluation results and backpropagation."""
                 if self.verbose >= 3:
                     self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
                 
@@ -326,10 +370,12 @@ class BatchedNeuralMCTS:
                 
                 # Mark node as expanded
                 node.node_state = NodeState.EXPANDED
-                node.remove_virtual_loss()
+                # Remove all virtual loss that was accumulated during evaluation
+                node.remove_virtual_loss(node.virtual_loss)
                 
-                # Update node statistics with the actual value
-                node.update_statistics(value)
+                # CRITICAL FIX: Backpropagate the true network value up the tree
+                # This ensures that all ancestors get the correct value, not the placeholder
+                self._backpropagate(node, value)
                 
                 if self.verbose >= 2:
                     self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
@@ -349,14 +395,9 @@ class BatchedNeuralMCTS:
                 metadata={'node_depth': node.get_depth(), 'simulation_id': self.stats['total_simulations']}
             )
             
-            # Queue the evaluation request - the callback will handle expansion later
-            # This is the proper asynchronous approach for batched MCTS
-            return 0.0  # Return placeholder - real value will be used in backpropagation when evaluation completes
-            
         elif node.node_state == NodeState.EVALUATION_PENDING:
-            # Node is already being evaluated, add virtual loss and return placeholder
+            # Node is already being evaluated, add virtual loss
             node.add_virtual_loss()
-            return 0.0
             
         else:  # NodeState.EXPANDED
             # Node is already expanded, this shouldn't happen in normal flow
