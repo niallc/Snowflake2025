@@ -61,6 +61,9 @@ scripts/test_mcts_tree_reuse.py
 scripts/test_model_config_integration.py
 write_ups/mcts_explorer_summary.md
 write_ups/mcts_tree_reuse_optimization.md
+scripts/test_batched_mcts.py
+write_ups/batched_mcts_implementation_summary.md
+
 # VSCode
 .vscode/
 
