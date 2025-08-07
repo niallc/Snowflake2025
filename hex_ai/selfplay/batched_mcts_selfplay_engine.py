@@ -116,8 +116,7 @@ class BatchedMCTSSelfPlayEngine:
                 # First move: create new root
                 if self.verbose >= 2:
                     self.logger.debug("Creating new MCTS root node")
-                # TODO (P3): Understand why we need to search to find the root node.
-                #            Isn't the root node the current state?
+                # Augment root with the children nodes and stats.
                 root = self.mcts.search(state, self.num_simulations)
             else:
                 # Subsequent moves: reuse existing tree
@@ -157,11 +156,11 @@ class BatchedMCTSSelfPlayEngine:
                 root = root.children[selected_move]
                 root.detach_parent()
             else:
-                # TODO (P2): If the below indicates a bug, raise an exception and crash. No fallback logic! 
-                #            Find errors fast.
-                # Fallback: create new root if child doesn't exist
-                self.logger.warning(f"Selected move {selected_move} not found in root children, creating new root")
-                root = None
+                # Raise exception and crash. No fallback logic! Find errors fast.
+                raise ValueError(f"CRITICAL: Selected move {selected_move} not found in root children, this indicates a bug.")
+                # # Fallback: create new root if child doesn't exist
+                # self.logger.warning(f"Selected move {selected_move} not found in root children, creating new root")
+                # root = None
             
             # Update statistics
             self.stats['total_moves'] += 1

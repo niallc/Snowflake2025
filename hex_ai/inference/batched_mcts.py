@@ -132,7 +132,7 @@ class BatchedNeuralMCTS:
         self.logger = logging.getLogger(__name__)
         
         # Initialize batch processor
-        self.batch_processor = BatchProcessor(model, optimal_batch_size)
+        self.batch_processor = BatchProcessor(model, optimal_batch_size, verbose=verbose)
         
         # Statistics tracking
         self.stats = {
@@ -173,27 +173,35 @@ class BatchedNeuralMCTS:
         else:
             raise ValueError(f"Expected HexGameState or BatchedMCTSNode, got {type(root_state_or_node)}")
         
+        # Track root for detailed logging
+        self._last_root = root
+        
         # Run simulations
         for sim_idx in range(num_simulations):
             self._run_simulation(root)
             self.stats['total_simulations'] += 1
             
             # Process batch periodically or when queue is large enough
-            # TODO (P1): Understand the magic number 10, what does "process" mean in this context?
-            #            Is this about network inference or some other procesing step?
+            # TODO (P4): Consider upadting '10' to a configurable parameter.
             if (sim_idx + 1) % 10 == 0 or self.batch_processor.get_queue_size() >= self.optimal_batch_size:
                 processed = self.batch_processor.process_batch()
                 if processed > 0:
                     self.stats['total_batches_processed'] += 1
             
             # Log progress every 100 simulations
-            # TODO (P3): Also log progress after 10 and 50 simulations, to see whether start-up is efficient?
+            # TODO (P3): Maybe also log progress after 10 and 50 simulations, to see whether start-up is efficient?
+            #            So e.g. (sim_idx + 1) % 100 == 0 or (sim_idx + 1) in [10, 50]
             if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
                 elapsed = time.time() - self.stats['start_time']
                 sims_per_sec = (sim_idx + 1) / elapsed
                 queue_size = self.batch_processor.get_queue_size()
+                cache_size = self.batch_processor.get_cache_size()
                 self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
-                               f"({sims_per_sec:.1f} sims/sec, queue: {queue_size})")
+                               f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
+            
+            # Detailed logging every 50 simulations
+            if self.verbose >= 2 and (sim_idx + 1) % 50 == 0:
+                self._log_detailed_progress(sim_idx + 1, num_simulations)
         
         # Process any remaining requests
         remaining_processed = self.batch_processor.process_all()
@@ -230,7 +238,7 @@ class BatchedNeuralMCTS:
 
     def _select(self, node: BatchedMCTSNode) -> BatchedMCTSNode:
         """Traverse the tree from the root to a leaf node."""
-        # TODO (P3): Crisp explanation: I think it's to descend the tree until we find a leaf node.
+        # TODO (P3): Add a crisp explanation: I think it's to descend the tree until we find a leaf node.
         while not node.is_leaf():
             node = self._select_child_with_puct(node)
         return node
@@ -295,9 +303,12 @@ class BatchedNeuralMCTS:
             node.node_state = NodeState.EVALUATION_PENDING
             node.add_virtual_loss()
             
-            # TODO (P3): Understand the logic of this method.
+            # TODO (P3): Add further explanation of the callback.
             def evaluation_callback(policy_logits: np.ndarray, value: float):
                 """Callback to handle evaluation results."""
+                if self.verbose >= 3:
+                    self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
+                
                 # Apply softmax and filter for legal moves
                 legal_moves = node.state.get_legal_moves()
                 node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
@@ -317,19 +328,30 @@ class BatchedNeuralMCTS:
                 node.node_state = NodeState.EXPANDED
                 node.remove_virtual_loss()
                 
+                # Update node statistics with the actual value
+                node.update_statistics(value)
+                
                 if self.verbose >= 2:
-                    self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}")
+                    self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
             
             # Request evaluation
+            # TODO (P3): Add brief explanation of how this batches evaluations
+            board_tensor = node.state.get_board_tensor()
+            # Convert tensor to numpy array for batch processor
+            # We expect PyTorch tensors from get_board_tensor(), so raise an exception if not
+            if not hasattr(board_tensor, 'cpu'):
+                raise ValueError(f"Expected PyTorch tensor from get_board_tensor(), got {type(board_tensor)}")
+            board_array = board_tensor.cpu().numpy()
+                
             self.batch_processor.request_evaluation(
-                board_state=node.state.get_board_tensor(),
+                board_state=board_array,
                 callback=evaluation_callback,
                 metadata={'node_depth': node.get_depth(), 'simulation_id': self.stats['total_simulations']}
             )
             
-            # Return a placeholder value - the real value will be used in backpropagation
-            # when the evaluation completes
-            return 0.0
+            # Queue the evaluation request - the callback will handle expansion later
+            # This is the proper asynchronous approach for batched MCTS
+            return 0.0  # Return placeholder - real value will be used in backpropagation when evaluation completes
             
         elif node.node_state == NodeState.EVALUATION_PENDING:
             # Node is already being evaluated, add virtual loss and return placeholder
@@ -349,7 +371,7 @@ class BatchedNeuralMCTS:
             value: Value to propagate up the tree
         """
         current_node = node
-        # TODO (P3): Get an explanation of the case where current_node is None.
+        # TODO (P3): Explain that 'None' indictes the root node.
         while current_node is not None:
             # Apply discount factor based on depth (move count penalty)
             depth = current_node.get_depth()
@@ -378,9 +400,8 @@ class BatchedNeuralMCTS:
             raise ValueError("Cannot get terminal value for non-terminal state")
         
         if state.winner is None:
-            # Draw (shouldn't happen in Hex, but good to handle)
-            # TODO (P2): Raise an exception and crash. No fallback logic! Find errors fast.
-            return 0.0
+            # Raise an exception and crash. No fallback logic! Find errors fast.
+            raise ValueError("CRITICAL: Game ended without a clear winner! This indicates a bug.")
         
         # The player who just moved is the OPPOSITE of current_player
         if not state.current_player in [BLUE_PLAYER, RED_PLAYER]:
@@ -466,8 +487,8 @@ class BatchedNeuralMCTS:
         moves = list(root.children.keys())
         visit_counts = [root.children[move].visits for move in moves]
         
-        # TODO (P4): Looks like _temperature_scale handles the deterministic case, so this is duplicate code.
-        #            Consider removing this. The two implementations are different, which is better?
+        # TODO (P1): Looks like _temperature_scale handles the deterministic case, so this is duplicate code.
+        #            Removing this, update the logic in _temperature_scale if necessary.
         if temperature == 0:
             # Deterministic: select most visited
             best_move_idx = np.argmax(visit_counts)
@@ -501,12 +522,11 @@ class BatchedNeuralMCTS:
             return [1.0 if count == max_visits else 0.0 for count in visit_counts]
         
         # Apply temperature scaling: p_i = (visits_i)^(1/temperature)
-        # TODO (P1): Understand the logic, why is dividing visits by temperature right?
+        # TODO (P3): Get further explanation of the logic. Why are we iterating over visit_counts?
         scaled_visits = [count ** (1.0 / temperature) for count in visit_counts]
         total = sum(scaled_visits)
         
         if total == 0:
-            # TODO (P1): Check that this really does indicate a bug.
             # Raise an exception and crash. No fallback logic! Find errors fast.
             raise ValueError(f"CRITICAL: All visit counts are zero! This indicates a bug.")
             # # Fallback to uniform distribution
@@ -526,7 +546,53 @@ class BatchedNeuralMCTS:
         batch_stats = self.batch_processor.get_statistics()
         stats.update(batch_stats)
         
+        # Add GPU memory statistics
+        from hex_ai.utils.gpu_monitoring import get_gpu_memory_info
+        gpu_mem = get_gpu_memory_info()
+        if gpu_mem:
+            stats['gpu_memory'] = gpu_mem
+        
+        # Add tree statistics if available
+        if hasattr(self, '_last_root') and self._last_root:
+            stats['tree_statistics'] = self._get_tree_statistics(self._last_root)
+        
         return stats
+    
+    def _get_tree_statistics(self, root: BatchedMCTSNode) -> Dict[str, Any]:
+        """Get detailed statistics about the search tree."""
+        if not root.children:
+            return {'total_nodes': 0, 'unexpanded': 0, 'pending': 0, 'expanded': 0}
+        
+        # Count nodes by state
+        unexpanded = 0
+        pending = 0
+        expanded = 0
+        total_visits = 0
+        
+        def count_nodes(node):
+            nonlocal unexpanded, pending, expanded, total_visits
+            if node.node_state == NodeState.UNEXPANDED:
+                unexpanded += 1
+            elif node.node_state == NodeState.EVALUATION_PENDING:
+                pending += 1
+            elif node.node_state == NodeState.EXPANDED:
+                expanded += 1
+            
+            total_visits += node.visits
+            
+            for child in node.children.values():
+                count_nodes(child)
+        
+        count_nodes(root)
+        
+        return {
+            'total_nodes': unexpanded + pending + expanded,
+            'unexpanded': unexpanded,
+            'pending': pending,
+            'expanded': expanded,
+            'total_visits': total_visits,
+            'root_visits': root.visits
+        }
     
     def reset_search_statistics(self):
         """Reset search statistics for the next search."""
@@ -569,3 +635,66 @@ class BatchedNeuralMCTS:
                 break
         
         return pv
+    
+    def _log_detailed_progress(self, sims_completed: int, total_sims: int):
+        """Log detailed progress information for debugging."""
+        elapsed = time.time() - self.stats['start_time']
+        sims_per_sec = sims_completed / elapsed
+        
+        # Get batch processor statistics
+        batch_stats = self.batch_processor.get_statistics()
+        
+        self.logger.info(f"=== Detailed Progress Report ===")
+        self.logger.info(f"Simulations: {sims_completed}/{total_sims} ({sims_per_sec:.1f} sims/sec)")
+        self.logger.info(f"Queue size: {self.batch_processor.get_queue_size()}")
+        self.logger.info(f"Cache size: {self.batch_processor.get_cache_size()}")
+        self.logger.info(f"Cache hit rate: {batch_stats.get('cache_hit_rate', 0):.1%}")
+        self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
+        self.logger.info(f"Average batch size: {batch_stats.get('average_batch_size', 0):.1f}")
+        
+        # GPU memory info
+        from hex_ai.utils.gpu_monitoring import get_gpu_memory_info
+        gpu_mem = get_gpu_memory_info()
+        if gpu_mem:
+            self.logger.info(f"GPU Memory: {gpu_mem['allocated_mb']:.1f}MB allocated "
+                           f"({gpu_mem['utilization_percent']:.1f}% utilization)")
+        
+        # Tree statistics
+        if hasattr(self, '_last_root') and self._last_root:
+            self._log_tree_statistics(self._last_root)
+        
+        self.logger.info(f"================================")
+    
+    def _log_tree_statistics(self, root: BatchedMCTSNode):
+        """Log statistics about the search tree."""
+        if not root.children:
+            return
+        
+        # Count nodes by state
+        unexpanded = 0
+        pending = 0
+        expanded = 0
+        
+        def count_nodes(node):
+            nonlocal unexpanded, pending, expanded
+            if node.node_state == NodeState.UNEXPANDED:
+                unexpanded += 1
+            elif node.node_state == NodeState.EVALUATION_PENDING:
+                pending += 1
+            elif node.node_state == NodeState.EXPANDED:
+                expanded += 1
+            
+            for child in node.children.values():
+                count_nodes(child)
+        
+        count_nodes(root)
+        
+        self.logger.info(f"Tree nodes: {unexpanded} unexpanded, {pending} pending, {expanded} expanded")
+        
+        # Show top moves
+        moves = list(root.children.keys())
+        visit_counts = [root.children[move].visits for move in moves]
+        
+        if visit_counts:
+            sorted_moves = sorted(zip(moves, visit_counts), key=lambda x: x[1], reverse=True)
+            self.logger.info(f"Top moves: {sorted_moves[:3]}")
