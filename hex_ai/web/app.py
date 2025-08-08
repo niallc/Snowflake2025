@@ -13,7 +13,7 @@ from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.mcts import NeuralMCTS  # Add MCTS import
+from hex_ai.inference.batched_mcts import BatchedNeuralMCTS  # Use batched MCTS for improved performance
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.value_utils import (
     policy_logits_to_probs,
@@ -34,6 +34,18 @@ DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
+
+# TODO: Refactor duplicated logic across API functions
+# The following functions share common patterns that should be extracted into utilities:
+# - api_state(), api_apply_move(), api_apply_trmph_sequence(), api_move()
+# Common patterns: TRMPH parsing/validation, player color conversion, model inference, response construction
+
+# TODO: Additional refactoring opportunities:
+# 1. Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py)
+# 2. Consolidate temperature scaling logic (duplicated in batched_mcts.py, mcts.py, value_utils.py)
+# 3. Create centralized move selection utility (duplicated in batched_mcts.py, mcts.py, web/app.py)
+# 4. Create base MCTS node class (duplicated between BatchedMCTSNode and MCTSNode)
+# 5. Break up complex functions: search() in batched_mcts.py, play_single_game() in tournament.py
 
 # Add debug logging for incoming requests
 @app.before_request
@@ -331,19 +343,16 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 if best_move is not None:
                     best_move_trmph = fc.rowcol_to_trmph(*best_move)
                 else:
-                    # Fallback to policy-based move using centralized utilities
-                    best_move = select_policy_move(state, model, temperature)
-                    best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                    app.logger.error("Tree search returned None for best_move")
+                    raise RuntimeError("Tree search returned None for best_move")
                     
                 # Update debug info with search tree if available
                 if verbose >= 2 and search_tree is not None:
                     debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
                                                   search_widths, temperature, verbose, None, search_tree, model_id)
             except Exception as e:
-                app.logger.warning(f"Tree search failed, falling back to policy: {e}")
-                # Fallback to policy-based move using centralized utilities
-                best_move = select_policy_move(state, model, temperature)
-                best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                app.logger.error(f"Tree search failed: {e}")
+                raise RuntimeError(f"Tree search failed: {e}")
         else:
             # Simple policy-based move using centralized utilities
             if verbose >= 1:
@@ -417,10 +426,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "error": f"Model loading failed: {e}"
             }
         
-        # Create MCTS engine
-        mcts = NeuralMCTS(
+        # Create batched MCTS engine for improved performance
+        mcts = BatchedNeuralMCTS(
             model=model,
             exploration_constant=exploration_constant,
+            optimal_batch_size=64,  # Good default for web interface
             verbose=verbose
         )
         
@@ -500,7 +510,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "win_rate_analysis": {
                 "root_value": root.mean_value if root.visits > 0 else 0.0,
                 "best_child_value": max([child.mean_value for child in root.children.values()]) if root.children else 0.0,
-                "win_probability": max(0.0, min(1.0, (root.mean_value + 1.5) / 3.0)) if root.visits > 0 else 0.5  # Convert from [-1.5,1.5] to [0,1] with bounds
+                "win_probability": max(0.0, min(1.0, (-root.mean_value + 1.5) / 3.0)) if root.visits > 0 else 0.5,  # Convert from [-1.5,1.5] to [0,1] with bounds, negated for current player perspective
+                "best_child_win_probability": max(0.0, min(1.0, (-max([child.mean_value for child in root.children.values()]) + 1.5) / 3.0)) if root.children else 0.5  # Best child from current player perspective
             },
             "move_sequence_analysis": {
                 "principal_variation": [fc.rowcol_to_trmph(*move) for move in move_sequence_analysis["principal_variation"]],
@@ -741,27 +752,23 @@ def api_state():
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
-    # Add defensive programming to catch any issues
+    # TODO: winner_to_color() should raise exceptions instead of returning 'reset' for invalid inputs
+    # This would eliminate the need for try-catch blocks in api_state(), api_apply_move(), api_apply_trmph_sequence(), and api_move()
     try:
         player_color = winner_to_color(player)
     except Exception as e:
         app.logger.error(f"Error converting player to color: {e}, player={player}")
-        player_color = 'unknown'
+        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
 
-    # Model inference
-    try:
-        model = get_model(model_id)
-        policy_logits, value_logit = model.simple_infer(trmph)
-        # Apply temperature scaling to policy using centralized utility
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        # Map policy to trmph moves
-        policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        # Win probability for current player
-        win_prob = get_win_prob_from_model_output(value_logit, player_color)
-    except Exception as e:
-        app.logger.error(f"Model inference failed: {e}")
-        policy_dict = {}
-        win_prob = 0.5
+    # Model inference - fail fast if this fails
+    model = get_model(model_id)
+    policy_logits, value_logit = model.simple_infer(trmph)
+    # Apply temperature scaling to policy using centralized utility
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    # Map policy to trmph moves
+    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
+    # Win probability for current player
+    win_prob = get_win_prob_from_model_output(value_logit, player_color)
 
     return jsonify({
         "board": board,
@@ -808,25 +815,20 @@ def api_apply_move():
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
-    # Add defensive programming to catch any issues
+    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
     try:
         player_color = winner_to_color(player)
     except Exception as e:
         app.logger.error(f"Error converting player to color: {e}, player={player}")
-        player_color = 'unknown'
+        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
 
-    # Recompute policy/value for the new state
-    try:
-        model = get_model(model_id)
-        policy_logits, value_logit = model.simple_infer(new_trmph)
-        # Apply temperature scaling to policy using centralized utility
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        win_prob = get_win_prob_from_model_output(value_logit, player_color)
-    except Exception as e:
-        app.logger.error(f"Final inference failed: {e}")
-        policy_dict = {}
-        win_prob = 0.5
+    # Recompute policy/value for the new state - fail fast if this fails
+    model = get_model(model_id)
+    policy_logits, value_logit = model.simple_infer(new_trmph)
+    # Apply temperature scaling to policy using centralized utility
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
+    win_prob = get_win_prob_from_model_output(value_logit, player_color)
 
     return jsonify({
         "new_trmph": new_trmph,
@@ -882,25 +884,20 @@ def api_apply_trmph_sequence():
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
-    # Add defensive programming to catch any issues
+    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
     try:
         player_color = winner_to_color(player)
     except Exception as e:
         app.logger.error(f"Error converting player to color: {e}, player={player}")
-        player_color = 'unknown'
+        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
 
-    # Recompute policy/value for the new state
-    try:
-        model = get_model(model_id)
-        policy_logits, value_logit = model.simple_infer(new_trmph)
-        # Apply temperature scaling to policy using centralized utility
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        win_prob = get_win_prob_from_model_output(value_logit, player_color)
-    except Exception as e:
-        app.logger.error(f"Final inference failed: {e}")
-        policy_dict = {}
-        win_prob = 0.5
+    # Recompute policy/value for the new state - fail fast if this fails
+    model = get_model(model_id)
+    policy_logits, value_logit = model.simple_infer(new_trmph)
+    # Apply temperature scaling to policy using centralized utility
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
+    win_prob = get_win_prob_from_model_output(value_logit, player_color)
 
     return jsonify({
         "new_trmph": new_trmph,
@@ -955,11 +952,7 @@ def api_move():
         try:
             # Determine which player's settings to use for the computer move
             # The current player after the human move determines whose settings to use
-            try:
-                current_player_color = winner_to_color(player)
-            except Exception as e:
-                app.logger.error(f"Error converting player to color for computer move: {e}, player={player}")
-                current_player_color = 'unknown'  # Avoids fallbacks as they can cause silent errors
+            current_player_color = winner_to_color(player)
             
             if current_player_color == 'blue':
                 # Use blue's settings for blue's computer move
@@ -1007,14 +1000,12 @@ def api_move():
                         # Convert TRMPH move back to coordinates for consistency
                         best_move = fc.trmph_move_to_rowcol(best_move_trmph)
                     else:
-                        app.logger.warning(f"MCTS failed, falling back to policy: {mcts_result.get('error', 'Unknown error')}")
-                        best_move = select_policy_move(state, model, computer_temperature)
-                        best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                        app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
+                        raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
                         
                 except Exception as e:
-                    app.logger.warning(f"MCTS failed, falling back to policy: {e}")
-                    best_move = select_policy_move(state, model, computer_temperature)
-                    best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                    app.logger.error(f"MCTS failed: {e}")
+                    raise RuntimeError(f"MCTS failed: {e}")
                     
             elif computer_search_widths and len(computer_search_widths) > 0:
                 # Use fixed-tree search if search_widths provided
@@ -1026,14 +1017,11 @@ def api_move():
                     if best_move is not None:
                         best_move_trmph = fc.rowcol_to_trmph(*best_move)
                     else:
-                        # Fallback to policy-based move using centralized utilities
-                        best_move = select_policy_move(state, model, computer_temperature)
-                        best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                        app.logger.error("Tree search returned None for best_move")
+                        raise RuntimeError("Tree search returned None for best_move")
                 except Exception as e:
-                    app.logger.warning(f"Tree search failed, falling back to policy: {e}")
-                    # Fallback to policy-based move using centralized utilities
-                    best_move = select_policy_move(state, model, computer_temperature)
-                    best_move_trmph = fc.rowcol_to_trmph(*best_move)
+                    app.logger.error(f"Tree search failed: {e}")
+                    raise RuntimeError(f"Tree search failed: {e}")
             else:
                 # Simple policy-based move using centralized utilities
                 best_move = select_policy_move(state, model, computer_temperature)
@@ -1066,25 +1054,20 @@ def api_move():
             app.logger.error(f"Model move failed: {e}")
             # Continue without model move if there's an error
     
-    # Add defensive programming to catch any issues
+    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
     try:
         player_color = winner_to_color(player)
     except Exception as e:
         app.logger.error(f"Error converting player to color: {e}, player={player}")
-        player_color = 'unknown'
+        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
 
     # Recompute policy/value for final state using centralized utilities
-    try:
-        model = get_model(model_id)
-        policy_logits, value_logit = model.simple_infer(new_trmph)
-        # Apply temperature scaling to policy using centralized utility
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-        win_prob = get_win_prob_from_model_output(value_logit, player_color)
-    except Exception as e:
-        app.logger.error(f"Final inference failed: {e}")
-        policy_dict = {}
-        win_prob = 0.5
+    model = get_model(model_id)
+    policy_logits, value_logit = model.simple_infer(new_trmph)
+    # Apply temperature scaling to policy using centralized utility
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
+    win_prob = get_win_prob_from_model_output(value_logit, player_color)
 
     response = {
         "new_trmph": new_trmph,

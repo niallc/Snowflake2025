@@ -191,16 +191,18 @@ class BatchedNeuralMCTS:
             
             self.stats['total_simulations'] += 1
             
-            # Process batch periodically or when queue is large enough
-            # TODO (P4): Consider upadting '10' to a configurable parameter.
-            if (sim_idx + 1) % 10 == 0 or self.batch_processor.get_queue_size() >= self.optimal_batch_size:
-                processed = self.batch_processor.process_batch()
+            # Process batch when queue is large enough or periodically to avoid starvation
+            # Force processing of small batches to ensure evaluations complete promptly
+            # TODO (P4): Consider upadting '3' to a configurable parameter.
+            if (self.batch_processor.get_queue_size() >= self.optimal_batch_size or 
+                (sim_idx + 1) % 3 == 0):  # Process every 3 simulations if queue is small
+                # Force processing of small batches to avoid starvation
+                force_processing = self.batch_processor.get_queue_size() < self.optimal_batch_size
+                processed = self.batch_processor.process_batch(force=force_processing)
                 if processed > 0:
                     self.stats['total_batches_processed'] += 1
             
-            # Log progress every 100 simulations
-            # TODO (P3): Maybe also log progress after 10 and 50 simulations, to see whether start-up is efficient?
-            #            So e.g. (sim_idx + 1) % 100 == 0 or (sim_idx + 1) in [10, 50]
+            # Log progress every 100 simulations (rate-limited for lower verbosity)
             if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
                 elapsed = time.time() - self.stats['start_time']
                 sims_per_sec = (sim_idx + 1) / elapsed
@@ -209,8 +211,8 @@ class BatchedNeuralMCTS:
                 self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
                                f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
             
-            # Detailed logging every 50 simulations
-            if self.verbose >= 2 and (sim_idx + 1) % 50 == 0:
+            # Detailed logging every 50 simulations (only for high verbosity)
+            if self.verbose >= 3 and (sim_idx + 1) % 50 == 0:
                 self._log_detailed_progress(sim_idx + 1, num_simulations)
         
         # Process any remaining requests
@@ -232,6 +234,11 @@ class BatchedNeuralMCTS:
             self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
             self.logger.info(f"Cache hit rate: {batch_stats['cache_hit_rate']:.1%}")
             self.logger.info(f"Average batch size: {batch_stats['average_batch_size']:.1f}")
+        
+        # More detailed summary for higher verbosity
+        if self.verbose >= 2:
+            self.logger.info(f"Performance summary: {batch_stats.get('inferences_per_second', 0):.1f} inferences/sec, "
+                           f"{batch_stats.get('average_batch_size', 0):.1f} avg batch size")
         
         return root
 
@@ -676,6 +683,59 @@ class BatchedNeuralMCTS:
                 break
         
         return pv
+    
+    def get_move_sequence_analysis(self, root: BatchedMCTSNode, max_depth: int = 5) -> Dict[str, Any]:
+        """
+        Get detailed analysis of the most likely move sequences.
+        
+        Args:
+            root: Root node of the search tree
+            max_depth: Maximum depth to analyze
+            
+        Returns:
+            Dictionary with move sequence analysis
+        """
+        if not root.children:
+            return {"principal_variation": [], "alternative_lines": []}
+        
+        # Get principal variation
+        pv = self.get_principal_variation(root, max_depth)
+        
+        # Get alternative lines (second best moves at each level)
+        alternative_lines = []
+        current_node = root
+        depth = 0
+        
+        while current_node.children and depth < max_depth:
+            # Sort children by visit count
+            sorted_children = sorted(current_node.children.items(), 
+                                   key=lambda x: x[1].visits, reverse=True)
+            
+            if len(sorted_children) >= 2:
+                # Add second best move as alternative
+                second_best_move, second_best_node = sorted_children[1]
+                total_visits = sum(child.visits for child in current_node.children.values())
+                if total_visits > 0:
+                    alternative_lines.append({
+                        "depth": depth,
+                        "move": second_best_move,
+                        "visits": second_best_node.visits,
+                        "value": second_best_node.mean_value,
+                        "probability": second_best_node.visits / total_visits
+                    })
+            
+            # Follow principal variation
+            if depth < len(pv):
+                current_node = current_node.children[pv[depth]]
+            else:
+                break
+            depth += 1
+        
+        return {
+            "principal_variation": pv,
+            "alternative_lines": alternative_lines,
+            "pv_length": len(pv)
+        }
     
     def _log_detailed_progress(self, sims_completed: int, total_sims: int):
         """Log detailed progress information for debugging."""

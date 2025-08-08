@@ -247,6 +247,8 @@ def get_player_to_move_from_moves(moves: list) -> Player:
 
 def winner_to_color(winner):
     """Map Winner enum, Player enum, or player int to color name string ('blue', 'red', or 'reset')."""
+    # TODO: This function should raise ValueError for invalid inputs instead of returning 'reset'
+    # This would make error handling more consistent with the "fail fast" principle
     if isinstance(winner, Winner):
         return 'blue' if winner == Winner.BLUE else 'red'
     if isinstance(winner, Player):

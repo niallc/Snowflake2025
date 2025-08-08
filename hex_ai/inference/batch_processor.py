@@ -57,6 +57,10 @@ class BatchProcessor:
         self.request_queue: List[BatchRequest] = []
         self.result_cache: Dict[bytes, Tuple[np.ndarray, float]] = {}
         
+        # Rate-limited logging
+        self.last_log_time = 0.0
+        self.log_interval = 5.0  # Log every 5 seconds for rate-limited output
+        
         # Performance statistics
         self.stats = {
             'total_requests': 0,
@@ -72,8 +76,8 @@ class BatchProcessor:
         
         logger.info(f"BatchProcessor initialized with optimal_batch_size={optimal_batch_size}, verbose={verbose}")
         
-        # Log initial memory status
-        if self.verbose >= 1:
+        # Log initial memory status only for high verbosity
+        if self.verbose >= 4:
             log_memory_status("Initial ")
     
     def request_evaluation(self, board_state: np.ndarray, 
@@ -120,7 +124,7 @@ class BatchProcessor:
         )
         self.request_queue.append(request)
         
-        if self.verbose >= 3:
+        if self.verbose >= 4:
             logger.debug(f"Added request to queue. Queue size: {len(self.request_queue)}, "
                         f"Cache size: {len(self.result_cache)}, "
                         f"Metadata: {metadata}")
@@ -143,14 +147,22 @@ class BatchProcessor:
         # Determine batch size
         batch_size = len(self.request_queue)
         if not force and batch_size < self.optimal_batch_size:
-            if self.verbose >= 2:
+            if self.verbose >= 3:
                 logger.debug(f"Batch too small ({batch_size} < {self.optimal_batch_size}), waiting for more requests")
             return 0  # Wait for more requests
         
         start_time = time.time()
         
-        if self.verbose >= 1:
+        # Rate-limited logging for batch processing
+        current_time = time.time()
+        should_log = (current_time - self.last_log_time) >= self.log_interval
+        
+        if self.verbose >= 1 and should_log:
             logger.info(f"Processing batch of {batch_size} requests (optimal: {self.optimal_batch_size})")
+            self.last_log_time = current_time
+        
+        # Detailed logging only for very high verbosity
+        if self.verbose >= 5:
             log_memory_status("Pre-batch ")
         
         # Extract boards and callbacks
@@ -203,9 +215,13 @@ class BatchProcessor:
             
             processed_count = len(boards)
             
-            if self.verbose >= 1:
+            # Rate-limited logging for batch completion
+            if self.verbose >= 1 and should_log:
                 logger.info(f"Batch processed: {processed_count} requests in {batch_time:.3f}s "
                            f"({processed_count/batch_time:.1f} req/s)")
+            
+            # Detailed logging only for very high verbosity
+            if self.verbose >= 5:
                 log_memory_status("Post-batch ")
             
         except Exception as e:
@@ -266,7 +282,9 @@ class BatchProcessor:
             'total_batches_processed': 0,
             'total_inferences': 0,
             'total_time': 0.0,
-            'average_batch_size': 0.0
+            'average_batch_size': 0.0,
+            'batch_processing_times': [],
+            'gpu_memory_samples': []
         }
     
     def clear_cache(self):
