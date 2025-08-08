@@ -49,10 +49,15 @@ class BatchProcessor:
             optimal_batch_size: Target batch size for optimal GPU utilization
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed, 3=debug)
         """
-        # TODO: PERFORMANCE - Monitor batch utilization to ensure optimal performance
-        # Current batching may be underfilling batches, causing many small model calls
-        # Track: average batch size, total model.predict() calls per move, GPU utilization
-        # Consider: relax "wait for N sims" to "collect until batch full or X ms passes"
+        # TODO: PERFORMANCE - Optimize batch utilization and tensor allocation
+        # IMPLEMENTATION PLAN (Phase 3.3):
+        # 1) Tune batch collection parameters: adjust max_wait_ms (1-5ms)
+        # 2) Pre-seed rollouts to fill queue before first inference
+        # 3) Pre-allocate input tensor pool, write into views when stacking
+        # 4) Batch CPU→GPU transfers, avoid per-state .cpu() calls
+        # 5) Monitor avg_batch_size vs target, aim for >80% utilization
+        # 6) Add performance instrumentation using PERF utility
+        # Expected gain: 1.5-3x speedup in inference throughput
         self.model = model
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose

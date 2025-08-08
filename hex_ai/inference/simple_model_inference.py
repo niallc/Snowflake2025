@@ -67,11 +67,15 @@ class LRUCache:
 
 
 class SimpleModelInference:
-    # TODO: PERFORMANCE - Investigate model call overhead for MCTS performance
-    # Current predict() calls may have Python-to-C transition overhead and tensor setup costs
-    # Consider: keep model loaded on GPU across calls, pre-allocate input tensors
-    # Use async GPU inference to overlap with MCTS CPU traversal
-    # Monitor: time spent in Python-to-C transitions vs actual inference
+    # TODO: PERFORMANCE - Optimize model inference for MCTS batching
+    # IMPLEMENTATION PLAN (Phase 3.3 + 3.4):
+    # 1) Pre-allocate input tensors once and reuse for batching
+    # 2) Keep model permanently on GPU, avoid device transfers
+    # 3) Use torch.inference_mode() for all forward passes
+    # 4) Implement device performance bake-off (CPU vs MPS vs CUDA)
+    # 5) Add performance instrumentation using PERF utility
+    # 6) Optimize tensor stacking and device transfers
+    # Expected gain: 1.5-3x speedup in inference, 0.5-2x from device optimization
     def __init__(
         self,
         checkpoint_path: str,
