@@ -17,6 +17,7 @@ from hex_ai.inference.mcts import NeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.board_display import display_hex_board
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -114,7 +115,7 @@ def test_mcts_progression(model_path: str, num_moves: int = 3):
         # Display current board
         print("Current board:")
         display_hex_board(state.board)
-        print(f"Player to move: {'Blue' if state.current_player == 0 else 'Red'}")
+        print(f"Player to move: {'Blue' if state.current_player == BLUE_PLAYER else 'Red'}")
         
         # Run MCTS search
         root = mcts.search(state, num_simulations=50)  # Fewer simulations for speed

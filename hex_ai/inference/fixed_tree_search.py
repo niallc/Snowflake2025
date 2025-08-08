@@ -312,7 +312,7 @@ class MinimaxSearchNode:
         self.is_maximizing: bool = (state.current_player == BLUE_PLAYER)  # Blue (0) maximizes, Red (1) minimizes
         
     def __str__(self):
-        return f"Node(depth={self.depth}, player={'Blue' if self.state.current_player == 0 else 'Red'}, " \
+        return f"Node(depth={self.depth}, player={'Blue' if self.state.current_player == BLUE_PLAYER else 'Red'}, " \
                f"maximizing={self.is_maximizing}, value={self.value}, path={self.path})"
 
 
@@ -637,7 +637,7 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
 
 def print_tree_structure(node: MinimaxSearchNode, indent=0):
     """Print the complete tree structure with all nodes."""
-    print("  " * indent + f"Node: depth={node.depth}, player={'Blue' if node.state.current_player == 0 else 'Red'}, "
+    print("  " * indent + f"Node: depth={node.depth}, player={'Blue' if node.state.current_player == BLUE_PLAYER else 'Red'}, "
           f"maximizing={node.is_maximizing}, value={node.value}, path={node.path}")
     
     for move, child in node.children.items():
@@ -704,7 +704,7 @@ def minimax_policy_value_search(
     
     if verbose >= 2:
         logger.info(f"Starting minimax search with widths {widths}, temperature {temperature}")
-        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == BLUE_PLAYER else 'Red'})")
     
     # Build the search tree
     root = build_search_tree(state, model, widths, temperature)
@@ -784,7 +784,7 @@ def minimax_policy_value_search_with_batching(
     
     if verbose >= 2:
         logger.info(f"Starting batched minimax search with widths {widths}, temperature {temperature}")
-        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == BLUE_PLAYER else 'Red'})")
     
     # Generate unique game ID for metadata validation
     game_id = id(state)  # Use object ID as unique identifier

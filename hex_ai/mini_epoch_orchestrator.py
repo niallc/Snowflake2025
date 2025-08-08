@@ -67,12 +67,21 @@ class MiniEpochOrchestrator:
                 if self.val_loader is not None:
                     val_metrics = self.trainer.validate()
                 
+                # Check for shutdown before starting training
+                if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
+                    self.logger.info("Shutdown requested before training mini-epoch, stopping training")
+                    raise GracefulShutdownRequested()
+                
                 # Train on this mini-epoch
                 train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch, mini_epoch=mini_epoch_idx, val_metrics=val_metrics)
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
-                    checkpoint_path = self.checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
+                    from hex_ai.file_utils import get_unique_checkpoint_path
+                    from pathlib import Path
+                    checkpoint_dir = Path(self.checkpoint_dir)
+                    base_checkpoint_path = checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
+                    checkpoint_path = get_unique_checkpoint_path(base_checkpoint_path)
                     self.trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics, compress=True)
                 
                 # Logging
@@ -93,10 +102,6 @@ class MiniEpochOrchestrator:
                     print(msg)
                     self.logger.info(msg)
                 mini_epoch_idx += 1
-                # Graceful shutdown check
-                if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
-                    self.logger.info("Shutdown requested, stopping training")
-                    raise GracefulShutdownRequested()
         
         self.logger.info(f"Training completed: processed {batch_count} total batches across {self.num_epochs - self.start_epoch} epochs")
         return {'total_batches': batch_count, 'epochs_completed': self.num_epochs - self.start_epoch} 

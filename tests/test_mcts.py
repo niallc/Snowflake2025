@@ -130,8 +130,54 @@ class TestNeuralMCTS:
         """Test MCTS engine initialization."""
         assert self.mcts.model == self.mock_model
         assert self.mcts.exploration_constant == 1.4
+        assert self.mcts.win_value == 1.5  # Default value
+        assert self.mcts.discount_factor == 0.98  # Default value
         assert self.mcts.stats['total_simulations'] == 0
         assert self.mcts.stats['total_inferences'] == 0
+    
+    def test_initialization_custom_win_value(self):
+        """Test MCTS engine initialization with custom win value."""
+        mcts_custom = NeuralMCTS(model=self.mock_model, win_value=2.0)
+        assert mcts_custom.win_value == 2.0
+    
+    def test_initialization_custom_discount_factor(self):
+        """Test MCTS engine initialization with custom discount factor."""
+        mcts_custom = NeuralMCTS(model=self.mock_model, discount_factor=0.95)
+        assert mcts_custom.discount_factor == 0.95
+    
+    def test_discount_factor_effect(self):
+        """Test that discount factor affects backpropagation correctly."""
+        # Create a simple tree structure
+        root_state = HexGameState()
+        root = MCTSNode(state=root_state, depth=0)
+        
+        # Create a child node
+        child_state = root_state.make_move(6, 6)
+        child = MCTSNode(state=child_state, parent=root, move=(6, 6), depth=1)
+        root.children[(6, 6)] = child
+        
+        # Test with different discount factors
+        test_cases = [
+            (1.0, 1.0),  # No discount
+            (0.5, 0.5),  # 50% discount
+            (0.8, 0.8),  # 20% discount
+        ]
+        
+        for discount_factor, expected_value in test_cases:
+            # Create MCTS with this discount factor
+            mcts = NeuralMCTS(model=self.mock_model, discount_factor=discount_factor)
+            
+            # Reset child state
+            child.total_value = 0.0
+            child.visits = 0
+            
+            # Backpropagate
+            mcts._backpropagate(child, 1.0)
+            
+            # Verify the discount was applied correctly
+            expected_discounted_value = 1.0 * (discount_factor ** 1)  # depth 1
+            assert abs(child.total_value - expected_discounted_value) < 1e-10, \
+                f"Discount factor {discount_factor} failed: expected {expected_discounted_value}, got {child.total_value}"
     
     def test_terminal_value_blue_win(self):
         """Test terminal value calculation for Blue win."""
@@ -141,9 +187,9 @@ class TestNeuralMCTS:
         state.current_player = BLUE_PLAYER  # Blue's turn, so Red just moved
         
         # Value should be from perspective of player who just moved (Red)
-        # Since Blue won, Red lost, so value should be -1.0
+        # Since Blue won, Red lost, so value should be -win_value
         value = self.mcts._terminal_value(state)
-        assert value == -1.0
+        assert value == -self.mcts.win_value
     
     def test_terminal_value_red_win(self):
         """Test terminal value calculation for Red win."""
@@ -153,9 +199,9 @@ class TestNeuralMCTS:
         state.current_player = RED_PLAYER  # Red's turn, so Blue just moved
         
         # Value should be from perspective of player who just moved (Blue)
-        # Since Red won, Blue lost, so value should be -1.0
+        # Since Red won, Blue lost, so value should be -win_value
         value = self.mcts._terminal_value(state)
-        assert value == -1.0
+        assert value == -self.mcts.win_value
     
     def test_terminal_value_draw(self):
         """Test terminal value calculation for draw."""
@@ -176,10 +222,10 @@ class TestNeuralMCTS:
     
     def test_get_priors_for_legal_moves(self):
         """Test prior probability extraction for legal moves."""
-        # Create mock policy logits (13x13 board)
-        policy_logits = np.zeros((13, 13))
-        policy_logits[6, 6] = 2.0  # High probability for center
-        policy_logits[0, 0] = 1.0  # Medium probability for corner
+        # Create mock policy logits (1D array, flattened from 13x13 board)
+        policy_logits = np.zeros(13 * 13)  # 169 elements
+        policy_logits[6 * 13 + 6] = 2.0  # High probability for center (6,6)
+        policy_logits[0 * 13 + 0] = 1.0  # Medium probability for corner (0,0)
         
         legal_moves = [(6, 6), (0, 0), (12, 12)]
         
@@ -201,7 +247,7 @@ class TestNeuralMCTS:
     
     def test_get_priors_zero_logits(self):
         """Test prior extraction when all logits are zero."""
-        policy_logits = np.zeros((13, 13))
+        policy_logits = np.zeros(13 * 13)  # 1D array, 169 elements
         legal_moves = [(6, 6), (0, 0), (12, 12)]
         
         priors = self.mcts._get_priors_for_legal_moves(policy_logits, legal_moves)
@@ -261,9 +307,9 @@ class TestMCTSBackpropagation:
         child1_state = HexGameState()
         child2_state = HexGameState()
         
-        root = MCTSNode(state=root_state)
-        child1 = MCTSNode(state=child1_state, parent=root, move=(6, 6))
-        child2 = MCTSNode(state=child2_state, parent=child1, move=(0, 0))
+        root = MCTSNode(state=root_state, depth=0)
+        child1 = MCTSNode(state=child1_state, parent=root, move=(6, 6), depth=1)
+        child2 = MCTSNode(state=child2_state, parent=child1, move=(0, 0), depth=2)
         
         root.children[(6, 6)] = child1
         child1.children[(0, 0)] = child2
@@ -276,20 +322,37 @@ class TestMCTSBackpropagation:
         child2.visits = 1
         child2.total_value = 0.5
         
+        # Store initial values for comparison
+        initial_root_value = root.total_value
+        initial_child1_value = child1.total_value
+        initial_child2_value = child2.total_value
+        
         # Backpropagate a value from child2
-        self.mcts._backpropagate(child2, 1.0)
+        backprop_value = 1.0
+        self.mcts._backpropagate(child2, backprop_value)
         
         # Check that all nodes were updated
         assert child2.visits == 2
-        assert child2.total_value == 1.5
-        
         assert child1.visits == 4
-        # child1 started with total_value=1.0, gets -1.0 from child2, so 1.0 + (-1.0) = 0.0
-        assert child1.total_value == 0.0
-        
         assert root.visits == 6
-        # root started with total_value=2.0, gets 1.0 from child1 (negated from child2), so 2.0 + 1.0 = 3.0
-        assert root.total_value == 3.0
+        
+        # Check that values were updated (without hardcoding specific numbers)
+        assert child2.total_value != initial_child2_value
+        assert child1.total_value != initial_child1_value
+        assert root.total_value != initial_root_value
+        
+        # Check that the discount factor was applied correctly
+        # child2 should get the backprop value with discount applied
+        expected_child2_discount = backprop_value * (self.mcts.discount_factor ** 2)
+        assert abs(child2.total_value - (initial_child2_value + expected_child2_discount)) < 1e-10
+        
+        # child1 should get the negated backprop value with discount applied
+        expected_child1_discount = -backprop_value * (self.mcts.discount_factor ** 1)
+        assert abs(child1.total_value - (initial_child1_value + expected_child1_discount)) < 1e-10
+        
+        # root should get the backprop value with discount applied
+        expected_root_discount = backprop_value * (self.mcts.discount_factor ** 0)
+        assert abs(root.total_value - (initial_root_value + expected_root_discount)) < 1e-10
     
     def test_backpropagation_value_negation(self):
         """Test that values are correctly negated during backpropagation."""
@@ -297,18 +360,33 @@ class TestMCTSBackpropagation:
         root_state = HexGameState()
         child_state = HexGameState()
         
-        root = MCTSNode(state=root_state)
-        child = MCTSNode(state=child_state, parent=root, move=(6, 6))
+        root = MCTSNode(state=root_state, depth=0)
+        child = MCTSNode(state=child_state, parent=root, move=(6, 6), depth=1)
         root.children[(6, 6)] = child
         
+        # Store initial values
+        initial_root_value = root.total_value
+        initial_child_value = child.total_value
+        
         # Backpropagate a positive value
-        self.mcts._backpropagate(child, 1.0)
+        backprop_value = 1.0
+        self.mcts._backpropagate(child, backprop_value)
         
-        # Child should get the positive value
-        assert child.total_value == 1.0
+        # Check that visits were incremented
+        assert child.visits == 1
+        assert root.visits == 1
         
-        # Root should get the negated value
-        assert root.total_value == -1.0
+        # Child should get the positive value with discount factor applied
+        expected_child_value = backprop_value * (self.mcts.discount_factor ** 1)  # depth 1
+        assert abs(child.total_value - expected_child_value) < 1e-10
+        
+        # Root should get the negated value with discount factor applied
+        expected_root_value = -backprop_value * (self.mcts.discount_factor ** 0)  # depth 0
+        assert abs(root.total_value - expected_root_value) < 1e-10
+        
+        # Verify that values changed from initial state
+        assert child.total_value != initial_child_value
+        assert root.total_value != initial_root_value
 
 
 class TestMCTSStateIntegrity:
@@ -351,7 +429,7 @@ class TestMCTSStateIntegrity:
         
         # Mock the model to return fixed values
         self.mock_model.simple_infer.return_value = (
-            np.ones((13, 13)) * 0.1,  # Policy logits
+            np.ones(13 * 13) * 0.1,  # Policy logits (1D array)
             0.5  # Value
         )
         
@@ -387,8 +465,8 @@ class TestMCTSIntegration:
         # Mock the model to return high value for winning moves
         def mock_infer(board_tensor):
             # Return high value for center move (simplified)
-            policy = np.ones((13, 13)) * 0.01
-            policy[6, 6] = 0.5  # High probability for center
+            policy = np.ones(13 * 13) * 0.01  # 1D array
+            policy[6 * 13 + 6] = 0.5  # High probability for center (6,6)
             return policy, 0.8  # High value
         
         self.mock_model.simple_infer.side_effect = mock_infer

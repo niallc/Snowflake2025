@@ -56,7 +56,8 @@ class TrainingLogger:
             'early_stopped', 'best_val_loss', 'epochs_trained',
             
             # Model statistics
-            'gradient_norm', 'gradient_norm_mean', 'gradient_norm_max', 'gradient_norm_min', 'gradient_norm_std',
+            'gradient_norm', 'post_clip_gradient_norm', 'gradient_norm_mean', 
+            'gradient_norm_max', 'gradient_norm_min', 'gradient_norm_std',
             'weight_norm_mean', 'weight_norm_std',
             'lr_mean', 'lr_min', 'lr_max', 'lr_std',
             'loss_spikes_count',
@@ -77,6 +78,53 @@ class TrainingLogger:
                 writer = csv.writer(f)
                 writer.writerow(self.headers)
             logger.info(f"Created new training metrics file: {self.log_file}")
+        else:
+            # Check if existing file has the correct headers
+            self._check_and_update_headers()
+    
+    def _check_and_update_headers(self):
+        """Check if existing CSV file has the correct headers and update if needed."""
+        try:
+            with open(self.log_file, 'r', newline='') as f:
+                reader = csv.reader(f)
+                existing_headers = next(reader, [])
+            
+            if existing_headers != self.headers:
+                logger.warning(f"CSV file {self.log_file} has outdated headers. Updating...")
+                
+                # Read all existing data
+                with open(self.log_file, 'r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    existing_data = list(reader)
+                
+                # Write back with new headers
+                with open(self.log_file, 'w', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=self.headers)
+                    writer.writeheader()
+                    
+                    # Write existing data, filling missing columns with empty strings
+                    for row in existing_data:
+                        # Ensure all required fields are present
+                        for header in self.headers:
+                            if header not in row:
+                                row[header] = ''
+                        writer.writerow(row)
+                
+                logger.info(f"Updated CSV headers in {self.log_file}")
+            else:
+                logger.debug(f"CSV file {self.log_file} has correct headers")
+                
+        except Exception as e:
+            logger.error(f"Error checking/updating CSV headers: {e}")
+            # If we can't read the file, create a backup and start fresh
+            backup_path = self.log_file.with_suffix('.csv.backup')
+            logger.warning(f"Creating backup of problematic file: {backup_path}")
+            self.log_file.rename(backup_path)
+            
+            with open(self.log_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(self.headers)
+            logger.info(f"Created new training metrics file: {self.log_file}")
     
     def log_epoch(self, 
                   epoch: int,
@@ -89,11 +137,13 @@ class TrainingLogger:
                   memory_usage_mb: float,
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
+                  post_clip_gradient_norm: Optional[float] = None,
                   weight_stats: Optional[Dict[str, float]] = None,
                   notes: str = "",
                   gradient_stats: Optional[Dict[str, float]] = None,
                   lr_stats: Optional[Dict[str, float]] = None,
-                  loss_spikes_count: int = 0) -> None:
+                  loss_spikes_count: int = 0,
+                  best_val_loss: Optional[float] = None) -> None:
         """
         Log metrics for a single epoch.
         
@@ -153,11 +203,12 @@ class TrainingLogger:
             
             # Training state
             'early_stopped': False,  # Will be updated later if needed
-            'best_val_loss': '',  # Will be updated by trainer
+            'best_val_loss': best_val_loss or '',  # Will be updated by trainer
             'epochs_trained': epoch + 1,
             
             # Model statistics
             'gradient_norm': gradient_norm or '',
+            'post_clip_gradient_norm': post_clip_gradient_norm or '',
             'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
             'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
             'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',

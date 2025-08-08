@@ -24,6 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import PositionCollector
+from hex_ai.inference.model_config import get_model_path
 
 def test_position_collector_basic():
     """
@@ -43,7 +44,7 @@ def test_position_collector_basic():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create position collector
@@ -115,7 +116,7 @@ def test_position_collector_batching():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create position collector
@@ -171,7 +172,7 @@ def test_position_collector_empty():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create position collector
@@ -202,7 +203,7 @@ def test_position_collector_mixed():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create position collector
@@ -269,7 +270,7 @@ def test_position_collector_correctness():
     
     # Initialize model
     model = SimpleModelInference(
-        "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408/epoch2_mini16.pt.gz"
+        get_model_path("current_best")
     )
     
     # Create test states

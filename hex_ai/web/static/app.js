@@ -31,10 +31,17 @@ let state = {
   red_search_widths: [],
   blue_temperature: 0.2,
   red_temperature: 0.2,
+  // MCTS settings
+  blue_use_mcts: false,
+  red_use_mcts: false,
+  blue_num_simulations: 200,
+  red_num_simulations: 200,
+  blue_exploration_constant: 1.4,
+  red_exploration_constant: 1.4,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
-  verbose_level: 3, // Debug output level
+  verbose_level: 1, // Debug output level
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
   constants: null // Will be populated from backend
@@ -58,13 +65,19 @@ function getCurrentPlayerSettings() {
     return {
       model_id: state.blue_model_id,
       search_widths: state.blue_search_widths,
-      temperature: state.blue_temperature
+      temperature: state.blue_temperature,
+      use_mcts: state.blue_use_mcts,
+      num_simulations: state.blue_num_simulations,
+      exploration_constant: state.blue_exploration_constant
     };
   } else {
     return {
       model_id: state.red_model_id,
       search_widths: state.red_search_widths,
-      temperature: state.red_temperature
+      temperature: state.red_temperature,
+      use_mcts: state.red_use_mcts,
+      num_simulations: state.red_num_simulations,
+      exploration_constant: state.red_exploration_constant
     };
   }
 }
@@ -106,7 +119,10 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
 async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
-                       verbose = 3) {
+                       blue_use_mcts = false, blue_num_simulations = 200, blue_exploration_constant = 1.4,
+                       red_use_mcts = false, red_num_simulations = 200, red_exploration_constant = 1.4,
+                       verbose = 1) {
+  console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -119,9 +135,15 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
       blue_model_id,
       blue_search_widths,
       blue_temperature,
+      blue_use_mcts,
+      blue_num_simulations,
+      blue_exploration_constant,
       red_model_id,
       red_search_widths,
       red_temperature,
+      red_use_mcts,
+      red_num_simulations,
+      red_exploration_constant,
       verbose
     }),
   });
@@ -139,14 +161,36 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0) {
-  const resp = await fetch('/api/computer_move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
-  });
-  if (!resp.ok) throw new Error('API error');
-  return await resp.json();
+async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0,
+                               use_mcts = false, num_simulations = 200, exploration_constant = 1.4) {
+  console.log(`makeComputerMove called with model_id: ${model_id}, use_mcts: ${use_mcts}`);
+  
+  if (use_mcts) {
+    // Use MCTS endpoint
+    const resp = await fetch('/api/mcts_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        trmph, 
+        model_id, 
+        num_simulations, 
+        exploration_constant, 
+        temperature, 
+        verbose 
+      }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  } else {
+    // Use fixed-tree search endpoint
+    const resp = await fetch('/api/computer_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  }
 }
 
 // --- Board Rendering ---
@@ -218,7 +262,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
-      if (isLegal && !winner && !state.auto_step_active) {
+      if (isLegal && !state.auto_step_active) {
         hex.classList.add('clickable');
         hex.addEventListener('click', onCellClick);
       }
@@ -289,21 +333,35 @@ function updateUI() {
   // TRMPH
   document.getElementById('trmph-string').value = state.trmph;
   
-  // Update step button
+  // Update step button - keep it enabled even when game is over
   const stepBtn = document.getElementById('step-btn');
   if (state.winner) {
-    stepBtn.textContent = 'Game Over';
-    stepBtn.disabled = true;
+    stepBtn.textContent = 'Game Over (Step Still Works)';
   } else {
     stepBtn.textContent = 'Step (Computer Move)';
-    stepBtn.disabled = false;
   }
+  stepBtn.disabled = false;
   
   // Update debug controls
   const verboseLevel = document.getElementById('verbose-level');
   const computerToggle = document.getElementById('computer-toggle');
   if (verboseLevel) verboseLevel.value = state.verbose_level;
   if (computerToggle) computerToggle.textContent = state.computer_enabled ? 'ON' : 'OFF';
+
+  // Update MCTS controls
+  const blueUseMcts = document.getElementById('blue-use-mcts');
+  const blueNumSimulations = document.getElementById('blue-num-simulations');
+  const blueExplorationConstant = document.getElementById('blue-exploration-constant');
+  const redUseMcts = document.getElementById('red-use-mcts');
+  const redNumSimulations = document.getElementById('red-num-simulations');
+  const redExplorationConstant = document.getElementById('red-exploration-constant');
+  
+  if (blueUseMcts) blueUseMcts.checked = state.blue_use_mcts;
+  if (blueNumSimulations) blueNumSimulations.value = state.blue_num_simulations;
+  if (blueExplorationConstant) blueExplorationConstant.value = state.blue_exploration_constant;
+  if (redUseMcts) redUseMcts.checked = state.red_use_mcts;
+  if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
+  if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
@@ -311,16 +369,12 @@ function updateUI() {
     debugOutput.style.display = state.verbose_level > 0 ? 'block' : 'none';
   }
   
-  // Disable controls during auto-step (but allow interruption)
-  const controls = document.querySelectorAll('select, input:not(#auto-step-checkbox), button:not(#step-btn)');
-  controls.forEach(control => {
-    control.disabled = state.auto_step_active;
-  });
+  // Keep all controls active - no need to disable them during auto-step or game over
 }
 
 // --- Event Handlers ---
 async function onCellClick(e) {
-  if (state.auto_step_active || state.winner) return;
+  if (state.auto_step_active) return;
   
   const row = parseInt(e.target.getAttribute('data-row'));
   const col = parseInt(e.target.getAttribute('data-col'));
@@ -354,18 +408,27 @@ async function onCellClick(e) {
     
     // Step 2: If game is not over and computer is enabled, get the computer move
     if (!state.winner && state.computer_enabled) {
+      // Save state for undo functionality before computer move
+      saveStateForUndo();
+      
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerSearchWidths, computerTemperature;
+      let computerModelId, computerSearchWidths, computerTemperature, computerUseMcts, computerNumSimulations, computerExplorationConstant;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
         computerSearchWidths = state.blue_search_widths;
         computerTemperature = state.blue_temperature;
+        computerUseMcts = state.blue_use_mcts;
+        computerNumSimulations = state.blue_num_simulations;
+        computerExplorationConstant = state.blue_exploration_constant;
       } else {
         computerModelId = state.red_model_id;
         computerSearchWidths = state.red_search_widths;
         computerTemperature = state.red_temperature;
+        computerUseMcts = state.red_use_mcts;
+        computerNumSimulations = state.red_num_simulations;
+        computerExplorationConstant = state.red_exploration_constant;
       }
       
       // Make computer move with verbose output
@@ -374,7 +437,10 @@ async function onCellClick(e) {
         computerModelId, 
         computerSearchWidths, 
         computerTemperature,
-        state.verbose_level
+        state.verbose_level,
+        computerUseMcts,
+        computerNumSimulations,
+        computerExplorationConstant
       );
       
       if (computerResult.success) {
@@ -389,6 +455,8 @@ async function onCellClick(e) {
         // Display debug information if available
         if (computerResult.debug_info) {
           displayDebugInfo(computerResult.debug_info);
+        } else if (computerResult.mcts_debug_info) {
+          displayMCTSDebugInfo(computerResult.mcts_debug_info);
         }
         
         updateUI();
@@ -411,11 +479,23 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, search_widths, temperature } = getCurrentPlayerSettings();
+  const { model_id, search_widths, temperature, use_mcts, num_simulations, exploration_constant } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
+  // Save state for undo functionality before computer move
+  saveStateForUndo();
+  
   try {
-    const result = await makeComputerMove(state.trmph, model_id, search_widths, temperature, state.verbose_level);
+    const result = await makeComputerMove(
+      state.trmph, 
+      model_id, 
+      search_widths, 
+      temperature, 
+      state.verbose_level,
+      use_mcts,
+      num_simulations,
+      exploration_constant
+    );
     
     if (result.success) {
       state.trmph = result.new_trmph;
@@ -429,6 +509,8 @@ async function stepComputerMove() {
       // Display debug information if available
       if (result.debug_info) {
         displayDebugInfo(result.debug_info);
+      } else if (result.mcts_debug_info) {
+        displayMCTSDebugInfo(result.mcts_debug_info);
       }
       
       updateUI();
@@ -474,7 +556,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       WINNER_VALUES: constantsResult.WINNER_VALUES
     };
     state.constants = constantsResult;
-    console.log('Loaded game constants:', GAME_CONSTANTS);
+    console.log('Loadedx game constants:', GAME_CONSTANTS);
   } catch (err) {
     console.error('Failed to load constants, using defaults:', err);
   }
@@ -556,6 +638,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.red_temperature = parseFloat(e.target.value);
   });
 
+  // MCTS controls
+  // Blue MCTS settings
+  document.getElementById('blue-use-mcts').addEventListener('change', (e) => {
+    state.blue_use_mcts = e.target.checked;
+  });
+  document.getElementById('blue-num-simulations').addEventListener('input', (e) => {
+    state.blue_num_simulations = parseInt(e.target.value);
+  });
+  document.getElementById('blue-exploration-constant').addEventListener('input', (e) => {
+    state.blue_exploration_constant = parseFloat(e.target.value);
+  });
+
+  // Red MCTS settings
+  document.getElementById('red-use-mcts').addEventListener('change', (e) => {
+    state.red_use_mcts = e.target.checked;
+  });
+  document.getElementById('red-num-simulations').addEventListener('input', (e) => {
+    state.red_num_simulations = parseInt(e.target.value);
+  });
+  document.getElementById('red-exploration-constant').addEventListener('input', (e) => {
+    state.red_exploration_constant = parseFloat(e.target.value);
+  });
+
   // Step button handler
   document.getElementById('step-btn').addEventListener('click', async () => {
     await stepComputerMove();
@@ -631,6 +736,145 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- Debug Output Functions ---
+function displayMCTSDebugInfo(mctsDebugInfo) {
+  if (!mctsDebugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // MCTS Search Statistics (condensed)
+  if (mctsDebugInfo.search_stats) {
+    output += '=== MCTS SEARCH STATISTICS ===\n';
+    output += `Simulations: ${mctsDebugInfo.search_stats.num_simulations} | `;
+    output += `Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s | `;
+    output += `Inferences: ${mctsDebugInfo.search_stats.total_inferences} | `;
+    output += `Exploration: ${mctsDebugInfo.search_stats.exploration_constant} | `;
+    output += `Temperature: ${mctsDebugInfo.search_stats.temperature}\n\n`;
+  }
+  
+  // Move Selection
+  if (mctsDebugInfo.move_selection) {
+    output += '=== MOVE SELECTION ===\n';
+    output += `Selected: ${mctsDebugInfo.move_selection.selected_move} (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
+  }
+  
+  // Tree Statistics (condensed)
+  if (mctsDebugInfo.tree_statistics) {
+    output += '=== TREE STATISTICS ===\n';
+    output += `Nodes: ${mctsDebugInfo.tree_statistics.total_nodes} | `;
+    output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth} | `;
+    output += `Total Visits: ${mctsDebugInfo.tree_statistics.total_visits}\n\n`;
+  }
+  
+  // Move Probabilities
+  if (mctsDebugInfo.move_probabilities) {
+    output += '=== MOVE PROBABILITIES ===\n';
+    
+    // MCTS visit counts (top moves only)
+    if (mctsDebugInfo.move_probabilities.mcts_visits) {
+      output += 'MCTS Visit Counts:\n';
+      const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
+        .sort(([,a], [,b]) => b - a);
+      
+      // Show only moves with visits > 0, limit to top 10
+      const nonZeroVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(0, 10);
+      
+      if (nonZeroVisits.length > 0) {
+        nonZeroVisits.forEach(([move, visits]) => {
+          const prob = visits / mctsDebugInfo.tree_statistics.total_visits * 100;
+          output += `  ${move}: ${visits} visits (${prob.toFixed(1)}%)\n`;
+        });
+        
+        // Add summary for remaining moves
+        const remainingVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(10);
+        if (remainingVisits.length > 0) {
+          const totalRemaining = remainingVisits.reduce((sum, [, visits]) => sum + visits, 0);
+          const remainingProb = totalRemaining / mctsDebugInfo.tree_statistics.total_visits * 100;
+          output += `  ... and ${remainingVisits.length} more moves (${remainingProb.toFixed(1)}%)\n`;
+        }
+      } else {
+        output += '  (no moves were visited)\n';
+      }
+      output += '\n';
+    }
+    
+    // Direct policy probabilities (top moves only)
+    if (mctsDebugInfo.move_probabilities.direct_policy) {
+      output += 'Direct Policy Probabilities (Top 10):\n';
+      const sortedDirect = Object.entries(mctsDebugInfo.move_probabilities.direct_policy)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 10);
+      sortedDirect.forEach(([move, prob]) => {
+        const probPercent = (prob * 100).toFixed(2);
+        output += `  ${move}: ${probPercent}%\n`;
+      });
+      output += '\n';
+    }
+  }
+  
+  // Comparison (top differences only)
+  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct) {
+    output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
+    const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
+      .sort(([,a], [,b]) => Math.abs(b.difference) - Math.abs(a.difference))
+      .slice(0, 10); // Show top 10 biggest differences
+    sortedComparison.forEach(([move, data]) => {
+      const mctsPercent = (data.mcts_probability * 100).toFixed(1);
+      const directPercent = (data.direct_probability * 100).toFixed(1);
+      const diffPercent = (data.difference * 100).toFixed(1);
+      const diffSign = data.difference >= 0 ? '+' : '';
+      output += `  ${move}: MCTS ${mctsPercent}% vs Direct ${directPercent}% (${diffSign}${diffPercent}%)\n`;
+    });
+    output += '\n';
+  }
+  
+  // Win Rate Analysis
+  if (mctsDebugInfo.win_rate_analysis) {
+    output += '=== WIN RATE ANALYSIS ===\n';
+    const winRate = mctsDebugInfo.win_rate_analysis;
+    output += `Root Value: ${winRate.root_value.toFixed(4)}\n`;
+    output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
+    output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n\n`;
+  }
+  
+  // Summary
+  if (mctsDebugInfo.summary) {
+    output += '=== SUMMARY ===\n';
+    const summary = mctsDebugInfo.summary;
+    output += `Top MCTS Move: ${summary.top_mcts_move || 'N/A'}\n`;
+    output += `Top Direct Move: ${summary.top_direct_move || 'N/A'}\n`;
+    output += `Moves Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
+    output += `Search Efficiency: ${summary.search_efficiency.toFixed(2)} inferences/simulation\n\n`;
+  }
+  
+  // Move Sequence Analysis
+  if (mctsDebugInfo.move_sequence_analysis) {
+    output += '=== MOVE SEQUENCE ANALYSIS ===\n';
+    const seqAnalysis = mctsDebugInfo.move_sequence_analysis;
+    
+    if (seqAnalysis.principal_variation && seqAnalysis.principal_variation.length > 0) {
+      output += `Principal Variation (${seqAnalysis.pv_length} moves):\n`;
+      seqAnalysis.principal_variation.forEach((move, index) => {
+        output += `  ${index + 1}. ${move}\n`;
+      });
+      output += '\n';
+    }
+    
+    if (seqAnalysis.alternative_lines && seqAnalysis.alternative_lines.length > 0) {
+      output += 'Alternative Lines:\n';
+      seqAnalysis.alternative_lines.forEach(alt => {
+        const probPercent = (alt.probability * 100).toFixed(1);
+        output += `  Depth ${alt.depth + 1}: ${alt.move} (${alt.visits} visits, ${probPercent}%, value: ${alt.value.toFixed(4)})\n`;
+      });
+      output += '\n';
+    }
+  }
+  
+  debugContent.textContent = output;
+}
+
 function displayDebugInfo(debugInfo) {
   if (!debugInfo || state.verbose_level === 0) return;
   
@@ -638,6 +882,15 @@ function displayDebugInfo(debugInfo) {
   if (!debugContent) return;
   
   let output = '';
+  
+  // Model information
+  if (debugInfo.model_info) {
+    output += '=== MODEL INFORMATION ===\n';
+    output += `Model ID: ${debugInfo.model_info.model_id}\n`;
+    output += `Model Type: ${debugInfo.model_info.model_type}\n`;
+    output += `Model Path: ${debugInfo.model_info.model_path}\n`;
+    output += '\n';
+  }
   
   // Basic information
   if (debugInfo.basic) {
@@ -736,6 +989,8 @@ function saveStateForUndo() {
   if (state.move_history.length > 10) {
     state.move_history.shift();
   }
+  
+
 } 
 
 // --- Debug utilities ---
@@ -769,3 +1024,388 @@ function debugBoardState(board, legalMoves, lastMove, winner, lastMovePlayer) {
   console.log('Piece counts - Blue:', blueCount, 'Red:', redCount, 'Empty:', emptyCount);
   console.log('========================');
 } 
+
+// --- Model Browser Functionality ---
+
+// Model browser state
+let modelBrowserState = {
+  modalOpen: false,
+  selectedModel: null,
+  currentPlayer: null, // 'blue' or 'red'
+  recentModels: [],
+  searchResults: [],
+  directoryModels: []
+};
+
+// API calls for model browser
+async function fetchRecentModels() {
+  try {
+    const response = await fetch('/api/model-browser/recent');
+    if (!response.ok) throw new Error('Failed to fetch recent models');
+    const data = await response.json();
+    return data.recent_models || [];
+  } catch (error) {
+    console.error('Error fetching recent models:', error);
+    return [];
+  }
+}
+
+async function fetchModelDirectories() {
+  try {
+    const response = await fetch('/api/model-browser/directories');
+    if (!response.ok) throw new Error('Failed to fetch directories');
+    const data = await response.json();
+    return data.directories || [];
+  } catch (error) {
+    console.error('Error fetching directories:', error);
+    return [];
+  }
+}
+
+async function fetchModelsInDirectory(directory) {
+  try {
+    const response = await fetch(`/api/model-browser/directory/${encodeURIComponent(directory)}`);
+    if (!response.ok) throw new Error('Failed to fetch models in directory');
+    const data = await response.json();
+    return data.models || [];
+  } catch (error) {
+    console.error('Error fetching models in directory:', error);
+    return [];
+  }
+}
+
+async function searchModels(query) {
+  try {
+    const response = await fetch(`/api/model-browser/search?q=${encodeURIComponent(query)}`);
+    if (!response.ok) throw new Error('Failed to search models');
+    const data = await response.json();
+    return data.models || [];
+  } catch (error) {
+    console.error('Error searching models:', error);
+    return [];
+  }
+}
+
+async function selectModel(modelPath, modelId) {
+  try {
+    const response = await fetch('/api/model-browser/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_path: modelPath, model_id: modelId })
+    });
+    if (!response.ok) throw new Error('Failed to select model');
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error selecting model:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Modal management
+function openModelBrowser(player) {
+  modelBrowserState.modalOpen = true;
+  modelBrowserState.currentPlayer = player;
+  modelBrowserState.selectedModel = null;
+  
+  document.getElementById('model-browser-modal').style.display = 'block';
+  document.getElementById('select-model-btn').disabled = true;
+  
+  // Load initial data
+  loadRecentModels();
+  loadDirectories();
+}
+
+function closeModelBrowser() {
+  modelBrowserState.modalOpen = false;
+  modelBrowserState.selectedModel = null;
+  modelBrowserState.currentPlayer = null;
+  
+  document.getElementById('model-browser-modal').style.display = 'none';
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('directory-models').innerHTML = '';
+  document.getElementById('model-search').value = '';
+}
+
+// Load and display recent models
+async function loadRecentModels() {
+  const recentModels = await fetchRecentModels();
+  modelBrowserState.recentModels = recentModels;
+  
+  const container = document.getElementById('recent-models-list');
+  if (recentModels.length === 0) {
+    container.innerHTML = '<div class="empty-list">No recent models</div>';
+  } else {
+    container.innerHTML = recentModels.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Load and display directories
+async function loadDirectories() {
+  const directories = await fetchModelDirectories();
+  const select = document.getElementById('directory-select');
+  
+  // Clear existing options except the first one
+  select.innerHTML = '<option value="">Select directory...</option>';
+  
+  directories.forEach(dir => {
+    const option = document.createElement('option');
+    option.value = dir;
+    option.textContent = dir;
+    select.appendChild(option);
+  });
+}
+
+// Load models in selected directory
+async function loadDirectoryModels(directory) {
+  const models = await fetchModelsInDirectory(directory);
+  modelBrowserState.directoryModels = models;
+  
+  const container = document.getElementById('directory-models');
+  if (models.length === 0) {
+    container.innerHTML = '<div class="empty-list">No models found in this directory</div>';
+  } else {
+    container.innerHTML = models.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Search models
+async function performSearch(query) {
+  if (!query.trim()) {
+    document.getElementById('search-results').innerHTML = '';
+    return;
+  }
+  
+  const models = await searchModels(query);
+  modelBrowserState.searchResults = models;
+  
+  const container = document.getElementById('search-results');
+  if (models.length === 0) {
+    container.innerHTML = '<div class="empty-list">No models found matching your search</div>';
+  } else {
+    container.innerHTML = models.map(model => createModelItem(model)).join('');
+  }
+}
+
+// Create model item HTML
+function createModelItem(model) {
+  const epochInfo = model.epoch && model.mini ? 
+    `<span class="model-item-epoch">E${model.epoch} M${model.mini}</span>` : '';
+  
+  return `
+    <div class="model-item" data-model-path="${model.relative_path}">
+      <div class="model-item-header">
+        <div class="model-item-name">${model.filename}${epochInfo}</div>
+        <div class="model-item-size">${model.size_mb} MB</div>
+      </div>
+      <div class="model-item-path">${model.relative_path}</div>
+    </div>
+  `;
+}
+
+// Handle model selection
+function selectModelItem(modelPath) {
+  modelBrowserState.selectedModel = modelPath;
+  document.getElementById('select-model-btn').disabled = false;
+  
+  // Update visual selection
+  document.querySelectorAll('.model-item').forEach(item => {
+    item.classList.remove('selected');
+  });
+  
+  const selectedItem = document.querySelector(`[data-model-path="${modelPath}"]`);
+  if (selectedItem) {
+    selectedItem.classList.add('selected');
+  }
+}
+
+// Apply selected model
+async function applySelectedModel() {
+  if (!modelBrowserState.selectedModel || !modelBrowserState.currentPlayer) {
+    return;
+  }
+  
+  const modelId = `model_${Date.now()}`; // Generate unique ID
+  console.log(`Attempting to select model: ${modelBrowserState.selectedModel} with ID: ${modelId}`);
+  
+  const result = await selectModel(modelBrowserState.selectedModel, modelId);
+  console.log('Model selection result:', result);
+  
+  if (result.success) {
+    // Update the appropriate model dropdown
+    const modelName = modelBrowserState.selectedModel.split('/').pop();
+    
+    if (modelBrowserState.currentPlayer === 'blue') {
+      state.blue_model_id = result.model_id;
+      updateModelDropdown('blue-model', result.model_id, modelName);
+      console.log(`Set blue model to: ${result.model_id}`);
+    } else {
+      state.red_model_id = result.model_id;
+      updateModelDropdown('red-model', result.model_id, modelName);
+      console.log(`Set red model to: ${result.model_id}`);
+    }
+    
+    closeModelBrowser();
+    updateUI();
+  } else {
+    console.error('Model selection failed:', result.error);
+    alert(`Error selecting model: ${result.error}`);
+  }
+}
+
+// Update model dropdown
+function updateModelDropdown(selectId, modelId, modelName) {
+  const select = document.getElementById(selectId);
+  
+  // Check if option already exists
+  let option = select.querySelector(`option[value="${modelId}"]`);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = modelId;
+    select.appendChild(option);
+  }
+  
+  option.textContent = modelName;
+  select.value = modelId;
+}
+
+// --- TRMPH Sequence Functions ---
+async function applyTrmphSequence() {
+  const trmphSequenceInput = document.getElementById('trmph-sequence-input');
+  const statusElement = document.getElementById('trmph-sequence-status');
+  const trmphSequence = trmphSequenceInput.value.trim();
+  
+  if (!trmphSequence) {
+    showTrmphStatus('Please enter a TRMPH sequence', 'error');
+    return;
+  }
+  
+  try {
+    showTrmphStatus('Applying TRMPH sequence...', 'info');
+    
+    const response = await fetch('/api/apply_trmph_sequence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        trmph_sequence: trmphSequence,
+        model_id: getCurrentPlayerSettings().model_id,
+        temperature: getCurrentPlayerSettings().temperature,
+        verbose: state.verbose_level
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to apply TRMPH sequence');
+    }
+    
+    const result = await response.json();
+    
+    if (result.success !== undefined && !result.success) {
+      throw new Error(result.error || 'Failed to apply TRMPH sequence');
+    }
+    
+    // Update state with the new board state
+    state.trmph = result.new_trmph;
+    state.board = result.board;
+    state.player = result.player;
+    state.legal_moves = result.legal_moves;
+    state.winner = result.winner;
+    state.policy = result.policy;
+    state.value = result.value;
+    state.win_prob = result.win_prob;
+    
+    // Update the TRMPH string display
+    document.getElementById('trmph-string').value = state.trmph;
+    
+    // Update the UI
+    updateUI();
+    
+    // Show success message
+    const movesApplied = result.moves_applied || 0;
+    const gameStatus = result.game_over ? ' (Game Over)' : '';
+    showTrmphStatus(`Successfully applied ${movesApplied} moves${gameStatus}`, 'success');
+    
+  } catch (error) {
+    console.error('Error applying TRMPH sequence:', error);
+    showTrmphStatus(`Error: ${error.message}`, 'error');
+  }
+}
+
+function clearTrmphSequence() {
+  document.getElementById('trmph-sequence-input').value = '';
+  document.getElementById('trmph-sequence-status').innerHTML = '';
+  document.getElementById('trmph-sequence-status').className = 'status-message';
+}
+
+function showTrmphStatus(message, type) {
+  const statusElement = document.getElementById('trmph-sequence-status');
+  statusElement.textContent = message;
+  statusElement.className = `status-message ${type}`;
+}
+
+// Event listeners for model browser
+document.addEventListener('DOMContentLoaded', function() {
+  // Browse buttons
+  document.getElementById('blue-model-browse').addEventListener('click', () => {
+    openModelBrowser('blue');
+  });
+  
+  document.getElementById('red-model-browse').addEventListener('click', () => {
+    openModelBrowser('red');
+  });
+  
+  // Modal close
+  document.querySelector('.close').addEventListener('click', closeModelBrowser);
+  document.getElementById('cancel-model-btn').addEventListener('click', closeModelBrowser);
+  
+  // Click outside modal to close
+  document.getElementById('model-browser-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'model-browser-modal') {
+      closeModelBrowser();
+    }
+  });
+  
+  // Model selection
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.model-item')) {
+      const modelItem = e.target.closest('.model-item');
+      const modelPath = modelItem.dataset.modelPath;
+      selectModelItem(modelPath);
+    }
+  });
+  
+  // Search functionality
+  document.getElementById('search-btn').addEventListener('click', () => {
+    const query = document.getElementById('model-search').value;
+    performSearch(query);
+  });
+  
+  document.getElementById('model-search').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      const query = e.target.value;
+      performSearch(query);
+    }
+  });
+  
+  // Directory selection
+  document.getElementById('directory-select').addEventListener('change', (e) => {
+    const directory = e.target.value;
+    if (directory) {
+      loadDirectoryModels(directory);
+    } else {
+      document.getElementById('directory-models').innerHTML = '';
+    }
+  });
+  
+  // Refresh directories
+  document.getElementById('refresh-dirs-btn').addEventListener('click', loadDirectories);
+  
+  // Select model button
+  document.getElementById('select-model-btn').addEventListener('click', applySelectedModel);
+  
+  // TRMPH sequence functionality
+  document.getElementById('apply-trmph-sequence').addEventListener('click', applyTrmphSequence);
+  document.getElementById('clear-trmph-sequence').addEventListener('click', clearTrmphSequence);
+}); 

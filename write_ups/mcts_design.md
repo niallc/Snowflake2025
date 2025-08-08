@@ -161,7 +161,8 @@ This plan prioritizes correctness before performance. Each phase should be compl
         - **Integration Test**: Run a full search on a simple, known "win-in-1" position. Use a dummy network that returns fixed values. Assert that after a small number of simulations, the winning move has the highest visit count.
         - **Value Perspective Test**: Verify that values are correctly handled from the perspective of the player who just moved (child's perspective) vs parent's perspective.
     5.  **Implementation Notes**:
-        - Use `copy.deepcopy()` for state copying to ensure true independence
+        - Use `copy.deepcopy()` for initial state copying to protect caller's state
+        - Use `make_move()` directly for child state creation (it returns a new, independent state)
         - Add logging to track value propagation through the tree
         - Implement a simple move selection function that samples based on visit counts
         - Add basic statistics tracking (simulations per second, tree size, etc.)
@@ -278,7 +279,7 @@ MCTS_CONFIG = {
 
 ### State Mutation Bugs
 - **Problem**: Modifying a child state affects parent/siblings
-- **Solution**: Use `copy.deepcopy()` for all state copying
+        - **Solution**: Use `copy.deepcopy()` for initial state copying, use `make_move()` for child states
 - **Debug**: Write test that modifies child state and verifies parent remains unchanged
 
 ### PUCT Formula Errors

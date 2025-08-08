@@ -33,15 +33,17 @@ or you can specify a single directory for all checkpoints.
 
 """
 import argparse
+from datetime import datetime
 import os
 import sys
 from hex_ai.inference.tournament import (
     TournamentConfig, run_round_robin_tournament, TournamentPlayConfig
 )
+from hex_ai.inference.model_config import get_model_dir
 
 # Directory containing checkpoints
 CHKPT_BASE_DIR = "checkpoints/hyperparameter_tuning"
-DEFAULT_CHKPT_DIR = os.path.join(CHKPT_BASE_DIR, "loss_weight_sweep_exp0_bs256_98f719_20250724_233408")
+DEFAULT_CHKPT_DIR = get_model_dir("current_best")
 
 # Default list of checkpoints to compare
 DEFAULT_CHECKPOINTS = [
@@ -152,13 +154,16 @@ if __name__ == "__main__":
     )
 
     # Create log files with descriptive names
-    timestamp = f"tournament_{args.num_games}games_{len(checkpoint_names)}models"
+    timestamp = (
+        f"tournament_{args.num_games}games_{len(checkpoint_names)}models_"
+        f"{datetime.now().strftime('%y%m%d_%H')}"
+    )
     LOG_DIR = "data/tournament_play"
-    LOG_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.log")
+    GAMES_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.trmph")
     CSV_FILE = os.path.join(LOG_DIR, f"{timestamp}/tournament.csv")
     
     # Ensure log directory exists
-    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
     print(f"Tournament Configuration:")
     print(f"  Checkpoints: {checkpoint_names}")
@@ -167,13 +172,13 @@ if __name__ == "__main__":
     print(f"  Temperature: {play_config.temperature}")
     print(f"  Pie rule: {play_config.pie_rule}")
     print(f"  Random seed: {play_config.random_seed}")
-    print(f"  Results: {LOG_FILE}, {CSV_FILE}")
+    print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
     result = run_round_robin_tournament(
         config,
         verbose=args.verbose,
-        log_file=LOG_FILE,
+        log_file=GAMES_FILE,
         csv_file=CSV_FILE,
         play_config=play_config
     )

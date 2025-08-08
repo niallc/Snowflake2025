@@ -17,7 +17,7 @@ class MockTrainer:
         self.validate_calls = 0
         self.checkpoints = []
 
-    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None):
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None, val_metrics=None):
         # Record the number of batches in this mini-epoch
         self.train_calls.append(len(list(batch_iterable)))
         return {'total_loss': 1.0, 'policy_loss': 0.5, 'value_loss': 0.5}
@@ -26,7 +26,7 @@ class MockTrainer:
         self.validate_calls += 1
         return {'total_loss': 0.9, 'policy_loss': 0.4, 'value_loss': 0.5}
 
-    def save_checkpoint(self, path, train_metrics, val_metrics):
+    def save_checkpoint(self, path, train_metrics, val_metrics, compress=True):
         self.checkpoints.append(path)
 
 # ---
@@ -44,7 +44,7 @@ def test_mini_epoch_orchestrator_basic():
         trainer=trainer,
         train_loader=loader,
         val_loader=loader,
-        mini_epoch_batches=5,
+        mini_epoch_samples=5,
         num_epochs=2,
         checkpoint_dir=None,
         log_interval=1
@@ -68,7 +68,7 @@ def test_mini_epoch_orchestrator_partial_final_mini_epoch():
         trainer=trainer,
         train_loader=loader,
         val_loader=loader,
-        mini_epoch_batches=3,
+        mini_epoch_samples=3,
         num_epochs=1,
         checkpoint_dir=None,
         log_interval=1
@@ -100,7 +100,7 @@ def test_mini_epoch_orchestrator_checkpointing():
             trainer=trainer,
             train_loader=loader,
             val_loader=loader,
-            mini_epoch_batches=2,
+            mini_epoch_samples=2,
             num_epochs=1,
             checkpoint_dir=tmpdir,
             log_interval=1
@@ -123,7 +123,7 @@ def test_mini_epoch_orchestrator_log_interval():
         trainer=trainer,
         train_loader=loader,
         val_loader=loader,
-        mini_epoch_batches=3,
+        mini_epoch_samples=3,
         num_epochs=1,
         checkpoint_dir=None,
         log_interval=2
@@ -145,7 +145,7 @@ def test_mini_epoch_orchestrator_no_validation():
         trainer=trainer,
         train_loader=loader,
         val_loader=None,
-        mini_epoch_batches=2,
+        mini_epoch_samples=2,
         num_epochs=1,
         checkpoint_dir=None,
         log_interval=1
@@ -166,7 +166,7 @@ def test_mini_epoch_orchestrator_batch_size_gt_1():
         trainer=trainer,
         train_loader=loader,
         val_loader=loader,
-        mini_epoch_batches=2,
+        mini_epoch_samples=2,
         num_epochs=1,
         checkpoint_dir=None,
         log_interval=1

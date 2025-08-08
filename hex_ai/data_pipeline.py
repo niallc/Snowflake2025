@@ -31,6 +31,29 @@ logger = logging.getLogger(__name__)
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
 
 
+def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:
+    """
+    Utility function to shuffle data files consistently.
+    
+    Args:
+        data_files: List of data file paths
+        shuffle_shards: Whether to shuffle the shards
+        random_seed: Random seed for reproducible shuffling
+        
+    Returns:
+        List of data file paths (shuffled if requested)
+    """
+    if not shuffle_shards:
+        return data_files
+    
+    if random_seed is not None:
+        random.seed(random_seed)
+    
+    shuffled_files = data_files.copy()
+    random.shuffle(shuffled_files)
+    return shuffled_files
+
+
 class ShardLogger:
     """
     Tracks and logs data shard transitions during training.
@@ -46,6 +69,17 @@ class ShardLogger:
         if not self.log_shard_transitions:
             return
         
+        # Get relative path from project root
+        try:
+            # Try to get relative path from current working directory (project root)
+            relative_path = file_path.relative_to(Path.cwd())
+            # Extract just the directory part (parent of the file)
+            relative_dir = relative_path.parent
+            dir_info = f" from {relative_dir}"
+        except ValueError:
+            # If we can't get relative path, fall back to absolute path
+            dir_info = f" from {file_path.parent}"
+        
         shard_info = {
             'file_path': str(file_path),
             'file_name': file_path.name,
@@ -59,7 +93,7 @@ class ShardLogger:
         self.shard_transitions.append(shard_info)
         
         # Log to console and file
-        log_msg = f"[SHARD_START] Processing shard {file_idx+1}/{total_shards}: {file_path.name}"
+        log_msg = f"[SHARD_START] Processing shard {file_idx+1}/{total_shards}: {file_path.name}{dir_info}"
         if approx_batch_count is not None:
             log_msg += f" (batch {approx_batch_count})"
         
@@ -102,10 +136,13 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         enable_augmentation: bool = True,
         max_examples_unaugmented: Optional[int] = None,
         verbose: bool = False,
-        log_shard_transitions: bool = True
+        log_shard_transitions: bool = True,
+        shuffle_shards: bool = True,
+        random_seed: Optional[int] = None
     ):
         super().__init__()
-        self.data_files = data_files
+        # Apply shuffling to data files if requested
+        self.data_files = shuffle_data_files(data_files, shuffle_shards, random_seed)
         self.enable_augmentation = enable_augmentation
         self.max_examples_unaugmented = max_examples_unaugmented
         self.verbose = verbose
@@ -269,7 +306,8 @@ def discover_processed_files(data_dir: str = "data/processed", skip_files: int =
 def create_train_val_split(data_files: List[Path], 
                           train_ratio: float = 0.8,
                           random_seed: Optional[int] = None,
-                          max_files_per_split: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
+                          max_files_per_split: Optional[int] = None,
+                          shuffle_shards: bool = True) -> Tuple[List[Path], List[Path]]:
     """
     Create train/validation split of data files.
     
@@ -278,6 +316,7 @@ def create_train_val_split(data_files: List[Path],
         train_ratio: Ratio of files to use for training (0.0 to 1.0)
         random_seed: Random seed for reproducible splits
         max_files_per_split: Maximum number of files per split (for efficiency)
+        shuffle_shards: Whether to shuffle the data shards before splitting (default: True)
         
     Returns:
         Tuple of (train_files, val_files)
@@ -285,9 +324,12 @@ def create_train_val_split(data_files: List[Path],
     if random_seed is not None:
         random.seed(random_seed)
     
-    # Shuffle files for random split
-    shuffled_files = data_files.copy()
-    random.shuffle(shuffled_files)
+    # Optionally shuffle files for random split
+    shuffled_files = shuffle_data_files(data_files, shuffle_shards, random_seed)
+    if shuffle_shards:
+        logger.info(f"Shuffled {len(data_files)} data shards before train/val split")
+    else:
+        logger.info(f"Using {len(data_files)} data shards in original order (no shuffling)")
     
     # Split files
     split_idx = int(len(shuffled_files) * train_ratio)

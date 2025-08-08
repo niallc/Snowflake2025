@@ -42,6 +42,30 @@ write_ups/training_instability_analysis_summary.md
 scripts/analyze_shard_spike_correlation.py
 scripts/analyze_training_performance.py
 scripts/investigate_spikes.py
+scripts/fix_winner_labels_safe.py
+scripts/test_pipeline.py
+scripts/example_pipeline_usage.py
+write_ups/pipeline_code_review.md
+scripts/deprecated/example_pipeline_usage.py
+scripts/deprecated/test_pipeline.py
+write_ups/redundant/mcts_test_analysis.md
+write_ups/redundant/pipeline_code_review.md
+write_ups/redundant/tmp_hyperparam_sweep_improvements_guide.md
+write_ups/redundant/training_instability_analysis_summary.md
+hex_ai/inference/model_config.py
+hex_ai/web/README.md
+hex_ai/web/mcts_api.py
+hex_ai/web/mcts_explorer.html
+scripts/run_mcts_explorer.py
+scripts/test_mcts_tree_reuse.py
+scripts/test_model_config_integration.py
+write_ups/mcts_explorer_summary.md
+write_ups/mcts_tree_reuse_optimization.md
+scripts/test_batched_mcts.py
+write_ups/batched_mcts_implementation_summary.md
+write_ups/redundant/batched_mcts_asynchronous_design_challenge.md
+write_ups/redundant/batched_mcts_backpropagation_fix_summary.md
+scripts/deprecated/test_enhanced_inference.py
 
 
 # VSCode

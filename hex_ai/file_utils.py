@@ -6,6 +6,7 @@ This module provides:
 - Atomic file write operations
 - Progress reporting utilities
 - File validation functions
+- Model checkpoint discovery and management
 """
 
 import signal
@@ -13,8 +14,10 @@ import sys
 import logging
 import gzip
 import pickle
+import os
+import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -223,3 +226,281 @@ def save_progress_report(stats: Dict[str, Any], output_dir: Path, shutdown_handl
         
     except Exception as e:
         logger.error(f"Failed to save progress report: {e}") 
+
+
+def get_unique_checkpoint_path(base_path: Path) -> Path:
+    """
+    Get a unique checkpoint path by appending timestamp if the file already exists.
+    
+    Args:
+        base_path: The desired checkpoint path (e.g., Path("epoch3_mini19.pt.gz"))
+        
+    Returns:
+        A unique path that won't overwrite existing files.
+        If base_path doesn't exist, returns base_path.
+        If base_path exists, returns base_path with timestamp appended.
+        
+    Example:
+        If "epoch3_mini19.pt.gz" exists, returns "epoch3_mini19_250802_1041.pt.gz"
+    """
+    if not base_path.exists():
+        return base_path
+    
+    # Extract stem and suffix
+    stem = base_path.stem
+    suffix = base_path.suffix
+    
+    # Generate timestamp (yymmdd_hrmin format)
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%y%m%d_%H%M")
+    
+    # Create new path with timestamp
+    new_stem = f"{stem}_{timestamp}"
+    new_path = base_path.parent / f"{new_stem}{suffix}"
+    
+    # If this path also exists, add seconds to make it unique
+    if new_path.exists():
+        timestamp_with_seconds = datetime.now().strftime("%y%m%d_%H%M%S")
+        new_stem = f"{stem}_{timestamp_with_seconds}"
+        new_path = base_path.parent / f"{new_stem}{suffix}"
+    
+    return new_path 
+
+
+def scan_checkpoint_directory(checkpoints_dir: Path = Path("checkpoints")) -> List[Dict[str, Any]]:
+    """
+    Scan the checkpoints directory to discover available model files.
+    
+    Args:
+        checkpoints_dir: Path to the checkpoints directory
+        
+    Returns:
+        List of model file information dictionaries with keys:
+        - path: Full path to the model file
+        - relative_path: Path relative to checkpoints directory
+        - directory: Directory name containing the model
+        - filename: Just the filename
+        - size_mb: File size in MB
+        - modified_time: Last modified timestamp
+        - epoch: Extracted epoch number (if available)
+        - mini: Extracted mini number (if available)
+    """
+    if not checkpoints_dir.exists():
+        logger.warning(f"Checkpoints directory {checkpoints_dir} does not exist")
+        return []
+    
+    models = []
+    
+    # Pattern to match checkpoint files: epochX_miniY.pt.gz
+    checkpoint_pattern = re.compile(r'epoch(\d+)_mini(\d+)\.pt\.gz$')
+    
+    try:
+        # Walk through all subdirectories
+        for root, dirs, files in os.walk(checkpoints_dir):
+            root_path = Path(root)
+            
+            for file in files:
+                if file.endswith('.pt.gz'):
+                    file_path = root_path / file
+                    relative_path = file_path.relative_to(checkpoints_dir)
+                    
+                    # Extract epoch and mini numbers if possible
+                    match = checkpoint_pattern.match(file)
+                    epoch = int(match.group(1)) if match else None
+                    mini = int(match.group(2)) if match else None
+                    
+                    # Get file stats
+                    try:
+                        stat = file_path.stat()
+                        size_mb = stat.st_size / (1024 * 1024)
+                        modified_time = datetime.fromtimestamp(stat.st_mtime)
+                    except OSError as e:
+                        logger.warning(f"Could not get stats for {file_path}: {e}")
+                        size_mb = 0
+                        modified_time = datetime.now()
+                    
+                    model_info = {
+                        'path': str(file_path),
+                        'relative_path': str(relative_path),
+                        'directory': str(relative_path.parent),
+                        'filename': file,
+                        'size_mb': round(size_mb, 1),
+                        'modified_time': modified_time.isoformat(),
+                        'epoch': epoch,
+                        'mini': mini
+                    }
+                    
+                    models.append(model_info)
+    
+    except Exception as e:
+        logger.error(f"Error scanning checkpoint directory: {e}")
+        return []
+    
+    # Sort by directory, then epoch, then mini
+    models.sort(key=lambda x: (x['directory'], x['epoch'] or 0, x['mini'] or 0))
+    
+    logger.info(f"Found {len(models)} model files in {checkpoints_dir}")
+    return models
+
+
+def validate_model_file(model_path: str) -> Tuple[bool, str]:
+    """
+    Validate that a model file exists and is accessible.
+    
+    Args:
+        model_path: Path to the model file (can be relative to checkpoints/)
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        # Handle relative paths
+        if not model_path.startswith('/'):
+            full_path = Path("checkpoints") / model_path
+        else:
+            full_path = Path(model_path)
+        
+        if not full_path.exists():
+            return False, f"Model file does not exist: {full_path}"
+        
+        if not full_path.is_file():
+            return False, f"Path is not a file: {full_path}"
+        
+        # Try to get file stats to verify accessibility
+        stat = full_path.stat()
+        if stat.st_size == 0:
+            return False, f"Model file is empty: {full_path}"
+        
+        return True, ""
+        
+    except Exception as e:
+        return False, f"Error validating model file: {e}"
+
+
+def get_model_directories(checkpoints_dir: Path = Path("checkpoints")) -> List[str]:
+    """
+    Get list of all directories containing model files.
+    
+    Args:
+        checkpoints_dir: Path to the checkpoints directory
+        
+    Returns:
+        List of directory names (relative to checkpoints/)
+    """
+    models = scan_checkpoint_directory(checkpoints_dir)
+    directories = list(set(model['directory'] for model in models))
+    directories.sort()
+    return directories
+
+
+def get_models_in_directory(directory: str, checkpoints_dir: Path = Path("checkpoints")) -> List[Dict[str, Any]]:
+    """
+    Get all models in a specific directory.
+    
+    Args:
+        directory: Directory name (relative to checkpoints/)
+        checkpoints_dir: Path to the checkpoints directory
+        
+    Returns:
+        List of model file information dictionaries
+    """
+    models = scan_checkpoint_directory(checkpoints_dir)
+    return [model for model in models if model['directory'] == directory]
+
+
+def save_recent_models(recent_models: List[str], max_count: int = 10) -> None:
+    """
+    Save list of recently used models to a file.
+    
+    Args:
+        recent_models: List of model paths (most recent first)
+        max_count: Maximum number of models to save
+    """
+    try:
+        # Limit to max_count
+        recent_models = recent_models[:max_count]
+        
+        # Save to user's home directory
+        home_dir = Path.home()
+        config_dir = home_dir / ".hex_ai"
+        config_dir.mkdir(exist_ok=True)
+        
+        config_file = config_dir / "recent_models.json"
+        
+        import json
+        with open(config_file, 'w') as f:
+            json.dump({
+                'recent_models': recent_models,
+                'last_updated': datetime.now().isoformat()
+            }, f, indent=2)
+        
+        logger.debug(f"Saved {len(recent_models)} recent models to {config_file}")
+        
+    except Exception as e:
+        logger.error(f"Failed to save recent models: {e}")
+
+
+def load_recent_models() -> List[str]:
+    """
+    Load list of recently used models from file.
+    
+    Returns:
+        List of model paths (most recent first)
+    """
+    try:
+        home_dir = Path.home()
+        config_file = home_dir / ".hex_ai" / "recent_models.json"
+        
+        if not config_file.exists():
+            return []
+        
+        import json
+        with open(config_file, 'r') as f:
+            data = json.load(f)
+        
+        recent_models = data.get('recent_models', [])
+        
+        # Validate that all models still exist
+        valid_models = []
+        for model_path in recent_models:
+            is_valid, _ = validate_model_file(model_path)
+            if is_valid:
+                valid_models.append(model_path)
+            else:
+                logger.debug(f"Removing invalid recent model: {model_path}")
+        
+        # Save back the cleaned list
+        if len(valid_models) != len(recent_models):
+            save_recent_models(valid_models)
+        
+        return valid_models
+        
+    except Exception as e:
+        logger.error(f"Failed to load recent models: {e}")
+        return []
+
+
+def add_recent_model(model_path: str) -> None:
+    """
+    Add a model to the recent models list.
+    
+    Args:
+        model_path: Path to the model file
+    """
+    try:
+        recent_models = load_recent_models()
+        
+        # Remove if already exists (will be added to front)
+        if model_path in recent_models:
+            recent_models.remove(model_path)
+        
+        # Add to front
+        recent_models.insert(0, model_path)
+        
+        # Save updated list
+        save_recent_models(recent_models)
+        
+        logger.debug(f"Added {model_path} to recent models")
+        
+    except Exception as e:
+        logger.error(f"Failed to add recent model: {e}") 

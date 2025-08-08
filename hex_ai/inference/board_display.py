@@ -1,5 +1,6 @@
 import numpy as np
 from hex_ai.utils.format_conversion import board_2nxn_to_nxn
+from hex_ai.config import BLUE_PIECE, RED_PIECE, EMPTY_PIECE
 import sys
 
 def ansi_colored(text, color):
@@ -12,9 +13,9 @@ def ansi_colored(text, color):
 
 def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
     """
-    Display a Hex board (NxN trinary format) as ASCII art, with optional move highlighting.
+    Display a Hex board (NxN format) as ASCII art, with optional move highlighting.
     Args:
-        board: np.ndarray of shape (N, N) or (2, N, N), values 0=empty, 1=blue, 2=red or 2-channel format
+        board: np.ndarray of shape (N, N) or (2, N, N), values 'e'=empty, 'b'=blue, 'r'=red or 2-channel format
         file: file-like object to write to (default: stdout)
         highlight_move: (row, col) tuple to highlight, or None
     """
@@ -24,9 +25,9 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
     N = board.shape[0]
     # Use uniform size symbols
     symbols = {
-        0: '◯',  # empty
-        1: '●',  # blue
-        2: '●',  # red
+        EMPTY_PIECE: '◯',  # empty
+        BLUE_PIECE: '●',   # blue
+        RED_PIECE: '●',    # red
     }
     highlight_symbol = '*'  # Symbol for highlighted move
     lines = []
@@ -42,9 +43,9 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
                 row_str += highlight_symbol + ' '
             else:
                 if use_color:
-                    if board[row, col] == 1:
+                    if board[row, col] == BLUE_PIECE:
                         symbol = ansi_colored(symbol, 'blue')
-                    elif board[row, col] == 2:
+                    elif board[row, col] == RED_PIECE:
                         symbol = ansi_colored(symbol, 'red')
                 row_str += symbol + ' '
         lines.append(row_str)

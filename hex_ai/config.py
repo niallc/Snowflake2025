@@ -65,6 +65,9 @@ TRMPH_RED_WIN = "r"
 TRAINING_BLUE_WIN = 0.0
 TRAINING_RED_WIN = 1.0
 
+# TRMPH format constants
+TRMPH_PREFIX = "#13,"
+
 # Default hyperparameters
 LEARNING_RATE = 0.001
 BATCH_SIZE = 128

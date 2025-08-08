@@ -235,7 +235,8 @@ class Trainer:
                  value_learning_rate_factor: float = 0.1,
                  value_weight_decay_factor: float = 5.0,
                  log_interval_batches: int = 200,
-                 run_timestamp: Optional[str] = None):
+                 run_timestamp: Optional[str] = None,
+                 shutdown_handler=None):
         """
         Args:
             model: The neural network model to train.
@@ -264,6 +265,7 @@ class Trainer:
         self.device = device
         self.max_grad_norm = max_grad_norm
         self.run_timestamp = run_timestamp
+        self.shutdown_handler = shutdown_handler
         
         # Store hyperparameters for logging
         self.value_learning_rate_factor = value_learning_rate_factor

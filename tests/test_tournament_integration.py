@@ -9,7 +9,8 @@ from hex_ai.inference import tournament
 from hex_ai.inference.game_engine import HexGameState
 
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
-THIS_MODEL_DIR = "loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
+from hex_ai.inference.model_config import get_model_dir
+THIS_MODEL_DIR = get_model_dir("previous_best").replace("checkpoints/", "")
 CHKPT_FILENAMES = [
     "epoch1_mini1.pt",
     "epoch1_mini5.pt"
@@ -201,8 +202,7 @@ def test_move_application_to_state():
     """Test what happens when applying moves to state."""
     from hex_ai.inference.tournament import play_game_loop, select_move
     from hex_ai.inference.simple_model_inference import SimpleModelInference
-    from hex_ai.inference.game_engine import HexGameState
-    from hex_ai.value_utils import apply_move_to_state
+    from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
     
     model_a = SimpleModelInference(CHKPT_PATHS[0])
     model_b = SimpleModelInference(CHKPT_PATHS[1])
@@ -251,8 +251,7 @@ def test_play_game_loop_step_by_step():
     """Test play_game_loop functionality step by step."""
     from hex_ai.inference.tournament import play_game_loop, select_move
     from hex_ai.inference.simple_model_inference import SimpleModelInference
-    from hex_ai.inference.game_engine import HexGameState
-    from hex_ai.value_utils import apply_move_to_state
+    from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
     
     model_a = SimpleModelInference(CHKPT_PATHS[0])
     model_b = SimpleModelInference(CHKPT_PATHS[1])

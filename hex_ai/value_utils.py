@@ -223,6 +223,16 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     scaled_logits = logits / temperature
     # Apply softmax
     probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
+    
+    # Validate that we got reasonable probabilities
+    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
+        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
+    
+    # Note: This check is redundant since softmax should never return all zeros for finite input
+    # But it's kept as a safety check for edge cases
+    if np.sum(probs) == 0:
+        raise ValueError(f"All probabilities are zero! Logits min/max: {logits.min():.6f}/{logits.max():.6f}, temperature: {temperature}")
+    
     return probs
 
 def get_player_to_move_from_moves(moves: list) -> Player:
@@ -237,6 +247,8 @@ def get_player_to_move_from_moves(moves: list) -> Player:
 
 def winner_to_color(winner):
     """Map Winner enum, Player enum, or player int to color name string ('blue', 'red', or 'reset')."""
+    # TODO: This function should raise ValueError for invalid inputs instead of returning 'reset'
+    # This would make error handling more consistent with the "fail fast" principle
     if isinstance(winner, Winner):
         return 'blue' if winner == Winner.BLUE else 'red'
     if isinstance(winner, Player):
@@ -264,6 +276,53 @@ def policy_logits_to_probs(policy_logits: np.ndarray, temperature: float = 1.0) 
         Temperature-scaled softmax probabilities
     """
     return temperature_scaled_softmax(policy_logits, temperature)
+
+
+def policy_logits_to_probs_2d(policy_logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
+    """
+    Convert policy logits to 2D probabilities using temperature-scaled softmax.
+    
+    This function is specifically designed for MCTS and other applications that prefer
+    2D coordinate access. It flattens the logits, applies softmax, and reshapes back to 2D.
+
+    Args:
+        policy_logits: Raw policy logits (numpy array, typically 13x13 for Hex)
+        temperature: Temperature parameter (default 1.0)
+
+    Returns:
+        2D temperature-scaled softmax probabilities with same shape as input
+    """
+    if temperature <= 0:
+        # Greedy selection: return one-hot vector for argmax
+        result = np.zeros_like(policy_logits)
+        result[np.argmax(policy_logits)] = 1.0
+        return result
+
+    # Store original shape
+    original_shape = policy_logits.shape
+    
+    # Flatten logits for softmax
+    logits_flat = policy_logits.flatten()
+    
+    # Apply temperature scaling: logits / temperature
+    scaled_logits = logits_flat / temperature
+    
+    # Apply softmax to flattened array
+    probs_flat = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
+    
+    # Reshape back to original shape
+    probs = probs_flat.reshape(original_shape)
+    
+    # Validate that we got reasonable probabilities
+    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
+        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
+    
+    # Note: This check is redundant since softmax should never return all zeros for finite input
+    # But it's kept as a safety check for edge cases
+    if np.sum(probs) == 0:
+        raise ValueError(f"All probabilities are zero! Logits min/max: {policy_logits.min():.6f}/{policy_logits.max():.6f}, temperature: {temperature}")
+    
+    return probs
 
 def get_legal_policy_probs(policy_probs: np.ndarray, legal_moves: List[Tuple[int, int]], board_size: int) -> np.ndarray:
     """

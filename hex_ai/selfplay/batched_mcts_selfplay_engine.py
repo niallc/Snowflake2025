@@ -1,8 +1,8 @@
 """
-MCTS-based self-play engine for generating training data.
+Batched MCTS-based self-play engine for generating training data.
 
-This module provides a self-play engine that uses MCTS instead of minimax search,
-following the design outlined in the MCTS design document.
+This module provides a self-play engine that uses the new batched MCTS implementation
+for significantly improved performance through batched neural network inference.
 """
 
 import time
@@ -11,33 +11,35 @@ from typing import List, Dict, Any, Optional, Tuple
 import logging
 from pathlib import Path
 
-from hex_ai.inference.mcts import NeuralMCTS
+from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.training_utils import get_device
 
 
-class MCTSSelfPlayEngine:
-    """Self-play engine using MCTS for move selection."""
+class BatchedMCTSSelfPlayEngine:
+    """Batched self-play engine using MCTS for move selection."""
     
     def __init__(self, model_path: str, num_simulations: int = 800, 
                  exploration_constant: float = 1.4, temperature: float = 1.0,
-                 verbose: int = 1):
+                 optimal_batch_size: int = 64, verbose: int = 1):
         """
-        Initialize the MCTS self-play engine.
+        Initialize the batched MCTS self-play engine.
         
         Args:
             model_path: Path to the model checkpoint
             num_simulations: Number of MCTS simulations per move
             exploration_constant: PUCT exploration constant
             temperature: Temperature for move selection
+            optimal_batch_size: Optimal batch size for neural network inference
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
         """
         self.model_path = model_path
         self.num_simulations = num_simulations
         self.exploration_constant = exploration_constant
         self.temperature = temperature
+        self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose
         
         # Set up logging
@@ -51,10 +53,12 @@ class MCTSSelfPlayEngine:
         self.logger.info(f"Loading model from {model_path}")
         self.model = SimpleModelInference(model_path)
         
-        # Create MCTS engine
-        self.mcts = NeuralMCTS(
+        # Create batched MCTS engine
+        self.mcts = BatchedNeuralMCTS(
             model=self.model,
-            exploration_constant=exploration_constant
+            exploration_constant=exploration_constant,
+            optimal_batch_size=optimal_batch_size,
+            verbose=verbose
         )
         
         # Statistics
@@ -63,15 +67,19 @@ class MCTSSelfPlayEngine:
             'total_moves': 0,
             'total_search_time': 0.0,
             'total_inferences': 0,
+            'total_batches_processed': 0,
             'blue_wins': 0,
-            'red_wins': 0
+            'red_wins': 0,
+            'cache_hit_rate': 0.0,
+            'average_batch_size': 0.0
         }
         
-        self.logger.info(f"MCTS Self-Play Engine initialized with {num_simulations} simulations")
+        self.logger.info(f"Batched MCTS Self-Play Engine initialized with {num_simulations} simulations, "
+                        f"optimal_batch_size={optimal_batch_size}")
     
     def play_game(self) -> Dict[str, Any]:
         """
-        Play a single game using MCTS.
+        Play a single game using batched MCTS.
         
         Returns:
             Dictionary containing game data and statistics
@@ -83,6 +91,7 @@ class MCTSSelfPlayEngine:
         moves = []
         search_times = []
         inference_counts = []
+        batch_counts = []
         
         self.logger.info("Starting new game")
         
@@ -107,6 +116,7 @@ class MCTSSelfPlayEngine:
                 # First move: create new root
                 if self.verbose >= 2:
                     self.logger.debug("Creating new MCTS root node")
+                # Augment root with the children nodes and stats.
                 root = self.mcts.search(state, self.num_simulations)
             else:
                 # Subsequent moves: reuse existing tree
@@ -129,11 +139,13 @@ class MCTSSelfPlayEngine:
             # Record statistics
             search_times.append(search_time)
             inference_counts.append(search_stats.get('total_inferences', 0))
+            batch_counts.append(search_stats.get('total_batches_processed', 0))
             
             if self.verbose >= 2:
                 self.logger.debug(f"{player_name} selected move {selected_move} "
                                 f"(search time: {search_time:.2f}s, "
-                                f"inferences: {search_stats.get('total_inferences', 0)})")
+                                f"inferences: {search_stats.get('total_inferences', 0)}, "
+                                f"batches: {search_stats.get('total_batches_processed', 0)})")
             
             # Make move and update root for tree reuse
             state = state.make_move(*selected_move)
@@ -144,19 +156,23 @@ class MCTSSelfPlayEngine:
                 root = root.children[selected_move]
                 root.detach_parent()
             else:
-                # Fallback: create new root if child doesn't exist
-                self.logger.warning(f"Selected move {selected_move} not found in root children, creating new root")
-                root = None
+                # Raise exception and crash. No fallback logic! Find errors fast.
+                raise ValueError(f"CRITICAL: Selected move {selected_move} not found in root children, this indicates a bug.")
+                # # Fallback: create new root if child doesn't exist
+                # self.logger.warning(f"Selected move {selected_move} not found in root children, creating new root")
+                # root = None
             
             # Update statistics
             self.stats['total_moves'] += 1
             self.stats['total_search_time'] += search_time
             self.stats['total_inferences'] += search_stats.get('total_inferences', 0)
+            self.stats['total_batches_processed'] += search_stats.get('total_batches_processed', 0)
         
         # Game finished
         game_time = time.time() - start_time
         
         # Determine winner
+        # TODO (P2): Consider replacing "blue" and "red" with the relevant Enums / constants from central utilities.
         if state.winner == "blue":
             self.stats['blue_wins'] += 1
             winner = "blue"
@@ -167,6 +183,11 @@ class MCTSSelfPlayEngine:
             winner = "draw"
         
         self.stats['games_played'] += 1
+        
+        # Update derived statistics
+        if self.stats['total_moves'] > 0:
+            self.stats['cache_hit_rate'] = self.mcts.batch_processor.get_statistics()['cache_hit_rate']
+            self.stats['average_batch_size'] = self.mcts.batch_processor.get_statistics()['average_batch_size']
         
         # Log game results
         self.logger.info(f"Game finished: {winner} wins in {len(moves)} moves "
@@ -180,8 +201,12 @@ class MCTSSelfPlayEngine:
             'game_time': game_time,
             'search_times': search_times,
             'inference_counts': inference_counts,
+            'batch_counts': batch_counts,
             'average_search_time': np.mean(search_times) if search_times else 0,
-            'total_inferences': sum(inference_counts)
+            'total_inferences': sum(inference_counts),
+            'total_batches': sum(batch_counts),
+            'cache_hit_rate': self.stats['cache_hit_rate'],
+            'average_batch_size': self.stats['average_batch_size']
         }
         
         return game_data
@@ -222,12 +247,14 @@ class MCTSSelfPlayEngine:
         
         avg_moves = self.stats['total_moves'] / games_completed
         avg_search_time = self.stats['total_search_time'] / self.stats['total_moves'] if self.stats['total_moves'] > 0 else 0
+        avg_inferences = self.stats['total_inferences'] / self.stats['total_moves'] if self.stats['total_moves'] > 0 else 0
         blue_win_rate = self.stats['blue_wins'] / games_completed
         red_win_rate = self.stats['red_wins'] / games_completed
         
         self.logger.info(f"Progress: {games_completed}/{total_games} games "
                         f"(avg moves: {avg_moves:.1f}, "
                         f"avg search: {avg_search_time:.2f}s, "
+                        f"avg inferences: {avg_inferences:.1f}, "
                         f"Blue: {blue_win_rate:.1%}, Red: {red_win_rate:.1%})")
     
     def _log_final_statistics(self):
@@ -239,6 +266,7 @@ class MCTSSelfPlayEngine:
         avg_moves = self.stats['total_moves'] / total_games
         avg_search_time = self.stats['total_search_time'] / self.stats['total_moves'] if self.stats['total_moves'] > 0 else 0
         avg_inferences = self.stats['total_inferences'] / self.stats['total_moves'] if self.stats['total_moves'] > 0 else 0
+        avg_batches = self.stats['total_batches_processed'] / self.stats['total_moves'] if self.stats['total_moves'] > 0 else 0
         
         blue_win_rate = self.stats['blue_wins'] / total_games
         red_win_rate = self.stats['red_wins'] / total_games
@@ -249,10 +277,14 @@ class MCTSSelfPlayEngine:
         self.logger.info(f"  Average moves per game: {avg_moves:.1f}")
         self.logger.info(f"  Average search time per move: {avg_search_time:.3f}s")
         self.logger.info(f"  Average inferences per move: {avg_inferences:.1f}")
+        self.logger.info(f"  Average batches per move: {avg_batches:.1f}")
         self.logger.info(f"  Blue win rate: {blue_win_rate:.1%}")
         self.logger.info(f"  Red win rate: {red_win_rate:.1%}")
         self.logger.info(f"  Total search time: {self.stats['total_search_time']:.1f}s")
         self.logger.info(f"  Total inferences: {self.stats['total_inferences']}")
+        self.logger.info(f"  Total batches processed: {self.stats['total_batches_processed']}")
+        self.logger.info(f"  Cache hit rate: {self.stats['cache_hit_rate']:.1%}")
+        self.logger.info(f"  Average batch size: {self.stats['average_batch_size']:.1f}")
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get current statistics."""
@@ -265,19 +297,28 @@ class MCTSSelfPlayEngine:
             'total_moves': 0,
             'total_search_time': 0.0,
             'total_inferences': 0,
+            'total_batches_processed': 0,
             'blue_wins': 0,
-            'red_wins': 0
+            'red_wins': 0,
+            'cache_hit_rate': 0.0,
+            'average_batch_size': 0.0
         }
+    
+    def clear_cache(self):
+        """Clear the batch processor cache."""
+        self.mcts.batch_processor.clear_cache()
+        self.logger.info("Cache cleared")
 
 
 def main():
     """Main function for testing."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="MCTS Self-Play Engine")
+    parser = argparse.ArgumentParser(description="Batched MCTS Self-Play Engine")
     parser.add_argument("model_path", help="Path to model checkpoint")
     parser.add_argument("--games", type=int, default=1, help="Number of games to play")
     parser.add_argument("--simulations", type=int, default=800, help="MCTS simulations per move")
+    parser.add_argument("--batch-size", type=int, default=64, help="Optimal batch size for inference")
     parser.add_argument("--temperature", type=float, default=1.0, help="Move selection temperature")
     parser.add_argument("--verbose", type=int, default=1, help="Verbosity level")
     
@@ -290,9 +331,10 @@ def main():
     )
     
     # Create engine and play games
-    engine = MCTSSelfPlayEngine(
+    engine = BatchedMCTSSelfPlayEngine(
         model_path=args.model_path,
         num_simulations=args.simulations,
+        optimal_batch_size=args.batch_size,
         temperature=args.temperature,
         verbose=args.verbose
     )
@@ -301,8 +343,9 @@ def main():
     
     print(f"\nCompleted {len(games)} games")
     for i, game in enumerate(games):
-        print(f"Game {i+1}: {game['winner']} wins in {game['num_moves']} moves")
+        print(f"Game {i+1}: {game['winner']} wins in {game['num_moves']} moves "
+              f"(inferences: {game['total_inferences']}, batches: {game['total_batches']})")
 
 
 if __name__ == "__main__":
-    main() 
+    main()
