@@ -83,6 +83,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.batch_processor import BatchProcessor
 from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.utils.perf import PERF
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,8 @@ class BatchedNeuralMCTS:
         self.logger = logging.getLogger(__name__)
         
         # Initialize batch processor
-        self.batch_processor = BatchProcessor(model, optimal_batch_size, verbose=verbose)
+        self.batch_processor = BatchProcessor(model, optimal_batch_size, verbose=verbose, 
+                                            max_wait_ms=3, enable_background_processing=True)
         
         # Statistics tracking
         self.stats = {
@@ -218,62 +220,83 @@ class BatchedNeuralMCTS:
         Returns:
             Root node with populated search tree
         """
-        if self.verbose >= 1:
-            self.logger.info(f"Starting batched MCTS search with {num_simulations} simulations")
-        self.stats['start_time'] = time.time()
-        self.stats['total_simulations'] = 0
+        with PERF.timer("mcts.search"):
+            if self.verbose >= 1:
+                self.logger.info(f"Starting batched MCTS search with {num_simulations} simulations")
+            self.stats['start_time'] = time.time()
+            self.stats['total_simulations'] = 0
+            
+            # Handle both HexGameState and BatchedMCTSNode inputs
+            if isinstance(root_state_or_node, HexGameState):
+                # Create new root node with fast copy of state
+                root = BatchedMCTSNode(state=root_state_or_node.fast_copy())
+                if self.verbose >= 2:
+                    self.logger.debug(f"Created new root node from HexGameState")
+            elif isinstance(root_state_or_node, BatchedMCTSNode):
+                # Continue search from existing node
+                root = root_state_or_node
+                if self.verbose >= 2:
+                    self.logger.debug(f"Continuing search from existing BatchedMCTSNode")
+            else:
+                raise ValueError(f"Expected HexGameState or BatchedMCTSNode, got {type(root_state_or_node)}")
+            
+            # Track root for detailed logging
+            self._last_root = root
+            
+            if self.verbose >= 2:
+                self.logger.debug(f"Root node state: {root.node_state}, terminal: {root.is_terminal()}, leaf: {root.is_leaf()}")
+            
+            # Run simulations
+            for sim_idx in range(num_simulations):
+                if self.verbose >= 3:
+                    self.logger.debug(f"Starting simulation {sim_idx + 1}")
+                
+                # Execute selection phase to get leaf node
+                with PERF.timer("mcts.select"):
+                    leaf_node = self._execute_selection_phase(root)
+                
+                if self.verbose >= 3:
+                    self.logger.debug(f"Selected leaf node for simulation {sim_idx + 1}")
+                
+                # Expand and evaluate the leaf node (backpropagation handled by callback)
+                with PERF.timer("mcts.expand"):
+                    self._expand_and_evaluate(leaf_node)
+                
+                if self.verbose >= 3:
+                    self.logger.debug(f"Expanded leaf node for simulation {sim_idx + 1}")
+                
+                PERF.inc("mcts.sim")  # Count simulations
+                self.stats['total_simulations'] += 1
+                
+                # Log progress every 100 simulations (rate-limited for lower verbosity)
+                if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
+                    elapsed = time.time() - self.stats['start_time']
+                    sims_per_sec = (sim_idx + 1) / elapsed
+                    queue_size = self.batch_processor.get_queue_size()
+                    cache_size = self.batch_processor.get_cache_size()
+                    self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
+                                   f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
+                
+                # Detailed logging every 50 simulations (only for high verbosity)
+                if self.verbose >= 3 and (sim_idx + 1) % 50 == 0:
+                    self._log_detailed_progress(sim_idx + 1, num_simulations)
         
-        # Handle both HexGameState and BatchedMCTSNode inputs
-        if isinstance(root_state_or_node, HexGameState):
-            # Create new root node with deep copy of state
-            root = BatchedMCTSNode(state=copy.deepcopy(root_state_or_node))
-        elif isinstance(root_state_or_node, BatchedMCTSNode):
-            # Continue search from existing node
-            root = root_state_or_node
-        else:
-            raise ValueError(f"Expected HexGameState or BatchedMCTSNode, got {type(root_state_or_node)}")
-        
-        # Track root for detailed logging
-        self._last_root = root
-        
-        # Run simulations
-        for sim_idx in range(num_simulations):
-            # Execute selection phase to get leaf node
-            leaf_node = self._execute_selection_phase(root)
+        # Wait for any remaining background processing to complete
+        # The background thread will automatically process remaining requests
+        if self.batch_processor.enable_background_processing:
+            # Give the background thread more time to process remaining requests
+            max_wait_time = 1.0  # Wait up to 1 second
+            wait_start = time.time()
+            while (self.batch_processor.get_queue_size() > 0 and 
+                   time.time() - wait_start < max_wait_time):
+                time.sleep(0.001)  # Sleep for 1ms
             
-            # Expand and evaluate the leaf node (backpropagation handled by callback)
-            self._expand_and_evaluate(leaf_node)
-            
-            self.stats['total_simulations'] += 1
-            
-            # Process batch when queue is large enough or periodically to avoid starvation
-            # Force processing of small batches to ensure evaluations complete promptly
-            # TODO (P4): Consider upadting '3' to a configurable parameter.
-            if (self.batch_processor.get_queue_size() >= self.optimal_batch_size or 
-                (sim_idx + 1) % 3 == 0):  # Process every 3 simulations if queue is small
-                # Force processing of small batches to avoid starvation
-                force_processing = self.batch_processor.get_queue_size() < self.optimal_batch_size
-                processed = self.batch_processor.process_batch(force=force_processing)
-                if processed > 0:
-                    self.stats['total_batches_processed'] += 1
-            
-            # Log progress every 100 simulations (rate-limited for lower verbosity)
-            if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
-                elapsed = time.time() - self.stats['start_time']
-                sims_per_sec = (sim_idx + 1) / elapsed
-                queue_size = self.batch_processor.get_queue_size()
-                cache_size = self.batch_processor.get_cache_size()
-                self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
-                               f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
-            
-            # Detailed logging every 50 simulations (only for high verbosity)
-            if self.verbose >= 3 and (sim_idx + 1) % 50 == 0:
-                self._log_detailed_progress(sim_idx + 1, num_simulations)
-        
-        # Process any remaining requests
-        remaining_processed = self.batch_processor.process_all()
-        if remaining_processed > 0:
-            self.stats['total_batches_processed'] += 1
+            if self.verbose >= 2:
+                remaining_queue = self.batch_processor.get_queue_size()
+                if remaining_queue > 0:
+                    self.logger.warning(f"Background processing incomplete: {remaining_queue} requests still in queue")
+                else:
+                    self.logger.debug("Background processing completed successfully")
         
         self.stats['end_time'] = time.time()
         total_time = self.stats['end_time'] - self.stats['start_time']
@@ -294,6 +317,9 @@ class BatchedNeuralMCTS:
         if self.verbose >= 2:
             self.logger.info(f"Performance summary: {batch_stats.get('inferences_per_second', 0):.1f} inferences/sec, "
                            f"{batch_stats.get('average_batch_size', 0):.1f} avg batch size")
+        
+        # Log performance snapshot at end of search
+        PERF.log_snapshot(clear=True, force=True)
         
         return root
 
@@ -342,7 +368,13 @@ class BatchedNeuralMCTS:
         """Traverse the tree from the root to a leaf node."""
         # TODO (P3): Add a crisp explanation: I think it's to descend the tree until we find a leaf node.
         while not node.is_leaf():
+            if self.verbose >= 3:
+                self.logger.debug(f"Selecting child from node with {len(node.children)} children")
             node = self._select_child_with_puct(node)
+        
+        if self.verbose >= 2:
+            self.logger.debug(f"Selected leaf node: state={node.node_state}, terminal={node.is_terminal()}, depth={node.get_depth()}")
+        
         return node
 
     def _select_child_with_puct(self, node: BatchedMCTSNode) -> BatchedMCTSNode:
@@ -405,6 +437,9 @@ class BatchedNeuralMCTS:
 
         # Handle different node states
         if node.node_state == NodeState.UNEXPANDED:
+            if self.verbose >= 2:
+                self.logger.debug(f"Expanding unexpanded node at depth {node.get_depth()}")
+            
             # Request evaluation from batch processor
             node.node_state = NodeState.EVALUATION_PENDING
             node.add_virtual_loss()
@@ -412,23 +447,38 @@ class BatchedNeuralMCTS:
             # TODO (P3): Add further explanation of the callback.
             def evaluation_callback(policy_logits: np.ndarray, value: float):
                 """Callback to handle evaluation results and backpropagation."""
-                if self.verbose >= 3:
+                if self.verbose >= 2:
                     self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
                 
                 # Apply softmax and filter for legal moves
                 legal_moves = node.state.get_legal_moves()
+                if self.verbose >= 2:
+                    self.logger.debug(f"Legal moves: {len(legal_moves)}")
+                
                 node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
                 
-                # Create child nodes for all legal moves
+                if self.verbose >= 2:
+                    self.logger.debug(f"Policy priors: {len(node.policy_priors)} moves")
+                
+                # Create child nodes for all legal moves using apply/undo pattern
                 for move, prior in node.policy_priors.items():
-                    child_state = node.state.make_move(*move)
+                    # Apply move to current state
+                    node.state.apply_move(*move)
+                    
+                    # Create child node with the modified state
                     child_depth = node.get_depth() + 1
                     node.children[move] = BatchedMCTSNode(
-                        state=child_state, 
+                        state=node.state.fast_copy(),  # Use fast_copy instead of deepcopy
                         parent=node, 
                         move=move, 
                         depth=child_depth
                     )
+                    
+                    # Undo the move to restore original state
+                    node.state.undo_last()
+                
+                if self.verbose >= 2:
+                    self.logger.debug(f"Created {len(node.children)} child nodes")
                 
                 # Mark node as expanded
                 node.node_state = NodeState.EXPANDED
@@ -473,21 +523,22 @@ class BatchedNeuralMCTS:
             node: Leaf node to start backpropagation from
             value: Value to propagate up the tree
         """
-        current_node = node
-        # TODO (P3): Explain that 'None' indictes the root node.
-        while current_node is not None:
-            # Apply discount factor based on depth (move count penalty)
-            depth = current_node.get_depth()
-            discounted_value = value * (self.discount_factor ** depth)
-            
-            current_node.update_statistics(discounted_value)
-            
-            # IMPORTANT: The value is from the perspective of the player at the current node.
-            # For the parent, this outcome has the opposite value.
-            # We negate the value BEFORE moving to the parent.
-            current_node = current_node.parent
-            if current_node is not None:
-                value = -value
+        with PERF.timer("mcts.backprop"):
+            current_node = node
+            # TODO (P3): Explain that 'None' indictes the root node.
+            while current_node is not None:
+                # Apply discount factor based on depth (move count penalty)
+                depth = current_node.get_depth()
+                discounted_value = value * (self.discount_factor ** depth)
+                
+                current_node.update_statistics(discounted_value)
+                
+                # IMPORTANT: The value is from the perspective of the player at the current node.
+                # For the parent, this outcome has the opposite value.
+                # We negate the value BEFORE moving to the parent.
+                current_node = current_node.parent
+                if current_node is not None:
+                    value = -value
 
     def _terminal_value(self, state: HexGameState) -> float:
         """

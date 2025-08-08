@@ -8,7 +8,7 @@ move validation, winner detection, and game state management.
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from collections import namedtuple
 
 from hex_ai.config import (
@@ -93,6 +93,9 @@ class HexGameState:
     game_over: bool = False
     winner: Optional[str] = None  # "blue", "red", or None
     
+    # Operation stack for undo functionality
+    _undo_stack: List[Dict[str, Any]] = field(default_factory=list, init=False)
+    
     @property
     def board_2nxn(self) -> torch.Tensor:
         """Get board in 2×N×N format for compatibility with tests (legacy, do not use for inference)."""
@@ -105,15 +108,97 @@ class HexGameState:
             return False
         return is_empty(self.board, row, col)
 
+    def apply_move(self, row: int, col: int) -> None:
+        """
+        Apply a move in-place to the current state.
+        
+        This method mutates the current state instead of creating a new one,
+        which is much more efficient for MCTS tree traversal.
+        
+        Args:
+            row: Row index (0-12)
+            col: Column index (0-12)
+            
+        Raises:
+            ValueError: If move is invalid
+        """
+        if not self.is_valid_move(row, col):
+            raise ValueError(f"Invalid move: ({row}, {col})")
+        
+        # Save state for undo
+        undo_info = {
+            'board': self.board.copy(),
+            'current_player': self.current_player,
+            'game_over': self.game_over,
+            'winner': self.winner,
+            'move': (row, col)
+        }
+        self._undo_stack.append(undo_info)
+        
+        # Apply the move
+        color = "blue" if self.current_player == BLUE_PLAYER else "red"
+        self.board = place_piece(self.board, row, col, color)
+        self.move_history.append((row, col))
+        self.current_player = RED_PLAYER if self.current_player == BLUE_PLAYER else BLUE_PLAYER
+        
+        # Check for winner
+        winner = self._find_winner()
+        if winner:
+            self.game_over = True
+            self.winner = winner
+
+    def undo_last(self) -> None:
+        """
+        Undo the last move applied to this state.
+        
+        This restores the state to before the last apply_move() call.
+        
+        Raises:
+            ValueError: If no moves have been applied
+        """
+        if not self._undo_stack:
+            raise ValueError("No moves to undo")
+        
+        # Restore state from undo stack
+        undo_info = self._undo_stack.pop()
+        self.board = undo_info['board']
+        self.current_player = undo_info['current_player']
+        self.game_over = undo_info['game_over']
+        self.winner = undo_info['winner']
+        
+        # Remove the last move from history
+        if self.move_history:
+            self.move_history.pop()
+
+    def fast_copy(self) -> 'HexGameState':
+        """
+        Create a fast copy of the current state.
+        
+        This is more efficient than deepcopy for MCTS when we need
+        to materialize child nodes.
+        
+        Returns:
+            A new HexGameState with the same state
+        """
+        new_state = HexGameState(
+            board=self.board.copy(),
+            current_player=self.current_player,
+            move_history=self.move_history.copy(),
+            game_over=self.game_over,
+            winner=self.winner
+        )
+        # Don't copy the undo stack - it's not needed for new states
+        return new_state
+
     def make_move(self, row: int, col: int) -> 'HexGameState':
-        # TODO: PERFORMANCE CRITICAL - Replace with apply/undo pattern for MCTS optimization
+        # TODO: PERFORMANCE CRITICAL - Replace deepcopy with apply/undo pattern
+        # Current make_move() creates new HexGameState objects which is expensive for MCTS
         # IMPLEMENTATION PLAN (Phase 3.1):
-        # 1) Add apply_move() method that mutates board in place
-        # 2) Add undo_last() method that restores previous state using operation stack
-        # 3) Update Union-Find incrementally instead of rebuilding from scratch
-        # 4) For MCTS: use apply → encode → undo pattern to avoid object creation
-        # 5) Keep make_move() for compatibility, but optimize internal implementation
-        # Expected gain: 10-20x speedup in MCTS expansion phase
+        # 1) Add apply_move() method to HexGameState that mutates in place
+        # 2) Add undo_last() method that restores previous state
+        # 3) Update MCTS to use apply → encode → undo pattern for evaluations
+        # 4) Use fast_copy() only when child nodes need to be materialized
+        # Expected gain: 10-20x speedup in expansion phase
         if not self.is_valid_move(row, col):
             raise ValueError(f"Invalid move: ({row}, {col})")
         color = "blue" if self.current_player == BLUE_PLAYER else "red"
