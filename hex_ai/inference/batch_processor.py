@@ -49,6 +49,10 @@ class BatchProcessor:
             optimal_batch_size: Target batch size for optimal GPU utilization
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed, 3=debug)
         """
+        # TODO: PERFORMANCE - Monitor batch utilization to ensure optimal performance
+        # Current batching may be underfilling batches, causing many small model calls
+        # Track: average batch size, total model.predict() calls per move, GPU utilization
+        # Consider: relax "wait for N sims" to "collect until batch full or X ms passes"
         self.model = model
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose

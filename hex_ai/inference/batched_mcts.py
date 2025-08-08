@@ -14,6 +14,46 @@ Key Features:
 - Clean separation of concerns
 """
 
+# TODO: PERFORMANCE CRITICAL - Replace deepcopy with fast state cloning
+# Current make_move() creates new HexGameState objects which is expensive for MCTS
+# Consider: 1) Implement fast_copy() that only copies board array + minimal vars
+# 2) Use apply/undo move pattern to mutate in place and roll back during simulation
+# This is likely the single biggest performance bottleneck (10-20x slowdown vs fixed search)
+
+# TODO: PERFORMANCE - Optimize tree traversal with NumPy arrays
+# Current _select_child_with_puct() iterates over Python dicts/lists in pure Python
+# Consider: Store child stats in NumPy arrays indexed by move, vectorize UCT formula
+# Cache math.log() calls, minimize attribute lookups (node.visits -> local vars)
+
+# TODO: PERFORMANCE - Ensure batch utilization
+# Current batching may be underfilling batches, causing many small model calls
+# Monitor: average batch size, total model.predict() calls per move
+# Consider: relax "wait for N sims" to "collect until batch full or X ms passes"
+
+# TODO: PERFORMANCE - Pre-allocate model input tensors
+# Current implementation creates new tensors for each evaluation
+# Consider: pre-allocate input tensors once and fill in-place each batch
+# Use async GPU inference to overlap with MCTS CPU traversal
+
+# TODO: PERFORMANCE - Optimize backpropagation loops
+# Current _backpropagate() uses Python function calls and repeated attribute lookups
+# Consider: inline the loop, use local variables instead of repeated node.visits += 1
+
+# TODO: STRUCTURAL - Separate MCTS core from game state logic
+# Consider: Node stores only indices/keys for game states in separate store
+# Game state as lightweight struct (NumPy array + player turn)
+# This would make optimization easier and reduce memory overhead
+
+# TODO: STRUCTURAL - Unify policy/value eval code
+# Current branching for batched vs single evaluation creates complexity
+# Consider: unified Evaluator class that handles queueing and returns results
+# This would make profiling and optimization easier
+
+# TODO: INSTRUMENTATION - Add performance profiling
+# Time spent in: (1) selection, (2) expansion, (3) model call, (4) backprop
+# Per move: total nodes expanded, total model calls, average batch size, GPU utilization
+# This will help identify the exact bottlenecks
+
 import copy
 import math
 import time

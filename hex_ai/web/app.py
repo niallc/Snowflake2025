@@ -35,6 +35,12 @@ DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
 app = Flask(__name__, static_folder="static")
 CORS(app)
 
+# TODO: PERFORMANCE INVESTIGATION - MCTS vs Fixed Tree Search Performance Gap
+# Fixed tree search: ~6 games/sec with depth 2, ~100 leaf nodes
+# Current MCTS: <1 move/sec despite batching ~64 evaluations
+# This represents a ~100x slowdown that needs systematic investigation
+# Key areas: state copying, tree traversal overhead, batch utilization, model call efficiency
+
 # TODO: Refactor duplicated logic across API functions
 # The following functions share common patterns that should be extracted into utilities:
 # - api_state(), api_apply_move(), api_apply_trmph_sequence(), api_move()

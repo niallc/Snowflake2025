@@ -67,6 +67,11 @@ class LRUCache:
 
 
 class SimpleModelInference:
+    # TODO: PERFORMANCE - Investigate model call overhead for MCTS performance
+    # Current predict() calls may have Python-to-C transition overhead and tensor setup costs
+    # Consider: keep model loaded on GPU across calls, pre-allocate input tensors
+    # Use async GPU inference to overlap with MCTS CPU traversal
+    # Monitor: time spent in Python-to-C transitions vs actual inference
     def __init__(
         self,
         checkpoint_path: str,

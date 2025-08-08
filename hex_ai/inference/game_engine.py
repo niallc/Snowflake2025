@@ -106,6 +106,10 @@ class HexGameState:
         return is_empty(self.board, row, col)
 
     def make_move(self, row: int, col: int) -> 'HexGameState':
+        # TODO: PERFORMANCE CRITICAL - This creates new state objects which is expensive for MCTS
+        # Consider implementing fast_copy() or apply/undo pattern for better performance
+        # Current approach: creates new board array, move history, and state object
+        # Alternative: mutate in place with rollback capability for MCTS simulations
         if not self.is_valid_move(row, col):
             raise ValueError(f"Invalid move: ({row}, {col})")
         color = "blue" if self.current_player == BLUE_PLAYER else "red"
