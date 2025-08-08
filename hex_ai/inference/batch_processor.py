@@ -7,12 +7,14 @@ for MCTS search, enabling significant performance improvements through GPU batch
 
 import time
 import logging
+import threading
 from typing import Dict, List, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 import numpy as np
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.utils.gpu_monitoring import get_gpu_memory_info, log_memory_status
+from hex_ai.utils.perf import PERF
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,8 @@ class BatchProcessor:
     - Performance monitoring and statistics
     """
     
-    def __init__(self, model: SimpleModelInference, optimal_batch_size: int = 64, verbose: int = 1):
+    def __init__(self, model: SimpleModelInference, optimal_batch_size: int = 64, verbose: int = 1, 
+                 max_wait_ms: int = 5, enable_background_processing: bool = True):
         """
         Initialize the batch processor.
         
@@ -48,18 +51,33 @@ class BatchProcessor:
             model: Model instance that supports batch_infer()
             optimal_batch_size: Target batch size for optimal GPU utilization
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed, 3=debug)
+            max_wait_ms: Maximum wait time in milliseconds before processing small batches
+            enable_background_processing: Whether to enable background thread for automatic processing
         """
-        # TODO: PERFORMANCE - Monitor batch utilization to ensure optimal performance
-        # Current batching may be underfilling batches, causing many small model calls
-        # Track: average batch size, total model.predict() calls per move, GPU utilization
-        # Consider: relax "wait for N sims" to "collect until batch full or X ms passes"
+        # TODO: PERFORMANCE - Optimize batch utilization and tensor allocation
+        # Current batching may underfill batches, creating new tensors per evaluation
+        # IMPLEMENTATION PLAN (Phase 3.3):
+        # 1) Tune batch collection parameters: adjust max_wait_ms (1-5ms)
+        # 2) Pre-seed rollouts to fill queue before first inference
+        # 3) Pre-allocate input tensor pool, write into views when stacking
+        # 4) Batch CPU→GPU transfers, avoid per-state .cpu() calls
+        # 5) Monitor avg_batch_size vs target, aim for >80% utilization
+        # 6) Add performance instrumentation using PERF utility
+        # Expected gain: 1.5-3x speedup in inference throughput
         self.model = model
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose
+        self.max_wait_ms = max_wait_ms
+        self.enable_background_processing = enable_background_processing
         
         # Request queue and cache
         self.request_queue: List[BatchRequest] = []
         self.result_cache: Dict[bytes, Tuple[np.ndarray, float]] = {}
+        
+        # Background processing
+        self.background_thread = None
+        self.shutdown_event = threading.Event()
+        self.processing_lock = threading.Lock()
         
         # Rate-limited logging
         self.last_log_time = 0.0
@@ -78,7 +96,12 @@ class BatchProcessor:
             'gpu_memory_samples': []
         }
         
-        logger.info(f"BatchProcessor initialized with optimal_batch_size={optimal_batch_size}, verbose={verbose}")
+        logger.info(f"BatchProcessor initialized with optimal_batch_size={optimal_batch_size}, "
+                   f"max_wait_ms={max_wait_ms}, background_processing={enable_background_processing}, verbose={verbose}")
+        
+        # Start background thread if enabled
+        if self.enable_background_processing:
+            self._start_background_thread()
         
         # Log initial memory status only for high verbosity
         if self.verbose >= 4:
@@ -89,6 +112,27 @@ class BatchProcessor:
                           metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Request an evaluation for a board state.
+        
+        Args:
+            board_state: Board state to evaluate (numpy array or torch tensor)
+            callback: Function to call with (policy, value) results
+            metadata: Optional metadata for debugging
+            
+        Returns:
+            True if result was immediately available from cache, False if queued
+        """
+        # Use lock if background processing is enabled
+        if self.enable_background_processing:
+            with self.processing_lock:
+                return self._request_evaluation_internal(board_state, callback, metadata)
+        else:
+            return self._request_evaluation_internal(board_state, callback, metadata)
+    
+    def _request_evaluation_internal(self, board_state: np.ndarray, 
+                                   callback: Callable[[np.ndarray, float], None],
+                                   metadata: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Internal evaluation request method (thread-safe when called with lock).
         
         Args:
             board_state: Board state to evaluate (numpy array or torch tensor)
@@ -128,16 +172,97 @@ class BatchProcessor:
         )
         self.request_queue.append(request)
         
-        if self.verbose >= 4:
+        if self.verbose >= 2:
+            logger.debug(f"Added request to queue. Queue size: {len(self.request_queue)}, "
+                        f"Cache size: {len(self.result_cache)}")
+        elif self.verbose >= 4:
             logger.debug(f"Added request to queue. Queue size: {len(self.request_queue)}, "
                         f"Cache size: {len(self.result_cache)}, "
                         f"Metadata: {metadata}")
         
         return False
     
+    def _start_background_thread(self):
+        """Start the background processing thread."""
+        if self.background_thread is not None:
+            return  # Already running
+        
+        self.shutdown_event.clear()
+        self.background_thread = threading.Thread(target=self._background_worker, daemon=True)
+        self.background_thread.start()
+        
+        if self.verbose >= 2:
+            logger.debug("Background processing thread started")
+    
+    def _stop_background_thread(self):
+        """Stop the background processing thread."""
+        if self.background_thread is None:
+            return
+        
+        self.shutdown_event.set()
+        self.background_thread.join(timeout=1.0)
+        self.background_thread = None
+        
+        if self.verbose >= 2:
+            logger.debug("Background processing thread stopped")
+    
+    def _background_worker(self):
+        """Background worker that processes batches automatically."""
+        while not self.shutdown_event.is_set():
+            try:
+                with self.processing_lock:
+                    queue_size = len(self.request_queue)
+                    
+                    # Process if we have enough requests or if we've been waiting too long
+                    should_process = (
+                        queue_size >= self.optimal_batch_size or
+                        (queue_size > 0 and self._should_process_small_batch())
+                    )
+                    
+                    if should_process:
+                        if self.verbose >= 2:
+                            logger.debug(f"Background worker processing batch of {queue_size} requests")
+                        result = self._process_batch_internal(force=queue_size < self.optimal_batch_size)
+                        if self.verbose >= 2:
+                            logger.debug(f"Background worker processed {result} requests")
+                
+                # Sleep for a short time to avoid busy waiting
+                time.sleep(self.max_wait_ms / 1000.0)
+                
+            except Exception as e:
+                logger.error(f"Background worker error: {e}")
+                time.sleep(0.001)  # Brief pause on error
+    
+    def _should_process_small_batch(self) -> bool:
+        """Check if we should process a small batch based on timing."""
+        # Simple implementation: process if we have any requests
+        # This could be enhanced with more sophisticated timing logic
+        return len(self.request_queue) > 0
+    
+    def __del__(self):
+        """Cleanup when the object is destroyed."""
+        self._stop_background_thread()
+    
     def process_batch(self, force: bool = False) -> int:
         """
         Process the current batch of requests.
+        
+        Args:
+            force: If True, process even if batch is smaller than optimal size
+            
+        Returns:
+            Number of requests processed
+        """
+        # Use lock if background processing is enabled
+        if self.enable_background_processing:
+            with self.processing_lock:
+                return self._process_batch_internal(force)
+        else:
+            return self._process_batch_internal(force)
+    
+    def _process_batch_internal(self, force: bool = False) -> int:
+        """
+        Internal batch processing method (thread-safe when called with lock).
         
         Args:
             force: If True, process even if batch is smaller than optimal size
@@ -174,64 +299,83 @@ class BatchProcessor:
         callbacks = [req.callback for req in self.request_queue]
         metadata_list = [req.metadata for req in self.request_queue]
         
-        # Process batch
-        try:
-            policies, values = self.model.batch_infer(boards)
-            
-            # Validate results
-            if len(policies) != len(values) or len(policies) != len(boards):
-                raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(boards)} boards")
-            
-            # Distribute results and update cache
-            for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
-                # Store in cache
-                cache_key = board.tobytes()
-                self.result_cache[cache_key] = (policy, value)
+        # Process batch with performance monitoring
+        with PERF.timer("nn.infer"):
+            try:
+                if self.verbose >= 2:
+                    logger.debug(f"Calling model.batch_infer with {len(boards)} boards")
+                policies, values = self.model.batch_infer(boards)
                 
-                # Call callback
-                try:
-                    callback(policy, value)
-                except Exception as e:
-                    logger.error(f"Callback error for request {i}: {e}")
-                    if metadata_list[i]:
-                        logger.error(f"Request metadata: {metadata_list[i]}")
-            
-            # Update statistics
-            batch_time = time.time() - start_time
-            self.stats['total_batches_processed'] += 1
-            self.stats['total_inferences'] += len(boards)
-            self.stats['total_time'] += batch_time
-            self.stats['batch_processing_times'].append(batch_time)
-            
-            # Update average batch size
-            total_batches = self.stats['total_batches_processed']
-            current_avg = self.stats['average_batch_size']
-            self.stats['average_batch_size'] = (current_avg * (total_batches - 1) + len(boards)) / total_batches
-            
-            # Record GPU memory usage
-            gpu_mem = get_gpu_memory_info()
-            if gpu_mem:
-                self.stats['gpu_memory_samples'].append({
-                    'timestamp': time.time(),
-                    'allocated_mb': gpu_mem['allocated_mb'],
-                    'utilization_percent': gpu_mem['utilization_percent']
-                })
-            
-            processed_count = len(boards)
-            
-            # Rate-limited logging for batch completion
-            if self.verbose >= 1 and should_log:
-                logger.info(f"Batch processed: {processed_count} requests in {batch_time:.3f}s "
-                           f"({processed_count/batch_time:.1f} req/s)")
-            
-            # Detailed logging only for very high verbosity
-            if self.verbose >= 5:
-                log_memory_status("Post-batch ")
-            
-        except Exception as e:
-            logger.error(f"Batch inference failed: {e}")
-            # Clear the queue on error to prevent infinite retries
-            processed_count = 0
+                if self.verbose >= 2:
+                    logger.debug(f"Model returned {len(policies)} policies and {len(values)} values")
+                
+                # Validate results
+                if len(policies) != len(values) or len(policies) != len(boards):
+                    raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(boards)} boards")
+                
+                # Distribute results and update cache
+                for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
+                    # Store in cache
+                    cache_key = board.tobytes()
+                    self.result_cache[cache_key] = (policy, value)
+                    
+                    # Call callback
+                    try:
+                        if self.verbose >= 2:
+                            logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
+                        callback(policy, value)
+                        if self.verbose >= 2:
+                            logger.debug(f"Callback {i} completed successfully")
+                    except Exception as e:
+                        logger.error(f"Callback error for request {i}: {e}")
+                        import traceback
+                        logger.error(f"Callback traceback: {traceback.format_exc()}")
+                        if metadata_list[i]:
+                            logger.error(f"Request metadata: {metadata_list[i]}")
+                
+                # Update performance statistics
+                PERF.inc("nn.batch")
+                PERF.add_sample("nn.batch_size", len(boards))
+                
+            except Exception as e:
+                logger.error(f"Batch inference failed: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                # Clear the queue on error to prevent infinite retries
+                processed_count = 0
+                return processed_count
+        
+        # Update statistics
+        batch_time = time.time() - start_time
+        self.stats['total_batches_processed'] += 1
+        self.stats['total_inferences'] += len(boards)
+        self.stats['total_time'] += batch_time
+        self.stats['batch_processing_times'].append(batch_time)
+        
+        # Update average batch size
+        total_batches = self.stats['total_batches_processed']
+        current_avg = self.stats['average_batch_size']
+        self.stats['average_batch_size'] = (current_avg * (total_batches - 1) + len(boards)) / total_batches
+        
+        # Record GPU memory usage
+        gpu_mem = get_gpu_memory_info()
+        if gpu_mem:
+            self.stats['gpu_memory_samples'].append({
+                'timestamp': time.time(),
+                'allocated_mb': gpu_mem['allocated_mb'],
+                'utilization_percent': gpu_mem['utilization_percent']
+            })
+        
+        processed_count = len(boards)
+        
+        # Rate-limited logging for batch completion
+        if self.verbose >= 1 and should_log:
+            logger.info(f"Batch processed: {processed_count} requests in {batch_time:.3f}s "
+                       f"({processed_count/batch_time:.1f} req/s)")
+        
+        # Detailed logging only for very high verbosity
+        if self.verbose >= 5:
+            log_memory_status("Post-batch ")
         
         # Clear the queue
         self.request_queue.clear()
