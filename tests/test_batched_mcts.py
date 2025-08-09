@@ -19,12 +19,17 @@ class TestBatchProcessor(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        # Create a mock model
+        # Create a mock model that returns results for any batch size
         self.mock_model = Mock()
-        self.mock_model.batch_infer.return_value = (
-            [np.random.rand(169) for _ in range(3)],  # policies
-            [0.5, -0.3, 0.8]  # values
-        )
+        
+        def mock_batch_infer(boards):
+            batch_size = len(boards)
+            return (
+                [np.random.rand(169) for _ in range(batch_size)],  # policies
+                [np.random.uniform(-1, 1) for _ in range(batch_size)]  # values
+            )
+        
+        self.mock_model.batch_infer.side_effect = mock_batch_infer
         
         self.processor = BatchProcessor(self.mock_model, optimal_batch_size=2)
     
@@ -169,12 +174,17 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        # Create a mock model
+        # Create a mock model that returns results for any batch size
         self.mock_model = Mock()
-        self.mock_model.batch_infer.return_value = (
-            [np.random.rand(169) for _ in range(5)],  # policies
-            [0.5, -0.3, 0.8, -0.1, 0.6]  # values
-        )
+        
+        def mock_batch_infer(boards):
+            batch_size = len(boards)
+            return (
+                [np.random.rand(169) for _ in range(batch_size)],  # policies
+                [np.random.uniform(-1, 1) for _ in range(batch_size)]  # values
+            )
+        
+        self.mock_model.batch_infer.side_effect = mock_batch_infer
         
         self.mcts = BatchedNeuralMCTS(
             model=self.mock_model,
@@ -187,17 +197,17 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
         """Test MCTS initialization."""
         self.assertEqual(self.mcts.exploration_constant, 1.4)
         self.assertEqual(self.mcts.optimal_batch_size, 2)
-        self.assertIsNotNone(self.mcts.batch_processor)
+        self.assertIsNotNone(self.mcts.evaluator)
     
     def test_search_new_state(self):
         """Test search with new game state."""
         state = HexGameState()
         
-        # Mock the batch processor to avoid actual inference
-        with patch.object(self.mcts.batch_processor, 'request_evaluation') as mock_request:
+        # Mock the evaluator to avoid actual inference
+        with patch.object(self.mcts.evaluator, 'request_evaluation') as mock_request:
             mock_request.return_value = False  # Cache miss
             
-            with patch.object(self.mcts.batch_processor, 'process_batch') as mock_process:
+            with patch.object(self.mcts.evaluator, 'process_pending_evaluations') as mock_process:
                 mock_process.return_value = 0  # No processing
                 
                 root = self.mcts.search(state, num_simulations=10)
@@ -216,11 +226,11 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
         existing_node.visits = 5
         existing_node.total_value = 2.0
         
-        # Mock the batch processor
-        with patch.object(self.mcts.batch_processor, 'request_evaluation') as mock_request:
+        # Mock the evaluator
+        with patch.object(self.mcts.evaluator, 'request_evaluation') as mock_request:
             mock_request.return_value = False
             
-            with patch.object(self.mcts.batch_processor, 'process_batch') as mock_process:
+            with patch.object(self.mcts.evaluator, 'process_pending_evaluations') as mock_process:
                 mock_process.return_value = 0
                 
                 root = self.mcts.search(existing_node, num_simulations=10)
@@ -235,8 +245,8 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
         # Check that all expected keys are present
         expected_keys = [
             'total_simulations', 'total_inferences', 'total_batches_processed',
-            'start_time', 'end_time', 'total_requests', 'cache_hits', 'cache_misses',
-            'total_time', 'average_batch_size', 'cache_hit_rate', 'inferences_per_second'
+            'start_time', 'end_time', 'total_evaluations', 'queue_size', 'cache_size',
+            'cache_hit_rate', 'average_batch_size', 'inferences_per_second'
         ]
         for key in expected_keys:
             self.assertIn(key, stats)

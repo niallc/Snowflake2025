@@ -81,8 +81,9 @@ import numpy as np
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.batch_processor import BatchProcessor
+from hex_ai.inference.batched_evaluator import BatchedEvaluator
 from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
 from hex_ai.utils.perf import PERF
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,8 @@ class BatchedMCTSNode:
     
     def add_virtual_loss(self, amount: int = 1):
         """Add virtual loss to discourage exploration while evaluation is pending."""
-        self.virtual_loss += amount
+        # Add bounds checking to prevent unbounded accumulation
+        self.virtual_loss = min(self.virtual_loss + amount, 1000)  # Reasonable upper bound
     
     def remove_virtual_loss(self, amount: int = 1):
         """Remove virtual loss after evaluation is complete."""
@@ -192,9 +194,18 @@ class BatchedNeuralMCTS:
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
         
-        # Initialize batch processor
-        self.batch_processor = BatchProcessor(model, optimal_batch_size, verbose=verbose, 
-                                            max_wait_ms=3, enable_background_processing=True)
+        # Initialize batched evaluator (replaces direct batch processor usage)
+        self.evaluator = BatchedEvaluator(
+            model=model,
+            optimal_batch_size=optimal_batch_size,
+            verbose=verbose,
+            max_wait_ms=3,
+            enable_background_processing=True
+        )
+        
+        # Node registry for callbacks (cleaner than lambda closures)
+        self._node_registry: Dict[int, BatchedMCTSNode] = {}
+        self._next_node_id = 0
         
         # Statistics tracking
         self.stats = {
@@ -208,6 +219,24 @@ class BatchedNeuralMCTS:
         self.logger.info(f"Initialized BatchedNeuralMCTS with exploration_constant={exploration_constant}, "
                         f"win_value={win_value}, discount_factor={discount_factor}, "
                         f"optimal_batch_size={optimal_batch_size}")
+
+    def _get_node_id(self, node: BatchedMCTSNode) -> int:
+        """Get or create a unique ID for a node."""
+        # Use id() of the node object as the unique identifier
+        node_id = id(node)
+        if node_id not in self._node_registry:
+            self._node_registry[node_id] = node
+        return node_id
+
+    def _get_node_by_id(self, node_id: int) -> Optional[BatchedMCTSNode]:
+        """Get a node by its ID, or None if not found."""
+        return self._node_registry.get(node_id)
+
+    def _cleanup_node_registry(self):
+        """Clean up nodes that are no longer referenced."""
+        # This is a simple cleanup - in practice, you might want more sophisticated
+        # reference counting or garbage collection
+        pass
 
     def search(self, root_state_or_node, num_simulations: int) -> BatchedMCTSNode:
         """
@@ -272,8 +301,8 @@ class BatchedNeuralMCTS:
                 if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
                     elapsed = time.time() - self.stats['start_time']
                     sims_per_sec = (sim_idx + 1) / elapsed
-                    queue_size = self.batch_processor.get_queue_size()
-                    cache_size = self.batch_processor.get_cache_size()
+                    queue_size = self.evaluator.get_queue_size()
+                    cache_size = self.evaluator.get_cache_size()
                     self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
                                    f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
                 
@@ -283,16 +312,16 @@ class BatchedNeuralMCTS:
         
         # Wait for any remaining background processing to complete
         # The background thread will automatically process remaining requests
-        if self.batch_processor.enable_background_processing:
+        if self.evaluator.enable_background_processing:
             # Give the background thread more time to process remaining requests
             max_wait_time = 1.0  # Wait up to 1 second
             wait_start = time.time()
-            while (self.batch_processor.get_queue_size() > 0 and 
+            while (self.evaluator.get_queue_size() > 0 and 
                    time.time() - wait_start < max_wait_time):
                 time.sleep(0.001)  # Sleep for 1ms
             
             if self.verbose >= 2:
-                remaining_queue = self.batch_processor.get_queue_size()
+                remaining_queue = self.evaluator.get_queue_size()
                 if remaining_queue > 0:
                     self.logger.warning(f"Background processing incomplete: {remaining_queue} requests still in queue")
                 else:
@@ -302,21 +331,21 @@ class BatchedNeuralMCTS:
         total_time = self.stats['end_time'] - self.stats['start_time']
         sims_per_sec = num_simulations / total_time
         
-        # Get batch processor statistics
-        batch_stats = self.batch_processor.get_statistics()
-        self.stats['total_inferences'] = batch_stats['total_inferences']
+        # Get evaluator statistics
+        evaluator_stats = self.evaluator.get_statistics()
+        self.stats['total_inferences'] = evaluator_stats.get('batch_processor', {}).get('total_inferences', 0)
         
         if self.verbose >= 1:
             self.logger.info(f"Batched MCTS search completed: {num_simulations} simulations in {total_time:.2f}s ({sims_per_sec:.1f} sims/sec)")
             self.logger.info(f"Total neural network inferences: {self.stats['total_inferences']}")
             self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
-            self.logger.info(f"Cache hit rate: {batch_stats['cache_hit_rate']:.1%}")
-            self.logger.info(f"Average batch size: {batch_stats['average_batch_size']:.1f}")
+            self.logger.info(f"Cache hit rate: {evaluator_stats.get('cache_hit_rate', 0):.1%}")
+            self.logger.info(f"Average batch size: {evaluator_stats.get('average_batch_size', 0):.1f}")
         
         # More detailed summary for higher verbosity
         if self.verbose >= 2:
-            self.logger.info(f"Performance summary: {batch_stats.get('inferences_per_second', 0):.1f} inferences/sec, "
-                           f"{batch_stats.get('average_batch_size', 0):.1f} avg batch size")
+            self.logger.info(f"Performance summary: {evaluator_stats.get('inferences_per_second', 0):.1f} inferences/sec, "
+                           f"{evaluator_stats.get('average_batch_size', 0):.1f} avg batch size")
         
         # Log performance snapshot at end of search
         PERF.log_snapshot(clear=True, force=True)
@@ -444,68 +473,18 @@ class BatchedNeuralMCTS:
             node.node_state = NodeState.EVALUATION_PENDING
             node.add_virtual_loss()
             
-            # TODO (P3): Add further explanation of the callback.
-            def evaluation_callback(policy_logits: np.ndarray, value: float):
-                """Callback to handle evaluation results and backpropagation."""
-                if self.verbose >= 2:
-                    self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
-                
-                # Apply softmax and filter for legal moves
-                legal_moves = node.state.get_legal_moves()
-                if self.verbose >= 2:
-                    self.logger.debug(f"Legal moves: {len(legal_moves)}")
-                
-                node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
-                
-                if self.verbose >= 2:
-                    self.logger.debug(f"Policy priors: {len(node.policy_priors)} moves")
-                
-                # Create child nodes for all legal moves using apply/undo pattern
-                for move, prior in node.policy_priors.items():
-                    # Apply move to current state
-                    node.state.apply_move(*move)
-                    
-                    # Create child node with the modified state
-                    child_depth = node.get_depth() + 1
-                    node.children[move] = BatchedMCTSNode(
-                        state=node.state.fast_copy(),  # Use fast_copy instead of deepcopy
-                        parent=node, 
-                        move=move, 
-                        depth=child_depth
-                    )
-                    
-                    # Undo the move to restore original state
-                    node.state.undo_last()
-                
-                if self.verbose >= 2:
-                    self.logger.debug(f"Created {len(node.children)} child nodes")
-                
-                # Mark node as expanded
-                node.node_state = NodeState.EXPANDED
-                # Remove all virtual loss that was accumulated during evaluation
-                node.remove_virtual_loss(node.virtual_loss)
-                
-                # CRITICAL FIX: Backpropagate the true network value up the tree
-                # This ensures that all ancestors get the correct value, not the placeholder
-                self._backpropagate(node, value)
-                
-                if self.verbose >= 2:
-                    self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
-            
-            # Request evaluation
-            # TODO (P3): Add brief explanation of how this batches evaluations
-            board_tensor = node.state.get_board_tensor()
-            # Convert tensor to numpy array for batch processor
-            # We expect PyTorch tensors from get_board_tensor(), so raise an exception if not
-            if not hasattr(board_tensor, 'cpu'):
-                raise ValueError(f"Expected PyTorch tensor from get_board_tensor(), got {type(board_tensor)}")
-            board_array = board_tensor.cpu().numpy()
-                
-            self.batch_processor.request_evaluation(
-                board_state=board_array,
-                callback=evaluation_callback,
-                metadata={'node_depth': node.get_depth(), 'simulation_id': self.stats['total_simulations']}
+            # Request evaluation using the batched evaluator
+            # Capture values at request time to avoid stale references
+            simulation_id = self.stats['total_simulations']
+            node_depth = node.get_depth()
+            node_id = self._get_node_id(node)
+            self.evaluator.request_evaluation(
+                state=node.state,
+                callback=lambda policy_logits, value: self._handle_evaluation_result(node_id, policy_logits, value),
+                metadata={'node_depth': node_depth, 'simulation_id': simulation_id}
             )
+            
+            # The evaluation request is now handled by the batched evaluator above
             
         elif node.node_state == NodeState.EVALUATION_PENDING:
             # Node is already being evaluated, add virtual loss
@@ -514,6 +493,71 @@ class BatchedNeuralMCTS:
         else:  # NodeState.EXPANDED
             # Node is already expanded, this shouldn't happen in normal flow
             raise ValueError("Attempted to expand already expanded node")
+
+    def _handle_evaluation_result(self, node_id: int, policy_logits: np.ndarray, value: float) -> None:
+        """
+        Handle evaluation results and complete node expansion.
+        
+        This method is called by the batched evaluator when neural network
+        evaluation completes. It processes the results and creates child nodes.
+        
+        Args:
+            node_id: The ID of the node that was evaluated
+            policy_logits: Raw policy logits from neural network
+            value: Value prediction from neural network
+        """
+        node = self._get_node_by_id(node_id)
+        if node is None:
+            self.logger.warning(f"Received evaluation result for unknown node with ID {node_id}")
+            return
+
+        if self.verbose >= 2:
+            self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
+        
+        # Apply softmax and filter for legal moves
+        legal_moves = node.state.get_legal_moves()
+        if self.verbose >= 2:
+            self.logger.debug(f"Legal moves: {len(legal_moves)}")
+        
+        node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
+        
+        if self.verbose >= 2:
+            self.logger.debug(f"Policy priors: {len(node.policy_priors)} moves")
+        
+        # Create child nodes for all legal moves using apply/undo pattern
+        for move, prior in node.policy_priors.items():
+            # Apply move to current state
+            node.state.apply_move(*move)
+            
+            # Create child node with the modified state
+            child_depth = node.get_depth() + 1
+            node.children[move] = BatchedMCTSNode(
+                state=node.state.fast_copy(),  # Use fast_copy instead of deepcopy
+                parent=node, 
+                move=move, 
+                depth=child_depth
+            )
+            
+            # Undo the move to restore original state
+            node.state.undo_last()
+        
+        if self.verbose >= 2:
+            self.logger.debug(f"Created {len(node.children)} child nodes")
+        
+        # Mark node as expanded
+        node.node_state = NodeState.EXPANDED
+        # Remove all virtual loss that was accumulated during evaluation
+        node.remove_virtual_loss(node.virtual_loss)
+        
+        # CRITICAL FIX: Backpropagate the true network value up the tree
+        # This ensures that all ancestors get the correct value, not the placeholder
+        self._backpropagate(node, value)
+        
+        if self.verbose >= 2:
+            self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
+        
+        # Clean up the node from registry after processing
+        self._node_registry.pop(node_id, None)
 
     def _backpropagate(self, node: BatchedMCTSNode, value: float) -> None:
         """
@@ -601,8 +645,7 @@ class BatchedNeuralMCTS:
         for move in legal_moves:
             row, col = move
             # Convert 2D coordinates to 1D index
-            # TODO (P2): Replace 13 with BOARD_SIZE from hex_ai.config.
-            move_index = row * 13 + col  # Assuming 13x13 board
+            move_index = row * BOARD_SIZE + col
             prior = policy_probs[move_index]
             move_priors[move] = prior
             total_prior += prior
@@ -696,9 +739,13 @@ class BatchedNeuralMCTS:
             if stats['total_simulations'] > 0:
                 stats['simulations_per_second'] = stats['total_simulations'] / stats['total_time']
         
-        # Add batch processor statistics
-        batch_stats = self.batch_processor.get_statistics()
-        stats.update(batch_stats)
+        # Add evaluator statistics
+        evaluator_stats = self.evaluator.get_statistics()
+        stats.update(evaluator_stats)
+        
+        # Add thread information
+        if hasattr(self.evaluator.batch_processor, 'get_thread_info'):
+            stats['background_thread'] = self.evaluator.batch_processor.get_thread_info()
         
         # Add GPU memory statistics
         from hex_ai.utils.gpu_monitoring import get_gpu_memory_info
@@ -755,7 +802,17 @@ class BatchedNeuralMCTS:
         self.stats['total_batches_processed'] = 0
         self.stats['start_time'] = None
         self.stats['end_time'] = None
-        self.batch_processor.reset_statistics()
+        self.evaluator.reset_statistics()
+    
+    def cleanup(self):
+        """Clean up resources and stop background threads."""
+        self.evaluator.cleanup()
+        if self.verbose >= 1:
+            self.logger.info("MCTS cleanup completed")
+    
+    def __del__(self):
+        """Cleanup when the object is destroyed."""
+        self.cleanup()
     
     def get_principal_variation(self, root: BatchedMCTSNode, max_depth: int = 10) -> List[Tuple[int, int]]:
         """
@@ -848,16 +905,16 @@ class BatchedNeuralMCTS:
         elapsed = time.time() - self.stats['start_time']
         sims_per_sec = sims_completed / elapsed
         
-        # Get batch processor statistics
-        batch_stats = self.batch_processor.get_statistics()
+        # Get evaluator statistics
+        evaluator_stats = self.evaluator.get_statistics()
         
         self.logger.info(f"=== Detailed Progress Report ===")
         self.logger.info(f"Simulations: {sims_completed}/{total_sims} ({sims_per_sec:.1f} sims/sec)")
-        self.logger.info(f"Queue size: {self.batch_processor.get_queue_size()}")
-        self.logger.info(f"Cache size: {self.batch_processor.get_cache_size()}")
-        self.logger.info(f"Cache hit rate: {batch_stats.get('cache_hit_rate', 0):.1%}")
+        self.logger.info(f"Queue size: {self.evaluator.get_queue_size()}")
+        self.logger.info(f"Cache size: {self.evaluator.get_cache_size()}")
+        self.logger.info(f"Cache hit rate: {evaluator_stats.get('cache_hit_rate', 0):.1%}")
         self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
-        self.logger.info(f"Average batch size: {batch_stats.get('average_batch_size', 0):.1f}")
+        self.logger.info(f"Average batch size: {evaluator_stats.get('average_batch_size', 0):.1f}")
         
         # GPU memory info
         from hex_ai.utils.gpu_monitoring import get_gpu_memory_info

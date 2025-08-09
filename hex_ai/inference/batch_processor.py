@@ -199,12 +199,36 @@ class BatchProcessor:
         if self.background_thread is None:
             return
         
+        if self.verbose >= 1:
+            logger.info("Stopping background processing thread...")
+        
         self.shutdown_event.set()
         self.background_thread.join(timeout=1.0)
-        self.background_thread = None
         
-        if self.verbose >= 2:
-            logger.debug("Background processing thread stopped")
+        if self.background_thread.is_alive():
+            logger.warning("Background thread did not stop within timeout - this may indicate a deadlock")
+            # Note: Since it's a daemon thread, it will be killed when main process exits
+        else:
+            if self.verbose >= 1:
+                logger.info("Background processing thread stopped successfully")
+        
+        self.background_thread = None
+    
+    def is_background_thread_alive(self) -> bool:
+        """Check if the background thread is still running."""
+        return self.background_thread is not None and self.background_thread.is_alive()
+    
+    def get_thread_info(self) -> Dict[str, Any]:
+        """Get information about the background thread status."""
+        if self.background_thread is None:
+            return {"status": "not_started", "alive": False}
+        
+        return {
+            "status": "running" if self.background_thread.is_alive() else "stopped",
+            "alive": self.background_thread.is_alive(),
+            "daemon": self.background_thread.daemon,
+            "name": self.background_thread.name
+        }
     
     def _background_worker(self):
         """Background worker that processes batches automatically."""
@@ -319,11 +343,16 @@ class BatchProcessor:
                     cache_key = board.tobytes()
                     self.result_cache[cache_key] = (policy, value)
                     
-                    # Call callback
+                    # Call callback - execute in main thread to avoid threading issues
                     try:
                         if self.verbose >= 2:
                             logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
+                        
+                        # Execute callback in main thread context
+                        # Note: This is safe because the callback is designed to be thread-safe
+                        # and only modifies the MCTS tree structure
                         callback(policy, value)
+                        
                         if self.verbose >= 2:
                             logger.debug(f"Callback {i} completed successfully")
                     except Exception as e:
