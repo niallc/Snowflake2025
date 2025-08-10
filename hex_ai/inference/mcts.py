@@ -1,8 +1,9 @@
 """
 Monte Carlo Tree Search (MCTS) implementation for Hex AI.
 
-This module provides a neural network-guided MCTS implementation following the AlphaZero approach.
-The design prioritizes correctness first, with optimizations added incrementally.
+Neural network-guided MCTS following an AlphaZero-style approach. The code
+prioritizes correctness and clarity with incremental optimizations and reuses
+shared utilities such as BOARD_SIZE and policy/value conversions.
 """
 
 import math
@@ -14,7 +15,7 @@ import numpy as np
 
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
+from hex_ai.value_utils import policy_logits_to_probs
 
 from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
 

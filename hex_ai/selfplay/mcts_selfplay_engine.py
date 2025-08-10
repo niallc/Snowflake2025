@@ -23,7 +23,7 @@ class MCTSSelfPlayEngine:
     
     def __init__(self, model_path: str, num_simulations: int = 800, 
                  exploration_constant: float = 1.4, temperature: float = 1.0,
-                 verbose: int = 1):
+                 verbose: int = 1, max_children_expanded: Optional[int] = None):
         """
         Initialize the MCTS self-play engine.
         
@@ -39,6 +39,7 @@ class MCTSSelfPlayEngine:
         self.exploration_constant = exploration_constant
         self.temperature = temperature
         self.verbose = verbose
+        self.max_children_expanded = max_children_expanded
         
         # Set up logging
         self.logger = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ class MCTSSelfPlayEngine:
         self.mcts = NeuralMCTS(
             model=self.model,
             exploration_constant=exploration_constant,
-            verbose=self.verbose
+            verbose=self.verbose,
+            max_children_expanded=self.max_children_expanded,
         )
         
         # Statistics
