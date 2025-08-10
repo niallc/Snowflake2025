@@ -5,7 +5,6 @@ This module provides a neural network-guided MCTS implementation following the A
 The design prioritizes correctness first, with optimizations added incrementally.
 """
 
-import copy
 import math
 import time
 import logging
@@ -17,7 +16,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
 
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +123,8 @@ class NeuralMCTS:
         
         # Handle both HexGameState and MCTSNode inputs
         if isinstance(root_state_or_node, HexGameState):
-            # Create new root node with deep copy of state
-            root = MCTSNode(state=copy.deepcopy(root_state_or_node))
+            # Create new root node with a fast copy of state (avoids expensive deepcopy)
+            root = MCTSNode(state=root_state_or_node.fast_copy())
         elif isinstance(root_state_or_node, MCTSNode):
             # Continue search from existing node
             root = root_state_or_node
@@ -181,7 +180,7 @@ class NeuralMCTS:
         
         # Verbose debug logging (only at extreme debug level)
         if self.verbose >= 4:
-            self.logger.debug(f"DEBUG: === SELECTING CHILD ===")
+            self.logger.debug("DEBUG: === SELECTING CHILD ===")
             self.logger.debug(f"DEBUG: Node state - current_player: {node.state.current_player}")
             self.logger.debug(f"DEBUG: Node state - game_over: {node.state.game_over}")
             self.logger.debug(f"DEBUG: Node state - winner: {node.state.winner}")
@@ -191,20 +190,22 @@ class NeuralMCTS:
         best_score = -float('inf')
         best_child = None
 
+        sqrt_parent_visits = math.sqrt(max(node.visits, 1))
         for move, child_node in node.children.items():
             # Note: child_node.mean_value is from the perspective of the player who made the move.
             # We must negate it to get the value from the current node's (parent's) perspective.
             q_value = -child_node.mean_value 
             
             prior = node.policy_priors[move]
-            ucb_component = self.exploration_constant * prior * (math.sqrt(node.visits) / (1 + child_node.visits))
+            ucb_component = self.exploration_constant * prior * (sqrt_parent_visits / (1 + child_node.visits))
             
             puct_score = q_value + ucb_component
             
-            self.logger.debug(
-                f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, "
-                f"UCB={ucb_component:.4f}, total={puct_score:.4f}"
-            )
+            if self.verbose >= 4:
+                self.logger.debug(
+                    f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, "
+                    f"UCB={ucb_component:.4f}, total={puct_score:.4f}"
+                )
             
             if puct_score > best_score:
                 best_score = puct_score
@@ -273,19 +274,21 @@ class NeuralMCTS:
             value: Value to propagate up the tree
         """
         current_node = node
+        # Compute leaf depth once, then iteratively update the discount moving up the tree
+        depth_at_node = node.get_depth()
+        discount_multiplier = self.discount_factor ** depth_at_node
         while current_node is not None:
-            # Apply discount factor based on depth (move count penalty)
-            depth = current_node.get_depth()
-            discounted_value = value * (self.discount_factor ** depth)
-            
+            discounted_value = value * discount_multiplier
             current_node.update_statistics(discounted_value)
-            
-            # IMPORTANT: The value is from the perspective of the player at the current node.
-            # For the parent, this outcome has the opposite value.
-            # We negate the value BEFORE moving to the parent.
+            # Move to parent: value flips perspective; discount reduces by one depth level
             current_node = current_node.parent
             if current_node is not None:
                 value = -value
+                # Avoid division by zero even if discount_factor is 0 (degenerate); handle explicitly
+                if self.discount_factor != 0:
+                    discount_multiplier /= self.discount_factor
+                else:
+                    discount_multiplier = 0.0
 
     def _terminal_value(self, state: HexGameState) -> float:
         """
@@ -344,7 +347,7 @@ class NeuralMCTS:
         for move in legal_moves:
             row, col = move
             # Convert 2D coordinates to 1D index
-            move_index = row * 13 + col  # Assuming 13x13 board
+            move_index = row * BOARD_SIZE + col
             prior = policy_probs[move_index]
             move_priors[move] = prior
             total_prior += prior

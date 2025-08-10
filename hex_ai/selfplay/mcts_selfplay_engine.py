@@ -54,7 +54,8 @@ class MCTSSelfPlayEngine:
         # Create MCTS engine
         self.mcts = NeuralMCTS(
             model=self.model,
-            exploration_constant=exploration_constant
+            exploration_constant=exploration_constant,
+            verbose=self.verbose
         )
         
         # Statistics
