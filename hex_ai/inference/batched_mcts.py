@@ -169,6 +169,69 @@ class BatchedMCTSNode:
             self.virtual_loss = max(0, self.virtual_loss - amount)
 
 
+class MCTSNodeManager:
+    """
+    Manages MCTS nodes and their lifecycle.
+    
+    This class handles node creation, state management, and cleanup,
+    providing a clean interface for the MCTS engine. It centralizes
+    node registry management and provides a consistent API for
+    node operations.
+    
+    Key Features:
+    - Node registry management for callback tracking
+    - Consistent node creation with proper parent relationships
+    - Automatic cleanup of unused nodes
+    - Thread-safe node ID generation
+    
+    This separation of concerns makes the MCTS engine more modular
+    and easier to test and maintain.
+    """
+    
+    def __init__(self, verbose: int = 0):
+        self.verbose = verbose
+        self.logger = logging.getLogger(__name__)
+        
+        # Node registry for callbacks (cleaner than lambda closures)
+        self._node_registry: Dict[int, BatchedMCTSNode] = {}
+        self._next_node_id = 0
+    
+    def _get_node_id(self, node: BatchedMCTSNode) -> int:
+        """Get or create a unique ID for a node."""
+        # Use id() of the node object as the unique identifier
+        node_id = id(node)
+        if node_id not in self._node_registry:
+            self._node_registry[node_id] = node
+        return node_id
+
+    def _get_node_by_id(self, node_id: int) -> Optional[BatchedMCTSNode]:
+        """Get a node by its ID, or None if not found."""
+        return self._node_registry.get(node_id)
+
+    def create_root_node(self, state: HexGameState) -> BatchedMCTSNode:
+        """Create a new root node from a game state."""
+        return BatchedMCTSNode(state=state.fast_copy())
+    
+    def create_child_node(self, parent: BatchedMCTSNode, move: Tuple[int, int], 
+                         state: HexGameState) -> BatchedMCTSNode:
+        """Create a child node with proper parent relationship."""
+        child_depth = parent.get_depth() + 1
+        return BatchedMCTSNode(
+            state=state,
+            parent=parent,
+            move=move,
+            depth=child_depth
+        )
+    
+    def cleanup_node(self, node_id: int) -> None:
+        """Clean up a node from the registry."""
+        self._node_registry.pop(node_id, None)
+    
+    def cleanup_all(self) -> None:
+        """Clean up all nodes in the registry."""
+        self._node_registry.clear()
+
+
 class BatchedNeuralMCTS:
     """Batched MCTS engine guided by a neural network."""
     
@@ -203,9 +266,8 @@ class BatchedNeuralMCTS:
             enable_background_processing=True
         )
         
-        # Node registry for callbacks (cleaner than lambda closures)
-        self._node_registry: Dict[int, BatchedMCTSNode] = {}
-        self._next_node_id = 0
+        # Initialize node manager for better separation of concerns
+        self.node_manager = MCTSNodeManager(verbose=verbose)
         
         # Statistics tracking
         self.stats = {
@@ -222,15 +284,11 @@ class BatchedNeuralMCTS:
 
     def _get_node_id(self, node: BatchedMCTSNode) -> int:
         """Get or create a unique ID for a node."""
-        # Use id() of the node object as the unique identifier
-        node_id = id(node)
-        if node_id not in self._node_registry:
-            self._node_registry[node_id] = node
-        return node_id
+        return self.node_manager._get_node_id(node)
 
     def _get_node_by_id(self, node_id: int) -> Optional[BatchedMCTSNode]:
         """Get a node by its ID, or None if not found."""
-        return self._node_registry.get(node_id)
+        return self.node_manager._get_node_by_id(node_id)
 
     def _cleanup_node_registry(self):
         """Clean up nodes that are no longer referenced."""
@@ -258,7 +316,7 @@ class BatchedNeuralMCTS:
             # Handle both HexGameState and BatchedMCTSNode inputs
             if isinstance(root_state_or_node, HexGameState):
                 # Create new root node with fast copy of state
-                root = BatchedMCTSNode(state=root_state_or_node.fast_copy())
+                root = self.node_manager.create_root_node(root_state_or_node)
                 if self.verbose >= 2:
                     self.logger.debug(f"Created new root node from HexGameState")
             elif isinstance(root_state_or_node, BatchedMCTSNode):
@@ -526,20 +584,19 @@ class BatchedNeuralMCTS:
         
         # Create child nodes for all legal moves using apply/undo pattern
         for move, prior in node.policy_priors.items():
-            # Apply move to current state
-            node.state.apply_move(*move)
-            
-            # Create child node with the modified state
-            child_depth = node.get_depth() + 1
-            node.children[move] = BatchedMCTSNode(
-                state=node.state.fast_copy(),  # Use fast_copy instead of deepcopy
-                parent=node, 
-                move=move, 
-                depth=child_depth
-            )
-            
-            # Undo the move to restore original state
-            node.state.undo_last()
+            try:
+                # Apply move to current state
+                node.state.apply_move(*move)
+                
+                # Create child node with the modified state
+                node.children[move] = self.node_manager.create_child_node(
+                    parent=node,
+                    move=move,
+                    state=node.state.fast_copy()
+                )
+            finally:
+                # Always restore state, even if exception occurs
+                node.state.undo_last()
         
         if self.verbose >= 2:
             self.logger.debug(f"Created {len(node.children)} child nodes")
@@ -557,7 +614,7 @@ class BatchedNeuralMCTS:
             self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
         
         # Clean up the node from registry after processing
-        self._node_registry.pop(node_id, None)
+        self.node_manager.cleanup_node(node_id)
 
     def _backpropagate(self, node: BatchedMCTSNode, value: float) -> None:
         """
