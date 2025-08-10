@@ -3,7 +3,7 @@ Board format conversion utilities for Hex AI.
 
 This module provides conversion functions between different board representations:
 - 2×N×N tensor format: Used by neural networks (channels for blue/red)
-- N×N array format: Used by game logic (-1=empty, 0=blue, 1=red)
+- N×N array format: Used by game logic with character encoding ('e'=empty, 'b'=blue, 'r'=red)
 
 The N×N format is more convenient for game logic, adjacency checks, and debugging.
 """
@@ -13,7 +13,8 @@ import numpy as np
 from typing import Tuple
 
 # Board value constants for N×N format
-from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Piece
 
 def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
     """
@@ -55,9 +56,9 @@ def has_piece_at(board_nxn: np.ndarray, row: int, col: int, color: str) -> bool:
     piece_value = board_nxn[row, col]
     
     if color == "blue":
-        return piece_value == BLUE_PIECE
+        return piece_value == Piece.BLUE.value
     elif color == "red":
-        return piece_value == RED_PIECE
+        return piece_value == Piece.RED.value
     else:
         return False
 
@@ -77,7 +78,7 @@ def is_empty(board_nxn: np.ndarray, row: int, col: int) -> bool:
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         return False
     
-    return board_nxn[row, col] == EMPTY_PIECE
+    return board_nxn[row, col] == Piece.EMPTY.value
 
 
 def place_piece(board_nxn: np.ndarray, row: int, col: int, color: str) -> np.ndarray:
@@ -99,15 +100,15 @@ def place_piece(board_nxn: np.ndarray, row: int, col: int, color: str) -> np.nda
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         raise ValueError(f"Position ({row}, {col}) is out of bounds")
     
-    if board_nxn[row, col] != EMPTY_PIECE:
+    if board_nxn[row, col] != Piece.EMPTY.value:
         raise ValueError(f"Position ({row}, {col}) is already occupied")
     
     new_board = board_nxn.copy()
     
     if color == "blue":
-        new_board[row, col] = BLUE_PIECE
+        new_board[row, col] = Piece.BLUE.value
     elif color == "red":
-        new_board[row, col] = RED_PIECE
+        new_board[row, col] = Piece.RED.value
     else:
         raise ValueError(f"Invalid color: {color}")
     
@@ -124,7 +125,7 @@ def board_to_string(board_nxn: np.ndarray) -> str:
     Returns:
         String representation with '.' for empty, 'B' for blue, 'R' for red
     """
-    symbols = {EMPTY_PIECE: '.', BLUE_PIECE: 'B', RED_PIECE: 'R'}
+    symbols = {Piece.EMPTY.value: '.', Piece.BLUE.value: 'B', Piece.RED.value: 'R'}
     
     lines = []
     for row in range(BOARD_SIZE):
@@ -149,8 +150,8 @@ def validate_board(board_nxn: np.ndarray) -> bool:
     if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
         return False
     
-    # Check that all values are valid (0, 1, or 2)
-    valid_values = {EMPTY_PIECE, BLUE_PIECE, RED_PIECE}
+    # Check that all values are valid ('e', 'b', or 'r')
+    valid_values = {Piece.EMPTY.value, Piece.BLUE.value, Piece.RED.value}
     return np.all(np.isin(board_nxn, list(valid_values)))
 
 
@@ -164,6 +165,6 @@ def count_pieces(board_nxn: np.ndarray) -> Tuple[int, int]:
     Returns:
         Tuple of (blue_count, red_count)
     """
-    blue_count = np.sum(board_nxn == BLUE_PIECE)
-    red_count = np.sum(board_nxn == RED_PIECE)
+    blue_count = np.sum(board_nxn == Piece.BLUE.value)
+    red_count = np.sum(board_nxn == Piece.RED.value)
     return int(blue_count), int(red_count) 

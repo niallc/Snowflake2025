@@ -1,12 +1,9 @@
-from enum import Enum
+from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective
 from hex_ai.config import (
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
-    BLUE_PLAYER, RED_PLAYER,
     BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
-    BLUE_CHANNEL, RED_CHANNEL
 )
-# Remove self-import - these are defined in this file
 import torch
 import numpy as np
 from typing import List, Tuple
@@ -47,36 +44,13 @@ def trmph_winner_to_clear_str(trmph_winner: str) -> str:
     else:
         raise ValueError(f"Invalid TRMPH winner: {trmph_winner}")
 
-# --- Enums for clarity ---
-class Winner(Enum):
-    BLUE = 0
-    RED = 1
-
-class Player(Enum):
-    """Player constants for game logic and player-to-move channel."""
-    BLUE = 0
-    RED = 1
-
-class Piece(Enum):
-    """Piece constants for N×N board representation."""
-    EMPTY = "e"
-    BLUE = "b"
-    RED = "r"
-
-class Channel(Enum):
-    """Channel indices for one-hot encoded board formats."""
-    BLUE = 0
-    RED = 1
-    PLAYER_TO_MOVE = 2
-
-class ValuePerspective(Enum):
-    TRAINING_TARGET = 0  # 0.0 = Blue win, 1.0 = Red win
-    BLUE_WIN_PROB = 1    # Probability Blue wins
-    RED_WIN_PROB = 2     # Probability Red wins
+## Enums are now defined in hex_ai.enums and imported above
 
 # --- Conversion functions ---
 def value_target_from_winner(winner: Winner) -> float:
     """Convert Winner to training value target (0.0 for Blue, 1.0 for Red)."""
+    if not isinstance(winner, Winner):
+        raise ValueError(f"Invalid winner: {winner}")
     if winner == Winner.BLUE:
         return 0.0
     elif winner == Winner.RED:
@@ -96,26 +70,46 @@ def winner_from_value_target(value: float) -> Winner:
 # --- Backward compatibility functions ---
 def player_to_int(player: Player) -> int:
     """Convert Player enum to integer for backward compatibility."""
-    return player.value
+    if not isinstance(player, Player):
+        raise TypeError(f"player must be Player enum, got {type(player)}")
+    return int(player.value)
 
 def int_to_player(player_int: int) -> Player:
     """Convert integer to Player enum."""
+    if not isinstance(player_int, int):
+        raise TypeError(f"player_int must be int, got {type(player_int)}")
+    if player_int not in (Player.BLUE.value, Player.RED.value):
+        # Match expected error message in tests
+        raise ValueError(f"{player_int} is not a valid Player")
     return Player(player_int)
 
-def piece_to_int(piece: Piece) -> int:
-    """Convert Piece enum to integer for backward compatibility."""
-    return piece.value
+def piece_to_char(piece: Piece) -> str:
+    """Convert Piece enum to its canonical character encoding ('e'|'b'|'r')."""
+    if not isinstance(piece, Piece):
+        raise TypeError(f"piece must be Piece enum, got {type(piece)}")
+    return str(piece.value)
 
-def int_to_piece(piece_int: int) -> Piece:
-    """Convert integer to Piece enum."""
-    return Piece(piece_int)
+def char_to_piece(piece_char: str) -> Piece:
+    """Convert character encoding to Piece enum."""
+    if not isinstance(piece_char, str):
+        raise TypeError(f"piece_char must be str, got {type(piece_char)}")
+    mapping = {"e": Piece.EMPTY, "b": Piece.BLUE, "r": Piece.RED}
+    if piece_char not in mapping:
+        raise ValueError(f"Invalid piece char: {piece_char}")
+    return mapping[piece_char]
 
 def channel_to_int(channel: Channel) -> int:
     """Convert Channel enum to integer for backward compatibility."""
-    return channel.value
+    if not isinstance(channel, Channel):
+        raise TypeError(f"channel must be Channel enum, got {type(channel)}")
+    return int(channel.value)
 
 def int_to_channel(channel_int: int) -> Channel:
     """Convert integer to Channel enum."""
+    if not isinstance(channel_int, int):
+        raise TypeError(f"channel_int must be int, got {type(channel_int)}")
+    if channel_int not in (Channel.BLUE.value, Channel.RED.value, Channel.PLAYER_TO_MOVE.value):
+        raise ValueError(f"Invalid channel int: {channel_int}")
     return Channel(channel_int)
 
 # --- Validation functions to catch legacy formats ---
@@ -253,10 +247,12 @@ def winner_to_color(winner):
         return 'blue' if winner == Winner.BLUE else 'red'
     if isinstance(winner, Player):
         return 'blue' if winner == Player.BLUE else 'red'
-    if winner == BLUE_PLAYER:  # Backward compatibility
-        return 'blue'
-    elif winner == RED_PLAYER:  # Backward compatibility
-        return 'red'
+    # Backward compatibility for legacy int inputs 0/1
+    if isinstance(winner, int):
+        if winner == Player.BLUE.value:
+            return 'blue'
+        if winner == Player.RED.value:
+            return 'red'
     else:
         return 'reset'
 
@@ -500,8 +496,8 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
     
-    blue_val = board_tensor[BLUE_CHANNEL, row, col].item()
-    red_val = board_tensor[RED_CHANNEL, row, col].item()
+    blue_val = board_tensor[Channel.BLUE.value, row, col].item()
+    red_val = board_tensor[Channel.RED.value, row, col].item()
     
     # Check for invalid values (should only be approximately EMPTY_ONEHOT or PIECE_ONEHOT)
     if not (abs(blue_val - EMPTY_ONEHOT) < tolerance or abs(blue_val - PIECE_ONEHOT) < tolerance):
@@ -611,7 +607,7 @@ def is_blue(player) -> bool:
     if isinstance(player, Winner):
         return player == Winner.BLUE
     if isinstance(player, int):
-        return player == BLUE_PLAYER  # Backward compatibility
+        return player == Player.BLUE.value  # Backward compatibility
     raise ValueError(f"Unknown player type: {type(player)}")
 
 def is_red(player) -> bool:
@@ -621,7 +617,7 @@ def is_red(player) -> bool:
     if isinstance(player, Winner):
         return player == Winner.RED
     if isinstance(player, int):
-        return player == RED_PLAYER  # Backward compatibility
+        return player == Player.RED.value  # Backward compatibility
     raise ValueError(f"Unknown player type: {type(player)}")
 
 def player_to_winner(player: Player) -> Winner:

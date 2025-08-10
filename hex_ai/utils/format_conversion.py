@@ -10,9 +10,9 @@ import torch
 from typing import Tuple
 
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    BLUE_CHANNEL, RED_CHANNEL, PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+    BOARD_SIZE, PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 )
+from hex_ai.enums import Piece, Channel
 
 import string
 import logging
@@ -72,15 +72,15 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
     bare_moves = strip_trmph_preamble(trmph_text)
     moves = split_trmph_moves(bare_moves)
     
-    # Initialize board with EMPTY_PIECE ('e')
-    board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
+    # Initialize board with empty piece ('e')
+    board = np.full((board_size, board_size), Piece.EMPTY.value, dtype='U1')
     
     # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
         
         # Check for duplicate moves
-        if board[row, col] != EMPTY_PIECE:
+        if board[row, col] != Piece.EMPTY.value:
             if duplicate_action == "ignore":
                 logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
                 break  # Do not process any moves after a duplicate.
@@ -100,8 +100,8 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
                 raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
         
         # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
-        player = 0 if (i % 2) == 0 else 1 # Changed from BLUE_PLAYER/RED_PLAYER to 0/1 for consistency with new_code
-        board[row, col] = BLUE_PIECE if player == 0 else RED_PIECE
+        is_blue_turn = (i % 2) == 0
+        board[row, col] = Piece.BLUE.value if is_blue_turn else Piece.RED.value
     
     return board
 
@@ -138,10 +138,10 @@ def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
     """Convert 2×N×N tensor format to N×N array format."""
     if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
-    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
+    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), Piece.EMPTY.value, dtype='U1')
     # Convert one-hot encoded channels to N×N format
-    board_nxn[board_2nxn[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE
-    board_nxn[board_2nxn[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE
+    board_nxn[board_2nxn[Channel.BLUE.value] == PIECE_ONEHOT] = Piece.BLUE.value
+    board_nxn[board_2nxn[Channel.RED.value] == PIECE_ONEHOT] = Piece.RED.value
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
@@ -150,8 +150,8 @@ def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
         raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
     board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
     # Convert N×N format to one-hot encoded channels
-    board_2nxn[BLUE_CHANNEL] = torch.from_numpy((board_nxn == BLUE_PIECE).astype(np.float32))
-    board_2nxn[RED_CHANNEL] = torch.from_numpy((board_nxn == RED_PIECE).astype(np.float32))
+    board_2nxn[Channel.BLUE.value] = torch.from_numpy((board_nxn == Piece.BLUE.value).astype(np.float32))
+    board_2nxn[Channel.RED.value] = torch.from_numpy((board_nxn == Piece.RED.value).astype(np.float32))
     return board_2nxn
 
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
