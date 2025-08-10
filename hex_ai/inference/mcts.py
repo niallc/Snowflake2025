@@ -112,7 +112,10 @@ class MCTSNode:
 class NeuralMCTS:
     """MCTS engine guided by a neural network."""
     
-    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, win_value: float = 1.5, discount_factor: float = 0.98, verbose: int = 0):
+    def __init__(
+        self, model: SimpleModelInference, exploration_constant: float = 1.4, win_value: float = 1.5,
+        discount_factor: float = 0.98, verbose: int = 0, max_children_expanded: Optional[int] = None
+    ):
         """
         Initialize the MCTS engine.
         
@@ -128,6 +131,7 @@ class NeuralMCTS:
         self.win_value = win_value
         self.discount_factor = discount_factor
         self.verbose = verbose
+        self.max_children_expanded = max_children_expanded
         self.logger = logging.getLogger(__name__)
         
         # Statistics tracking
@@ -138,7 +142,11 @@ class NeuralMCTS:
             'end_time': None
         }
         
-        self.logger.info(f"Initialized NeuralMCTS with exploration_constant={exploration_constant}, win_value={win_value}, discount_factor={discount_factor}")
+        self.logger.info(
+            f"Initialized NeuralMCTS with exploration_constant={exploration_constant}, "
+            f"win_value={win_value}, discount_factor={discount_factor}, "
+            f"max_children_expanded={max_children_expanded}"
+        )
 
     def search(self, root_state_or_node, num_simulations: int) -> MCTSNode:
         """
@@ -280,22 +288,21 @@ class NeuralMCTS:
             self.logger.debug(f"DEBUG: Legal moves count: {len(legal_moves)}")
             self.logger.debug(f"DEBUG: Top 5 policy priors: {sorted(node.policy_priors.items(), key=lambda x: x[1], reverse=True)[:5]}")
 
-        # Create child nodes for all legal moves using fast_copy() to avoid deep copies
+        # Create child nodes for a subset of legal moves (top-k by prior) if configured
         parent_depth_plus_one = node.get_depth() + 1
-        for move, prior in node.policy_priors.items():
-            # Materialize the child state once for storage in the tree
-            child_state = node.state.make_move(*move)
-            node.children[move] = MCTSNode(
-                state=child_state,
-                parent=node,
-                move=move,
-                depth=parent_depth_plus_one,
-            )
+        priors_items = list(node.policy_priors.items())
+        if self.max_children_expanded is not None and self.max_children_expanded < len(priors_items):
+            # Sort once by prior descending and take top-k
+            priors_items.sort(key=lambda x: x[1], reverse=True)
+            priors_items = priors_items[: self.max_children_expanded]
+        for move, _prior in priors_items:
+            node.children[move] = self._create_child_node(node, move, parent_depth_plus_one)
             
             # Verbose debug logging for child creation
             if self.verbose >= 4 and len(node.children) <= 5:
+                created_child = node.children[move]
                 self.logger.debug(
-                    f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}, depth: {parent_depth_plus_one}"
+                    f"DEBUG: Created child for move {move} -> child state current_player: {created_child.state.current_player}, depth: {parent_depth_plus_one}"
                 )
             
         if self.verbose >= 2:
@@ -303,6 +310,33 @@ class NeuralMCTS:
         
         # The value is from the perspective of the current player at 'node'.
         return value
+
+    def _create_child_node(self, parent: MCTSNode, move: Tuple[int, int], child_depth: int) -> MCTSNode:
+        """
+        Create a child node from a parent node and a move.
+
+        Centralizes child state materialization to keep one code path.
+        This makes it easy to evolve how we generate child states (e.g.,
+        switching to an apply/undo or lazy materialization strategy later)
+        without touching the expansion logic.
+
+        Args:
+            parent: The parent MCTS node
+            move: The (row, col) move applied to the parent's state
+            child_depth: The depth to assign to the child
+
+        Returns:
+            A new MCTSNode representing the child position.
+        """
+        # Current approach: construct a new independent state via make_move.
+        # If we later adopt apply/undo or lazy materialization, update here only.
+        child_state = parent.state.make_move(*move)
+        return MCTSNode(
+            state=child_state,
+            parent=parent,
+            move=move,
+            depth=child_depth,
+        )
 
     def _backpropagate(self, node: MCTSNode, value: float) -> None:
         """
