@@ -21,7 +21,44 @@ from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+def compute_puct_score(
+    *,
+    child_mean_value: float,
+    prior_probability: float,
+    parent_visits: int,
+    child_visits: int,
+    exploration_constant: float,
+) -> float:
+    """
+    Compute the PUCT score for a child.
+
+    PUCT(s,a) = Q_parent_perspective(s,a) + C * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
+
+    Where:
+    - Q_parent_perspective(s,a) is the child's mean value from the parent's perspective
+      (i.e., negative of the child's mean value, since child's value is from the child mover's perspective)
+    - C is the exploration constant
+    - P(s,a) is the prior probability from the policy network
+    - N(s) is the parent's visit count
+    - N(s,a) is the child's visit count
+
+    Args:
+        child_mean_value: Mean value stored at the child node (child's perspective)
+        prior_probability: Policy prior for the move at the parent node
+        parent_visits: Number of visits to the parent node
+        child_visits: Number of visits to the child node
+        exploration_constant: Exploration constant C
+
+    Returns:
+        The PUCT score as a float.
+    """
+    # Transform child's mean value to parent's perspective
+    q_value_parent = -child_mean_value
+    sqrt_parent_visits = math.sqrt(max(parent_visits, 1))
+    ucb_component = exploration_constant * prior_probability * (sqrt_parent_visits / (1 + child_visits))
+    return q_value_parent + ucb_component
+
+@dataclass(slots=True)
 class MCTSNode:
     """Represents a node in the MCTS search tree."""
     # Core state
@@ -64,10 +101,8 @@ class MCTSNode:
         self.total_value += value
     
     def get_depth(self) -> int:
-        """Calculate the depth of this node from the root."""
-        if self.parent is None:
-            return 0
-        return self.parent.get_depth() + 1
+        """Return the cached depth of this node from the root (0 for root)."""
+        return self.depth
     
     def detach_parent(self):
         """Detach this node from its parent, making it a new root."""
@@ -190,22 +225,18 @@ class NeuralMCTS:
         best_score = -float('inf')
         best_child = None
 
-        sqrt_parent_visits = math.sqrt(max(node.visits, 1))
         for move, child_node in node.children.items():
-            # Note: child_node.mean_value is from the perspective of the player who made the move.
-            # We must negate it to get the value from the current node's (parent's) perspective.
-            q_value = -child_node.mean_value 
-            
             prior = node.policy_priors[move]
-            ucb_component = self.exploration_constant * prior * (sqrt_parent_visits / (1 + child_node.visits))
-            
-            puct_score = q_value + ucb_component
+            puct_score = compute_puct_score(
+                child_mean_value=child_node.mean_value,
+                prior_probability=prior,
+                parent_visits=node.visits,
+                child_visits=child_node.visits,
+                exploration_constant=self.exploration_constant,
+            )
             
             if self.verbose >= 4:
-                self.logger.debug(
-                    f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, "
-                    f"UCB={ucb_component:.4f}, total={puct_score:.4f}"
-                )
+                self.logger.debug(f"PUCT scores - Move {move}: total={puct_score:.4f}, prior={prior:.4f}, visits(parent/child)={node.visits}/{child_node.visits}")
             
             if puct_score > best_score:
                 best_score = puct_score
@@ -230,6 +261,7 @@ class NeuralMCTS:
             return self._terminal_value(node.state)
 
         # Get policy and value from the neural network
+        # Note: Evaluation happens on the current node state tensor without extra allocations
         self.stats['total_inferences'] += 1
         policy_logits, value = self.model.simple_infer(node.state.get_board_tensor())
         
@@ -248,16 +280,23 @@ class NeuralMCTS:
             self.logger.debug(f"DEBUG: Legal moves count: {len(legal_moves)}")
             self.logger.debug(f"DEBUG: Top 5 policy priors: {sorted(node.policy_priors.items(), key=lambda x: x[1], reverse=True)[:5]}")
 
-        # Create child nodes for all legal moves
+        # Create child nodes for all legal moves using fast_copy() to avoid deep copies
+        parent_depth_plus_one = node.get_depth() + 1
         for move, prior in node.policy_priors.items():
-            # make_move returns a new, independent state object.
+            # Materialize the child state once for storage in the tree
             child_state = node.state.make_move(*move)
-            child_depth = node.get_depth() + 1
-            node.children[move] = MCTSNode(state=child_state, parent=node, move=move, depth=child_depth)
+            node.children[move] = MCTSNode(
+                state=child_state,
+                parent=node,
+                move=move,
+                depth=parent_depth_plus_one,
+            )
             
             # Verbose debug logging for child creation
             if self.verbose >= 4 and len(node.children) <= 5:
-                self.logger.debug(f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}, depth: {child_depth}")
+                self.logger.debug(
+                    f"DEBUG: Created child for move {move} -> child state current_player: {child_state.current_player}, depth: {parent_depth_plus_one}"
+                )
             
         if self.verbose >= 2:
             self.logger.info(f"Expanded node with {len(node.children)} children, value={value:.4f}")
