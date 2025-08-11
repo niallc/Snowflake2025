@@ -14,8 +14,9 @@ from pathlib import Path
 from hex_ai.inference.mcts import NeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
 from hex_ai.training_utils import get_device
+from hex_ai.enums import Player
+from hex_ai.value_utils import int_to_player
 
 
 class MCTSSelfPlayEngine:
@@ -94,12 +95,14 @@ class MCTSSelfPlayEngine:
         
         # Play until game is over
         while not state.game_over:
-            if state.current_player == BLUE_PLAYER:
+            current_player_enum = state.current_player_enum
+            if current_player_enum == Player.BLUE:
                 player_name = "Blue"
-            elif state.current_player == RED_PLAYER:
+            elif current_player_enum == Player.RED:
                 player_name = "Red"
             else:
-                raise ValueError(f"Unknown player value: {state.current_player}")
+                # Fail fast on unexpected enum values
+                raise ValueError(f"Unknown player enum: {current_player_enum}")
             
             if self.verbose >= 2:
                 self.logger.debug(f"{player_name}'s turn")

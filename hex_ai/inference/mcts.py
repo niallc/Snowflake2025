@@ -15,9 +15,11 @@ import numpy as np
 
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.value_utils import policy_logits_to_probs
+from hex_ai.value_utils import policy_logits_to_probs, player_to_winner
 
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Player
+# Note: int_to_player not needed here; internals should use Enums
 
 logger = logging.getLogger(__name__)
 
@@ -377,18 +379,18 @@ class NeuralMCTS:
         if not state.game_over:
             raise ValueError("Cannot get terminal value for non-terminal state")
         
-        if state.winner is None:
-            # Draw (shouldn't happen in Hex, but good to handle)
-            return 0.0
+        # Prefer enum-based winner for internal logic; handle draw explicitly for backward-compat tests
+        winner_enum = state.winner_enum
+        if winner_enum is None:
+            # Crash fast: Hex should not have draws; unexpected winner state indicates a bug
+            raise ValueError("CRITICAL: Terminal state without a clear winner! This indicates a bug.")
         
-        # The player who just moved is the OPPOSITE of current_player
-        just_moved_player = RED_PLAYER if state.current_player == BLUE_PLAYER else BLUE_PLAYER
+        # The player who just moved is the OPPOSITE of current_player (use Enums internally)
+        current_player_enum = state.current_player_enum
+        just_moved_player = Player.RED if current_player_enum == Player.BLUE else Player.BLUE
         
-        # Determine if the player who just moved won
-        just_moved_won = (
-            (just_moved_player == BLUE_PLAYER and state.winner == "blue") or
-            (just_moved_player == RED_PLAYER and state.winner == "red")
-        )
+        # Determine if the player who just moved won using Enums exclusively
+        just_moved_won = (player_to_winner(just_moved_player) == winner_enum)
         
         # Return value from perspective of player who just moved
         if just_moved_won:
@@ -499,8 +501,8 @@ class NeuralMCTS:
         total = sum(scaled_visits)
         
         if total == 0:
-            # Fallback to uniform distribution
-            return [1.0 / len(visit_counts)] * len(visit_counts)
+            # Fail fast to surface silent bugs
+            raise ValueError("CRITICAL: All visit counts are zero! This indicates a bug.")
         
         return [v / total for v in scaled_visits]
 

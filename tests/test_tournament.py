@@ -51,9 +51,9 @@ def test_get_win_prob_from_model_output_valid():
     # Should work for Winner enums
     p_blue = get_win_prob_from_model_output(logit, Winner.BLUE)
     p_red = get_win_prob_from_model_output(logit, Winner.RED)
-    # Should work for strings
-    p_blue2 = get_win_prob_from_model_output(logit, 'blue')
-    p_red2 = get_win_prob_from_model_output(logit, 'red')
+    # Should also work for Winner enums (no string support)
+    p_blue2 = get_win_prob_from_model_output(logit, Winner.BLUE)
+    p_red2 = get_win_prob_from_model_output(logit, Winner.RED)
     assert abs(p_blue + p_red - 1.0) < 1e-6
     assert abs(p_blue - p_blue2) < 1e-6
     assert abs(p_red - p_red2) < 1e-6
@@ -65,7 +65,7 @@ def test_get_win_prob_from_model_output_invalid():
     with pytest.raises(ValueError):
         get_win_prob_from_model_output(logit, 0)  # int not allowed
     with pytest.raises(ValueError):
-        get_win_prob_from_model_output(logit, 'invalid')
+        get_win_prob_from_model_output(logit, 'blue')  # strings no longer accepted
 
 def test_determine_winner_and_swap_logic():
     """Test that determine_winner correctly maps winner to model and color, with and without swap."""
@@ -73,10 +73,17 @@ def test_determine_winner_and_swap_logic():
     class DummyModel: pass
     model_1 = DummyModel()
     model_2 = DummyModel()
-    # Dummy state with .winner attribute
+    # Dummy state with winner string and winner_enum property to match new internal usage
     class DummyState:
         def __init__(self, winner):
             self.winner = winner
+        @property
+        def winner_enum(self):
+            if self.winner == "blue":
+                return Winner.BLUE
+            if self.winner == "red":
+                return Winner.RED
+            return None
     # Blue wins
     state = DummyState("blue")
     result, winner_char = determine_winner(state, model_1, model_2, swap=False)

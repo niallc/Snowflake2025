@@ -69,17 +69,16 @@ def winner_from_value_target(value: float) -> Winner:
 
 # --- Backward compatibility functions ---
 def player_to_int(player: Player) -> int:
-    """Convert Player enum to integer for backward compatibility."""
+    """Convert Player enum to integer (strict)."""
     if not isinstance(player, Player):
         raise TypeError(f"player must be Player enum, got {type(player)}")
     return int(player.value)
 
 def int_to_player(player_int: int) -> Player:
-    """Convert integer to Player enum."""
+    """Convert integer to Player enum (strict)."""
     if not isinstance(player_int, int):
         raise TypeError(f"player_int must be int, got {type(player_int)}")
     if player_int not in (Player.BLUE.value, Player.RED.value):
-        # Match expected error message in tests
         raise ValueError(f"{player_int} is not a valid Player")
     return Player(player_int)
 
@@ -160,21 +159,15 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
 
 def get_win_prob_from_model_output(model_output: float, player) -> float:
     """
-    Given the raw model output (logit) and a player ('blue', 'red', or Winner),
+    Given the raw model output (logit) and a player (Winner or Player only),
     return the probability that player wins.
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     """
-    if isinstance(player, str):
-        player = player.lower()
-        if player == 'blue':
-            perspective = ValuePerspective.BLUE_WIN_PROB
-        elif player == 'red':
-            perspective = ValuePerspective.RED_WIN_PROB
-        else:
-            raise ValueError(f"Unknown player: {player}")
-    elif hasattr(player, 'name') and player.name in ('BLUE', 'RED'):
-        perspective = ValuePerspective.BLUE_WIN_PROB if player.name == 'BLUE' else ValuePerspective.RED_WIN_PROB
+    if isinstance(player, Player):
+        perspective = ValuePerspective.BLUE_WIN_PROB if player == Player.BLUE else ValuePerspective.RED_WIN_PROB
+    elif isinstance(player, Winner):
+        perspective = ValuePerspective.BLUE_WIN_PROB if player == Winner.BLUE else ValuePerspective.RED_WIN_PROB
     else:
         raise ValueError(f"Unknown player: {player}")
     prob_red_win = torch.sigmoid(torch.tensor(model_output)).item()
@@ -509,7 +502,7 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     return abs(blue_val - EMPTY_ONEHOT) < tolerance and abs(red_val - EMPTY_ONEHOT) < tolerance
 
 
-def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player) -> torch.Tensor:
+def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player: Player) -> torch.Tensor:
     """
     Apply a move to a 3-channel board tensor and return the new tensor.
     
@@ -523,7 +516,7 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player)
         board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
         row: Row index (0-(BOARD_SIZE-1))
         col: Column index (0-(BOARD_SIZE-1))
-        player: Player making the move (Player enum, or int for backward compatibility)
+        player: Player making the move (Player enum only)
         
     Returns:
         New board tensor with the move applied and player-to-move channel updated
@@ -542,9 +535,9 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player)
     if not is_position_empty(board_tensor, row, col):
         raise ValueError(f"Position ({row}, {col}) is already occupied")
     
-    # Convert player to Player enum if it's an integer
-    if isinstance(player, int):
-        player = int_to_player(player)
+    # Strict enum-only API
+    if not isinstance(player, Player):
+        raise TypeError(f"player must be Player, got {type(player)}")
     
     # Create new tensor (don't modify original)
     new_tensor = board_tensor.clone()
@@ -601,24 +594,20 @@ def get_opponent(player: Player) -> Player:
     return Player.RED if player == Player.BLUE else Player.BLUE
 
 def is_blue(player) -> bool:
-    """Check if the given player/winner is blue."""
+    """Check if the given player/winner is blue (strict inputs)."""
     if isinstance(player, Player):
         return player == Player.BLUE
     if isinstance(player, Winner):
         return player == Winner.BLUE
-    if isinstance(player, int):
-        return player == Player.BLUE.value  # Backward compatibility
-    raise ValueError(f"Unknown player type: {type(player)}")
+    raise TypeError(f"Unknown player type: {type(player)}")
 
 def is_red(player) -> bool:
-    """Check if the given player/winner is red."""
+    """Check if the given player/winner is red (strict inputs)."""
     if isinstance(player, Player):
         return player == Player.RED
     if isinstance(player, Winner):
         return player == Winner.RED
-    if isinstance(player, int):
-        return player == Player.RED.value  # Backward compatibility
-    raise ValueError(f"Unknown player type: {type(player)}")
+    raise TypeError(f"Unknown player type: {type(player)}")
 
 def player_to_winner(player: Player) -> Winner:
     """Convert Player enum to Winner enum."""

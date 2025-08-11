@@ -14,11 +14,10 @@ from hex_ai.training_utils import get_device  # Use centralized device detection
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.config import (
     PLAYER_CHANNEL, MODEL_CHANNELS,
-    BLUE_PLAYER, RED_PLAYER, BLUE_CHANNEL, RED_CHANNEL,
-    BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
 )
+from hex_ai.enums import Channel
 from hex_ai.utils.player_utils import get_player_to_move_from_board
 from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 from hex_ai.value_utils import (
@@ -76,6 +75,10 @@ class SimpleModelInference:
     # 5) Add performance instrumentation using PERF utility
     # 6) Optimize tensor stacking and device transfers
     # Expected gain: 1.5-3x speedup in inference, 0.5-2x from device optimization
+    # TODO: ENUM MIGRATION - Prefer Enums internally where applicable
+    # - Keep TRMPH/tensor interfaces as boundary conversions (str/float)
+    # - Avoid using raw BLUE/RED channel constants directly; prefer Channel enum
+    # - Add type hints to all public methods and enforce fail-fast for invalid inputs
     def __init__(
         self,
         checkpoint_path: str,

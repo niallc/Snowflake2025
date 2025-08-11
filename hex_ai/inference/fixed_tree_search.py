@@ -10,7 +10,7 @@ import time
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, sample_moves_from_policy
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.enums import Player
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
@@ -309,11 +309,14 @@ class MinimaxSearchNode:
         self.children: Dict[Tuple[int, int], MinimaxSearchNode] = {}
         self.value: Optional[float] = None
         self.best_move: Optional[Tuple[int, int]] = None
-        self.is_maximizing: bool = (state.current_player == BLUE_PLAYER)  # Blue (0) maximizes, Red (1) minimizes
+        self.is_maximizing: bool = (state.current_player_enum == Player.BLUE)
         
     def __str__(self):
-        return f"Node(depth={self.depth}, player={'Blue' if self.state.current_player == BLUE_PLAYER else 'Red'}, " \
-               f"maximizing={self.is_maximizing}, value={self.value}, path={self.path})"
+        current_player_enum = self.state.current_player_enum
+        return (
+            f"Node(depth={self.depth}, player={'Blue' if current_player_enum == Player.BLUE else 'Red'}, "
+            f"maximizing={self.is_maximizing}, value={self.value}, path={self.path})"
+        )
 
 
 def get_topk_moves(state: HexGameState, model, k: int, 
@@ -525,7 +528,7 @@ def build_search_tree_with_collection(
     return build_node(root_state, 0, [])
 
 
-def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -> float:
+def convert_model_logit_to_minimax_value(value_logit: float, root_player: Player) -> float:
     """
     Convert a raw model value logit to a minimax-friendly value from the root player's perspective.
     
@@ -537,7 +540,7 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
     
     Args:
         value_logit: Raw logit from model's value head (unbounded)
-        root_player: BLUE_PLAYER (0) for Blue, RED_PLAYER (1) for Red (the player whose perspective we want)
+        root_player: Player whose perspective we want (Player enum only)
         
     Returns:
         Minimax value in range [-1, 1] where:
@@ -546,11 +549,12 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
         - 0.0 represents neutral/equal chances
         
     Raises:
-        ValueError: If root_player is not BLUE_PLAYER or RED_PLAYER
+        TypeError: If root_player is not a Player enum
     """
-    # Validate root_player
-    if root_player not in (BLUE_PLAYER, RED_PLAYER):
-        raise ValueError(f"root_player must be BLUE_PLAYER ({BLUE_PLAYER}) or RED_PLAYER ({RED_PLAYER}), got {root_player}")
+    # Normalize root_player to Player enum (Enum-only API)
+    if not isinstance(root_player, Player):
+        raise TypeError(f"root_player must be Player, got {type(root_player)}")
+    root_player_enum = root_player
     
     # Step 1: Convert logit to probability using sigmoid
     # The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
@@ -558,7 +562,7 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
     prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
     
     # Step 2: Convert to root player's perspective
-    if root_player == BLUE_PLAYER:  # Root player is Blue
+    if root_player_enum == Player.BLUE:  # Root player is Blue
         # For Blue: positive values = Blue wins (good), negative values = Red wins (bad)
         # Convert from Red's win probability to Blue's perspective
         return 1.0 - 2.0 * prob_red_win  # Maps [0,1] to [1,-1]
@@ -568,8 +572,11 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: int) -
         return 2.0 * prob_red_win - 1.0  # Maps [0,1] to [-1,1]
 
 
-def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode], 
-    model, batch_size: int = 1000, root_player: int = None
+def evaluate_leaf_nodes(
+    nodes: List[MinimaxSearchNode],
+    model,
+    batch_size: int = 1000,
+    root_player: Player | None = None,
 ) -> None:
     """Batch evaluate all leaf nodes from the root player's perspective."""
     leaf_nodes = []
@@ -598,7 +605,9 @@ def evaluate_leaf_nodes(nodes: List[MinimaxSearchNode],
     # Assign values to leaf nodes, converting to root player's perspective
     for node, value in zip(leaf_nodes, values):
         # Convert raw model logit to minimax-friendly value
-        node.value = convert_model_logit_to_minimax_value(value, root_player)
+        # If root_player not provided, use the game's current player at root of search
+        effective_root_player = root_player if root_player is not None else nodes[0].state.current_player_enum
+        node.value = convert_model_logit_to_minimax_value(value, effective_root_player)
         
         # Debug logging with intermediate values for clarity
         prob_red_win = torch.sigmoid(torch.tensor(value)).item()
@@ -637,8 +646,12 @@ def minimax_backup(node: MinimaxSearchNode) -> float:
 
 def print_tree_structure(node: MinimaxSearchNode, indent=0):
     """Print the complete tree structure with all nodes."""
-    print("  " * indent + f"Node: depth={node.depth}, player={'Blue' if node.state.current_player == BLUE_PLAYER else 'Red'}, "
-          f"maximizing={node.is_maximizing}, value={node.value}, path={node.path}")
+    player_enum = node.state.current_player_enum
+    print(
+        "  " * indent
+        + f"Node: depth={node.depth}, player={'Blue' if player_enum == Player.BLUE else 'Red'}, "
+        f"maximizing={node.is_maximizing}, value={node.value}, path={node.path}"
+    )
     
     for move, child in node.children.items():
         print("  " * indent + f"Move {move}:")
@@ -704,13 +717,14 @@ def minimax_policy_value_search(
     
     if verbose >= 2:
         logger.info(f"Starting minimax search with widths {widths}, temperature {temperature}")
-        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == BLUE_PLAYER else 'Red'})")
+        root_player_enum = state.current_player_enum
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if root_player_enum == Player.BLUE else 'Red'})")
     
     # Build the search tree
     root = build_search_tree(state, model, widths, temperature)
     
     # Evaluate all leaf nodes from the root player's perspective
-    evaluate_leaf_nodes([root], model, batch_size, state.current_player)
+    evaluate_leaf_nodes([root], model, batch_size, state.current_player_enum)
     
     # Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)
@@ -784,7 +798,8 @@ def minimax_policy_value_search_with_batching(
     
     if verbose >= 2:
         logger.info(f"Starting batched minimax search with widths {widths}, temperature {temperature}")
-        logger.info(f"Root state: player {state.current_player} ({'Blue' if state.current_player == BLUE_PLAYER else 'Red'})")
+        root_player_enum = state.current_player_enum
+        logger.info(f"Root state: player {state.current_player} ({'Blue' if root_player_enum == Player.BLUE else 'Red'})")
     
     # Generate unique game ID for metadata validation
     game_id = id(state)  # Use object ID as unique identifier
@@ -817,7 +832,7 @@ def minimax_policy_value_search_with_batching(
     
     # STEP 4: Evaluate all leaf nodes from the root player's perspective
     # This is also batched for efficiency
-    evaluate_leaf_nodes([root], model, batch_size, state.current_player)
+    evaluate_leaf_nodes([root], model, batch_size, state.current_player_enum)
     
     # STEP 5: Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)

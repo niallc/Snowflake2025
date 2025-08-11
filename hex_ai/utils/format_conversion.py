@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 LETTERS = string.ascii_lowercase
 
+# TODO: ENUM MIGRATION - This module now uses Piece/Channel internally and keeps
+# boundary types (TRMPH strings, numpy/tensors) for IO. Continue migrating
+# upstream/downstream code to pass Enums in domain logic and convert only at boundaries.
+
 # --- TRMPH/Move Conversion Functions (from data_utils.py) ---
 def strip_trmph_preamble(trmph_text: str) -> str:
     match = __import__('re').compile(r"#(\d+),").search(trmph_text)
@@ -157,7 +161,7 @@ def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     """
     Convert a (2, N, N) board tensor to a (3, N, N) tensor by adding a player-to-move channel.
-    The player-to-move channel is filled with BLUE_PLAYER (0.0) or RED_PLAYER (1.0) as float.
+    The player-to-move channel is filled with Player.BLUE.value (0.0) or Player.RED.value (1.0) as float.
     Args:
         board_2nxn: torch.Tensor of shape (2, N, N)
     Returns:

@@ -12,8 +12,9 @@ from typing import List, Optional, Tuple, Dict, Any
 from collections import namedtuple
 
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, VERBOSE_LEVEL, EMPTY_PIECE
+    BOARD_SIZE, VERBOSE_LEVEL, EMPTY_PIECE
 )
+from hex_ai.enums import Player, Winner as WinnerEnum, Piece as PieceEnum
 from hex_ai.inference.board_utils import (
     is_empty, place_piece, board_to_string
 )
@@ -82,24 +83,110 @@ class UnionFind:
         y_root = self.find(y)
         return x_root == y_root
 
-@dataclass
+@dataclass(init=False)
 class HexGameState:
     """
     Represents the state of a Hex game using N×N character format.
     """
     board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1'))
-    current_player: int = BLUE_PLAYER
+    _current_player: Player = field(default=Player.BLUE, repr=False)
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
-    winner: Optional[str] = None  # "blue", "red", or None
+    _winner: Optional[WinnerEnum] = field(default=None, repr=False)
     
     # Operation stack for undo functionality
     _undo_stack: List[Dict[str, Any]] = field(default_factory=list, init=False)
+
+    def __init__(self, board: Optional[np.ndarray] = None, current_player: Optional[int] = None,
+                 _current_player: Optional[Player] = None, move_history: Optional[List[Tuple[int, int]]] = None,
+                 game_over: bool = False, winner: Optional[str] = None):
+        # Initialize board
+        self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
+        # Initialize current player with compatibility for legacy int
+        if _current_player is not None:
+            if not isinstance(_current_player, Player):
+                raise TypeError(f"_current_player must be Player, got {type(_current_player)}")
+            self._current_player = _current_player
+        elif current_player is not None:
+            if current_player == Player.BLUE.value:
+                self._current_player = Player.BLUE
+            elif current_player == Player.RED.value:
+                self._current_player = Player.RED
+            else:
+                raise ValueError(f"{current_player} is not a valid Player")
+        else:
+            self._current_player = Player.BLUE
+        # Initialize other fields
+        self.move_history = move_history.copy() if move_history is not None else []
+        self.game_over = game_over
+        # Winner internal storage uses Enum; accept both Enum and string for compatibility
+        self._winner = None
+        if winner is not None:
+            if isinstance(winner, str):
+                if winner == "blue":
+                    self._winner = WinnerEnum.BLUE
+                elif winner == "red":
+                    self._winner = WinnerEnum.RED
+                else:
+                    raise ValueError(f"Invalid winner string: {winner}")
+            elif isinstance(winner, WinnerEnum):
+                self._winner = winner
+            else:
+                raise TypeError(f"winner must be str or Winner enum, got {type(winner)}")
+        self._undo_stack = []
     
     @property
     def board_2nxn(self) -> torch.Tensor:
         """Get board in 2×N×N format for compatibility with tests (legacy, do not use for inference)."""
         return board_nxn_to_2nxn(self.board)
+
+    @property
+    def current_player(self) -> int:
+        """Expose current player as legacy int (0/1) for compatibility."""
+        return int(self._current_player.value)
+
+    @current_player.setter
+    def current_player(self, value) -> None:
+        """Set current player using Player enum only; no implicit int conversions."""
+        if not isinstance(value, Player):
+            raise TypeError(f"current_player must be Player, got {type(value)}")
+        self._current_player = value
+
+    @property
+    def current_player_enum(self) -> Player:
+        """Preferred: expose current player as Player enum."""
+        return self._current_player
+
+    @property
+    def winner(self) -> Optional[str]:
+        """Legacy-facing winner as 'blue'/'red' or None. Internally stores Winner enum."""
+        if self._winner is None:
+            return None
+        return "blue" if self._winner == WinnerEnum.BLUE else "red"
+
+    @winner.setter
+    def winner(self, value: Optional[object]) -> None:
+        """Accept 'blue'/'red' strings or Winner enum; fail fast on invalid inputs."""
+        if value is None:
+            self._winner = None
+            return
+        if isinstance(value, str):
+            if value == "blue":
+                self._winner = WinnerEnum.BLUE
+                return
+            if value == "red":
+                self._winner = WinnerEnum.RED
+                return
+            raise ValueError(f"Invalid winner string: {value}")
+        if isinstance(value, WinnerEnum):
+            self._winner = value
+            return
+        raise TypeError(f"winner must be str, Winner enum, or None; got {type(value)}")
+
+    @property
+    def winner_enum(self) -> Optional[WinnerEnum]:
+        """Preferred: expose winner as Winner enum (or None if game not over)."""
+        return self._winner
 
     def is_valid_move(self, row: int, col: int) -> bool:
         if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
@@ -136,10 +223,10 @@ class HexGameState:
         self._undo_stack.append(undo_info)
         
         # Apply the move
-        color = "blue" if self.current_player == BLUE_PLAYER else "red"
+        color = "blue" if self._current_player == Player.BLUE else "red"
         self.board = place_piece(self.board, row, col, color)
         self.move_history.append((row, col))
-        self.current_player = RED_PLAYER if self.current_player == BLUE_PLAYER else BLUE_PLAYER
+        self._current_player = Player.RED if self._current_player == Player.BLUE else Player.BLUE
         
         # Check for winner
         winner = self._find_winner()
@@ -182,7 +269,7 @@ class HexGameState:
         """
         new_state = HexGameState(
             board=self.board.copy(),
-            current_player=self.current_player,
+            _current_player=self._current_player,
             move_history=self.move_history.copy(),
             game_over=self.game_over,
             winner=self.winner
@@ -201,12 +288,12 @@ class HexGameState:
         # Expected gain: 10-20x speedup in expansion phase
         if not self.is_valid_move(row, col):
             raise ValueError(f"Invalid move: ({row}, {col})")
-        color = "blue" if self.current_player == BLUE_PLAYER else "red"
+        color = "blue" if self._current_player == Player.BLUE else "red"
         new_board = place_piece(self.board, row, col, color)
         new_move_history = self.move_history + [(row, col)]
         new_state = HexGameState(
             board=new_board,
-            current_player=RED_PLAYER if self.current_player == BLUE_PLAYER else BLUE_PLAYER,
+            _current_player=Player.RED if self._current_player == Player.BLUE else Player.BLUE,
             move_history=new_move_history,
             game_over=False,
             winner=None
@@ -267,13 +354,13 @@ class HexGameState:
         # Add all pieces on the board and connect them
         for row in range(BOARD_SIZE):
             for col in range(BOARD_SIZE):
-                if self.board[row, col] == RED_PIECE:
+                if self.board[row, col] == PieceEnum.RED.value:
                     piece = Piece(row=row, column=col, colour="red")
                     connections.make_set(piece)
                     if VERBOSE_LEVEL >= 4:
                         print(f"[DEBUG] Make set for RED piece: {piece}")
                     self._connect_piece_to_neighbors(piece, connections)
-                elif self.board[row, col] == BLUE_PIECE:
+                elif self.board[row, col] == PieceEnum.BLUE.value:
                     piece = Piece(row=row, column=col, colour="blue")
                     connections.make_set(piece)
                     if VERBOSE_LEVEL >= 4:
@@ -283,24 +370,24 @@ class HexGameState:
         # Explicitly connect edge pieces to board edge pieces (legacy logic)
         for col in range(BOARD_SIZE):
             # Blue: top and bottom rows
-            if self.board[0, col] == BLUE_PIECE:
+            if self.board[0, col] == PieceEnum.BLUE.value:
                 piece = Piece(row=0, column=col, colour="blue")
                 connections.union(piece, blue_top)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union BLUE top: {piece} <-> {blue_top}")
-            if self.board[BOARD_SIZE-1, col] == BLUE_PIECE:
+            if self.board[BOARD_SIZE-1, col] == PieceEnum.BLUE.value:
                 piece = Piece(row=BOARD_SIZE-1, column=col, colour="blue")
                 connections.union(piece, blue_bottom)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union BLUE bottom: {piece} <-> {blue_bottom}")
         for row in range(BOARD_SIZE):
             # Red: left and right columns
-            if self.board[row, 0] == RED_PIECE:
+            if self.board[row, 0] == PieceEnum.RED.value:
                 piece = Piece(row=row, column=0, colour="red")
                 connections.union(piece, red_left)
                 if VERBOSE_LEVEL >= 4:
                     print(f"[DEBUG] Union RED left: {piece} <-> {red_left}")
-            if self.board[row, BOARD_SIZE-1] == RED_PIECE:
+            if self.board[row, BOARD_SIZE-1] == PieceEnum.RED.value:
                 piece = Piece(row=row, column=BOARD_SIZE-1, colour="red")
                 connections.union(piece, red_right)
                 if VERBOSE_LEVEL >= 4:
@@ -329,7 +416,7 @@ class HexGameState:
         """Get all same-color neighbors of a piece."""
         neighbors = []
         color = piece.colour
-        expected_value = RED_PIECE if color == "red" else BLUE_PIECE
+        expected_value = PieceEnum.RED.value if color == "red" else PieceEnum.BLUE.value
         
         # Get adjacent positions
         adjacent_positions = self._get_adjacent_positions(piece.row, piece.column)
@@ -399,7 +486,7 @@ class HexGameState:
         return state
 
     def __str__(self) -> str:
-        status = f"Player {'Blue' if self.current_player == BLUE_PLAYER else 'Red'}'s turn"
+        status = f"Player {'Blue' if self._current_player == Player.BLUE else 'Red'}'s turn"
         if self.game_over:
             status = f"Game over - {self.winner.title()} wins!"
         return f"HexGameState(moves={len(self.move_history)}, {status})\n" + board_to_string(self.board)
@@ -545,7 +632,7 @@ def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, play
     Args:
         board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
         trmph_move: TRMPH format move (e.g., "a1", "b2")
-        player: Player making the move (BLUE_PLAYER=0 or RED_PLAYER=1)
+        player: Player making the move (prefer Player enum; int accepted for backward compatibility)
         
     Returns:
         New board tensor with the move applied

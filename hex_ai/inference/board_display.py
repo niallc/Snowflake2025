@@ -1,6 +1,6 @@
 import numpy as np
 from hex_ai.utils.format_conversion import board_2nxn_to_nxn
-from hex_ai.config import BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.enums import Piece
 import sys
 
 def ansi_colored(text, color):
@@ -11,7 +11,7 @@ def ansi_colored(text, color):
     }
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
-def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
+def display_hex_board(board: np.ndarray, file=None, highlight_move=None) -> None:
     """
     Display a Hex board (NxN format) as ASCII art, with optional move highlighting.
     Args:
@@ -19,15 +19,16 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
         file: file-like object to write to (default: stdout)
         highlight_move: (row, col) tuple to highlight, or None
     """
+    # TODO: ENUM MIGRATION - Upstream callers should pass domain types consistently.
     # Convert (2, N, N) format to (N, N) if needed
     if board.ndim == 3 and board.shape[0] == 2:
         board = board_2nxn_to_nxn(board)
     N = board.shape[0]
     # Use uniform size symbols
     symbols = {
-        EMPTY_PIECE: '◯',  # empty
-        BLUE_PIECE: '●',   # blue
-        RED_PIECE: '●',    # red
+        Piece.EMPTY.value: '◯',  # empty
+        Piece.BLUE.value: '●',   # blue
+        Piece.RED.value: '●',    # red
     }
     highlight_symbol = '*'  # Symbol for highlighted move
     lines = []
@@ -43,9 +44,9 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
                 row_str += highlight_symbol + ' '
             else:
                 if use_color:
-                    if board[row, col] == BLUE_PIECE:
+                    if board[row, col] == Piece.BLUE.value:
                         symbol = ansi_colored(symbol, 'blue')
-                    elif board[row, col] == RED_PIECE:
+                    elif board[row, col] == Piece.RED.value:
                         symbol = ansi_colored(symbol, 'red')
                 row_str += symbol + ' '
         lines.append(row_str)

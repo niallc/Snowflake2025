@@ -21,7 +21,7 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     select_policy_move,
 )
-from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
@@ -34,6 +34,12 @@ DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
+
+# API contract for player fields
+# - player: UI-friendly color string ("blue"|"red")
+# - player_enum: canonical enum name ("BLUE"|"RED")
+# - player_index: canonical numeric (0=BLUE, 1=RED)
+# - player_raw: DEPRECATED; remove after frontend migrates
 
 # TODO: PERFORMANCE INVESTIGATION - MCTS vs Fixed Tree Search Performance Gap
 # Fixed tree search: ~6 games/sec with depth 2, ~100 leaf nodes
@@ -170,8 +176,9 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
     if verbose >= 1:
         # Add defensive programming to catch any issues
         try:
-            current_player_color = winner_to_color(state.current_player)
-            win_prob = get_win_prob_from_model_output(value_logit, current_player_color)
+            current_player_enum = state.current_player_enum
+            current_player_color = winner_to_color(current_player_enum)
+            win_prob = get_win_prob_from_model_output(value_logit, current_player_enum)
         except Exception as e:
             # Log the error and provide fallback values
             app.logger.error(f"Error in app.py debug info generation: {e}")
@@ -589,9 +596,12 @@ def api_constants():
             "BLUE": BLUE_PIECE,
             "RED": RED_PIECE
         },
+        # Frontend currently expects numeric player codes; expose Enum .value at boundary
+        # TODO: Figure out: should we change the frontend to use the Player enum instead?
+        #       If not, we should at least use constants rather than literals here.
         "PLAYER_VALUES": {
-            "BLUE": BLUE_PLAYER,
-            "RED": RED_PLAYER
+        	"BLUE": 0,
+        	"RED": 1
         },
         "WINNER_VALUES": {
             "BLUE": TRMPH_BLUE_WIN,
@@ -774,12 +784,19 @@ def api_state():
     # Map policy to trmph moves
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
     # Win probability for current player
-    win_prob = get_win_prob_from_model_output(value_logit, player_color)
+    # Use Enum for strictness
+    player_enum = state.current_player_enum
+    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
+    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
+    player_enum_name = state.current_player_enum.name
+    player_index = int(state.current_player_enum.value)
     return jsonify({
         "board": board,
         "player": player_color,
         "player_raw": player,  # Add raw value for debugging
+        "player_enum": player_enum_name,  # Canonical enum name
+        "player_index": player_index,     # Canonical numeric index (0=BLUE,1=RED)
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
@@ -834,13 +851,19 @@ def api_apply_move():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_color)
+    player_enum = state.current_player_enum
+    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
+    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
+    player_enum_name = state.current_player_enum.name
+    player_index = int(state.current_player_enum.value)
     return jsonify({
         "new_trmph": new_trmph,
         "board": board,
         "player": player_color,
         "player_raw": player,  # Add raw value for debugging
+        "player_enum": player_enum_name,
+        "player_index": player_index,
         "legal_moves": legal_moves,
         "winner": winner,
         "model_move": None,  # No computer move made
@@ -903,13 +926,19 @@ def api_apply_trmph_sequence():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_color)
+    player_enum = state.current_player_enum
+    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
+    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
+    player_enum_name = state.current_player_enum.name
+    player_index = int(state.current_player_enum.value)
     return jsonify({
         "new_trmph": new_trmph,
         "board": board,
         "player": player_color,
         "player_raw": player,
+        "player_enum": player_enum_name,
+        "player_index": player_index,
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
@@ -958,7 +987,8 @@ def api_move():
         try:
             # Determine which player's settings to use for the computer move
             # The current player after the human move determines whose settings to use
-            current_player_color = winner_to_color(player)
+            current_player_enum = state.current_player_enum
+            current_player_color = winner_to_color(current_player_enum)
             
             if current_player_color == 'blue':
                 # Use blue's settings for blue's computer move
@@ -1073,7 +1103,8 @@ def api_move():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_color)
+    player_enum = state.current_player_enum
+    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
     response = {
         "new_trmph": new_trmph,

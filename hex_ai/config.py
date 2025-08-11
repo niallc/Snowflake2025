@@ -36,9 +36,7 @@ PIECE_ONEHOT = 1      # Value for occupied positions in one-hot encoding
 EMPTY_ONEHOT = 0      # Value for empty positions in one-hot encoding
 
 # Deprecated semantic constants – prefer hex_ai.enums usage throughout the codebase.
-# These remain as aliases for gradual migration and backward compatibility.
-BLUE_PLAYER = Player.BLUE.value
-RED_PLAYER = Player.RED.value
+# Player int aliases removed; use Player enum everywhere internally.
 
 BLUE_PIECE = Piece.BLUE.value
 RED_PIECE = Piece.RED.value

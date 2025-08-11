@@ -17,7 +17,7 @@ try:
     from hex_ai.inference.mcts import MCTSNode, NeuralMCTS
     from hex_ai.inference.game_engine import HexGameState
     from hex_ai.inference.simple_model_inference import SimpleModelInference
-    from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+    from hex_ai.enums import Player
 except ImportError as e:
     print(f"ERROR: Could not import MCTS modules: {e}")
     print("Make sure to run with PYTHONPATH=.")
@@ -184,7 +184,7 @@ class TestNeuralMCTS:
         state = HexGameState()
         state.game_over = True
         state.winner = "blue"
-        state.current_player = BLUE_PLAYER  # Blue's turn, so Red just moved
+        state.current_player = Player.BLUE  # Blue's turn, so Red just moved
         
         # Value should be from perspective of player who just moved (Red)
         # Since Blue won, Red lost, so value should be -win_value
@@ -196,21 +196,20 @@ class TestNeuralMCTS:
         state = HexGameState()
         state.game_over = True
         state.winner = "red"
-        state.current_player = RED_PLAYER  # Red's turn, so Blue just moved
+        state.current_player = Player.RED  # Red's turn, so Blue just moved
         
         # Value should be from perspective of player who just moved (Blue)
         # Since Red won, Blue lost, so value should be -win_value
         value = self.mcts._terminal_value(state)
         assert value == -self.mcts.win_value
     
-    def test_terminal_value_draw(self):
-        """Test terminal value calculation for draw."""
+    # Draws do not exist in Hex; terminal without winner should raise
+    def test_terminal_value_draw_raises(self):
         state = HexGameState()
         state.game_over = True
-        state.winner = None  # Draw
-        
-        value = self.mcts._terminal_value(state)
-        assert value == 0.0
+        state.winner = None
+        with pytest.raises(ValueError):
+            self.mcts._terminal_value(state)
     
     def test_terminal_value_non_terminal_error(self):
         """Test that terminal value raises error for non-terminal state."""

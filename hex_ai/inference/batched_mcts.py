@@ -82,8 +82,9 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.batch_processor import BatchProcessor
 from hex_ai.inference.batched_evaluator import BatchedEvaluator
-from hex_ai.value_utils import policy_logits_to_probs, get_top_k_legal_moves
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER, BOARD_SIZE
+from hex_ai.value_utils import policy_logits_to_probs, player_to_winner
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Player
 from hex_ai.utils.perf import PERF
 
 logger = logging.getLogger(__name__)
@@ -654,21 +655,18 @@ class BatchedNeuralMCTS:
         if not state.game_over:
             raise ValueError("Cannot get terminal value for non-terminal state")
         
-        if state.winner is None:
+        # Prefer enum-based winner; fail fast if missing
+        winner_enum = state.winner_enum
+        if winner_enum is None:
             # Raise an exception and crash. No fallback logic! Find errors fast.
             raise ValueError("CRITICAL: Game ended without a clear winner! This indicates a bug.")
         
-        # The player who just moved is the OPPOSITE of current_player
-        if not state.current_player in [BLUE_PLAYER, RED_PLAYER]:
-            raise ValueError(f"Invalid current player: {state.current_player}")
-        just_moved_player = RED_PLAYER if state.current_player == BLUE_PLAYER else BLUE_PLAYER
+        # The player who just moved is the OPPOSITE of current_player (use Enums internally)
+        current_player_enum = state.current_player_enum
+        just_moved_player = Player.RED if current_player_enum == Player.BLUE else Player.BLUE
         
-        # Determine if the player who just moved won
-        # TODO (P2): Consider replacing "blue" and "red" with the relevant Enums / constants from central utilities.
-        just_moved_won = (
-            (just_moved_player == BLUE_PLAYER and state.winner == "blue") or
-            (just_moved_player == RED_PLAYER and state.winner == "red")
-        )
+        # Determine if the player who just moved won using Enums exclusively
+        just_moved_won = (player_to_winner(just_moved_player) == winner_enum)
         
         # Return value from perspective of player who just moved
         if just_moved_won:

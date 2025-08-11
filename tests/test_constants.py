@@ -7,11 +7,11 @@ and accessible from the centralized config module.
 
 import pytest
 from hex_ai.config import (
-    BLUE_PLAYER, RED_PLAYER,
     BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN
 )
+from hex_ai.enums import Player
 
 
 class TestPlayerConstants:
@@ -19,14 +19,14 @@ class TestPlayerConstants:
     
     def test_player_constants_defined(self):
         """Test that player constants are properly defined."""
-        assert BLUE_PLAYER == 0
-        assert RED_PLAYER == 1
-        assert BLUE_PLAYER != RED_PLAYER
+        assert Player.BLUE.value == 0
+        assert Player.RED.value == 1
+        assert Player.BLUE != Player.RED
     
     def test_player_constants_integer(self):
         """Test that player constants are integers."""
-        assert isinstance(BLUE_PLAYER, int)
-        assert isinstance(RED_PLAYER, int)
+        assert isinstance(Player.BLUE.value, int)
+        assert isinstance(Player.RED.value, int)
 
 
 class TestPieceConstants:
@@ -82,8 +82,8 @@ class TestConstantsConsistency:
         # RED_PLAYER (1) should correspond to RED_PIECE ('r') in board representation
         # This is because board representation now uses 'e'=empty, 'b'=blue, 'r'=red
         # while player-to-move uses 0=blue, 1=red
-        assert BLUE_PLAYER == 0
-        assert RED_PLAYER == 1
+        assert Player.BLUE.value == 0
+        assert Player.RED.value == 1
         assert BLUE_PIECE == "b"
         assert RED_PIECE == "r"
     

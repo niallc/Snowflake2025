@@ -21,7 +21,7 @@ from hex_ai.inference.game_engine import (
     apply_move_to_state,  # Add move application utilities
 )
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, 
+    BOARD_SIZE,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
@@ -29,6 +29,8 @@ import random
 from datetime import datetime
 import csv
 from pathlib import Path
+from hex_ai.enums import Player
+from hex_ai.value_utils import int_to_player
 
 # TODO: In the future, support different play configs (search_widths, MCTS, etc.)
 # TODO: Batch model inference for efficiency (currently sequential)
@@ -249,13 +251,18 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
     move_sequence = []
     
     while not state.game_over:
-        # Determine which model to use
-        model = model_1 if state.current_player == BLUE_PLAYER else model_2
+        # Determine which model to use using Player enum for safety
+        current_player_enum = state.current_player_enum
+        model = model_1 if current_player_enum == Player.BLUE else model_2
         
+        # Fail fast if there are no legal moves while not game over (shouldn't happen in Hex)
+        if not state.get_legal_moves():
+            raise ValueError("No legal moves available while game is not over. This indicates a bug.")
+
         # Select and apply move
         move = select_move(state, model, search_widths, temperature)
         if move is None:
-            break  # No valid moves
+            raise ValueError("Move selection returned None. This indicates a model or selection failure.")
         
         move_sequence.append(move)
         state = apply_move_to_state(state, *move)
@@ -280,14 +287,18 @@ def determine_winner(state: HexGameState, model_1: SimpleModelInference,
         - winner_color: "b" or "r" (color-based)
         - winner_char: "b" or "r" (color-based)
     """
-    if state.winner == "blue":
+    # Fail fast and use Enum internally; convert at IO boundary
+    winner_enum = state.winner_enum
+    if winner_enum is None:
+        raise ValueError("Game is not over or winner missing")
+    if winner_enum.name == 'BLUE':
         winner_color = TRMPH_BLUE_WIN
         winner_char = TRMPH_BLUE_WIN
-    elif state.winner == "red":
+    elif winner_enum.name == 'RED':
         winner_color = TRMPH_RED_WIN
         winner_char = TRMPH_RED_WIN
     else:
-        raise ValueError("Game is not over")
+        raise ValueError(f"Unknown winner enum: {winner_enum}")
     
     return winner_color, winner_char
 
@@ -352,7 +363,7 @@ def play_single_game(model_1: SimpleModelInference,
     # Initialize game state
     state = HexGameState(
         board=np.full((board_size, board_size), EMPTY_PIECE, dtype='U1'), 
-        current_player=BLUE_PLAYER
+        _current_player=Player.BLUE
     )
     
     # Handle pie rule
