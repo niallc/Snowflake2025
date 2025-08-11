@@ -215,7 +215,8 @@ class HexGameState:
         # Save state for undo
         undo_info = {
             'board': self.board.copy(),
-            'current_player': self.current_player,
+            # Store enum, not legacy int, to satisfy strict setter on undo
+            'current_player': self._current_player,
             'game_over': self.game_over,
             'winner': self.winner,
             'move': (row, col)

@@ -238,7 +238,7 @@ class BatchedNeuralMCTS:
     
     def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, 
                  win_value: float = 1.5, discount_factor: float = 0.98, 
-                 optimal_batch_size: int = 64, verbose: int = 0):
+                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 0):
         """
         Initialize the batched MCTS engine.
         
@@ -257,6 +257,7 @@ class BatchedNeuralMCTS:
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
+        self.selection_wait_ms = selection_wait_ms
         
         # Initialize batched evaluator (replaces direct batch processor usage)
         self.evaluator = BatchedEvaluator(
@@ -406,6 +407,9 @@ class BatchedNeuralMCTS:
             self.logger.info(f"Performance summary: {evaluator_stats.get('inferences_per_second', 0):.1f} inferences/sec, "
                            f"{evaluator_stats.get('average_batch_size', 0):.1f} avg batch size")
         
+        # Optional readiness wait to reduce zero-visit path at selection time
+        self._wait_for_root_ready(root, max_wait_ms=self.selection_wait_ms)
+
         # Log performance snapshot at end of search
         PERF.log_snapshot(clear=True, force=True)
         
@@ -427,6 +431,16 @@ class BatchedNeuralMCTS:
         # Selection: Traverse the tree using PUCT until a leaf node is found.
         leaf_node = self._select(root)
         return leaf_node
+
+    def _wait_for_root_ready(self, root: BatchedMCTSNode, max_wait_ms: int = 0) -> None:
+        """Spin briefly until root has priors and children or timeout."""
+        if max_wait_ms <= 0:
+            return
+        deadline = time.time() + (max_wait_ms / 1000.0)
+        while time.time() < deadline:
+            if root.policy_priors and root.children:
+                return
+            time.sleep(0.001)
 
     def _run_simulation(self, root: BatchedMCTSNode) -> None:
         """
@@ -477,7 +491,7 @@ class BatchedNeuralMCTS:
         best_score = -float('inf')
         best_child = None
 
-        for move, child_node in node.children.items():
+        for move, child_node in list(node.children.items()):
             # Note: child_node.mean_value is from the perspective of the player who made the move.
             # We must negate it to get the value from the current node's (parent's) perspective.
             q_value = -child_node.mean_value 
@@ -724,35 +738,50 @@ class BatchedNeuralMCTS:
 
     def select_move(self, root: BatchedMCTSNode, temperature: float = 1.0) -> Tuple[int, int]:
         """
-        Select final move based on visit counts.
-        
-        Args:
-            root: Root node of search tree
-            temperature: Temperature for move selection (0 = deterministic, 1 = stochastic)
-            
-        Returns:
-            Selected move (row, col)
+        Select final move based on visit counts. If all child visits are zero
+        (plausible with async batching), fall back to policy priors.
         """
         if not root.children:
-            raise ValueError("Cannot select move from root with no children")
-        
+            # Optional short readiness wait
+            self._wait_for_root_ready(root, max_wait_ms=getattr(self, "selection_wait_ms", 0))
+            if not root.children:
+                raise ValueError("Cannot select move from root with no children")
+
         moves = list(root.children.keys())
-        visit_counts = [root.children[move].visits for move in moves]
-        
-        # TODO (P1): Looks like _temperature_scale handles the deterministic case, so this is duplicate code.
-        #            Removing this, update the logic in _temperature_scale if necessary.
+        visit_counts = [root.children[m].visits for m in moves]
+
+        total_visits = sum(visit_counts)
+        if total_visits == 0:
+            # Expected race: no traversal reached children yet.
+            if not root.policy_priors:
+                raise ValueError("Root has children but no policy priors; unexpected in async MCTS.")
+            priors = np.array([root.policy_priors.get(m, 0.0) for m in moves], dtype=np.float64)
+            s = float(priors.sum())
+            if s <= 0.0:
+                raise ValueError("CRITICAL: All policy priors are zero! This indicates a bug.")
+            if temperature == 0:
+                idx = int(np.argmax(priors))
+                selected_move = moves[idx]
+                self.logger.info(f"Selected {selected_move} (deterministic, priors-only)")
+                return selected_move
+            scaled = np.power(priors, 1.0 / float(temperature))
+            probs = scaled / scaled.sum()
+            idx = int(np.random.choice(len(moves), p=probs))
+            selected_move = moves[idx]
+            self.logger.info(f"Selected {selected_move} (stochastic, priors-only, temp={temperature})")
+            return selected_move
+
+        # Normal path: some visits exist
         if temperature == 0:
-            # Deterministic: select most visited
-            best_move_idx = np.argmax(visit_counts)
-            selected_move = moves[best_move_idx]
-            self.logger.info(f"Selected move {selected_move} (deterministic, visits={visit_counts[best_move_idx]})")
-        else:
-            # Stochastic: sample based on visit counts
-            probabilities = self._temperature_scale(visit_counts, temperature)
-            selected_move_idx = np.random.choice(len(moves), p=probabilities)
-            selected_move = moves[selected_move_idx]
-            self.logger.info(f"Selected move {selected_move} (stochastic, visits={visit_counts[selected_move_idx]}, temp={temperature})")
-        
+            idx = int(np.argmax(visit_counts))
+            selected_move = moves[idx]
+            self.logger.info(f"Selected {selected_move} (deterministic, visits={visit_counts[idx]})")
+            return selected_move
+
+        probabilities = self._temperature_scale(visit_counts, temperature)
+        idx = int(np.random.choice(len(moves), p=probabilities))
+        selected_move = moves[idx]
+        self.logger.info(f"Selected {selected_move} (stochastic, visits={visit_counts[idx]}, temp={temperature})")
         return selected_move
 
     # TODO (P2): For self-play game generation, we should also add Dirichlet noise to the initial policy priors as a secondary form of randomness.
