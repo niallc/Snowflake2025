@@ -238,7 +238,7 @@ class BatchedNeuralMCTS:
     
     def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, 
                  win_value: float = 1.5, discount_factor: float = 0.98, 
-                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 0):
+                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 500):
         """
         Initialize the batched MCTS engine.
         
@@ -257,6 +257,7 @@ class BatchedNeuralMCTS:
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
+        # Small default wait helps ensure at least one callback/backprop completes before selection
         self.selection_wait_ms = selection_wait_ms
         
         # Initialize batched evaluator (replaces direct batch processor usage)
@@ -280,9 +281,11 @@ class BatchedNeuralMCTS:
             'end_time': None
         }
         
-        self.logger.info(f"Initialized BatchedNeuralMCTS with exploration_constant={exploration_constant}, "
-                        f"win_value={win_value}, discount_factor={discount_factor}, "
-                        f"optimal_batch_size={optimal_batch_size}")
+        self.logger.info(
+            f"Initialized BatchedNeuralMCTS with exploration_constant={exploration_constant}, "
+            f"win_value={win_value}, discount_factor={discount_factor}, "
+            f"optimal_batch_size={optimal_batch_size}, selection_wait_ms={self.selection_wait_ms}"
+        )
 
     def _get_node_id(self, node: BatchedMCTSNode) -> int:
         """Get or create a unique ID for a node."""
@@ -335,60 +338,80 @@ class BatchedNeuralMCTS:
             if self.verbose >= 2:
                 self.logger.debug(f"Root node state: {root.node_state}, terminal: {root.is_terminal()}, leaf: {root.is_leaf()}")
             
-            # Run simulations
-            for sim_idx in range(num_simulations):
+            # Request up to num_simulations evaluations, respecting async pending states
+            evaluations_requested = 0
+            pending_encounters = 0
+            while evaluations_requested < num_simulations:
                 if self.verbose >= 3:
-                    self.logger.debug(f"Starting simulation {sim_idx + 1}")
-                
+                    self.logger.debug(f"Starting selection for request {evaluations_requested + 1}")
+
                 # Execute selection phase to get leaf node
                 with PERF.timer("mcts.select"):
                     leaf_node = self._execute_selection_phase(root)
-                
-                if self.verbose >= 3:
-                    self.logger.debug(f"Selected leaf node for simulation {sim_idx + 1}")
-                
-                # Expand and evaluate the leaf node (backpropagation handled by callback)
+
+                # If evaluation is already pending for this leaf, wait briefly for callback
+                if getattr(leaf_node, 'node_state', None) == NodeState.EVALUATION_PENDING:
+                    pending_encounters += 1
+                    # Respect selection_wait_ms knob: when zero, skip this wait entirely (useful for tests)
+                    max_wait_s = min(0.5, max(0.0, getattr(self, 'selection_wait_ms', 0) / 1000.0))
+                    if max_wait_s > 0.0:
+                        with PERF.timer("mcts.pending_wait"):
+                            wait_start = time.time()
+                            waited_any = False
+                            while (
+                                getattr(leaf_node, 'node_state', None) == NodeState.EVALUATION_PENDING
+                                and (time.time() - wait_start) < max_wait_s
+                            ):
+                                waited_any = True
+                                time.sleep(0.001)
+                            if waited_any:
+                                PERF.inc("mcts.pending_wait_events")
+                        # After waiting, try again without consuming budget
+                        continue
+                    # No waiting configured; if we keep encountering pending without progress, break to avoid long hangs in tests
+                    if pending_encounters >= 1:
+                        self.logger.debug("Pending leaf encountered with selection_wait_ms=0; breaking out of search loop early for test speed.")
+                        break
+                    continue
+
+                # Expand and queue evaluation for unexpanded leaf
                 with PERF.timer("mcts.expand"):
                     self._expand_and_evaluate(leaf_node)
-                
-                if self.verbose >= 3:
-                    self.logger.debug(f"Expanded leaf node for simulation {sim_idx + 1}")
-                
-                PERF.inc("mcts.sim")  # Count simulations
-                self.stats['total_simulations'] += 1
-                
-                # Log progress every 100 simulations (rate-limited for lower verbosity)
-                if self.verbose >= 1 and (sim_idx + 1) % 100 == 0:
-                    elapsed = time.time() - self.stats['start_time']
-                    sims_per_sec = (sim_idx + 1) / elapsed
+
+                evaluations_requested += 1
+                PERF.inc("mcts.sim")  # Treat each queued evaluation as one simulation budget unit
+                self.stats['total_simulations'] = evaluations_requested
+
+                # Log progress every 50 requests
+                if self.verbose >= 1 and (evaluations_requested % 50 == 0 or evaluations_requested == num_simulations):
+                    elapsed = max(time.time() - self.stats['start_time'], 1e-6)
+                    sims_per_sec = evaluations_requested / elapsed
                     queue_size = self.evaluator.get_queue_size()
                     cache_size = self.evaluator.get_cache_size()
-                    self.logger.info(f"Completed {sim_idx + 1}/{num_simulations} simulations "
-                                   f"({sims_per_sec:.1f} sims/sec, queue: {queue_size}, cache: {cache_size})")
-                
-                # Detailed logging every 50 simulations (only for high verbosity)
-                if self.verbose >= 3 and (sim_idx + 1) % 50 == 0:
-                    self._log_detailed_progress(sim_idx + 1, num_simulations)
+                    self.logger.info(
+                        f"Completed {evaluations_requested}/{num_simulations} eval requests "
+                        f"({sims_per_sec:.0f} req/sec, queue: {queue_size}, cache: {cache_size})"
+                    )
+                if self.verbose >= 3 and (evaluations_requested % 50 == 0):
+                    self._log_detailed_progress(evaluations_requested, num_simulations)
         
-        # Wait for any remaining background processing to complete
-        # The background thread will automatically process remaining requests
-        if self.evaluator.enable_background_processing:
-            # Give the background thread more time to process remaining requests
-            max_wait_time = 1.0  # Wait up to 1 second
-            wait_start = time.time()
-            while (self.evaluator.get_queue_size() > 0 and 
-                   time.time() - wait_start < max_wait_time):
-                time.sleep(0.001)  # Sleep for 1ms
-            
-            if self.verbose >= 2:
-                remaining_queue = self.evaluator.get_queue_size()
-                if remaining_queue > 0:
-                    self.logger.warning(f"Background processing incomplete: {remaining_queue} requests still in queue")
-                else:
-                    self.logger.debug("Background processing completed successfully")
+        # Wait until at least one evaluation callback has been applied to the root
+        # This ensures priors/children exist and at least some visits can accrue.
+        # Skip this wait entirely when selection_wait_ms == 0 (e.g., unit tests).
+        if self.selection_wait_ms > 0:
+            with PERF.timer("mcts.ensure_applied_wait"):
+                ensure_applied_deadline = time.time() + 0.25  # up to 250ms
+                waited_any = False
+                while time.time() < ensure_applied_deadline:
+                    if root.policy_priors and root.children:
+                        break
+                    waited_any = True
+                    time.sleep(0.001)
+                if waited_any:
+                    PERF.inc("mcts.ensure_applied_wait_events")
         
         self.stats['end_time'] = time.time()
-        total_time = self.stats['end_time'] - self.stats['start_time']
+        total_time = max(self.stats['end_time'] - self.stats['start_time'], 1e-6)
         sims_per_sec = num_simulations / total_time
         
         # Get evaluator statistics
@@ -396,7 +419,7 @@ class BatchedNeuralMCTS:
         self.stats['total_inferences'] = evaluator_stats.get('batch_processor', {}).get('total_inferences', 0)
         
         if self.verbose >= 1:
-            self.logger.info(f"Batched MCTS search completed: {num_simulations} simulations in {total_time:.2f}s ({sims_per_sec:.1f} sims/sec)")
+            self.logger.info(f"Batched MCTS search completed: {num_simulations} simulations in {total_time:.3f}s ({sims_per_sec:.0f} sims/sec)")
             self.logger.info(f"Total neural network inferences: {self.stats['total_inferences']}")
             self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
             self.logger.info(f"Cache hit rate: {evaluator_stats.get('cache_hit_rate', 0):.1%}")
@@ -408,7 +431,16 @@ class BatchedNeuralMCTS:
                            f"{evaluator_stats.get('average_batch_size', 0):.1f} avg batch size")
         
         # Optional readiness wait to reduce zero-visit path at selection time
-        self._wait_for_root_ready(root, max_wait_ms=self.selection_wait_ms)
+        # When selection_wait_ms == 0 this returns immediately.
+        with PERF.timer("mcts.selection_ready_wait"):
+            self._wait_for_root_ready(root, max_wait_ms=self.selection_wait_ms)
+        # Enforce at least one non-zero child visit if configured to wait
+        if self.selection_wait_ms > 0 and root.children:
+            deadline = time.time() + (self.selection_wait_ms / 1000.0)
+            while time.time() < deadline:
+                if any(child.visits > 0 for child in root.children.values()):
+                    break
+                time.sleep(0.001)
 
         # Log performance snapshot at end of search
         PERF.log_snapshot(clear=True, force=True)

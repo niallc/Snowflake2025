@@ -12,7 +12,7 @@ from hex_ai.inference.batch_processor import BatchProcessor, BatchRequest
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS, BatchedMCTSNode, NodeState
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-
+from hex_ai.inference.game_engine import BOARD_SIZE
 
 class TestBatchProcessor(unittest.TestCase):
     """Test the BatchProcessor class."""
@@ -36,7 +36,7 @@ class TestBatchProcessor(unittest.TestCase):
     def test_request_evaluation_cache_hit(self):
         """Test that cache hits return immediately."""
         # Add a result to cache
-        board_state = np.random.rand(13, 13)
+        board_state = np.random.rand(BOARD_SIZE, BOARD_SIZE)
         cache_key = board_state.tobytes()
         cached_policy = np.random.rand(169)
         cached_value = 0.7
@@ -62,7 +62,7 @@ class TestBatchProcessor(unittest.TestCase):
     
     def test_request_evaluation_cache_miss(self):
         """Test that cache misses queue the request."""
-        board_state = np.random.rand(13, 13)
+        board_state = np.random.rand(BOARD_SIZE, BOARD_SIZE)
         
         # Mock callback
         callback_called = False
@@ -83,7 +83,7 @@ class TestBatchProcessor(unittest.TestCase):
     def test_process_batch(self):
         """Test batch processing."""
         # Add requests to queue
-        board_states = [np.random.rand(13, 13) for _ in range(3)]
+        board_states = [np.random.rand(BOARD_SIZE, BOARD_SIZE) for _ in range(3)]
         callbacks = []
         
         for board_state in board_states:
@@ -112,7 +112,7 @@ class TestBatchProcessor(unittest.TestCase):
     def test_get_statistics(self):
         """Test statistics calculation."""
         # Add some activity
-        board_state = np.random.rand(13, 13)
+        board_state = np.random.rand(BOARD_SIZE, BOARD_SIZE)
         self.processor.request_evaluation(board_state, lambda p, v: None)
         self.processor.process_batch(force=True)
         
@@ -180,7 +180,7 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
         def mock_batch_infer(boards):
             batch_size = len(boards)
             return (
-                [np.random.rand(169) for _ in range(batch_size)],  # policies
+                [np.random.rand(BOARD_SIZE * BOARD_SIZE) for _ in range(batch_size)],  # policies
                 [np.random.uniform(-1, 1) for _ in range(batch_size)]  # values
             )
         
