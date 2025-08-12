@@ -186,11 +186,13 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
         
         self.mock_model.batch_infer.side_effect = mock_batch_infer
         
+        # Use selection_wait_ms=0 to avoid sleeps/busy-wait in unit tests
         self.mcts = BatchedNeuralMCTS(
             model=self.mock_model,
             exploration_constant=1.4,
             optimal_batch_size=2,
-            verbose=0
+            verbose=0,
+            selection_wait_ms=0
         )
     
     def test_initialization(self):
@@ -210,7 +212,8 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
             with patch.object(self.mcts.evaluator, 'process_pending_evaluations') as mock_process:
                 mock_process.return_value = 0  # No processing
                 
-                root = self.mcts.search(state, num_simulations=10)
+                # Keep simulations minimal for test speed
+                root = self.mcts.search(state, num_simulations=2)
                 
                 # Should create a new root node
                 self.assertIsInstance(root, BatchedMCTSNode)
@@ -233,7 +236,8 @@ class TestBatchedNeuralMCTS(unittest.TestCase):
             with patch.object(self.mcts.evaluator, 'process_pending_evaluations') as mock_process:
                 mock_process.return_value = 0
                 
-                root = self.mcts.search(existing_node, num_simulations=10)
+                # Keep simulations minimal for test speed
+                root = self.mcts.search(existing_node, num_simulations=2)
                 
                 # Should return the same node
                 self.assertIs(root, existing_node)

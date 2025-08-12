@@ -73,6 +73,7 @@ class BatchProcessor:
         # Request queue and cache
         self.request_queue: List[BatchRequest] = []
         self.result_cache: Dict[bytes, Tuple[np.ndarray, float]] = {}
+        self.last_enqueue_time: float = 0.0
         
         # Background processing
         self.background_thread = None
@@ -171,6 +172,8 @@ class BatchProcessor:
             metadata=metadata
         )
         self.request_queue.append(request)
+        # Record when the most recent request was queued for coalescing logic
+        self.last_enqueue_time = time.time()
         
         if self.verbose >= 2:
             logger.debug(f"Added request to queue. Queue size: {len(self.request_queue)}, "
@@ -242,6 +245,16 @@ class BatchProcessor:
                         queue_size >= self.optimal_batch_size or
                         (queue_size > 0 and self._should_process_small_batch())
                     )
+                    if self.verbose >= 2 and should_process:
+                        if queue_size >= self.optimal_batch_size:
+                            logger.info(
+                                f"Triggering batch: reason=size (queue={queue_size} >= optimal={self.optimal_batch_size}), max_wait_ms={self.max_wait_ms}"
+                            )
+                        else:
+                            waited = (time.time() - self.last_enqueue_time) if self.last_enqueue_time else 0.0
+                            logger.info(
+                                f"Triggering batch: reason=timeout (queue={queue_size}, waited={waited:.3f}s >= {self.max_wait_ms/1000.0:.3f}s), max_wait_ms={self.max_wait_ms}"
+                            )
                     
                     if should_process:
                         if self.verbose >= 2:
@@ -259,9 +272,32 @@ class BatchProcessor:
     
     def _should_process_small_batch(self) -> bool:
         """Check if we should process a small batch based on timing."""
-        # Simple implementation: process if we have any requests
-        # This could be enhanced with more sophisticated timing logic
-        return len(self.request_queue) > 0
+        # Process a small batch only if we've waited at least max_wait_ms
+        # since the last enqueue, allowing additional requests to coalesce.
+        if not self.request_queue:
+            return False
+        if self.last_enqueue_time <= 0.0:
+            return True
+        return (time.time() - self.last_enqueue_time) >= (self.max_wait_ms / 1000.0)
+
+    def drain(self, timeout_s: Optional[float] = None) -> bool:
+        """Block until the request queue is empty or timeout.
+
+        Args:
+            timeout_s: Optional timeout in seconds. If None, wait indefinitely.
+
+        Returns:
+            True if the queue was drained (empty), False if timed out.
+        """
+        start = time.time()
+        while True:
+            with self.processing_lock:
+                empty = (len(self.request_queue) == 0)
+            if empty:
+                return True
+            if timeout_s is not None and (time.time() - start) > timeout_s:
+                return False
+            time.sleep(0.001)
     
     def __del__(self):
         """Cleanup when the object is destroyed."""
@@ -280,8 +316,12 @@ class BatchProcessor:
         # Use lock if background processing is enabled
         if self.enable_background_processing:
             with self.processing_lock:
+                if self.verbose >= 2 and force:
+                    logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
                 return self._process_batch_internal(force)
         else:
+            if self.verbose >= 2 and force:
+                logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
             return self._process_batch_internal(force)
     
     def _process_batch_internal(self, force: bool = False) -> int:

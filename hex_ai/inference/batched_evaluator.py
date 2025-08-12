@@ -33,7 +33,7 @@ class BatchedEvaluator:
     """
     
     def __init__(self, model: SimpleModelInference, optimal_batch_size: int = 64, 
-                 verbose: int = 1, max_wait_ms: int = 3, 
+                 verbose: int = 1, max_wait_ms: int = 15, 
                  enable_background_processing: bool = True):
         """
         Initialize the batched evaluator.
@@ -67,8 +67,10 @@ class BatchedEvaluator:
             'end_time': None
         }
         
-        logger.info(f"BatchedEvaluator initialized with optimal_batch_size={optimal_batch_size}, "
-                   f"max_wait_ms={max_wait_ms}, background_processing={enable_background_processing}")
+        logger.info(
+            f"BatchedEvaluator initialized with optimal_batch_size={optimal_batch_size}, "
+            f"max_wait_ms={max_wait_ms}, background_processing={enable_background_processing}"
+        )
 
     def request_evaluation(self, state: HexGameState, 
                           callback: Callable[[np.ndarray, float], None],
