@@ -14,6 +14,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS  # Use batched MCTS for improved performance
+from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.value_utils import (
     policy_logits_to_probs,
@@ -404,8 +405,28 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
         return {"success": False, "error": str(e)}
 
 
+def _build_orchestration_from_dict(cfg: dict | None) -> BatchedMCTSOrchestration | None:
+    """Build orchestration object from a dict of overrides; returns None if cfg is falsy."""
+    if not cfg:
+        return None
+    # Only pick known keys; ignore extras from clients
+    kwargs = {}
+    for key in (
+        'evaluator_max_wait_ms',
+        'optimal_batch_size',
+        'selection_wait_ms',
+        'min_batch_before_force',
+        'min_wait_before_force_ms',
+        'max_inflight',
+        'batch_wait_s',
+    ):
+        if key in cfg and cfg[key] is not None:
+            kwargs[key] = cfg[key]
+    return BatchedMCTSOrchestration(**kwargs) if kwargs else BatchedMCTSOrchestration()
+
+
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
-                   temperature=1.0, verbose=0):
+                   temperature=1.0, verbose=0, orchestration_overrides: BatchedMCTSOrchestration | None = None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.debug(f"make_mcts_move called with model_id: {model_id}, simulations: {num_simulations}")
@@ -443,8 +464,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         mcts = BatchedNeuralMCTS(
             model=model,
             exploration_constant=exploration_constant,
-            optimal_batch_size=64,  # Good default for web interface
-            verbose=verbose
+            optimal_batch_size=64,  # Retained for explicit constructor default; orchestration overrides if provided
+            verbose=verbose,
+            orchestration=orchestration_overrides,
         )
         
         # Run MCTS search
@@ -454,6 +476,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Get search statistics
         search_stats = mcts.get_search_statistics()
+        evaluator_stats = mcts.evaluator.get_statistics()
+        bp_stats = evaluator_stats.get('batch_processor', {})
+        nn_infer_time_s = float(bp_stats.get('total_time', 0.0) or 0.0)
+        total_compute_time_s = float(search_time)
+        other_time_s = max(0.0, total_compute_time_s - nn_infer_time_s)
         
         # Get move sequence analysis
         move_sequence_analysis = mcts.get_move_sequence_analysis(root, max_depth=5)
@@ -464,6 +491,20 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Get direct policy comparison
         policy_logits, value_logit = model.simple_infer(trmph)
+        # Attach device diagnostics (helps verify GPU vs CPU at runtime)
+        try:
+            if verbose >= 2 and hasattr(model, 'model') and hasattr(model.model, 'get_device_info'):
+                device_info = model.model.get_device_info()
+            elif verbose >= 2 and hasattr(model, 'model'):
+                # Fallback minimal info
+                device_info = {
+                    'wrapper_device': str(model.model.get_device() if hasattr(model.model, 'get_device') else 'unknown'),
+                    'param_device': str(model.model.get_param_device() if hasattr(model.model, 'get_param_device') else 'unknown'),
+                }
+            else:
+                device_info = None
+        except Exception:
+            device_info = None
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         
         # Get legal moves and their probabilities
@@ -546,7 +587,16 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "moves_explored": len([v for v in mcts_visit_counts.values() if v > 0]),
                 "total_legal_moves": len(legal_moves),
                 "search_efficiency": search_stats.get('total_inferences', 0) / num_simulations if num_simulations > 0 else 0
-            }
+            },
+            "profiling_summary": {
+                "total_compute_ms": int(total_compute_time_s * 1000.0),
+                "nn_infer_ms": int(nn_infer_time_s * 1000.0),
+                "other_ms": int(other_time_s * 1000.0),
+                "avg_batch_size": float(search_stats.get('average_batch_size', 0.0)),
+                "total_batches": int(search_stats.get('total_batches_processed', 0)),
+                "cache_hit_rate": float(search_stats.get('cache_hit_rate', 0.0)),
+            },
+            "device_info": device_info,
         }
         
         # Add comparison data
@@ -1151,7 +1201,18 @@ def api_mcts_move():
     temperature = data.get("temperature", 1.0)
     verbose = data.get("verbose", 0)
     
-    result = make_mcts_move(trmph, model_id, num_simulations, exploration_constant, temperature, verbose)
+    # Optional orchestration overrides from request
+    orchestration_cfg = data.get("orchestration", None)
+    orchestration = _build_orchestration_from_dict(orchestration_cfg)
+    result = make_mcts_move(
+        trmph,
+        model_id,
+        num_simulations,
+        exploration_constant,
+        temperature,
+        verbose,
+        orchestration_overrides=orchestration,
+    )
     return jsonify(result)
 
 @app.route("/favicon.ico")

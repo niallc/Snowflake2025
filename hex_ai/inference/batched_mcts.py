@@ -83,6 +83,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.batch_processor import BatchProcessor
 from hex_ai.inference.batched_evaluator import BatchedEvaluator
+from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
 from hex_ai.value_utils import policy_logits_to_probs, player_to_winner
 from hex_ai.config import BOARD_SIZE
 from hex_ai.enums import Player
@@ -239,7 +240,8 @@ class BatchedNeuralMCTS:
     
     def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, 
                  win_value: float = 1.5, discount_factor: float = 0.98, 
-                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 500):
+                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 500,
+                 orchestration: BatchedMCTSOrchestration | None = None):
         """
         Initialize the batched MCTS engine.
         
@@ -258,23 +260,35 @@ class BatchedNeuralMCTS:
         self.optimal_batch_size = optimal_batch_size
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
-        # Small default wait helps ensure at least one callback/backprop completes before selection
-        self.selection_wait_ms = selection_wait_ms
+        # Orchestration configuration
+        if orchestration is None:
+            # Respect dataclass defaults; only align a couple of constructor-specified knobs
+            self.orchestration = BatchedMCTSOrchestration()
+            # Keep caller-provided optimal_batch_size and selection_wait_ms without
+            # overriding other defaults like evaluator_max_wait_ms
+            self.orchestration.optimal_batch_size = optimal_batch_size
+            self.orchestration.selection_wait_ms = selection_wait_ms
+        else:
+            self.orchestration = orchestration
+        self.selection_wait_ms = self.orchestration.selection_wait_ms
+        self.max_inflight = self.orchestration.max_inflight
+        self.batch_wait_s = self.orchestration.batch_wait_s
+        self.min_batch_before_force = self.orchestration.min_batch_before_force
+        self.min_wait_before_force_ms = self.orchestration.min_wait_before_force_ms
+        # Track last time we explicitly forced processing to avoid over-forcing
+        self._last_force_ts: float = 0.0
+
         # Concurrency controls for accurate simulation accounting
         self._cv = threading.Condition()
         self._scheduled = 0
         self._completed = 0
-        # Cap the number of in-flight leaves awaiting evaluation/backprop
-        self.max_inflight = getattr(self, "max_inflight", 128)
-        # Small idle wait to let batches form while waiting on completions
-        self.batch_wait_s = getattr(self, "batch_wait_s", 0.005)
         
         # Initialize batched evaluator (replaces direct batch processor usage)
         self.evaluator = BatchedEvaluator(
             model=model,
-            optimal_batch_size=optimal_batch_size,
+            optimal_batch_size=self.orchestration.optimal_batch_size,
             verbose=verbose,
-            max_wait_ms=3,
+            max_wait_ms=self.orchestration.evaluator_max_wait_ms,
             enable_background_processing=True
         )
         
@@ -293,7 +307,16 @@ class BatchedNeuralMCTS:
         self.logger.info(
             f"Initialized BatchedNeuralMCTS with exploration_constant={exploration_constant}, "
             f"win_value={win_value}, discount_factor={discount_factor}, "
-            f"optimal_batch_size={optimal_batch_size}, selection_wait_ms={self.selection_wait_ms}"
+            f"optimal_batch_size={self.orchestration.optimal_batch_size}, selection_wait_ms={self.selection_wait_ms}"
+        )
+        # Log orchestration settings explicitly for diagnostics
+        self.logger.info(
+            "MCTS Orchestration: "
+            f"evaluator_max_wait_ms={self.orchestration.evaluator_max_wait_ms}, "
+            f"min_batch_before_force={self.min_batch_before_force}, "
+            f"min_wait_before_force_ms={self.min_wait_before_force_ms}, "
+            f"max_inflight={self.max_inflight}, "
+            f"batch_wait_s={self.batch_wait_s}"
         )
 
     def _get_node_id(self, node: BatchedMCTSNode) -> int:
@@ -390,9 +413,23 @@ class BatchedNeuralMCTS:
                         )
                         last_progress_time = now
 
-                # Proactively process pending evaluations, then wait briefly for completions
+                # Proactively process pending evaluations with coalescing policy
                 try:
-                    self.evaluator.process_pending_evaluations(force=True)
+                    queue_size = self.evaluator.get_queue_size()
+                    # Only force if queue is at least the configured minimum AND
+                    # we have respected the minimum wait since the last forced call.
+                    now_ts = time.time()
+                    waited_ms_since_force = (now_ts - self._last_force_ts) * 1000.0
+                    should_force = (
+                        queue_size >= self.min_batch_before_force and
+                        waited_ms_since_force >= float(self.min_wait_before_force_ms)
+                    )
+                    if should_force:
+                        self.evaluator.process_pending_evaluations(force=True)
+                        self._last_force_ts = now_ts
+                    else:
+                        # Let background coalescing drive timing; only non-forced processing here
+                        self.evaluator.process_pending_evaluations(force=False)
                 except Exception:
                     pass
                 with self._cv:

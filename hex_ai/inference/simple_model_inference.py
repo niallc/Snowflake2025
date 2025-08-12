@@ -232,6 +232,14 @@ class SimpleModelInference:
         else:
             raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
 
+        # Diagnostics: capture device info before/after
+        if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
+            from hex_ai.utils.perf import PERF
+            try:
+                from_device = getattr(input_tensor, 'device', 'na')
+                logging.getLogger(__name__).debug(f"simple_infer: input_device={from_device}")
+            except Exception:
+                pass
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
         value_logit_val = value_logit.item() if hasattr(value_logit, 'item') else float(value_logit)
@@ -321,7 +329,10 @@ class SimpleModelInference:
             for i in range(0, len(input_tensors), optimal_batch_size):
                 batch_tensors = input_tensors[i:i + optimal_batch_size]
                 batch_tensor = torch.stack(batch_tensors)
-                
+                if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
+                    logging.getLogger(__name__).debug(
+                        f"batch_infer: stacked_batch_shape={tuple(batch_tensor.shape)}, device_before={batch_tensor.device}"
+                    )
                 # Run batch inference
                 policy_logits_batch, value_logits_batch = self.model.batch_predict(batch_tensor)
                 

@@ -22,11 +22,11 @@ class BatchedMCTSOrchestration:
     - batch_wait_s: condition-variable wait between scheduler iterations
     """
 
-    evaluator_max_wait_ms: int = 3
+    evaluator_max_wait_ms: int = 30
     optimal_batch_size: int = 64
-    selection_wait_ms: int = 25
-    min_batch_before_force: int = 16
-    min_wait_before_force_ms: int = 10
+    selection_wait_ms: int = 200
+    min_batch_before_force: int = 24
+    min_wait_before_force_ms: int = 20
     max_inflight: int = 128
     batch_wait_s: float = 0.005
 
