@@ -68,6 +68,7 @@ write_ups/redundant/batched_mcts_backpropagation_fix_summary.md
 scripts/deprecated/test_enhanced_inference.py
 write_ups/batched_mcts_improvement_plan.md
 write_ups/code_review_concerns.md
+write_ups/tree_search_batching_bug_analysis.md
 
 # VSCode
 .vscode/

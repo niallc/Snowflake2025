@@ -57,12 +57,13 @@ class PositionCollector:
         collector.process_batches()
     """
     
-    def __init__(self, model):
+    def __init__(self, model, verbose: int = 0):
         """
         Initialize the position collector.
         
         Args:
             model: Model instance that supports batch_infer() method
+            verbose: Verbosity level for debugging output
             
         Raises:
             RuntimeError: If called from a multi-threaded context
@@ -108,6 +109,7 @@ class PositionCollector:
             sys.exit(1)
         
         self.model = model
+        self.verbose = verbose
         # Store (board, callback, metadata) tuples for deferred processing
         self.policy_requests = []  # List of (board, callback, metadata) tuples
         self._memory_warnings_shown = set()  # Track which warnings we've already shown
@@ -115,6 +117,19 @@ class PositionCollector:
         self._last_memory_check_time = 0  # Track when we last checked memory
         self._memory_check_cooldown = 2.0  # Don't check memory more than once every 5 seconds
         
+        # Add counters and timing for iterative batching
+        self.total_policy_requests = 0
+        self.total_value_requests = 0
+        self.iteration_index = 0
+        self.policy_batches_processed = 0
+        self.policy_items_processed = 0
+        self.last_batch_size = 0
+        self.eval_time_sec = 0.0
+        
+    def has_pending_requests(self) -> bool:
+        """Check if there are any pending policy requests."""
+        return bool(self.policy_requests)
+    
     def _check_thread_safety(self, method_name: str):
         """Check if method is called from the correct thread."""
         current_thread = threading.current_thread()
@@ -223,6 +238,7 @@ class PositionCollector:
             RuntimeError: If called from a different thread than the constructor
         """
         self._validate_and_add_request(board, callback, metadata, "request_policy")
+        self.total_policy_requests += 1
     
     def process_batches(self):
         """
@@ -242,36 +258,44 @@ class PositionCollector:
         """
         self._check_thread_safety("process_batches")
         
-        # Process policy requests
-        if self.policy_requests:
-            boards = [req[0] for req in self.policy_requests]
-            callbacks = [req[1] for req in self.policy_requests]
-            metadata_list = [req[2] for req in self.policy_requests]
-            
-            # Validate that we have the expected number of requests
-            if len(boards) != len(callbacks) or len(boards) != len(metadata_list):
-                raise RuntimeError(f"Inconsistent request counts: {len(boards)} boards, {len(callbacks)} callbacks, {len(metadata_list)} metadata")
-            
-            # Single batch inference call for all policy requests
-            try:
-                policies, _ = self.model.batch_infer(boards)
-            except Exception as e:
-                raise RuntimeError(f"Model batch inference failed: {e}")
-            
-            # Validate that we got the expected number of results
-            if len(policies) != len(boards):
-                raise RuntimeError(f"Model returned {len(policies)} policies for {len(boards)} boards")
-            
-            # Call each callback with its corresponding policy result and metadata
-            for i, (callback, policy, metadata) in enumerate(zip(callbacks, policies, metadata_list)):
-                try:
-                    callback(policy, metadata)
-                except Exception as e:
-                    # Log error and re-raise to fail fast
-                    logger.error(f"Error in policy callback {i} with metadata {metadata}: {e}")
-                    raise RuntimeError(f"Policy callback {i} failed: {e}")
-            
-            self.policy_requests.clear()
+        if not self.policy_requests:
+            return
+
+        # Wave index (for logs)
+        wave = self.iteration_index
+        self.iteration_index += 1
+
+        # Snapshot current wave; DO NOT process items that callbacks add later
+        snapshot = list(self.policy_requests)  # [(board, callback, meta), ...]
+        self.policy_requests.clear()
+
+        boards = [req[0] for req in snapshot]
+        callbacks = [req[1] for req in snapshot]
+        metadata_list = [req[2] for req in snapshot]
+
+        self.last_batch_size = len(boards)
+
+        t0 = time.perf_counter()
+        policies, _ = self.model.batch_infer(boards)
+        t1 = time.perf_counter()
+
+        self.eval_time_sec += (t1 - t0)
+        self.policy_batches_processed += 1
+        self.policy_items_processed += len(boards)
+
+        # sanity
+        if len(policies) != len(boards):
+            raise RuntimeError(f"Model returned {len(policies)} policies for {len(boards)} boards")
+
+        # Dispatch callbacks
+        for policy, cb, meta in zip(policies, callbacks, metadata_list):
+            cb(policy, meta)
+
+        if self.verbose >= 1:
+            logger.info(
+                f"🔍 BATCH {wave}: processed {len(boards)} policy items "
+                f"(cum {self.policy_items_processed}); time {t1 - t0:.4f}s"
+            )
     
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -404,7 +428,8 @@ def build_search_tree_with_collection(
     widths: List[int], 
     temperature: float = 1.0,
     collector: PositionCollector = None,
-    game_id: Optional[int] = None
+    game_id: Optional[int] = None,
+    verbose: int = 0
 ) -> MinimaxSearchNode:
     """
     Build search tree while collecting positions for batch processing.
@@ -446,7 +471,7 @@ def build_search_tree_with_collection(
         Root node of the search tree (children may not be fully populated until process_batches() is called)
     """
     
-    def build_node(state: HexGameState, depth: int, path: List[Tuple[int, int]]) -> MinimaxSearchNode:
+    def build_node(state: HexGameState, depth: int, path: List[Tuple[int, int]], verbose: int = 0) -> MinimaxSearchNode:
         """
         Recursively build a node in the search tree.
         
@@ -456,8 +481,16 @@ def build_search_tree_with_collection(
         """
         node = MinimaxSearchNode(state, depth, path)
         
+        # DEBUG: Trace tree building process
+        if verbose >= 2:
+            logger.info(f"🔍 BUILD NODE DEBUG: Building node at depth {depth}, path: {path}")
+            logger.info(f"🔍 BUILD NODE DEBUG: Game over: {state.game_over}, depth >= len(widths): {depth >= len(widths)}")
+            logger.info(f"🔍 BUILD NODE DEBUG: Current widths: {widths}, max depth: {len(widths)}")
+        
         # Stop if game is over or we've reached max depth
         if state.game_over or depth >= len(widths):
+            if verbose >= 2:
+                logger.info(f"🔍 BUILD NODE DEBUG: Stopping at depth {depth} - game_over: {state.game_over}, max_depth: {depth >= len(widths)}")
             return node
         
         # Get top moves for this depth
@@ -481,6 +514,12 @@ def build_search_tree_with_collection(
                     policy_logits: Policy logits from batched inference
                     metadata: Validation metadata to ensure correct routing
                 """
+                # DEBUG: Trace callback execution
+                if verbose >= 2:
+                    logger.info(f"🔍 CALLBACK DEBUG: Policy callback called for depth {depth}, path: {path}")
+                    logger.info(f"🔍 CALLBACK DEBUG: Policy logits shape: {policy_logits.shape if hasattr(policy_logits, 'shape') else 'no shape'}")
+                    logger.info(f"🔍 CALLBACK DEBUG: Metadata: {metadata}")
+                
                 # Validate metadata to ensure this result belongs to this node
                 expected_metadata = {
                     'game_id': game_id,
@@ -492,15 +531,23 @@ def build_search_tree_with_collection(
                         f"Metadata mismatch in policy callback. Expected {expected_metadata}, got {metadata}"
                     )
                 
-                # Use policy to get top moves
-                moves_with_probs = get_topk_moves(state, model, k, temperature)
+                # Use policy to get top moves from the already-computed policy logits
+                moves = get_topk_moves_from_policy(policy_logits, state, k, temperature)
+                
+                if verbose >= 2:
+                    logger.info(f"🔍 CALLBACK DEBUG: Got {len(moves)} moves: {moves}")
                 
                 # Build children for each move
-                for move, _ in moves_with_probs:
+                for move in moves:
                     child_state = state.make_move(*move)
                     child_path = path + [move]
-                    child_node = build_node(child_state, depth + 1, child_path)
+                    if verbose >= 2:
+                        logger.info(f"🔍 CALLBACK DEBUG: Building child for move {move} at depth {depth + 1}")
+                    child_node = build_node(child_state, depth + 1, child_path, verbose)
                     node.children[move] = child_node
+                
+                if verbose >= 2:
+                    logger.info(f"🔍 CALLBACK DEBUG: Created {len(node.children)} children for depth {depth}")
             
             # Create metadata for validation
             metadata = {
@@ -510,13 +557,15 @@ def build_search_tree_with_collection(
             }
             
             # Register the board + callback + metadata for later batch processing
+            if verbose >= 2:
+                logger.info(f"🔍 POLICY REQUEST DEBUG: Registering policy request for depth {depth}, path: {path}")
             collector.request_policy(state.board, policy_callback, metadata)
             
         else:
             # FALLBACK: Immediate inference (original behavior)
             moves_with_probs = get_topk_moves(state, model, k, temperature)
             
-            # Build children immediately
+                        # Build children immediately
             for move, _ in moves_with_probs:
                 child_state = state.make_move(*move)
                 child_path = path + [move]
@@ -525,7 +574,16 @@ def build_search_tree_with_collection(
             
         return node
     
-    return build_node(root_state, 0, [])
+    return build_node(root_state, 0, [], verbose)
+
+
+def expected_nodes_by_depth(widths):
+    """Calculate expected number of nodes at each depth for given search widths."""
+    # depth 0: 1 node (root)
+    out = [1]
+    for w in widths:
+        out.append(out[-1] * w)
+    return out  # len = len(widths) + 1
 
 
 def convert_model_logit_to_minimax_value(value_logit: float, root_player: Player) -> float:
@@ -600,6 +658,17 @@ def evaluate_leaf_nodes(
         batch = boards[i:i+batch_size]
         # Use efficient batch inference instead of individual calls
         _, batch_values = model.batch_infer(batch)
+        
+        # DEBUG: Analyze the returned values to verify they're real
+        if len(batch_values) > 0:
+            import numpy as np
+            batch_values_np = np.array(batch_values)
+            logger.info(f"🔍 VALUE ANALYSIS DEBUG: Batch {i//batch_size + 1} with {len(batch_values)} values")
+            logger.info(f"🔍 VALUE ANALYSIS DEBUG: Min: {batch_values_np.min():.6f}, Max: {batch_values_np.max():.6f}")
+            logger.info(f"🔍 VALUE ANALYSIS DEBUG: Mean: {batch_values_np.mean():.6f}, Std: {batch_values_np.std():.6f}")
+            logger.info(f"🔍 VALUE ANALYSIS DEBUG: First 5 values: {batch_values[:5]}")
+            logger.info(f"🔍 VALUE ANALYSIS DEBUG: Last 5 values: {batch_values[-5:]}")
+        
         values.extend(batch_values)
     
     # Assign values to leaf nodes, converting to root player's perspective
@@ -732,10 +801,21 @@ def minimax_policy_value_search(
     if verbose >= 2:
         logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
     
+    # Create search statistics
+    search_stats = {
+        'policy_items_processed': collector.policy_items_processed,
+        'policy_batches_processed': collector.policy_batches_processed,
+        'policy_nn_time': collector.eval_time_sec,
+        'policy_total_time': t1_all - t0_all,
+        'avg_policy_batch': collector.policy_items_processed / max(1, collector.policy_batches_processed),
+        'total_positions': total_positions,
+        'tree_analysis': tree_analysis
+    }
+    
     if return_tree:
-        return root.best_move, root_value, root
+        return root.best_move, root_value, root, search_stats
     else:
-        return root.best_move, root_value
+        return root.best_move, root_value, None, search_stats
 
 
 def minimax_policy_value_search_with_batching(
@@ -748,7 +828,7 @@ def minimax_policy_value_search_with_batching(
     debug: bool = False,
     return_tree: bool = False,
     verbose: int = 0
-) -> Tuple[Tuple[int, int], float, Optional[MinimaxSearchNode]]:
+) -> Tuple[Tuple[int, int], float, Optional[MinimaxSearchNode], Dict[str, Any]]:
     """
     Fixed-width, fixed-depth minimax search with batched inference for all policy calls.
 
@@ -805,24 +885,36 @@ def minimax_policy_value_search_with_batching(
     game_id = id(state)  # Use object ID as unique identifier
     
     # STEP 1: Create position collector for batched inference
-    collector = PositionCollector(model)
+    collector = PositionCollector(model, verbose=verbose)
     
     # Check memory usage at the start of the search
     collector._check_memory_usage()
     
     # STEP 2: Build the search tree with position collection
     # This creates the tree structure but defers all policy inference
-    root = build_search_tree_with_collection(state, model, widths, temperature, collector, game_id=game_id)
+    root = build_search_tree_with_collection(state, model, widths, temperature, collector, game_id=game_id, verbose=verbose)
     
     if verbose >= 2:
         stats = collector.get_stats()
         logger.info(f"Tree built with {stats['policy_requests']} policy requests collected")
         logger.info(f"Memory usage: {stats['memory_gb']:.1f}GB")
     
-    # STEP 3: Process all collected batches
+    # STEP 3: Process all collected batches iteratively
     # This is where the actual neural network inference happens
-    # All policy requests are processed in a single batch call
-    collector.process_batches()
+    # Process in waves until no more requests are pending
+    t0_all = time.perf_counter()
+    max_waves = max(2, len(widths) * 2)  # generous safety cap
+    waves = 0
+    while collector.has_pending_requests():
+        collector.process_batches()
+        waves += 1
+        if waves >= max_waves:
+            logger.warning(
+                f"🔍 TREE SEARCH WARNING: exceeded max_waves={max_waves} "
+                f"with pending requests still present; aborting further waves."
+            )
+            break
+    t1_all = time.perf_counter()
     
     # Check memory usage after processing batches
     collector._check_memory_usage()
@@ -830,9 +922,85 @@ def minimax_policy_value_search_with_batching(
     if verbose >= 2:
         logger.info("All policy batches processed, tree is now complete")
     
+    # Log evaluation summary
+    logger.info(
+        f"🔍 EVAL SUMMARY: {collector.policy_items_processed} policy evals "
+        f"in {collector.eval_time_sec:.4f}s NN time; "
+        f"{t1_all - t0_all:.4f}s total policy phase; "
+        f"{collector.policy_batches_processed} waves; "
+        f"avg batch size { (collector.policy_items_processed / max(1, collector.policy_batches_processed)) :.2f}"
+    )
+    
+    # DEBUG: Count total positions in tree and analyze structure (AFTER callbacks are processed)
+    def count_positions(node):
+        count = 1  # Count this node
+        for child in node.children.values():
+            count += count_positions(child)
+        return count
+    
+    def analyze_tree_structure(node, depth=0):
+        """Analyze tree structure to understand depth distribution"""
+        if depth == 0:
+            # Root level
+            return {
+                'depth_0': 1,
+                'depth_1': len(node.children),
+                'depth_2': sum(len(child.children) for child in node.children.values()),
+                'max_depth': max([analyze_tree_structure(child, depth + 1)['max_depth'] for child in node.children.values()], default=0)
+            }
+        else:
+            # Recursive case
+            if not node.children:
+                return {'max_depth': depth}
+            else:
+                child_max_depths = [analyze_tree_structure(child, depth + 1)['max_depth'] for child in node.children.values()]
+                return {'max_depth': max(child_max_depths) if child_max_depths else depth}
+    
+    total_positions = count_positions(root)
+    tree_analysis = analyze_tree_structure(root)
+    
+    # TODO: CRITICAL BUG - Tree building is only going to depth 1 instead of depth 2
+    # The issue is that when build_node() is called recursively inside the callback, 
+    # the child nodes are not registering their own policy requests for depth 2.
+    # 
+    # Current behavior:
+    # - Only 1 policy request collected per move (should be 13)
+    # - Tree has 14 positions total (1 root + 13 children at depth 1)
+    # - 0 positions at depth 2 (should be 13 × 8 = 104 positions)
+    # 
+    # Expected behavior with search widths [13, 8]:
+    # - 13 policy requests collected for depth 1
+    # - 13 × 8 = 104 policy requests collected for depth 2  
+    # - Tree should have 1 + 13 + 104 = 118 total positions
+    # 
+    # This bug significantly reduces search quality and explains the unexpectedly fast performance.
+    # The tree search is effectively only doing 1-ply lookahead instead of 2-ply.
+    
+    # Depth accounting: verify expected breadth per depth
+    exp = expected_nodes_by_depth(widths)
+    act = [tree_analysis.get(f'depth_{d}', 0) for d in range(len(exp))]
+    logger.info(f"🔍 TREE STATS: expected nodes by depth: {exp}")
+    logger.info(f"🔍 TREE STATS: actual nodes by depth:   {act}")
+
+    # If depth under-explored:
+    for d in range(1, len(exp)):  # ignore root
+        if act[d] < (0.9 * exp[d]):  # threshold configurable
+            logger.warning(
+                f"🔍 TREE SEARCH WARNING: depth {d} has {act[d]} nodes; expected ~{exp[d]}"
+            )
+    
+    # Additional debugging: Check if the tree is actually being built to depth 2
+    if tree_analysis['depth_2'] == 0 and len(widths) > 1:
+        logger.warning(f"🔍 TREE SEARCH WARNING: Tree has 0 positions at depth 2, but search widths {widths} should explore depth 2")
+        logger.warning(f"🔍 TREE SEARCH WARNING: This suggests the tree building is not working correctly")
+    
     # STEP 4: Evaluate all leaf nodes from the root player's perspective
     # This is also batched for efficiency
+    if verbose >= 1:
+        logger.info(f"🔍 LEAF EVALUATION DEBUG: Starting leaf node evaluation")
     evaluate_leaf_nodes([root], model, batch_size, state.current_player_enum)
+    if verbose >= 1:
+        logger.info(f"🔍 LEAF EVALUATION DEBUG: Completed leaf node evaluation")
     
     # STEP 5: Backup values to root (temperature already applied during move sampling)
     root_value = minimax_backup(root)
@@ -840,7 +1008,96 @@ def minimax_policy_value_search_with_batching(
     if verbose >= 2:
         logger.info(f"Batched search complete: best move = {root.best_move}, value = {root_value}")
     
+    # Create search statistics
+    search_stats = {
+        'policy_items_processed': collector.policy_items_processed,
+        'policy_batches_processed': collector.policy_batches_processed,
+        'policy_nn_time': collector.eval_time_sec,
+        'policy_total_time': t1_all - t0_all,
+        'avg_policy_batch': collector.policy_items_processed / max(1, collector.policy_batches_processed),
+        'total_positions': total_positions,
+        'tree_analysis': tree_analysis
+    }
+    
     if return_tree:
-        return root.best_move, root_value, root
+        return root.best_move, root_value, root, search_stats
     else:
-        return root.best_move, root_value 
+        return root.best_move, root_value, None, search_stats 
+
+
+def test_iterative_batching_sanity():
+    """
+    Quick sanity test for iterative batching.
+    
+    This test verifies that:
+    1. The tree is built to the expected depth
+    2. The correct number of policy evaluations are performed
+    3. The iterative batching works correctly
+    
+    Expected with widths=[13,8]:
+    - 1 root node (depth 0)
+    - 13 children at depth 1
+    - 13*8 = 104 grandchildren at depth 2
+    - Total: 1 + 13 + 104 = 118 policy evaluations
+    """
+    from hex_ai.inference.simple_model_inference import SimpleModelInference
+    from hex_ai.training_utils import get_device
+    
+    print("Testing iterative batching sanity...")
+    
+    # Create a simple model (you'll need to provide a valid model path)
+    try:
+        model = SimpleModelInference("checkpoints/hyperparameter_tuning/pipeline_20250805_162626/pipeline_sweep_exp0__99914b_20250805_162626/epoch4_mini32.pt.gz", device=get_device())
+    except Exception as e:
+        print(f"Could not load model: {e}")
+        print("Skipping iterative batching test")
+        return
+    
+    # Create test state
+    state = HexGameState()
+    widths = [13, 8]
+    
+    # Run search
+    best_move, best_value, _, search_stats = minimax_policy_value_search_with_batching(
+        state=state,
+        model=model,
+        widths=widths,
+        temperature=1.0,
+        verbose=2
+    )
+    
+    # Verify results
+    expected_policy_evals = 1 + 13  # root + depth1 (depth2 nodes are leaves, no policy needed)
+    actual_policy_evals = search_stats['policy_items_processed']
+    
+    print(f"Expected policy evaluations: {expected_policy_evals}")
+    print(f"Actual policy evaluations: {actual_policy_evals}")
+    print(f"Policy evaluations match: {actual_policy_evals == expected_policy_evals}")
+    
+    # Check depth exploration
+    tree_analysis = search_stats['tree_analysis']
+    depth_2_count = tree_analysis.get('depth_2', 0)
+    expected_depth_2 = 13 * 8
+    
+    print(f"Expected depth 2 nodes: {expected_depth_2}")
+    print(f"Actual depth 2 nodes: {depth_2_count}")
+    print(f"Depth 2 exploration correct: {depth_2_count == expected_depth_2}")
+    
+    # Check that we have the right number of waves
+    expected_waves = 2  # wave 0: root, wave 1: depth1
+    actual_waves = search_stats['policy_batches_processed']
+    print(f"Expected waves: {expected_waves}")
+    print(f"Actual waves: {actual_waves}")
+    print(f"Wave count correct: {actual_waves == expected_waves}")
+    
+    if (actual_policy_evals == expected_policy_evals and 
+        depth_2_count == expected_depth_2 and 
+        actual_waves == expected_waves):
+        print("✅ Iterative batching sanity test PASSED")
+    else:
+        print("❌ Iterative batching sanity test FAILED")
+        print("This indicates the tree building is not working correctly")
+
+
+if __name__ == "__main__":
+    test_iterative_batching_sanity() 

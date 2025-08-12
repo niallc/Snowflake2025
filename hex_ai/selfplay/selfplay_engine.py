@@ -120,15 +120,32 @@ class SelfPlayEngine:
         """
         state = HexGameState()  # Always uses 13x13 board
         
+        if self.verbose >= 3:
+            print(f"🎮 SELF-PLAY: Starting new game with search widths {self.search_widths}")
+        
         while not state.game_over:
             # Use batched minimax search
-            move, minimax_value = minimax_policy_value_search_with_batching(
+            if self.verbose >= 3:
+                print(f"🎮 SELF-PLAY: Move {len(state.move_history)}, player {state.current_player}, legal moves: {len(state.get_legal_moves())}")
+            
+            move, minimax_value, _, search_stats = minimax_policy_value_search_with_batching(
                 state=state,
                 model=self.model,
                 widths=self.search_widths,
                 temperature=self.temperature,
                 verbose=self.verbose
             )
+            
+            if self.verbose >= 3:
+                print(f"🎮 SELF-PLAY: Selected move {move}, value {minimax_value:.4f}")
+            
+            # Log search statistics
+            if self.verbose >= 2:
+                print(
+                    f"[Move {len(state.move_history)}] evals: policy={search_stats['policy_items_processed']} "
+                    f"(waves={search_stats['policy_batches_processed']}, avg_batch={search_stats['avg_policy_batch']:.2f}, "
+                    f"nn_time={search_stats['policy_nn_time']:.4f}s, total_phase={search_stats['policy_total_time']:.4f}s)"
+                )
             
             # Apply move
             state = state.make_move(*move)
@@ -145,6 +162,9 @@ class SelfPlayEngine:
             'trmph': state.to_trmph(),
             'winner': winner_char
         }
+        
+        if self.verbose >= 3:
+            print(f"🎮 SELF-PLAY: Game complete, winner: {state.winner}, moves: {len(state.move_history)}")
         
         return game_data
 
