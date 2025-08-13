@@ -87,25 +87,20 @@ class BatchedEvaluator:
             True if request was queued successfully, False otherwise
         """
         with PERF.timer("evaluator.request"):
-            # Convert state to board tensor
+            # Convert state to board tensor (keep as torch tensor on CPU)
             board_tensor = state.get_board_tensor()
-            
-            # Convert tensor to numpy array for batch processor
             if not hasattr(board_tensor, 'cpu'):
                 raise ValueError(f"Expected PyTorch tensor from get_board_tensor(), got {type(board_tensor)}")
-            board_array = board_tensor.cpu().numpy()
-            
-            # Add evaluation metadata
+            board_tensor = board_tensor.detach().to('cpu', copy=True).contiguous()
+
+            # Minimal metadata; avoid heavy hashing
             if metadata is None:
                 metadata = {}
-            metadata.update({
-                'evaluator_timestamp': time.time(),
-                'state_hash': hash(str(state.board.tobytes()))
-            })
-            
-            # Request evaluation from batch processor
+            metadata.update({'evaluator_timestamp': time.time()})  # TODO: consider lightweight state hash if needed for debugging
+
+            # Request evaluation from batch processor (pass torch tensor)
             success = self.batch_processor.request_evaluation(
-                board_state=board_array,
+                board_state=board_tensor,
                 callback=callback,
                 metadata=metadata
             )

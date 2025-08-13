@@ -74,7 +74,7 @@ import math
 import threading
 import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
 import numpy as np
@@ -83,7 +83,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.batch_processor import BatchProcessor
 from hex_ai.inference.batched_evaluator import BatchedEvaluator
-from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
+from hex_ai.inference.mcts_config import BatchedMCTSOrchestration, MCTSCoreConfig
 from hex_ai.value_utils import policy_logits_to_probs, player_to_winner
 from hex_ai.config import BOARD_SIZE
 from hex_ai.enums import Player
@@ -238,38 +238,50 @@ class MCTSNodeManager:
 class BatchedNeuralMCTS:
     """Batched MCTS engine guided by a neural network."""
     
-    def __init__(self, model: SimpleModelInference, exploration_constant: float = 1.4, 
-                 win_value: float = 1.5, discount_factor: float = 0.98, 
-                 optimal_batch_size: int = 64, verbose: int = 0, selection_wait_ms: int = 500,
+    def __init__(self, model: SimpleModelInference,
+                 exploration_constant: float | None = None,
+                 win_value: float | None = None,
+                 discount_factor: float | None = None,
+                 optimal_batch_size: int | None = None,
+                 verbose: int = 0,
+                 selection_wait_ms: int | None = None,
                  orchestration: BatchedMCTSOrchestration | None = None):
         """
         Initialize the batched MCTS engine.
         
         Args:
             model: Neural network model for policy and value predictions
-            exploration_constant: PUCT exploration constant (default: 1.4)
-            win_value: Value assigned to winning terminal states (default: 1.5)
-            discount_factor: Discount factor for move count penalty (default: 0.98)
-            optimal_batch_size: Optimal batch size for neural network inference
+            exploration_constant: PUCT exploration constant. If None, uses MCTSCoreConfig.
+            win_value: Terminal state value magnitude. If None, uses MCTSCoreConfig.
+            discount_factor: Move-count penalty discount factor. If None, uses MCTSCoreConfig.
+            optimal_batch_size: NN inference target batch size. If None, uses orchestration default.
             verbose: Verbosity level (0=quiet, 1=basic, 2=detailed, 3=debug, 4=extreme debug)
+            selection_wait_ms: Optional readiness wait before selecting a move from root. If None, uses orchestration default.
+            orchestration: Orchestration parameters for batching/scheduling. If None, uses BatchedMCTSOrchestration defaults.
         """
         self.model = model
-        self.exploration_constant = exploration_constant
-        self.win_value = win_value
-        self.discount_factor = discount_factor
-        self.optimal_batch_size = optimal_batch_size
+        # Resolve algorithm defaults from centralized config
+        core_cfg = MCTSCoreConfig()
+        self.exploration_constant = core_cfg.exploration_constant if exploration_constant is None else exploration_constant
+        self.win_value = core_cfg.win_value if win_value is None else win_value
+        self.discount_factor = core_cfg.discount_factor if discount_factor is None else discount_factor
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
         # Orchestration configuration
         if orchestration is None:
-            # Respect dataclass defaults; only align a couple of constructor-specified knobs
             self.orchestration = BatchedMCTSOrchestration()
-            # Keep caller-provided optimal_batch_size and selection_wait_ms without
-            # overriding other defaults like evaluator_max_wait_ms
-            self.orchestration.optimal_batch_size = optimal_batch_size
-            self.orchestration.selection_wait_ms = selection_wait_ms
         else:
             self.orchestration = orchestration
+        # Apply optional overrides immutably to avoid mutating caller-provided objects
+        if (optimal_batch_size is not None) or (selection_wait_ms is not None):
+            override_kwargs: dict[str, int | float] = {}
+            if optimal_batch_size is not None:
+                override_kwargs['optimal_batch_size'] = int(optimal_batch_size)
+            if selection_wait_ms is not None:
+                override_kwargs['selection_wait_ms'] = int(selection_wait_ms)
+            self.orchestration = replace(self.orchestration, **override_kwargs)
+        # Mirror commonly used orchestration fields to instance attributes
+        self.optimal_batch_size = self.orchestration.optimal_batch_size
         self.selection_wait_ms = self.orchestration.selection_wait_ms
         self.max_inflight = self.orchestration.max_inflight
         self.batch_wait_s = self.orchestration.batch_wait_s
@@ -308,8 +320,8 @@ class BatchedNeuralMCTS:
         }
         
         self.logger.info(
-            f"Initialized BatchedNeuralMCTS with exploration_constant={exploration_constant}, "
-            f"win_value={win_value}, discount_factor={discount_factor}, "
+            f"Initialized BatchedNeuralMCTS with exploration_constant={self.exploration_constant}, "
+            f"win_value={self.win_value}, discount_factor={self.discount_factor}, "
             f"optimal_batch_size={self.orchestration.optimal_batch_size}, selection_wait_ms={self.selection_wait_ms}"
         )
         # Log orchestration settings explicitly for diagnostics
@@ -417,27 +429,29 @@ class BatchedNeuralMCTS:
                         last_progress_time = now
 
                 # Proactively process pending evaluations with coalescing policy
-                try:
-                    queue_size = self.evaluator.get_queue_size()
-                    # Only force if queue is at least the configured minimum AND
-                    # we have respected the minimum wait since the last forced call.
-                    now_ts = time.time()
-                    waited_ms_since_force = (now_ts - self._last_force_ts) * 1000.0
-                    should_force = (
-                        queue_size >= self.min_batch_before_force and
-                        waited_ms_since_force >= float(self.min_wait_before_force_ms)
-                    )
-                    if should_force:
-                        self.evaluator.process_pending_evaluations(force=True)
-                        # Drain queued expansions outside nn.* timers
-                        self._process_queued_evaluations()
-                        self._last_force_ts = now_ts
-                    else:
-                        # Let background coalescing drive timing; only non-forced processing here
+                queue_size = self.evaluator.get_queue_size()
+                # Only force if queue is at least the configured minimum AND
+                # we have respected the minimum wait since the last forced call.
+                now_ts = time.time()
+                waited_ms_since_force = (now_ts - self._last_force_ts) * 1000.0
+                should_force = (
+                    queue_size >= self.min_batch_before_force and
+                    waited_ms_since_force >= float(self.min_wait_before_force_ms)
+                )
+                if should_force:
+                    self.evaluator.process_pending_evaluations(force=True)
+                    # Drain queued expansions outside nn.* timers
+                    self._process_queued_evaluations()
+                    self._last_force_ts = now_ts
+                else:
+                    # Throttle non-forced processing: only allow if last non-forced call was sufficiently long ago
+                    last_non_forced = getattr(self, "_last_non_forced_ts", 0.0)
+                    waited_ms_since_non_forced = (now_ts - last_non_forced) * 1000.0
+                    min_interval_ms = float(getattr(self.orchestration, "evaluator_max_wait_ms", 100))
+                    if waited_ms_since_non_forced >= min_interval_ms:
                         self.evaluator.process_pending_evaluations(force=False)
                         self._process_queued_evaluations()
-                except Exception:
-                    pass
+                        self._last_non_forced_ts = now_ts
                 with self._cv:
                     if self._completed < target:
                         self._cv.wait(timeout=self.batch_wait_s)
@@ -489,16 +503,17 @@ class BatchedNeuralMCTS:
             self.logger.info(
                 f"NN_EVAL_SUMMARY boards={boards_evaluated} batches={self.stats['total_batches_processed']} avg_batch={avg_bs:.2f} nn_time_s={nn_total_time:.4f}"
             )
-            # Batch histogram and trigger reasons if available
-            try:
-                bp_hist = bp_stats.get('batch_sizes', [])
-                bp_trig = bp_stats.get('batch_trigger_reasons', {})
-                if bp_hist:
-                    self.logger.info(f"BATCH_HIST sizes={bp_hist}")
-                if bp_trig:
-                    self.logger.info(f"BATCH_TRIGGERS {bp_trig}")
-            except Exception:
-                pass
+            # Batch histogram and trigger reasons if available (noisy; only at very high verbosity)
+            if self.verbose >= 5:
+                try:
+                    bp_hist = bp_stats.get('batch_sizes', [])
+                    bp_trig = bp_stats.get('batch_trigger_reasons', {})
+                    if bp_hist:
+                        self.logger.info(f"BATCH_HIST sizes={bp_hist}")
+                    if bp_trig:
+                        self.logger.info(f"BATCH_TRIGGERS {bp_trig}")
+                except Exception:
+                    pass
             # Optional detailed timer aggregates if available
             # If we later expose aggregate timers, add them here as NN_TIMERS_SUMMARY
         
@@ -613,37 +628,60 @@ class BatchedNeuralMCTS:
         
         PUCT formula: Q(s,a) + C * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
         """
-        if not node.children:
-            raise ValueError("Cannot select child from node with no children")
+        # With lazy child creation we may have no materialized children yet.
+        # Require policy_priors to be present (node must be EXPANDED).
+        if not node.policy_priors:
+            raise ValueError("Cannot select child: node has no policy_priors (not expanded)")
         
         best_score = -float('inf')
         best_child = None
 
-        for move, child_node in list(node.children.items()):
-            # Note: child_node.mean_value is from the perspective of the player who made the move.
-            # We must negate it to get the value from the current node's (parent's) perspective.
-            q_value = -child_node.mean_value 
-            
-            prior = node.policy_priors[move]
-            
-            # Apply virtual loss penalty for pending evaluations
-            effective_visits = child_node.visits + child_node.virtual_loss
+        # Iterate over priors (virtual children allowed)
+        best_move = None
+        for move, prior in node.policy_priors.items():
+            child_node = node.children.get(move)
+            if child_node is None:
+                # Virtual child: no visits/value yet
+                q_value = 0.0
+                effective_visits = 0
+                virtual_loss = 0
+            else:
+                # Note: child_node.mean_value is from the perspective of the player who made the move.
+                # We must negate it to get the value from the current node's (parent's) perspective.
+                q_value = -child_node.mean_value
+                effective_visits = child_node.visits + child_node.virtual_loss
+                virtual_loss = child_node.virtual_loss
+
             ucb_component = self.exploration_constant * prior * (math.sqrt(node.visits) / (1 + effective_visits))
-            
             puct_score = q_value + ucb_component
-            
+
             if self.verbose >= 4:
                 self.logger.debug(
                     f"PUCT scores - Move {move}: Q={q_value:.4f}, prior={prior:.4f}, "
-                    f"UCB={ucb_component:.4f}, virtual_loss={child_node.virtual_loss}, total={puct_score:.4f}"
+                    f"UCB={ucb_component:.4f}, virtual_loss={virtual_loss}, total={puct_score:.4f}"
                 )
-            
+
             if puct_score > best_score:
                 best_score = puct_score
                 best_child = child_node
+                best_move = move
                 
         if best_child is None:
-            raise ValueError("No child selected - this should not happen")
+            # Materialize the best move as a new child
+            if best_move is None:
+                raise ValueError("No child selected - missing best_move despite priors")
+            move = best_move
+            try:
+                node.state.apply_move(*move)
+                child = self.node_manager.create_child_node(
+                    parent=node,
+                    move=move,
+                    state=node.state.fast_copy()
+                )
+            finally:
+                node.state.undo_last()
+            node.children[move] = child
+            best_child = child
             
         return best_child
 
@@ -738,24 +776,8 @@ class BatchedNeuralMCTS:
         
         if self.verbose >= 2:
             self.logger.debug(f"Policy priors: {len(node.policy_priors)} moves")
-        
-        # Create child nodes for all legal moves using apply/undo pattern
-        t_child0 = perf_counter()
-        for move, prior in node.policy_priors.items():
-            try:
-                # Apply move to current state
-                node.state.apply_move(*move)
-                
-                # Create child node with the modified state
-                node.children[move] = self.node_manager.create_child_node(
-                    parent=node,
-                    move=move,
-                    state=node.state.fast_copy()
-                )
-            finally:
-                # Always restore state, even if exception occurs
-                node.state.undo_last()
-        t_child1 = perf_counter()
+        # Lazy child creation: do not instantiate children here
+        t_child0 = perf_counter(); t_child1 = t_child0
         
         if self.verbose >= 2:
             self.logger.debug(f"Created {len(node.children)} child nodes")

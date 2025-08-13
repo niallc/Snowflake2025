@@ -461,10 +461,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             }
         
         # Create batched MCTS engine for improved performance
+        # Leave batch/orchestration defaults to config unless explicitly provided
         mcts = BatchedNeuralMCTS(
             model=model,
             exploration_constant=exploration_constant,
-            optimal_batch_size=64,  # Retained for explicit constructor default; orchestration overrides if provided
             verbose=verbose,
             orchestration=orchestration_overrides,
         )
@@ -1009,7 +1009,7 @@ def api_move():
     verbose = data.get("verbose", 1)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     # MCTS parameters
-    use_mcts = data.get("use_mcts", False)
+    use_mcts = data.get("use_mcts", True)
     num_simulations = data.get("num_simulations", 200)
     exploration_constant = data.get("exploration_constant", 1.4)
     

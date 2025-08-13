@@ -375,27 +375,40 @@ class BatchProcessor:
         callbacks = [req.callback for req in self.request_queue]
         metadata_list = [req.metadata for req in self.request_queue]
         
+        # Normalize inputs to numpy arrays for SimpleModelInference (without extra copies)
+        norm_boards = []
+        for b in boards:
+            if hasattr(b, 'numpy'):
+                norm_boards.append(b.numpy())
+            else:
+                norm_boards.append(b)
+
         # Process batch with performance monitoring
         with PERF.timer("nn.infer"):
             try:
                 if self.verbose >= 2:
-                    logger.debug(f"Calling model.batch_infer with {len(boards)} boards")
+                    logger.debug(f"Calling model.batch_infer with {len(norm_boards)} boards")
                 # Time just the model call
                 with PERF.timer("nn.batch_infer"):
-                    policies, values = self.model.batch_infer(boards)
+                    policies, values = self.model.batch_infer(norm_boards)
 
                 if self.verbose >= 2:
                     logger.debug(f"Model returned {len(policies)} policies and {len(values)} values")
 
                 # Validate results
-                if len(policies) != len(values) or len(policies) != len(boards):
-                    raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(boards)} boards")
+                if len(policies) != len(values) or len(policies) != len(norm_boards):
+                    raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(norm_boards)} boards")
 
                 # Distribute results and update cache separately
                 with PERF.timer("nn.callbacks"):
-                    for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
+                    for i, (board, policy, value, callback) in enumerate(zip(norm_boards, policies, values, callbacks)):
                         # Store in cache
-                        cache_key = board.tobytes()
+                        # Build cache key with minimal copies
+                        if hasattr(board, 'numpy'):
+                            # Torch tensor (CPU)
+                            cache_key = memoryview(board.numpy()).tobytes()
+                        else:
+                            cache_key = board.tobytes()
                         t_c0 = perf_counter()
                         self.result_cache[cache_key] = (policy, value)
                         t_c1 = perf_counter()

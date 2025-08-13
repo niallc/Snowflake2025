@@ -406,10 +406,6 @@ class SimpleModelInference:
                 
                 all_policies.extend(batch_policies)
                 all_values.extend(batch_values)
-                
-                # Clear GPU cache if needed
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
             
             # Store results and update cache
             for idx, board, policy, value in zip(uncached_indices, uncached_boards, all_policies, all_values):
