@@ -28,16 +28,18 @@ class PositionCollector:
     
     This class is designed to be used in a single-threaded context where:
     1. Multiple positions are collected during tree building
-    2. All positions are processed in a single batch inference call
+    2. All positions are processed in iterative batches (waves)
     3. Results are distributed back to the appropriate callbacks
     
     HOW IT WORKS:
     1. During tree building, instead of immediately calling model.infer() for each position,
        we collect the board and a callback function using request_policy()
-    2. After the entire tree is built, we call process_batches() which:
-       - Groups all policy requests into a single batch
-       - Calls model.batch_infer() once for all requests
+    2. After the tree structure is built, we call process_batches() iteratively which:
+       - Processes current wave of policy requests in batches
+       - Calls model.batch_infer() for the current wave
        - Calls the appropriate callback for each result
+       - New requests from callbacks are queued for the next wave
+    3. This continues until no more requests are pending (iterative batching)
     
     BENEFITS:
     - Reduces GPU kernel launches from O(n) to O(1) where n is the number of positions
@@ -53,8 +55,9 @@ class PositionCollector:
         collector = PositionCollector(model)
         # Build tree while collecting requests
         root = build_search_tree_with_collection(state, model, widths, collector)
-        # Process all collected requests in batches
-        collector.process_batches()
+        # Process all collected requests in iterative batches
+        while collector.has_pending_requests():
+            collector.process_batches()
     """
     
     def __init__(self, model, verbose: int = 0):
@@ -657,7 +660,12 @@ def evaluate_leaf_nodes(
     for i in range(0, len(boards), batch_size):
         batch = boards[i:i+batch_size]
         # Use efficient batch inference instead of individual calls
+        t0 = time.perf_counter()
         _, batch_values = model.batch_infer(batch)
+        t1 = time.perf_counter()
+        logger.info(
+            f"NN_BATCH values batch_index={i // batch_size} size={len(batch)} wall_ms={(t1 - t0)*1e3:.2f}"
+        )
         
         # DEBUG: Analyze the returned values to verify they're real
         if len(batch_values) > 0:
@@ -801,21 +809,10 @@ def minimax_policy_value_search(
     if verbose >= 2:
         logger.info(f"Search complete: best move = {root.best_move}, value = {root_value}")
     
-    # Create search statistics
-    search_stats = {
-        'policy_items_processed': collector.policy_items_processed,
-        'policy_batches_processed': collector.policy_batches_processed,
-        'policy_nn_time': collector.eval_time_sec,
-        'policy_total_time': t1_all - t0_all,
-        'avg_policy_batch': collector.policy_items_processed / max(1, collector.policy_batches_processed),
-        'total_positions': total_positions,
-        'tree_analysis': tree_analysis
-    }
-    
     if return_tree:
-        return root.best_move, root_value, root, search_stats
+        return root.best_move, root_value, root
     else:
-        return root.best_move, root_value, None, search_stats
+        return root.best_move, root_value
 
 
 def minimax_policy_value_search_with_batching(
@@ -839,14 +836,15 @@ def minimax_policy_value_search_with_batching(
     BATCHING WORKFLOW:
     1. Create PositionCollector to manage deferred inference requests
     2. Build search tree structure while collecting all policy requests
-    3. Process all collected policy requests in a single batch call
+    3. Process all collected policy requests in iterative batches (waves)
     4. Evaluate leaf nodes (also batched)
     5. Perform minimax backup to compute final values
 
     PERFORMANCE BENEFITS:
-    - Tree building: O(n) individual calls → O(1) batched calls
+    - Tree building: O(n) individual calls → O(waves) batched calls
     - Leaf evaluation: Already batched in evaluate_leaf_nodes()
-    - Total inference calls: O(n) → O(1) for policy + O(1) for values
+    - Total inference calls: O(n) → O(waves) for policy + O(1) for values
+    - Iterative batching ensures all depths are properly explored
     
     VALIDATION:
     - Each position request includes metadata for validation
@@ -959,22 +957,7 @@ def minimax_policy_value_search_with_batching(
     total_positions = count_positions(root)
     tree_analysis = analyze_tree_structure(root)
     
-    # TODO: CRITICAL BUG - Tree building is only going to depth 1 instead of depth 2
-    # The issue is that when build_node() is called recursively inside the callback, 
-    # the child nodes are not registering their own policy requests for depth 2.
-    # 
-    # Current behavior:
-    # - Only 1 policy request collected per move (should be 13)
-    # - Tree has 14 positions total (1 root + 13 children at depth 1)
-    # - 0 positions at depth 2 (should be 13 × 8 = 104 positions)
-    # 
-    # Expected behavior with search widths [13, 8]:
-    # - 13 policy requests collected for depth 1
-    # - 13 × 8 = 104 policy requests collected for depth 2  
-    # - Tree should have 1 + 13 + 104 = 118 total positions
-    # 
-    # This bug significantly reduces search quality and explains the unexpectedly fast performance.
-    # The tree search is effectively only doing 1-ply lookahead instead of 2-ply.
+
     
     # Depth accounting: verify expected breadth per depth
     exp = expected_nodes_by_depth(widths)

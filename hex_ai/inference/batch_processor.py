@@ -368,44 +368,44 @@ class BatchProcessor:
             try:
                 if self.verbose >= 2:
                     logger.debug(f"Calling model.batch_infer with {len(boards)} boards")
-                policies, values = self.model.batch_infer(boards)
-                
+                # Time just the model call
+                with PERF.timer("nn.batch_infer"):
+                    policies, values = self.model.batch_infer(boards)
+
                 if self.verbose >= 2:
                     logger.debug(f"Model returned {len(policies)} policies and {len(values)} values")
-                
+
                 # Validate results
                 if len(policies) != len(values) or len(policies) != len(boards):
                     raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(boards)} boards")
-                
-                # Distribute results and update cache
-                for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
-                    # Store in cache
-                    cache_key = board.tobytes()
-                    self.result_cache[cache_key] = (policy, value)
-                    
-                    # Call callback - execute in main thread to avoid threading issues
-                    try:
-                        if self.verbose >= 2:
-                            logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
-                        
-                        # Execute callback in main thread context
-                        # Note: This is safe because the callback is designed to be thread-safe
-                        # and only modifies the MCTS tree structure
-                        callback(policy, value)
-                        
-                        if self.verbose >= 2:
-                            logger.debug(f"Callback {i} completed successfully")
-                    except Exception as e:
-                        logger.error(f"Callback error for request {i}: {e}")
-                        import traceback
-                        logger.error(f"Callback traceback: {traceback.format_exc()}")
-                        if metadata_list[i]:
-                            logger.error(f"Request metadata: {metadata_list[i]}")
-                
+
+                # Distribute results and update cache separately
+                with PERF.timer("nn.callbacks"):
+                    for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
+                        # Store in cache
+                        cache_key = board.tobytes()
+                        self.result_cache[cache_key] = (policy, value)
+
+                        # Call callback - execute in main thread to avoid threading issues
+                        try:
+                            if self.verbose >= 2:
+                                logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
+
+                            callback(policy, value)
+
+                            if self.verbose >= 2:
+                                logger.debug(f"Callback {i} completed successfully")
+                        except Exception as e:
+                            logger.error(f"Callback error for request {i}: {e}")
+                            import traceback
+                            logger.error(f"Callback traceback: {traceback.format_exc()}")
+                            if metadata_list[i]:
+                                logger.error(f"Request metadata: {metadata_list[i]}")
+
                 # Update performance statistics
                 PERF.inc("nn.batch")
                 PERF.add_sample("nn.batch_size", len(boards))
-                
+
             except Exception as e:
                 logger.error(f"Batch inference failed: {e}")
                 import traceback

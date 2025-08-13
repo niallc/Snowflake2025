@@ -144,6 +144,18 @@ class TwoHeadedResNet(nn.Module):
                 nn.init.xavier_normal_(m.weight)
                 nn.init.constant_(m.bias, 0)
     
+    def forward_shared(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the shared trunk up to the penultimate representation."""
+        x = F.relu(self.input_bn(self.input_conv(x)))
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        return x
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through the two-headed ResNet.
@@ -156,25 +168,18 @@ class TwoHeadedResNet(nn.Module):
             - policy_logits: Shape (batch_size, 169)
             - value_logit: Shape (batch_size, 1) - Raw logit for Red's win probability
         """
-        # Input convolution
-        x = F.relu(self.input_bn(self.input_conv(x)))
-        
-        # ResNet body
-        x = self.layer1(x)  # (batch_size, 64, 13, 13)
-        x = self.layer2(x)  # (batch_size, 128, 7, 7)
-        x = self.layer3(x)  # (batch_size, 256, 4, 4)
-        x = self.layer4(x)  # (batch_size, 512, 2, 2)
-        
-        # Global average pooling
-        x = self.global_pool(x)  # (batch_size, 512, 1, 1)
-        x = x.view(x.size(0), -1)  # (batch_size, 512)
-        # Dropout
-        x = self.dropout(x)
+        x = self.forward_shared(x)
         # Policy head
         policy_logits = self.policy_head(x)  # (batch_size, 169)
         # Value head
         value_logit = self.value_head(x)  # (batch_size, 1)
         return policy_logits, value_logit
+
+    @torch.no_grad()
+    def forward_value_only(self, x: torch.Tensor) -> torch.Tensor:
+        """Value-only inference path for faster leaf evaluation."""
+        x = self.forward_shared(x)
+        return self.value_head(x)
 
 
 def create_model(model_type: str = "resnet18") -> TwoHeadedResNet:

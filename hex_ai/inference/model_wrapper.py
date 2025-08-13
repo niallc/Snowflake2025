@@ -2,6 +2,7 @@ import gzip
 import os
 import torch
 import logging
+import time
 from hex_ai.models import create_model
 from typing import Optional, Tuple, List, Union
 from hex_ai.training_utils import get_device

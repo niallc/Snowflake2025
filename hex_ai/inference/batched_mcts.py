@@ -463,6 +463,10 @@ class BatchedNeuralMCTS:
         self.stats['total_batches_processed'] = int(bp_stats.get('total_batches_processed', 0))
         avg_bs = float(bp_stats.get('average_batch_size', 0.0))
         cache_hit_rate = float(evaluator_stats.get('cache_hit_rate', 0.0))
+        # Additional comparable metrics to fixed-tree EVAL SUMMARY
+        boards_evaluated = int(bp_stats.get('total_inferences', 0))
+        nn_total_time = float(bp_stats.get('total_time', 0.0))
+        nn_infer_ms = nn_batch_infer_ms = nn_callbacks_ms = None
 
         if self.verbose >= 1:
             sims_per_sec = self.stats['total_simulations'] / total_time if total_time > 0 else 0.0
@@ -473,6 +477,12 @@ class BatchedNeuralMCTS:
             self.logger.info(f"Total batches processed: {self.stats['total_batches_processed']}")
             self.logger.info(f"Cache hit rate: {cache_hit_rate:.1%}")
             self.logger.info(f"Average batch size: {avg_bs:.1f}")
+            # Fixed-tree comparable summary line
+            self.logger.info(
+                f"NN_EVAL_SUMMARY boards={boards_evaluated} batches={self.stats['total_batches_processed']} avg_batch={avg_bs:.2f} nn_time_s={nn_total_time:.4f}"
+            )
+            # Optional detailed timer aggregates if available
+            # If we later expose aggregate timers, add them here as NN_TIMERS_SUMMARY
         
         # More detailed summary for higher verbosity
         if self.verbose >= 2:
