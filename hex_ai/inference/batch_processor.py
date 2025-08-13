@@ -6,6 +6,7 @@ for MCTS search, enabling significant performance improvements through GPU batch
 """
 
 import time
+from time import perf_counter
 import logging
 import threading
 from typing import Dict, List, Optional, Tuple, Any, Callable
@@ -94,7 +95,10 @@ class BatchProcessor:
             'total_time': 0.0,
             'average_batch_size': 0.0,
             'batch_processing_times': [],
-            'gpu_memory_samples': []
+            'gpu_memory_samples': [],
+            # New: batch introspection
+            'batch_sizes': [],
+            'batch_trigger_reasons': {'size': 0, 'timeout': 0, 'force': 0}
         }
         
         logger.info(f"BatchProcessor initialized with optimal_batch_size={optimal_batch_size}, "
@@ -259,7 +263,8 @@ class BatchProcessor:
                     if should_process:
                         if self.verbose >= 2:
                             logger.debug(f"Background worker processing batch of {queue_size} requests")
-                        result = self._process_batch_internal(force=queue_size < self.optimal_batch_size)
+                        trigger_reason = 'size' if queue_size >= self.optimal_batch_size else 'timeout'
+                        result = self._process_batch_internal(force=False, trigger_reason=trigger_reason)
                         if self.verbose >= 2:
                             logger.debug(f"Background worker processed {result} requests")
                 
@@ -318,13 +323,13 @@ class BatchProcessor:
             with self.processing_lock:
                 if self.verbose >= 2 and force:
                     logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
-                return self._process_batch_internal(force)
+                return self._process_batch_internal(force, trigger_reason='force' if force else 'timeout')
         else:
             if self.verbose >= 2 and force:
                 logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
-            return self._process_batch_internal(force)
+            return self._process_batch_internal(force, trigger_reason='force' if force else 'timeout')
     
-    def _process_batch_internal(self, force: bool = False) -> int:
+    def _process_batch_internal(self, force: bool = False, trigger_reason: str = 'timeout') -> int:
         """
         Internal batch processing method (thread-safe when called with lock).
         
@@ -340,9 +345,16 @@ class BatchProcessor:
         # Determine batch size
         batch_size = len(self.request_queue)
         if not force and batch_size < self.optimal_batch_size:
-            if self.verbose >= 3:
-                logger.debug(f"Batch too small ({batch_size} < {self.optimal_batch_size}), waiting for more requests")
-            return 0  # Wait for more requests
+            # Allow foreground processing on timeout as well
+            if trigger_reason == 'timeout' and self._should_process_small_batch():
+                if self.verbose >= 2:
+                    logger.debug(
+                        f"Processing small batch due to timeout: size={batch_size}, max_wait_ms={self.max_wait_ms}"
+                    )
+            else:
+                if self.verbose >= 3:
+                    logger.debug(f"Batch too small ({batch_size} < {self.optimal_batch_size}), waiting for more requests")
+                return 0  # Wait for more requests
         
         start_time = time.time()
         
@@ -384,14 +396,20 @@ class BatchProcessor:
                     for i, (board, policy, value, callback) in enumerate(zip(boards, policies, values, callbacks)):
                         # Store in cache
                         cache_key = board.tobytes()
+                        t_c0 = perf_counter()
                         self.result_cache[cache_key] = (policy, value)
+                        t_c1 = perf_counter()
+                        PERF.add_sample('nn.cache_write', (t_c1 - t_c0))
 
                         # Call callback - execute in main thread to avoid threading issues
                         try:
                             if self.verbose >= 2:
                                 logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
 
+                            t_cb0 = perf_counter()
                             callback(policy, value)
+                            t_cb1 = perf_counter()
+                            PERF.add_sample('nn.user_callback', (t_cb1 - t_cb0))
 
                             if self.verbose >= 2:
                                 logger.debug(f"Callback {i} completed successfully")
@@ -436,6 +454,14 @@ class BatchProcessor:
             })
         
         processed_count = len(boards)
+
+        # Record batch introspection
+        try:
+            self.stats['batch_sizes'].append(processed_count)
+            if trigger_reason in self.stats['batch_trigger_reasons']:
+                self.stats['batch_trigger_reasons'][trigger_reason] += 1
+        except Exception:
+            pass
         
         # Rate-limited logging for batch completion
         if self.verbose >= 1 and should_log:

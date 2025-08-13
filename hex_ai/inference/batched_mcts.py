@@ -294,6 +294,9 @@ class BatchedNeuralMCTS:
         
         # Initialize node manager for better separation of concerns
         self.node_manager = MCTSNodeManager(verbose=verbose)
+        # Queue for deferring heavy expansion/backprop outside of nn.* timers
+        self._queued_eval_results: list[tuple[int, np.ndarray, float]] = []
+        self._queue_lock = threading.Lock()
         
         # Statistics tracking
         self.stats = {
@@ -426,10 +429,13 @@ class BatchedNeuralMCTS:
                     )
                     if should_force:
                         self.evaluator.process_pending_evaluations(force=True)
+                        # Drain queued expansions outside nn.* timers
+                        self._process_queued_evaluations()
                         self._last_force_ts = now_ts
                     else:
                         # Let background coalescing drive timing; only non-forced processing here
                         self.evaluator.process_pending_evaluations(force=False)
+                        self._process_queued_evaluations()
                 except Exception:
                     pass
                 with self._cv:
@@ -445,6 +451,8 @@ class BatchedNeuralMCTS:
             self.evaluator.process_all()
         except Exception:
             pass
+        # Final drain of queued expansions
+        self._process_queued_evaluations()
 
         # End timing and pull stats
         self.stats['end_time'] = time.time()
@@ -481,6 +489,16 @@ class BatchedNeuralMCTS:
             self.logger.info(
                 f"NN_EVAL_SUMMARY boards={boards_evaluated} batches={self.stats['total_batches_processed']} avg_batch={avg_bs:.2f} nn_time_s={nn_total_time:.4f}"
             )
+            # Batch histogram and trigger reasons if available
+            try:
+                bp_hist = bp_stats.get('batch_sizes', [])
+                bp_trig = bp_stats.get('batch_trigger_reasons', {})
+                if bp_hist:
+                    self.logger.info(f"BATCH_HIST sizes={bp_hist}")
+                if bp_trig:
+                    self.logger.info(f"BATCH_TRIGGERS {bp_trig}")
+            except Exception:
+                pass
             # Optional detailed timer aggregates if available
             # If we later expose aggregate timers, add them here as NN_TIMERS_SUMMARY
         
@@ -505,6 +523,25 @@ class BatchedNeuralMCTS:
         PERF.log_snapshot(clear=True, force=True)
         
         return root
+
+    def _enqueue_evaluation_result(self, node_id: int, policy_logits: np.ndarray, value: float) -> None:
+        """Lightweight callback: queue the result for processing later."""
+        with self._queue_lock:
+            self._queued_eval_results.append((node_id, policy_logits, value))
+
+    def _process_queued_evaluations(self) -> None:
+        """Process any queued evaluation results outside of nn.* timers."""
+        pending: list[tuple[int, np.ndarray, float]]
+        with self._queue_lock:
+            if not self._queued_eval_results:
+                return
+            pending = self._queued_eval_results
+            self._queued_eval_results = []
+        for node_id, policy_logits, value in pending:
+            try:
+                self._handle_evaluation_result(node_id, policy_logits, value)
+            except Exception as e:
+                self.logger.error(f"Deferred evaluation processing failed for node {node_id}: {e}")
 
     def _execute_selection_phase(self, root: BatchedMCTSNode) -> BatchedMCTSNode:
         """
@@ -652,7 +689,7 @@ class BatchedNeuralMCTS:
             node_id = self._get_node_id(node)
             self.evaluator.request_evaluation(
                 state=node.state,
-                callback=lambda policy_logits, value: self._handle_evaluation_result(node_id, policy_logits, value),
+                callback=lambda policy_logits, value: self._enqueue_evaluation_result(node_id, policy_logits, value),
                 metadata={'node_depth': node_depth, 'simulation_id': simulation_id}
             )
             
@@ -688,16 +725,22 @@ class BatchedNeuralMCTS:
             self.logger.debug(f"Evaluation callback received for node at depth {node.get_depth()}, value={value:.4f}")
         
         # Apply softmax and filter for legal moves
+        from time import perf_counter
+        t_legal0 = perf_counter()
         legal_moves = node.state.get_legal_moves()
+        t_legal1 = perf_counter()
         if self.verbose >= 2:
             self.logger.debug(f"Legal moves: {len(legal_moves)}")
         
+        t_priors0 = perf_counter()
         node.policy_priors = self._get_priors_for_legal_moves(policy_logits, legal_moves)
+        t_priors1 = perf_counter()
         
         if self.verbose >= 2:
             self.logger.debug(f"Policy priors: {len(node.policy_priors)} moves")
         
         # Create child nodes for all legal moves using apply/undo pattern
+        t_child0 = perf_counter()
         for move, prior in node.policy_priors.items():
             try:
                 # Apply move to current state
@@ -712,6 +755,7 @@ class BatchedNeuralMCTS:
             finally:
                 # Always restore state, even if exception occurs
                 node.state.undo_last()
+        t_child1 = perf_counter()
         
         if self.verbose >= 2:
             self.logger.debug(f"Created {len(node.children)} child nodes")
@@ -723,7 +767,9 @@ class BatchedNeuralMCTS:
         
         # CRITICAL FIX: Backpropagate the true network value up the tree
         # This ensures that all ancestors get the correct value, not the placeholder
+        t_back0 = perf_counter()
         self._backpropagate(node, value)
+        t_back1 = perf_counter()
         
         if self.verbose >= 2:
             self.logger.debug(f"Expanded node with {len(node.children)} children, value={value:.4f}, visits={node.visits}")
@@ -735,6 +781,17 @@ class BatchedNeuralMCTS:
 
         # Clean up the node from registry after processing
         self.node_manager.cleanup_node(node_id)
+
+        # Aggregate fine-grained timings for diagnostics
+        try:
+            from hex_ai.utils.perf import PERF
+            PERF.add_sample('mcts.cb_legal', (t_legal1 - t_legal0))
+            PERF.add_sample('mcts.cb_priors', (t_priors1 - t_priors0))
+            PERF.add_sample('mcts.cb_children', (t_child1 - t_child0))
+            PERF.add_sample('mcts.cb_backprop', (t_back1 - t_back0))
+            PERF.add_sample('mcts.cb_legal_count', float(len(legal_moves)))
+        except Exception:
+            pass
 
     def _backpropagate(self, node: BatchedMCTSNode, value: float) -> None:
         """
