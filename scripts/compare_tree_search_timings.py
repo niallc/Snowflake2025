@@ -13,6 +13,7 @@ from hex_ai.inference.fixed_tree_search import (
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
 from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
+from hex_ai.inference.simple_batched_mcts import SimpleBatchedMCTS
 
 
 def parse_args():
@@ -30,6 +31,7 @@ def parse_args():
     p.add_argument("--mcts-wait-ms", type=int, default=200)
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--output", choices=["table", "json"], default="table")
+    p.add_argument("--include-simple-mcts", action="store_true", default=True)
     return p.parse_args()
 
 
@@ -94,11 +96,8 @@ def run_mcts(model: SimpleModelInference, sims: int, optimal_batch_size: int, wa
     model.reset_stats()
     orch = BatchedMCTSOrchestration()
     # Use default configuration from mcts_config.py
-    # Only override if explicitly provided
-    if optimal_batch_size != 64:
-        orch.optimal_batch_size = optimal_batch_size
-    if wait_ms != 200:  # Default from mcts_config.py
-        orch.evaluator_max_wait_ms = wait_ms
+    orch.optimal_batch_size = optimal_batch_size
+    orch.evaluator_max_wait_ms = wait_ms
 
     mcts = BatchedNeuralMCTS(
         model=model,
@@ -120,6 +119,18 @@ def run_mcts(model: SimpleModelInference, sims: int, optimal_batch_size: int, wa
     return s
 
 
+def run_simple_mcts(model: SimpleModelInference, sims: int, optimal_batch_size: int):
+    # Reset stats storage to isolate this trial
+    model.reset_stats()
+    smcts = SimpleBatchedMCTS(model=model, optimal_batch_size=optimal_batch_size)
+    state = HexGameState()
+    _ = smcts.search(state, num_simulations=sims)
+    # Summarize per-batch stats gathered by SimpleModelInference
+    s = summarize_batches(model.stats.get("batch_records", []))
+    s["conv_ms_total"] = float(model.stats.get("conv_ms_total", 0.0))
+    return s
+
+
 def main():
     args = parse_args()
     seed_everything(args.seed)
@@ -136,11 +147,15 @@ def main():
 
     fixed_runs = []
     mcts_runs = []
+    simple_mcts_runs = []
     for _ in range(args.repeats):
         fr = run_fixed_tree(model, widths, args.fixed_tree_batch_size)
         fixed_runs.append(fr)
         mr = run_mcts(model, args.mcts_sims, args.mcts_optimal_batch_size, args.mcts_wait_ms)
         mcts_runs.append(mr)
+        if args.include_simple_mcts:
+            smr = run_simple_mcts(model, args.mcts_sims, args.mcts_optimal_batch_size)
+            simple_mcts_runs.append(smr)
 
     def agg(runs):
         if not runs:
@@ -164,6 +179,8 @@ def main():
         "fixed_tree": fixed_med,
         "mcts": mcts_med,
     }
+    if args.include_simple_mcts:
+        result["simple_mcts"] = agg(simple_mcts_runs)
 
     if args.output == "json":
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -185,6 +202,14 @@ def main():
         f"conv_ms_total={mcts_med.get('conv_ms_total',0):.1f} stack_ms_total={mcts_med.get('stack_ms_total',0):.1f} post_ms_total={mcts_med.get('post_ms_total',0):.1f} "
         f"(mcts_agg boards={int(mcts_med.get('mcts_boards',0))} batches={int(mcts_med.get('mcts_batches',0))} avg_batch={mcts_med.get('mcts_avg_batch',0):.2f})"
     )
+    if args.include_simple_mcts:
+        sm = result["simple_mcts"]
+        print("-- Simple MCTS --")
+        print(
+            f"boards={int(sm.get('boards',0))} batches={int(sm.get('batches',0))} avg_batch={sm.get('avg_batch',0):.2f} "
+            f"predict_total_ms={sm.get('predict_ms_total',0):.1f} per_sample_median_ms={sm.get('predict_ms_per_sample_median',0):.3f} "
+            f"conv_ms_total={sm.get('conv_ms_total',0):.1f} stack_ms_total={sm.get('stack_ms_total',0):.1f} post_ms_total={sm.get('post_ms_total',0):.1f}"
+        )
     # Quick diff highlight
     ft = fixed_med.get('predict_ms_per_sample_median', 0.0)
     mc = mcts_med.get('predict_ms_per_sample_median', 0.0)
