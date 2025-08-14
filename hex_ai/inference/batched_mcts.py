@@ -296,12 +296,13 @@ class BatchedNeuralMCTS:
         self._completed = 0
         
         # Initialize batched evaluator (replaces direct batch processor usage)
+        # Use foreground-controlled batching to avoid draining underfilled batches.
         self.evaluator = BatchedEvaluator(
             model=model,
             optimal_batch_size=self.orchestration.optimal_batch_size,
             verbose=verbose,
             max_wait_ms=self.orchestration.evaluator_max_wait_ms,
-            enable_background_processing=True
+            enable_background_processing=False
         )
         
         # Initialize node manager for better separation of concerns
@@ -333,6 +334,8 @@ class BatchedNeuralMCTS:
             f"max_inflight={self.max_inflight}, "
             f"batch_wait_s={self.batch_wait_s}"
         )
+        # Track first-batch gating to ensure we start with a full batch
+        self._first_batch_done: bool = False
 
     def _get_node_id(self, node: BatchedMCTSNode) -> int:
         """Get or create a unique ID for a node."""
@@ -398,6 +401,33 @@ class BatchedNeuralMCTS:
             except Exception:
                 pass
 
+            # Prefill phase: ensure the first batch is at least optimal_batch_size if possible
+            try:
+                prefill_target = min(self.optimal_batch_size, target)
+                # Schedule without processing until queue reaches prefill_target or inflight hits cap
+                while (
+                    self.evaluator.get_queue_size() < prefill_target and
+                    (self._scheduled - self._completed) < self.max_inflight and
+                    self._scheduled < target
+                ):
+                    with PERF.timer("mcts.select"):
+                        leaf_node = self._execute_selection_phase(root)
+                    with PERF.timer("mcts.expand"):
+                        did_queue = self._expand_and_evaluate(leaf_node)
+                    if did_queue:
+                        self._scheduled += 1
+                        PERF.inc("mcts.sim")
+                    else:
+                        break
+                # Force process the first batch if we have anything queued
+                if self.evaluator.get_queue_size() > 0:
+                    self.evaluator.process_pending_evaluations(force=True)
+                    self._process_queued_evaluations()
+                    self._first_batch_done = True
+                    self._last_force_ts = time.time()
+            except Exception:
+                pass
+
             while self._completed < target:
                 # Schedule more leaves if we have capacity
                 while (self._scheduled < target) and ((self._scheduled - self._completed) < self.max_inflight):
@@ -428,30 +458,24 @@ class BatchedNeuralMCTS:
                         )
                         last_progress_time = now
 
-                # Proactively process pending evaluations with coalescing policy
+                # Proactively process pending evaluations only when we have enough to form a good batch.
                 queue_size = self.evaluator.get_queue_size()
-                # Only force if queue is at least the configured minimum AND
-                # we have respected the minimum wait since the last forced call.
                 now_ts = time.time()
                 waited_ms_since_force = (now_ts - self._last_force_ts) * 1000.0
-                should_force = (
-                    queue_size >= self.min_batch_before_force and
+                # Prefer full batches, but allow timeout-based small batch to kick-start progress
+                if queue_size >= self.min_batch_before_force and (
                     waited_ms_since_force >= float(self.min_wait_before_force_ms)
-                )
-                if should_force:
+                ):
                     self.evaluator.process_pending_evaluations(force=True)
-                    # Drain queued expansions outside nn.* timers
                     self._process_queued_evaluations()
                     self._last_force_ts = now_ts
-                else:
-                    # Throttle non-forced processing: only allow if last non-forced call was sufficiently long ago
-                    last_non_forced = getattr(self, "_last_non_forced_ts", 0.0)
-                    waited_ms_since_non_forced = (now_ts - last_non_forced) * 1000.0
-                    min_interval_ms = float(getattr(self.orchestration, "evaluator_max_wait_ms", 100))
-                    if waited_ms_since_non_forced >= min_interval_ms:
+                elif queue_size > 0 and self._first_batch_done:
+                    # Small batch policy: process if we've waited at least evaluator_max_wait_ms since last force
+                    max_wait_ms = float(getattr(self.orchestration, "evaluator_max_wait_ms", 50))
+                    if waited_ms_since_force >= max_wait_ms:
                         self.evaluator.process_pending_evaluations(force=False)
                         self._process_queued_evaluations()
-                        self._last_non_forced_ts = now_ts
+                        self._last_force_ts = now_ts
                 with self._cv:
                     if self._completed < target:
                         self._cv.wait(timeout=self.batch_wait_s)

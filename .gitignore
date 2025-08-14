@@ -69,7 +69,6 @@ scripts/deprecated/test_enhanced_inference.py
 write_ups/batched_mcts_improvement_plan.md
 write_ups/code_review_concerns.md
 write_ups/tree_search_batching_bug_analysis.md
-scripts/compare_tree_search_timings.py
 write_ups/mcts_timing_analysis.md
 
 # VSCode

@@ -241,36 +241,35 @@ class BatchProcessor:
         """Background worker that processes batches automatically."""
         while not self.shutdown_event.is_set():
             try:
+                # Decide under lock, but DO NOT process under lock
                 with self.processing_lock:
                     queue_size = len(self.request_queue)
-                    
-                    # Process if we have enough requests or if we've been waiting too long
                     should_process = (
                         queue_size >= self.optimal_batch_size or
                         (queue_size > 0 and self._should_process_small_batch())
                     )
-                    if self.verbose >= 2 and should_process:
-                        if queue_size >= self.optimal_batch_size:
-                            logger.info(
-                                f"Triggering batch: reason=size (queue={queue_size} >= optimal={self.optimal_batch_size}), max_wait_ms={self.max_wait_ms}"
-                            )
-                        else:
-                            waited = (time.time() - self.last_enqueue_time) if self.last_enqueue_time else 0.0
-                            logger.info(
-                                f"Triggering batch: reason=timeout (queue={queue_size}, waited={waited:.3f}s >= {self.max_wait_ms/1000.0:.3f}s), max_wait_ms={self.max_wait_ms}"
-                            )
-                    
-                    if should_process:
-                        if self.verbose >= 2:
-                            logger.debug(f"Background worker processing batch of {queue_size} requests")
-                        trigger_reason = 'size' if queue_size >= self.optimal_batch_size else 'timeout'
-                        result = self._process_batch_internal(force=False, trigger_reason=trigger_reason)
-                        if self.verbose >= 2:
-                            logger.debug(f"Background worker processed {result} requests")
-                
+                    trigger_reason = 'size' if queue_size >= self.optimal_batch_size else 'timeout'
+                    waited = (time.time() - self.last_enqueue_time) if self.last_enqueue_time else 0.0
+                if self.verbose >= 2 and should_process:
+                    if trigger_reason == 'size':
+                        logger.info(
+                            f"Triggering batch: reason=size (queue={queue_size} >= optimal={self.optimal_batch_size}), max_wait_ms={self.max_wait_ms}"
+                        )
+                    else:
+                        logger.info(
+                            f"Triggering batch: reason=timeout (queue={queue_size}, waited={waited:.3f}s >= {self.max_wait_ms/1000.0:.3f}s), max_wait_ms={self.max_wait_ms}"
+                        )
+
+                if should_process:
+                    if self.verbose >= 2:
+                        logger.debug(f"Background worker processing batch of {queue_size} requests")
+                    result = self._process_batch_internal(force=False, trigger_reason=trigger_reason)
+                    if self.verbose >= 2:
+                        logger.debug(f"Background worker processed {result} requests")
+
                 # Sleep for a short time to avoid busy waiting
                 time.sleep(self.max_wait_ms / 1000.0)
-                
+
             except Exception as e:
                 logger.error(f"Background worker error: {e}")
                 time.sleep(0.001)  # Brief pause on error
@@ -318,16 +317,13 @@ class BatchProcessor:
         Returns:
             Number of requests processed
         """
-        # Use lock if background processing is enabled
-        if self.enable_background_processing:
-            with self.processing_lock:
-                if self.verbose >= 2 and force:
-                    logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
-                return self._process_batch_internal(force, trigger_reason='force' if force else 'timeout')
-        else:
-            if self.verbose >= 2 and force:
-                logger.info(f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}")
-            return self._process_batch_internal(force, trigger_reason='force' if force else 'timeout')
+        # Do not hold processing_lock across model forward or callbacks.
+        # Internal method will acquire the lock briefly to snapshot and clear the queue.
+        if self.verbose >= 2 and force:
+            logger.info(
+                f"Triggering batch: reason=force (explicit call), queue={len(self.request_queue)}, max_wait_ms={self.max_wait_ms}"
+            )
+        return self._process_batch_internal(force, trigger_reason='force' if force else 'timeout')
     
     def _process_batch_internal(self, force: bool = False, trigger_reason: str = 'timeout') -> int:
         """
@@ -339,49 +335,52 @@ class BatchProcessor:
         Returns:
             Number of requests processed
         """
-        if not self.request_queue:
-            return 0
-        
-        # Determine batch size
-        batch_size = len(self.request_queue)
-        if not force and batch_size < self.optimal_batch_size:
-            # Allow foreground processing on timeout as well
-            if trigger_reason == 'timeout' and self._should_process_small_batch():
-                if self.verbose >= 2:
-                    logger.debug(
-                        f"Processing small batch due to timeout: size={batch_size}, max_wait_ms={self.max_wait_ms}"
-                    )
-            else:
-                if self.verbose >= 3:
-                    logger.debug(f"Batch too small ({batch_size} < {self.optimal_batch_size}), waiting for more requests")
-                return 0  # Wait for more requests
-        
+        # SNAPSHOT PHASE: hold lock briefly to decide and copy out the batch; release before NN/dispatch
+        with self.processing_lock:
+            if not self.request_queue:
+                return 0
+            batch_size = len(self.request_queue)
+            if not force and batch_size < self.optimal_batch_size:
+                if trigger_reason == 'timeout' and self._should_process_small_batch():
+                    if self.verbose >= 2:
+                        logger.debug(
+                            f"Processing small batch due to timeout: size={batch_size}, max_wait_ms={self.max_wait_ms}"
+                        )
+                else:
+                    if self.verbose >= 3:
+                        logger.debug(
+                            f"Batch too small ({batch_size} < {self.optimal_batch_size}), waiting for more requests"
+                        )
+                    return 0
+            # Rate-limited logging snapshot
+            current_time = time.time()
+            should_log = (current_time - self.last_log_time) >= self.log_interval
+            if self.verbose >= 1 and should_log:
+                logger.info(
+                    f"Processing batch of {batch_size} requests (optimal: {self.optimal_batch_size})"
+                )
+                self.last_log_time = current_time
+
+            # Extract and clear queue under lock
+            boards = [req.board_state for req in self.request_queue]
+            callbacks = [req.callback for req in self.request_queue]
+            metadata_list = [req.metadata for req in self.request_queue]
+            self.request_queue.clear()
+            # Record batch trigger reason
+            try:
+                if trigger_reason in self.stats['batch_trigger_reasons']:
+                    self.stats['batch_trigger_reasons'][trigger_reason] += 1
+            except Exception:
+                pass
+
         start_time = time.time()
-        
-        # Rate-limited logging for batch processing
-        current_time = time.time()
-        should_log = (current_time - self.last_log_time) >= self.log_interval
-        
-        if self.verbose >= 1 and should_log:
-            logger.info(f"Processing batch of {batch_size} requests (optimal: {self.optimal_batch_size})")
-            self.last_log_time = current_time
         
         # Detailed logging only for very high verbosity
         if self.verbose >= 5:
             log_memory_status("Pre-batch ")
         
-        # Extract boards and callbacks
-        boards = [req.board_state for req in self.request_queue]
-        callbacks = [req.callback for req in self.request_queue]
-        metadata_list = [req.metadata for req in self.request_queue]
-        
-        # Normalize inputs to numpy arrays for SimpleModelInference (without extra copies)
-        norm_boards = []
-        for b in boards:
-            if hasattr(b, 'numpy'):
-                norm_boards.append(b.numpy())
-            else:
-                norm_boards.append(b)
+        # Keep input types unchanged; downstream will convert as needed
+        norm_boards = boards
 
         # Process batch with performance monitoring
         with PERF.timer("nn.infer"):
@@ -399,13 +398,11 @@ class BatchProcessor:
                 if len(policies) != len(values) or len(policies) != len(norm_boards):
                     raise RuntimeError(f"Batch inference returned {len(policies)} policies, {len(values)} values for {len(norm_boards)} boards")
 
-                # Distribute results and update cache separately
-                with PERF.timer("nn.callbacks"):
+                # Distribute results and update cache without holding internal locks
+                with PERF.timer("nn.distribute"):
                     for i, (board, policy, value, callback) in enumerate(zip(norm_boards, policies, values, callbacks)):
-                        # Store in cache
-                        # Build cache key with minimal copies
+                        # Store in cache (fast path)
                         if hasattr(board, 'numpy'):
-                            # Torch tensor (CPU)
                             cache_key = memoryview(board.numpy()).tobytes()
                         else:
                             cache_key = board.tobytes()
@@ -414,23 +411,21 @@ class BatchProcessor:
                         t_c1 = perf_counter()
                         PERF.add_sample('nn.cache_write', (t_c1 - t_c0))
 
-                        # Call callback - execute in main thread to avoid threading issues
+                        # Call user callback (lightweight in our MCTS); never under processor locks
                         try:
                             if self.verbose >= 2:
-                                logger.debug(f"Calling callback {i} with policy shape {policy.shape} and value {value:.4f}")
-
+                                logger.debug(
+                                    f"Calling callback {i} with policy shape {getattr(policy, 'shape', None)} and value {value:.4f}"
+                                )
                             t_cb0 = perf_counter()
                             callback(policy, value)
                             t_cb1 = perf_counter()
                             PERF.add_sample('nn.user_callback', (t_cb1 - t_cb0))
-
-                            if self.verbose >= 2:
-                                logger.debug(f"Callback {i} completed successfully")
                         except Exception as e:
                             logger.error(f"Callback error for request {i}: {e}")
                             import traceback
                             logger.error(f"Callback traceback: {traceback.format_exc()}")
-                            if metadata_list[i]:
+                            if i < len(metadata_list) and metadata_list[i]:
                                 logger.error(f"Request metadata: {metadata_list[i]}")
 
                 # Update performance statistics
@@ -477,16 +472,15 @@ class BatchProcessor:
             pass
         
         # Rate-limited logging for batch completion
-        if self.verbose >= 1 and should_log:
-            logger.info(f"Batch processed: {processed_count} requests in {batch_time:.3f}s "
-                       f"({processed_count/batch_time:.1f} req/s)")
+        if self.verbose >= 1:
+            logger.info(
+                f"Batch processed: {processed_count} requests in {batch_time:.3f}s "
+                f"({processed_count / batch_time:.1f} req/s)"
+            )
         
         # Detailed logging only for very high verbosity
         if self.verbose >= 5:
             log_memory_status("Post-batch ")
-        
-        # Clear the queue
-        self.request_queue.clear()
         
         return processed_count
     
