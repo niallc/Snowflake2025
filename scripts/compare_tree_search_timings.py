@@ -13,7 +13,7 @@ from hex_ai.inference.fixed_tree_search import (
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
 from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
-from hex_ai.inference.simple_batched_mcts import SimpleBatchedMCTS
+# from hex_ai.inference.simple_batched_mcts import SimpleBatchedMCTS  # File doesn't exist
 
 
 def parse_args():
@@ -122,7 +122,8 @@ def run_mcts(model: SimpleModelInference, sims: int, optimal_batch_size: int, wa
 def run_simple_mcts(model: SimpleModelInference, sims: int, optimal_batch_size: int):
     # Reset stats storage to isolate this trial
     model.reset_stats()
-    smcts = SimpleBatchedMCTS(model=model, optimal_batch_size=optimal_batch_size)
+    # SimpleBatchedMCTS doesn't exist - using BatchedNeuralMCTS instead
+    smcts = BatchedNeuralMCTS(model=model, optimal_batch_size=optimal_batch_size)
     state = HexGameState()
     _ = smcts.search(state, num_simulations=sims)
     # Summarize per-batch stats gathered by SimpleModelInference

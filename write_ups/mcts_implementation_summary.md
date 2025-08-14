@@ -45,7 +45,7 @@ All critical MCTS functionality is tested:
 
 ### Basic MCTS Usage
 ```python
-from hex_ai.inference.mcts import NeuralMCTS
+from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
@@ -53,7 +53,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 model = SimpleModelInference("path/to/checkpoint.pt")
 
 # Create MCTS engine
-mcts = NeuralMCTS(model=model, exploration_constant=1.4)
+mcts = BatchedNeuralMCTS(model=model, exploration_constant=1.4)
 
 # Run search
 state = HexGameState()
@@ -65,10 +65,10 @@ move = mcts.select_move(root, temperature=1.0)
 
 ### Self-Play Usage
 ```python
-from hex_ai.selfplay.mcts_selfplay_engine import MCTSSelfPlayEngine
+from hex_ai.selfplay.batched_mcts_selfplay_engine import BatchedMCTSSelfPlayEngine
 
 # Create self-play engine
-engine = MCTSSelfPlayEngine(
+engine = BatchedMCTSSelfPlayEngine(
     model_path="path/to/checkpoint.pt",
     num_simulations=800,
     temperature=1.0
