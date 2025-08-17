@@ -94,7 +94,7 @@ class HexGameState:
 
     def __init__(self, board: Optional[np.ndarray] = None, current_player: Optional[int] = None,
                  _current_player: Optional[Player] = None, move_history: Optional[List[Tuple[int, int]]] = None,
-                 game_over: bool = False, winner: Optional[str] = None):
+                 game_over: bool = False, winner: Optional[WinnerEnum] = None):
         # Initialize board
         self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
         # Initialize current player with compatibility for legacy int
@@ -114,20 +114,8 @@ class HexGameState:
         # Initialize other fields
         self.move_history = move_history.copy() if move_history is not None else []
         self.game_over = game_over
-        # Winner internal storage uses Enum; accept both Enum and string for compatibility
-        self._winner = None
-        if winner is not None:
-            if isinstance(winner, str):
-                if winner == "blue":
-                    self._winner = WinnerEnum.BLUE
-                elif winner == "red":
-                    self._winner = WinnerEnum.RED
-                else:
-                    raise ValueError(f"Invalid winner string: {winner}")
-            elif isinstance(winner, WinnerEnum):
-                self._winner = winner
-            else:
-                raise TypeError(f"winner must be str or Winner enum, got {type(winner)}")
+        # Winner internal storage uses Enum only
+        self._winner = winner
         self._undo_stack = []
     
     @property
@@ -153,30 +141,20 @@ class HexGameState:
         return self._current_player
 
     @property
-    def winner(self) -> Optional[str]:
-        """Legacy-facing winner as 'blue'/'red' or None. Internally stores Winner enum."""
-        if self._winner is None:
-            return None
-        return "blue" if self._winner == WinnerEnum.BLUE else "red"
+    def winner(self) -> Optional[WinnerEnum]:
+        """Winner as Winner enum or None. Internally stores Winner enum."""
+        return self._winner
 
     @winner.setter
-    def winner(self, value: Optional[object]) -> None:
-        """Accept 'blue'/'red' strings or Winner enum; fail fast on invalid inputs."""
+    def winner(self, value: Optional[WinnerEnum]) -> None:
+        """Accept Winner enum or None; fail fast on invalid inputs."""
         if value is None:
             self._winner = None
             return
-        if isinstance(value, str):
-            if value == "blue":
-                self._winner = WinnerEnum.BLUE
-                return
-            if value == "red":
-                self._winner = WinnerEnum.RED
-                return
-            raise ValueError(f"Invalid winner string: {value}")
         if isinstance(value, WinnerEnum):
             self._winner = value
             return
-        raise TypeError(f"winner must be str, Winner enum, or None; got {type(value)}")
+        raise TypeError(f"winner must be Winner enum or None; got {type(value)}")
 
     @property
     def winner_enum(self) -> Optional[WinnerEnum]:
@@ -219,8 +197,8 @@ class HexGameState:
         self._undo_stack.append(undo_info)
         
         # Apply the move
-        color = "blue" if self._current_player == Player.BLUE else "red"
-        self.board = place_piece(self.board, row, col, color)
+        piece = PieceEnum.BLUE if self._current_player == Player.BLUE else PieceEnum.RED
+        self.board = place_piece(self.board, row, col, piece)
         self.move_history.append((row, col))
         self._current_player = Player.RED if self._current_player == Player.BLUE else Player.BLUE
         
@@ -284,8 +262,8 @@ class HexGameState:
         # Expected gain: 10-20x speedup in expansion phase
         if not self.is_valid_move(row, col):
             raise ValueError(f"Invalid move: ({row}, {col})")
-        color = "blue" if self._current_player == Player.BLUE else "red"
-        new_board = place_piece(self.board, row, col, color)
+        piece = PieceEnum.BLUE if self._current_player == Player.BLUE else PieceEnum.RED
+        new_board = place_piece(self.board, row, col, piece)
         new_move_history = self.move_history + [(row, col)]
         new_state = HexGameState(
             board=new_board,
@@ -312,7 +290,7 @@ class HexGameState:
                 adjacent.append((new_row, new_col))
         return adjacent
 
-    def _find_winner(self) -> Optional[str]:
+    def _find_winner(self) -> Optional[WinnerEnum]:
         """Find the winner using Union-Find connected components."""
         connections = self._build_connections()
         
@@ -320,13 +298,13 @@ class HexGameState:
         red_left = Piece(row=0, column=LEFT_EDGE, colour="red")
         red_right = Piece(row=0, column=RIGHT_EDGE, colour="red")
         if connections.are_connected(red_left, red_right):
-            return "red"
+            return WinnerEnum.RED
         
         # Check for blue win (vertical connection)
         blue_top = Piece(row=TOP_EDGE, column=0, colour="blue")
         blue_bottom = Piece(row=BOTTOM_EDGE, column=0, colour="blue")
         if connections.are_connected(blue_top, blue_bottom):
-            return "blue"
+            return WinnerEnum.BLUE
         
         return None
     
@@ -435,14 +413,14 @@ class HexGameState:
         """Check if a position is valid on the board."""
         return 0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE
     
-    def _get_edge_piece(self, row: int, col: int, color: str) -> Optional[Piece]:
+    def _get_edge_piece(self, row: int, col: int, piece: Piece) -> Optional[Piece]:
         """Get the appropriate edge piece for off-board positions."""
-        if color == "red":
+        if piece == Piece.RED:
             if col == LEFT_EDGE:
                 return Piece(row=0, column=LEFT_EDGE, colour="red")
             elif col == RIGHT_EDGE:
                 return Piece(row=0, column=RIGHT_EDGE, colour="red")
-        elif color == "blue":
+        elif piece == Piece.BLUE:
             if row == TOP_EDGE:
                 return Piece(row=TOP_EDGE, column=0, colour="blue")
             elif row == BOTTOM_EDGE:
@@ -546,7 +524,7 @@ class HexGameEngine:
         """
         return state.get_legal_moves()
     
-    def get_winner(self, state: HexGameState) -> Optional[str]:
+    def get_winner(self, state: HexGameState) -> Optional[WinnerEnum]:
         """
         Get the winner of the game.
         
@@ -554,7 +532,7 @@ class HexGameEngine:
             state: Current game state
             
         Returns:
-            "blue", "red", or None if no winner
+            Winner enum or None if no winner
         """
         return state._find_winner()
     
@@ -619,7 +597,7 @@ def apply_move_to_state_trmph(state, trmph_move: str) -> 'HexGameState':
         raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}")
 
 
-def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, player: int) -> torch.Tensor:
+def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, player: Player) -> torch.Tensor:
     """
     Apply a TRMPH move to a 3-channel board tensor and return the new tensor.
     
@@ -628,7 +606,7 @@ def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, play
     Args:
         board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
         trmph_move: TRMPH format move (e.g., "a1", "b2")
-        player: Player making the move (prefer Player enum; int accepted for backward compatibility)
+        player: Player making the move (Player enum)
         
     Returns:
         New board tensor with the move applied

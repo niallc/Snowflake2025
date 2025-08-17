@@ -16,6 +16,7 @@ from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS  # Use batched MCTS for improved performance
 from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
+from hex_ai.enums import Player
 from hex_ai.value_utils import (
     policy_logits_to_probs,
     get_legal_policy_probs,
@@ -808,7 +809,7 @@ def api_state():
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
 
     board = state.board.tolist()
-    player = state.current_player
+    player_enum = state.current_player_enum  # Use enum directly
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
@@ -819,13 +820,8 @@ def api_state():
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
-    # TODO: winner_to_color() should raise exceptions instead of returning 'reset' for invalid inputs
-    # This would eliminate the need for try-catch blocks in api_state(), api_apply_move(), api_apply_trmph_sequence(), and api_move()
-    try:
-        player_color = winner_to_color(player)
-    except Exception as e:
-        app.logger.error(f"Error converting player to color: {e}, player={player}")
-        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
+    # Use enum-based color conversion - much safer
+    player_color = winner_to_color(player_enum)
 
     # Model inference - fail fast if this fails
     model = get_model(model_id)
@@ -834,18 +830,15 @@ def api_state():
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     # Map policy to trmph moves
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    # Win probability for current player
-    # Use Enum for strictness
-    player_enum = state.current_player_enum
+    # Win probability for current player - use enum directly
     win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
-    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
-    player_enum_name = state.current_player_enum.name
-    player_index = int(state.current_player_enum.value)
+    # Consistent enum-based player representation
+    player_enum_name = player_enum.name
+    player_index = int(player_enum.value)
     return jsonify({
         "board": board,
         "player": player_color,
-        "player_raw": player,  # Add raw value for debugging
         "player_enum": player_enum_name,  # Canonical enum name
         "player_index": player_index,     # Canonical numeric index (0=BLUE,1=RED)
         "legal_moves": legal_moves,
@@ -878,7 +871,7 @@ def api_apply_move():
 
     new_trmph = state.to_trmph()
     board = state.board.tolist()
-    player = state.current_player
+    player_enum = state.current_player_enum  # Use enum directly
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
@@ -889,12 +882,8 @@ def api_apply_move():
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
-    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
-    try:
-        player_color = winner_to_color(player)
-    except Exception as e:
-        app.logger.error(f"Error converting player to color: {e}, player={player}")
-        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
+    # Use enum-based color conversion - much safer
+    player_color = winner_to_color(player_enum)
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
@@ -902,17 +891,15 @@ def api_apply_move():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    player_enum = state.current_player_enum
     win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
-    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
-    player_enum_name = state.current_player_enum.name
-    player_index = int(state.current_player_enum.value)
+    # Consistent enum-based player representation
+    player_enum_name = player_enum.name
+    player_index = int(player_enum.value)
     return jsonify({
         "new_trmph": new_trmph,
         "board": board,
         "player": player_color,
-        "player_raw": player,  # Add raw value for debugging
         "player_enum": player_enum_name,
         "player_index": player_index,
         "legal_moves": legal_moves,
@@ -960,16 +947,12 @@ def api_apply_trmph_sequence():
 
     new_trmph = state.to_trmph()
     board = state.board.tolist()
-    player = state.current_player
+    player_enum = state.current_player_enum  # Use enum directly
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
-    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
-    try:
-        player_color = winner_to_color(player)
-    except Exception as e:
-        app.logger.error(f"Error converting player to color: {e}, player={player}")
-        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
+    # Use enum-based color conversion - much safer
+    player_color = winner_to_color(player_enum)
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
@@ -977,17 +960,15 @@ def api_apply_trmph_sequence():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    player_enum = state.current_player_enum
     win_prob = get_win_prob_from_model_output(value_logit, player_enum)
 
-    # TODO: normalize player_raw to a consistent, enum-based representation (e.g., Player name)
-    player_enum_name = state.current_player_enum.name
-    player_index = int(state.current_player_enum.value)
+    # Consistent enum-based player representation
+    player_enum_name = player_enum.name
+    player_index = int(player_enum.value)
     return jsonify({
         "new_trmph": new_trmph,
         "board": board,
         "player": player_color,
-        "player_raw": player,
         "player_enum": player_enum_name,
         "player_index": player_index,
         "legal_moves": legal_moves,
@@ -1026,14 +1007,14 @@ def api_move():
 
     new_trmph = state.to_trmph()
     board = state.board.tolist()
-    player = state.current_player
+    player_enum = state.current_player_enum  # Use enum directly
     legal_moves = moves_to_trmph(state.get_legal_moves())
     winner = state.winner
 
     model_move = None
     debug_info = {}
     # If game not over and it's model's turn, have model pick a move
-    app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={state.current_player}")
+    app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={player_enum}")
     if not state.game_over:
         try:
             # Determine which player's settings to use for the computer move
@@ -1119,7 +1100,6 @@ def api_move():
             model_move = best_move_trmph
             new_trmph = state.to_trmph()
             board = state.board.tolist()
-            player = state.current_player
             legal_moves = moves_to_trmph(state.get_legal_moves())
             winner = state.winner
             
@@ -1141,12 +1121,8 @@ def api_move():
             app.logger.error(f"Model move failed: {e}")
             # Continue without model move if there's an error
     
-    # Player color conversion (see TODO in api_state() about winner_to_color() improvements)
-    try:
-        player_color = winner_to_color(player)
-    except Exception as e:
-        app.logger.error(f"Error converting player to color: {e}, player={player}")
-        raise RuntimeError(f"Error converting player to color: {e}, player={player}")
+    # Use enum-based color conversion - much safer
+    player_color = winner_to_color(player_enum)
 
     # Recompute policy/value for final state using centralized utilities
     model = get_model(model_id)
@@ -1154,14 +1130,18 @@ def api_move():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    player_enum = state.current_player_enum
     win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+
+    # Consistent enum-based player representation
+    player_enum_name = player_enum.name
+    player_index = int(player_enum.value)
 
     response = {
         "new_trmph": new_trmph,
         "board": board,
         "player": player_color,
-        "player_raw": player,  # Add raw value for debugging
+        "player_enum": player_enum_name,
+        "player_index": player_index,
         "legal_moves": legal_moves,
         "winner": winner,
         "model_move": model_move,

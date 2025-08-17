@@ -10,7 +10,7 @@ from hex_ai.config import BOARD_SIZE
 from hex_ai.enums import Piece, char_to_piece, get_piece_display_symbol, piece_to_char
 
 
-def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
+def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> Piece:
     """
     Get the piece at a specific position.
     
@@ -20,7 +20,7 @@ def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
         col: Column index (0-indexed)
         
     Returns:
-        Piece value: 'e'=empty, 'b'=blue, 'r'=red
+        Piece enum at the position
         
     Raises:
         IndexError: If coordinates are out of bounds
@@ -28,33 +28,28 @@ def get_piece_at(board_nxn: np.ndarray, row: int, col: int) -> str:
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
     
-    return board_nxn[row, col]
+    piece_char = board_nxn[row, col]
+    return char_to_piece(piece_char)
 
 
-def has_piece_at(board_nxn: np.ndarray, row: int, col: int, color: str) -> bool:
+def has_piece_at(board_nxn: np.ndarray, row: int, col: int, piece: Piece) -> bool:
     """
-    Check if a specific color piece is at a position.
+    Check if a specific piece is at a position.
     
     Args:
         board_nxn: N×N board array
         row: Row index (0-indexed)
         col: Column index (0-indexed)
-        color: "blue" or "red"
+        piece: Piece enum to check for
         
     Returns:
-        True if the specified color piece is at the position
+        True if the specified piece is at the position
     """
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         return False
     
     piece_value = board_nxn[row, col]
-    
-    if color == "blue":
-        return piece_value == piece_to_char(Piece.BLUE)
-    elif color == "red":
-        return piece_value == piece_to_char(Piece.RED)
-    else:
-        return False
+    return piece_value == piece_to_char(piece)
 
 
 def is_empty(board_nxn: np.ndarray, row: int, col: int) -> bool:
@@ -75,7 +70,7 @@ def is_empty(board_nxn: np.ndarray, row: int, col: int) -> bool:
     return board_nxn[row, col] == piece_to_char(Piece.EMPTY)
 
 
-def place_piece(board_nxn: np.ndarray, row: int, col: int, color: str) -> np.ndarray:
+def place_piece(board_nxn: np.ndarray, row: int, col: int, piece: Piece) -> np.ndarray:
     """
     Place a piece at the specified position.
     
@@ -83,7 +78,7 @@ def place_piece(board_nxn: np.ndarray, row: int, col: int, color: str) -> np.nda
         board_nxn: N×N board array
         row: Row index (0-indexed)
         col: Column index (0-indexed)
-        color: "blue" or "red"
+        piece: Piece enum to place
         
     Returns:
         New board array with the piece placed
@@ -98,13 +93,7 @@ def place_piece(board_nxn: np.ndarray, row: int, col: int, color: str) -> np.nda
         raise ValueError(f"Position ({row}, {col}) is already occupied")
     
     new_board = board_nxn.copy()
-    
-    if color == "blue":
-        new_board[row, col] = piece_to_char(Piece.BLUE)
-    elif color == "red":
-        new_board[row, col] = piece_to_char(Piece.RED)
-    else:
-        raise ValueError(f"Invalid color: {color}")
+    new_board[row, col] = piece_to_char(piece)
     
     return new_board
 

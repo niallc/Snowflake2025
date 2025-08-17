@@ -29,7 +29,7 @@ import random
 from datetime import datetime
 import csv
 from pathlib import Path
-from hex_ai.enums import Player
+from hex_ai.enums import Player, Piece
 from hex_ai.value_utils import int_to_player
 
 # TODO: In the future, support different play configs (search_widths, MCTS, etc.)
@@ -41,7 +41,7 @@ from hex_ai.value_utils import int_to_player
 @dataclass
 class GameResult:
     """Result of a single game."""
-    winner: str  # "b" or "r" (color-based)
+    winner: Piece  # Piece.BLUE or Piece.RED (color-based)
     trmph_str: str
     winner_char: str  # 'b', 'r', 'd'
     swap_decision: Optional[str]
@@ -278,13 +278,13 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
     return move_sequence, state
 
 def determine_winner(state: HexGameState, model_1: SimpleModelInference, 
-                    model_2: SimpleModelInference, swap: bool) -> Tuple[str, str]:
+                    model_2: SimpleModelInference, swap: bool) -> Tuple[Piece, str]:
     """
     Determine the winner of the game.
     
     Returns:
         Tuple of (winner_color, winner_char) where:
-        - winner_color: "b" or "r" (color-based)
+        - winner_color: Piece.BLUE or Piece.RED (color-based)
         - winner_char: "b" or "r" (color-based)
     """
     # Fail fast and use Enum internally; convert at IO boundary
@@ -292,11 +292,11 @@ def determine_winner(state: HexGameState, model_1: SimpleModelInference,
     if winner_enum is None:
         raise ValueError("Game is not over or winner missing")
     if winner_enum.name == 'BLUE':
-        winner_color = TRMPH_BLUE_WIN
-        winner_char = TRMPH_BLUE_WIN
+        winner_color = Piece.BLUE
+        winner_char = Piece.BLUE.value
     elif winner_enum.name == 'RED':
-        winner_color = TRMPH_RED_WIN
-        winner_char = TRMPH_RED_WIN
+        winner_color = Piece.RED
+        winner_char = Piece.RED.value
     else:
         raise ValueError(f"Unknown winner enum: {winner_enum}")
     
@@ -435,17 +435,17 @@ def play_games_with_each_first(
     
     return {
         'model_a_first': {
-            'winner_position': result_1.winner,  # "b" or "r" based on color
-            'winner_model': model_a_path if result_1.winner == "b" else model_b_path,
-            'loser_model': model_b_path if result_1.winner == "b" else model_a_path,
+            'winner_position': result_1.winner,  # Piece.BLUE or Piece.RED based on color
+            'winner_model': model_a_path if result_1.winner == Piece.BLUE else model_b_path,
+            'loser_model': model_b_path if result_1.winner == Piece.BLUE else model_a_path,
             'trmph_str': result_1.trmph_str,
             'winner_char': result_1.winner_char,
             'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
-            'winner_position': result_2.winner,  # "b" or "r" based on color
-            'winner_model': model_b_path if result_2.winner == "b" else model_a_path,
-            'loser_model': model_a_path if result_2.winner == "b" else model_b_path,
+            'winner_position': result_2.winner,  # Piece.BLUE or Piece.RED based on color
+            'winner_model': model_b_path if result_2.winner == Piece.BLUE else model_a_path,
+            'loser_model': model_a_path if result_2.winner == Piece.BLUE else model_b_path,
             'trmph_str': result_2.trmph_str,
             'winner_char': result_2.winner_char,
             'swap_decision': result_2.swap_decision

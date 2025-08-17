@@ -87,12 +87,12 @@ def int_to_channel(channel_int: int) -> Channel:
 
 def create_empty_board(board_size: int) -> str:
     """Create an empty board string representation."""
-    return piece_to_char(Piece.EMPTY)
+    return Piece.EMPTY.value
 
 
 def create_empty_board_array(board_size: int) -> str:
     """Create an empty board array with proper dtype."""
-    return piece_to_char(Piece.EMPTY)
+    return Piece.EMPTY.value
 
 
 # ============================================================================

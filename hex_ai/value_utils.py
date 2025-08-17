@@ -232,22 +232,33 @@ def get_player_to_move_from_moves(moves: list) -> Player:
     else:
         return Player.RED
 
-def winner_to_color(winner):
-    """Map Winner enum, Player enum, or player int to color name string ('blue', 'red', or 'reset')."""
-    # TODO: This function should raise ValueError for invalid inputs instead of returning 'reset'
-    # This would make error handling more consistent with the "fail fast" principle
+def winner_to_color(winner) -> str:
+    """
+    Map Winner enum, Player enum, or player int to color name string ('blue' or 'red').
+    
+    Args:
+        winner: Winner enum, Player enum, or player int (0 for Blue, 1 for Red)
+        
+    Returns:
+        Color name string: 'blue' or 'red'
+        
+    Raises:
+        TypeError: If winner is not a Winner enum, Player enum, or int
+        ValueError: If winner is an invalid int value
+    """
     if isinstance(winner, Winner):
         return 'blue' if winner == Winner.BLUE else 'red'
     if isinstance(winner, Player):
         return 'blue' if winner == Player.BLUE else 'red'
     # Backward compatibility for legacy int inputs 0/1
     if isinstance(winner, int):
-        if winner == Player.BLUE.value:
+        if winner == player_to_int(Player.BLUE):
             return 'blue'
-        if winner == Player.RED.value:
+        if winner == player_to_int(Player.RED):
             return 'red'
-    else:
-        return 'reset'
+        raise ValueError(f"Invalid player integer: {winner}. Expected 0 (Blue) or 1 (Red)")
+    
+    raise TypeError(f"Invalid winner type: {type(winner)}. Expected Winner enum, Player enum, or int (0/1), got {type(winner)}")
 
 # =============================
 # Policy Processing & Move Selection Utilities
@@ -489,8 +500,8 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
     
-    blue_val = board_tensor[channel_to_int(Channel.BLUE), row, col].item()
-    red_val = board_tensor[channel_to_int(Channel.RED), row, col].item()
+    blue_val = board_tensor[Channel.BLUE.value, row, col].item()
+    red_val = board_tensor[Channel.RED.value, row, col].item()
     
     # Check for invalid values (should only be approximately EMPTY_ONEHOT or PIECE_ONEHOT)
     if not (abs(blue_val - EMPTY_ONEHOT) < tolerance or abs(blue_val - PIECE_ONEHOT) < tolerance):
@@ -544,15 +555,15 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player:
     
     # Place the piece in the appropriate channel using enum
     if player == Player.BLUE:
-        new_tensor[channel_to_int(Channel.BLUE), row, col] = PIECE_ONEHOT  # Blue channel
+        new_tensor[Channel.BLUE.value, row, col] = PIECE_ONEHOT  # Blue channel
     elif player == Player.RED:
-        new_tensor[channel_to_int(Channel.RED), row, col] = PIECE_ONEHOT  # Red channel
+        new_tensor[Channel.RED.value, row, col] = PIECE_ONEHOT  # Red channel
     else:
         raise ValueError(f"Invalid player: {player}")
     
     # Update player-to-move channel (switch to other player)
     next_player = Player.RED if player == Player.BLUE else Player.BLUE
-    new_tensor[channel_to_int(Channel.PLAYER_TO_MOVE), :, :] = float(player_to_int(next_player))
+    new_tensor[Channel.PLAYER_TO_MOVE.value, :, :] = float(next_player.value)
     
     return new_tensor
 

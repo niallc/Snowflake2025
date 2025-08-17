@@ -105,11 +105,11 @@ class TestBoardOperations:
         
         # Test getting blue piece
         piece = get_piece_at(board_nxn, 0, 0)
-        assert piece == piece_to_char(Piece.BLUE)
+        assert piece == Piece.BLUE
         
         # Test getting empty piece
         piece = get_piece_at(board_nxn, 1, 1)
-        assert piece == piece_to_char(Piece.EMPTY)
+        assert piece == Piece.EMPTY
         
         # Test out of bounds
         with pytest.raises(IndexError):
@@ -122,19 +122,19 @@ class TestBoardOperations:
         board_nxn[1, 1] = piece_to_char(Piece.RED)
         
         # Test blue piece
-        assert has_piece_at(board_nxn, 0, 0, "blue") == True
-        assert has_piece_at(board_nxn, 1, 1, "blue") == False
+        assert has_piece_at(board_nxn, 0, 0, Piece.BLUE) == True
+        assert has_piece_at(board_nxn, 1, 1, Piece.BLUE) == False
         
         # Test red piece
-        assert has_piece_at(board_nxn, 1, 1, "red") == True
-        assert has_piece_at(board_nxn, 0, 0, "red") == False
+        assert has_piece_at(board_nxn, 1, 1, Piece.RED) == True
+        assert has_piece_at(board_nxn, 0, 0, Piece.RED) == False
         
         # Test empty position
-        assert has_piece_at(board_nxn, 2, 2, "blue") == False
-        assert has_piece_at(board_nxn, 2, 2, "red") == False
+        assert has_piece_at(board_nxn, 2, 2, Piece.BLUE) == False
+        assert has_piece_at(board_nxn, 2, 2, Piece.RED) == False
         
         # Test out of bounds
-        assert has_piece_at(board_nxn, BOARD_SIZE, 0, "blue") == False
+        assert has_piece_at(board_nxn, BOARD_SIZE, 0, Piece.BLUE) == False
     
     def test_is_empty(self):
         """Test checking if position is empty."""
@@ -155,21 +155,21 @@ class TestBoardOperations:
         board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
         
         # Place blue piece
-        new_board = place_piece(board_nxn, 0, 0, "blue")
+        new_board = place_piece(board_nxn, 0, 0, Piece.BLUE)
         assert new_board[0, 0] == piece_to_char(Piece.BLUE)
         assert new_board[1, 1] == piece_to_char(Piece.EMPTY)  # Other positions unchanged
         
         # Place red piece
-        new_board = place_piece(new_board, 1, 1, "red")
+        new_board = place_piece(new_board, 1, 1, Piece.RED)
         assert new_board[1, 1] == piece_to_char(Piece.RED)
         
         # Test placing on occupied position
         with pytest.raises(ValueError):
-            place_piece(new_board, 0, 0, "red")
+            place_piece(new_board, 0, 0, Piece.RED)
         
         # Test out of bounds
         with pytest.raises(ValueError):
-            place_piece(board_nxn, BOARD_SIZE, 0, "blue")
+            place_piece(board_nxn, BOARD_SIZE, 0, Piece.BLUE)
     
     def test_board_to_string(self):
         """Test board string representation."""

@@ -77,14 +77,14 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
     moves = split_trmph_moves(bare_moves)
     
     # Initialize board with empty piece ('e')
-    board = np.full((board_size, board_size), piece_to_char(Piece.EMPTY), dtype='U1')
+    board = np.full((board_size, board_size), Piece.EMPTY.value, dtype='U1')
     
     # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
         
         # Check for duplicate moves
-        if board[row, col] != piece_to_char(Piece.EMPTY):
+        if board[row, col] != Piece.EMPTY.value:
             if duplicate_action == "ignore":
                 logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
                 break  # Do not process any moves after a duplicate.
@@ -105,7 +105,10 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         
         # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
         is_blue_turn = (i % 2) == 0
-        board[row, col] = piece_to_char(Piece.BLUE) if is_blue_turn else piece_to_char(Piece.RED)
+        # TODO: ENUM MIGRATION - This is a temporary fix to allow the board to be created with the Piece enum.
+        #       In the future, we should use the Piece enum directly in the board creation.
+        # TODO: Avoid this if / else style. Check for blue / red and raise an exception with any other value.
+        board[row, col] = Piece.BLUE.value if is_blue_turn else Piece.RED.value
     
     return board
 
