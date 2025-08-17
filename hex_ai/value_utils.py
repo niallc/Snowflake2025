@@ -1,4 +1,4 @@
-from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective
+from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
 from hex_ai.config import (
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
@@ -489,8 +489,8 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
     
-    blue_val = board_tensor[Channel.BLUE.value, row, col].item()
-    red_val = board_tensor[Channel.RED.value, row, col].item()
+    blue_val = board_tensor[channel_to_int(Channel.BLUE), row, col].item()
+    red_val = board_tensor[channel_to_int(Channel.RED), row, col].item()
     
     # Check for invalid values (should only be approximately EMPTY_ONEHOT or PIECE_ONEHOT)
     if not (abs(blue_val - EMPTY_ONEHOT) < tolerance or abs(blue_val - PIECE_ONEHOT) < tolerance):
@@ -544,15 +544,15 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player:
     
     # Place the piece in the appropriate channel using enum
     if player == Player.BLUE:
-        new_tensor[Channel.BLUE.value, row, col] = PIECE_ONEHOT  # Blue channel
+        new_tensor[channel_to_int(Channel.BLUE), row, col] = PIECE_ONEHOT  # Blue channel
     elif player == Player.RED:
-        new_tensor[Channel.RED.value, row, col] = PIECE_ONEHOT  # Red channel
+        new_tensor[channel_to_int(Channel.RED), row, col] = PIECE_ONEHOT  # Red channel
     else:
         raise ValueError(f"Invalid player: {player}")
     
     # Update player-to-move channel (switch to other player)
     next_player = Player.RED if player == Player.BLUE else Player.BLUE
-    new_tensor[Channel.PLAYER_TO_MOVE.value, :, :] = float(next_player.value)
+    new_tensor[channel_to_int(Channel.PLAYER_TO_MOVE), :, :] = float(player_to_int(next_player))
     
     return new_tensor
 

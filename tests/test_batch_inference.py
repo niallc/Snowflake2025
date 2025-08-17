@@ -13,8 +13,8 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.config import EMPTY_PIECE
-from hex_ai.enums import Player
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Piece, Player
 from hex_ai.inference.game_engine import HexGameState
 
 
@@ -24,7 +24,7 @@ def create_test_boards(num_boards=10, board_size=13):
     
     for i in range(num_boards):
         # Create a simple board with some moves
-        board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
+        board = np.full((board_size, board_size), Piece.EMPTY.value, dtype='U1')
         
         # Add some moves to make it interesting
         num_moves = min(i + 1, board_size * board_size // 4)  # Vary the number of moves

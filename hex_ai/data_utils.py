@@ -23,13 +23,13 @@ import random
 from datetime import datetime
 import json
 
-
+from hex_ai.enums import player_to_int
 from .config import (
     BOARD_SIZE, NUM_PLAYERS, TRMPH_EXTENSION, POLICY_OUTPUT_SIZE,
-    BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    PIECE_ONEHOT, EMPTY_ONEHOT, BLUE_CHANNEL, RED_CHANNEL, PLAYER_CHANNEL,
+    PIECE_ONEHOT, EMPTY_ONEHOT,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN,
 )
+from hex_ai.enums import Piece, Channel, piece_to_char, channel_to_int
 from hex_ai.value_utils import (
     trmph_winner_to_training_value, trmph_winner_to_clear_str,
     get_player_to_move_from_moves, Winner, Player
@@ -100,8 +100,8 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
         # 2-channel format: convert to single channel
         board_2d = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
         # Convert one-hot encoded channels to N×N format
-        board_2d[board[BLUE_CHANNEL] == PIECE_ONEHOT] = BLUE_PIECE  # Blue pieces
-        board_2d[board[RED_CHANNEL] == PIECE_ONEHOT] = RED_PIECE   # Red pieces
+        board_2d[board[channel_to_int(Channel.BLUE)] == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)  # Blue pieces
+        board_2d[board[channel_to_int(Channel.RED)] == PIECE_ONEHOT] = piece_to_char(Piece.RED)   # Red pieces
     else:
         board_2d = board
     
@@ -110,7 +110,7 @@ def display_board(board: np.ndarray, format_type: str = "matrix") -> str:
     
     elif format_type == "visual":
         # Create a visual representation
-        symbols = {EMPTY_PIECE: ".", BLUE_PIECE: "B", RED_PIECE: "R"}
+        symbols = {piece_to_char(Piece.EMPTY): ".", piece_to_char(Piece.BLUE): "B", piece_to_char(Piece.RED): "R"}
         lines = []
         for row in range(BOARD_SIZE):
             line = " " * row  # Indent for hex shape
@@ -174,8 +174,8 @@ def reflect_board_long_diagonal(board: np.ndarray) -> np.ndarray:
         # Single channel format: (13, 13) with values 0/1/2
         reflected = np.transpose(board)  # Transpose
         # Swap colors: BLUE_PIECE <-> RED_PIECE
-        reflected = np.where(reflected == BLUE_PIECE, RED_PIECE,
-                             np.where(reflected == RED_PIECE, BLUE_PIECE,
+        reflected = np.where(reflected == piece_to_char(Piece.BLUE), piece_to_char(Piece.RED),
+                             np.where(reflected == piece_to_char(Piece.RED), piece_to_char(Piece.BLUE),
                                       reflected))
         return reflected
 
@@ -208,12 +208,12 @@ def reflect_board_short_diagonal(board: np.ndarray) -> np.ndarray:
         for row in range(N):
             for col in range(N):
                 val = board[row, col]
-                if val == BLUE_PIECE:
-                    reflected[N - 1 - col, N - 1 - row] = RED_PIECE  # Blue -> Red
-                elif val == RED_PIECE:
-                    reflected[N - 1 - col, N - 1 - row] = BLUE_PIECE  # Red -> Blue
+                if val == piece_to_char(Piece.BLUE):
+                    reflected[N - 1 - col, N - 1 - row] = piece_to_char(Piece.RED)  # Blue -> Red
+                elif val == piece_to_char(Piece.RED):
+                    reflected[N - 1 - col, N - 1 - row] = piece_to_char(Piece.BLUE)  # Red -> Blue
                 else:
-                    reflected[N - 1 - col, N - 1 - row] = EMPTY_PIECE
+                    reflected[N - 1 - col, N - 1 - row] = piece_to_char(Piece.EMPTY)
         return reflected
 
 def create_augmented_boards(board: np.ndarray) -> list[np.ndarray]:
@@ -449,8 +449,8 @@ def create_board_from_moves(moves: List[str]) -> np.ndarray:
     
     # Convert N×N format to 2-channel format for neural network training
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
-    board_state[BLUE_CHANNEL] = (board_nxn == BLUE_PIECE).astype(np.float32)  # Blue channel
-    board_state[RED_CHANNEL] = (board_nxn == RED_PIECE).astype(np.float32)   # Red channel
+    board_state[channel_to_int(Channel.BLUE)] = (board_nxn == piece_to_char(Piece.BLUE)).astype(np.float32)  # Blue channel
+    board_state[channel_to_int(Channel.RED)] = (board_nxn == piece_to_char(Piece.RED)).astype(np.float32)   # Red channel
     
     return board_state
 
@@ -836,7 +836,7 @@ def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
     board_2ch = ex['board']
     player_to_move = get_player_to_move_from_board(board_2ch)
     # Convert Player enum to integer for tensor creation
-    player_to_move_int = player_to_move.value
+    player_to_move_int = player_to_int(player_to_move)
     player_channel = np.full((1, BOARD_SIZE, BOARD_SIZE), float(player_to_move_int), dtype=board_2ch.dtype)
     board_3ch = np.concatenate([board_2ch, player_channel], axis=0)
     board = torch.tensor(board_3ch, dtype=torch.float32)

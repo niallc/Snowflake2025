@@ -1,6 +1,6 @@
 import numpy as np
 from hex_ai.utils.format_conversion import board_2nxn_to_nxn
-from hex_ai.enums import Piece
+from hex_ai.enums import Piece, char_to_piece, get_piece_unicode_symbol
 import sys
 
 def ansi_colored(text, color):
@@ -24,32 +24,32 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None) -> None
     if board.ndim == 3 and board.shape[0] == 2:
         board = board_2nxn_to_nxn(board)
     N = board.shape[0]
-    # Use uniform size symbols
-    symbols = {
-        Piece.EMPTY.value: '◯',  # empty
-        Piece.BLUE.value: '●',   # blue
-        Piece.RED.value: '●',    # red
-    }
+    
     highlight_symbol = '*'  # Symbol for highlighted move
     lines = []
     header = '   ' + ' '.join(str(i) for i in range(N))
     lines.append(header)
     use_color = file is None and sys.stdout.isatty()
+    
     for row in range(N):
         indent = ' ' * row
         row_str = f"{row:2d} " + indent
         for col in range(N):
-            symbol = symbols[board[row, col]]
+            piece_char = board[row, col]
+            piece = char_to_piece(piece_char)
+            symbol = get_piece_unicode_symbol(piece)
+            
             if highlight_move is not None and (row, col) == highlight_move:
                 row_str += highlight_symbol + ' '
             else:
                 if use_color:
-                    if board[row, col] == Piece.BLUE.value:
+                    if piece == Piece.BLUE:
                         symbol = ansi_colored(symbol, 'blue')
-                    elif board[row, col] == Piece.RED.value:
+                    elif piece == Piece.RED:
                         symbol = ansi_colored(symbol, 'red')
                 row_str += symbol + ' '
         lines.append(row_str)
+    
     output = '\n'.join(lines)
     if file is not None:
         print(output, file=file)

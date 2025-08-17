@@ -33,13 +33,14 @@ or you can specify a single directory for all checkpoints.
 
 """
 import argparse
-from datetime import datetime
 import os
 import sys
-from hex_ai.inference.tournament import (
-    TournamentConfig, run_round_robin_tournament, TournamentPlayConfig
-)
+from datetime import datetime
+
 from hex_ai.inference.model_config import get_model_dir
+from hex_ai.inference.tournament import (
+    TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
+)
 
 # Directory containing checkpoints
 CHKPT_BASE_DIR = "checkpoints/hyperparameter_tuning"

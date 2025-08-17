@@ -19,8 +19,8 @@ from hex_ai.inference.game_engine import (
     apply_move_to_tensor_trmph,
     HexGameState
 )
-from hex_ai.config import BOARD_SIZE, BLUE_PIECE, RED_PIECE, EMPTY_ONEHOT, PIECE_ONEHOT
-from hex_ai.enums import Player
+from hex_ai.config import BOARD_SIZE, EMPTY_ONEHOT, PIECE_ONEHOT
+from hex_ai.enums import Piece, Player
 
 
 class TestIsPositionEmpty:
@@ -153,11 +153,11 @@ class TestApplyMoveToTensor:
         
         # Test negative coordinates
         with pytest.raises(IndexError, match="out of bounds"):
-            apply_move_to_tensor(board_tensor, -1, 0, Player.BLUE)
+            apply_move_to_tensor(board_tensor, -1, 0, Piece.BLUE)
         
         # Test coordinates beyond board size
         with pytest.raises(IndexError, match="out of bounds"):
-            apply_move_to_tensor(board_tensor, BOARD_SIZE, 0, Player.BLUE)
+            apply_move_to_tensor(board_tensor, BOARD_SIZE, 0, Piece.BLUE)
     
     def test_invalid_player(self):
         """Test that using an invalid player raises an error."""
@@ -172,7 +172,7 @@ class TestApplyMoveToTensor:
         board_tensor = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         
         with pytest.raises(ValueError, match="Expected tensor shape"):
-            apply_move_to_tensor(board_tensor, 0, 0, Player.BLUE)
+            apply_move_to_tensor(board_tensor, 0, 0, Piece.BLUE)
     
     def test_tensor_immutability(self):
         """Test that the original tensor is not modified."""
@@ -197,7 +197,7 @@ class TestApplyMoveToState:
         new_state = apply_move_to_state(state, 0, 0)
         
         # Check the move was applied
-        assert new_state.board[0, 0] == BLUE_PIECE
+        assert new_state.board[0, 0] == Piece.BLUE.value
         assert new_state.current_player == Player.RED.value
         assert new_state.move_history == [(0, 0)]
     
@@ -239,7 +239,7 @@ class TestApplyMoveToStateTrmph:
         new_state = apply_move_to_state_trmph(state, "a1")  # (0, 0)
         
         # Check the move was applied
-        assert new_state.board[0, 0] == BLUE_PIECE
+        assert new_state.board[0, 0] == Piece.BLUE.value
         assert new_state.current_player == Player.RED.value
         assert new_state.move_history == [(0, 0)]
     

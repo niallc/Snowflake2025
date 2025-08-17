@@ -16,7 +16,7 @@ from hex_ai.inference.board_utils import (
     get_piece_at, has_piece_at,
     is_empty, place_piece, board_to_string, validate_board, count_pieces
 )
-from hex_ai.config import EMPTY_PIECE, BLUE_PIECE, RED_PIECE
+from hex_ai.enums import Piece, piece_to_char
 from hex_ai.config import BOARD_SIZE
 
 
@@ -32,7 +32,7 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check all positions are empty
-        assert np.all(board_nxn == EMPTY_PIECE)
+        assert np.all(board_nxn == piece_to_char(Piece.EMPTY))
         
         # Convert back
         board_2nxn_back = board_nxn_to_2nxn(board_nxn)
@@ -50,11 +50,11 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check blue piece is at (0,0)
-        assert board_nxn[0, 0] == BLUE_PIECE
+        assert board_nxn[0, 0] == piece_to_char(Piece.BLUE)
         
         # Check all other positions are empty
-        board_nxn[0, 0] = EMPTY_PIECE  # Temporarily remove the piece
-        assert np.all(board_nxn == EMPTY_PIECE)
+        board_nxn[0, 0] = piece_to_char(Piece.EMPTY)  # Temporarily remove the piece
+        assert np.all(board_nxn == piece_to_char(Piece.EMPTY))
     
     def test_red_piece_conversion(self):
         """Test conversion with red piece."""
@@ -66,11 +66,11 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check red piece is at (1,1)
-        assert board_nxn[1, 1] == RED_PIECE
+        assert board_nxn[1, 1] == piece_to_char(Piece.RED)
         
         # Check all other positions are empty
-        board_nxn[1, 1] = EMPTY_PIECE  # Temporarily remove the piece
-        assert np.all(board_nxn == EMPTY_PIECE)
+        board_nxn[1, 1] = piece_to_char(Piece.EMPTY)  # Temporarily remove the piece
+        assert np.all(board_nxn == piece_to_char(Piece.EMPTY))
     
     def test_multiple_pieces_conversion(self):
         """Test conversion with multiple pieces."""
@@ -84,9 +84,9 @@ class TestBoardConversion:
         board_nxn = board_2nxn_to_nxn(board_2nxn)
         
         # Check pieces are in correct positions
-        assert board_nxn[0, 0] == BLUE_PIECE
-        assert board_nxn[1, 1] == RED_PIECE
-        assert board_nxn[2, 2] == BLUE_PIECE
+        assert board_nxn[0, 0] == piece_to_char(Piece.BLUE)
+        assert board_nxn[1, 1] == piece_to_char(Piece.RED)
+        assert board_nxn[2, 2] == piece_to_char(Piece.BLUE)
         
         # Convert back
         board_2nxn_back = board_nxn_to_2nxn(board_nxn)
@@ -100,16 +100,16 @@ class TestBoardOperations:
     
     def test_get_piece_at(self):
         """Test getting piece at position."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
         
         # Test getting blue piece
         piece = get_piece_at(board_nxn, 0, 0)
-        assert piece == BLUE_PIECE
+        assert piece == piece_to_char(Piece.BLUE)
         
         # Test getting empty piece
         piece = get_piece_at(board_nxn, 1, 1)
-        assert piece == EMPTY_PIECE
+        assert piece == piece_to_char(Piece.EMPTY)
         
         # Test out of bounds
         with pytest.raises(IndexError):
@@ -117,9 +117,9 @@ class TestBoardOperations:
     
     def test_has_piece_at(self):
         """Test checking for pieces of specific color."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
-        board_nxn[1, 1] = RED_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
+        board_nxn[1, 1] = piece_to_char(Piece.RED)
         
         # Test blue piece
         assert has_piece_at(board_nxn, 0, 0, "blue") == True
@@ -138,8 +138,8 @@ class TestBoardOperations:
     
     def test_is_empty(self):
         """Test checking if position is empty."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
         
         # Test empty position
         assert is_empty(board_nxn, 1, 1) == True
@@ -152,16 +152,16 @@ class TestBoardOperations:
     
     def test_place_piece(self):
         """Test placing pieces."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
         
         # Place blue piece
         new_board = place_piece(board_nxn, 0, 0, "blue")
-        assert new_board[0, 0] == BLUE_PIECE
-        assert new_board[1, 1] == EMPTY_PIECE  # Other positions unchanged
+        assert new_board[0, 0] == piece_to_char(Piece.BLUE)
+        assert new_board[1, 1] == piece_to_char(Piece.EMPTY)  # Other positions unchanged
         
         # Place red piece
         new_board = place_piece(new_board, 1, 1, "red")
-        assert new_board[1, 1] == RED_PIECE
+        assert new_board[1, 1] == piece_to_char(Piece.RED)
         
         # Test placing on occupied position
         with pytest.raises(ValueError):
@@ -173,9 +173,9 @@ class TestBoardOperations:
     
     def test_board_to_string(self):
         """Test board string representation."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
-        board_nxn[1, 1] = RED_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
+        board_nxn[1, 1] = piece_to_char(Piece.RED)
         
         board_str = board_to_string(board_nxn)
         
@@ -197,21 +197,21 @@ class TestBoardOperations:
     def test_validate_board(self):
         """Test board validation."""
         # Valid board
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
-        board_nxn[1, 1] = RED_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
+        board_nxn[1, 1] = piece_to_char(Piece.RED)
         assert validate_board(board_nxn) == True
         
         # Invalid board (wrong shape)
-        invalid_board = np.full((BOARD_SIZE, BOARD_SIZE + 1), EMPTY_PIECE, dtype='U1')
+        invalid_board = np.full((BOARD_SIZE, BOARD_SIZE + 1), piece_to_char(Piece.EMPTY), dtype='U1')
         assert validate_board(invalid_board) == False
     
     def test_count_pieces(self):
         """Test counting pieces."""
-        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
-        board_nxn[0, 0] = BLUE_PIECE
-        board_nxn[1, 1] = RED_PIECE
-        board_nxn[2, 2] = BLUE_PIECE
+        board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+        board_nxn[0, 0] = piece_to_char(Piece.BLUE)
+        board_nxn[1, 1] = piece_to_char(Piece.RED)
+        board_nxn[2, 2] = piece_to_char(Piece.BLUE)
         
         blue_count, red_count = count_pieces(board_nxn)
         assert blue_count == 2

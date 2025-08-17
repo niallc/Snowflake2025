@@ -1,31 +1,25 @@
-import torch
-import numpy as np
-import time
-import psutil
-from typing import List, Tuple, Union, Optional, Dict, Any
-from collections import OrderedDict
 import logging
+import time
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from hex_ai.utils import format_conversion as fc
+import numpy as np
+import psutil
+import torch
+
+from hex_ai.config import (
+    MODEL_CHANNELS, PLAYER_CHANNEL, TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+)
 from hex_ai.data_utils import create_board_from_moves
-from hex_ai.value_utils import policy_logits_to_probs, get_top_k_moves_with_probs
+from hex_ai.enums import Channel
+from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.training_utils import get_device  # Use centralized device detection
-from hex_ai.inference.board_display import display_hex_board
-from hex_ai.config import (
-    PLAYER_CHANNEL, MODEL_CHANNELS,
-    TRAINING_BLUE_WIN, TRAINING_RED_WIN,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
-)
-from hex_ai.enums import Channel
+from hex_ai.utils import format_conversion as fc
 from hex_ai.utils.player_utils import get_player_to_move_from_board
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 from hex_ai.value_utils import (
-    # Add new utilities
-    policy_logits_to_probs,
-    get_legal_policy_probs,
-    select_top_k_moves,
-    get_top_k_moves_with_probs,
+    get_legal_policy_probs, get_top_k_moves_with_probs, model_output_to_prob, policy_logits_to_probs,
+    select_top_k_moves, trmph_winner_to_clear_str, trmph_winner_to_training_value, ValuePerspective
 )
 
 

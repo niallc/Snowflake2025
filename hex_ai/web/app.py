@@ -22,7 +22,8 @@ from hex_ai.value_utils import (
     select_top_k_moves,
     select_policy_move,
 )
-from hex_ai.config import BOARD_SIZE, EMPTY_PIECE, BLUE_PIECE, RED_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+from hex_ai.enums import Piece
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
@@ -642,9 +643,9 @@ def api_constants():
     return jsonify({
         "BOARD_SIZE": BOARD_SIZE,
         "PIECE_VALUES": {
-            "EMPTY": EMPTY_PIECE,
-            "BLUE": BLUE_PIECE,
-            "RED": RED_PIECE
+            "EMPTY": Piece.EMPTY.value,
+            "BLUE": Piece.BLUE.value,
+            "RED": Piece.RED.value
         },
         # Frontend currently expects numeric player codes; expose Enum .value at boundary
         # TODO: Figure out: should we change the frontend to use the Player enum instead?

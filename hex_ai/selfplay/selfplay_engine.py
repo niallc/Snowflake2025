@@ -2,22 +2,21 @@
 Self-play engine for generating training data using the Hex AI model.
 """
 
-import time
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
-import pickle
-import gzip
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.game_engine import HexGameState
+import numpy as np
+
+from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching
-from hex_ai.config import TRMPH_PREFIX, TRMPH_RED_WIN, TRMPH_BLUE_WIN
-from hex_ai.value_utils import validate_trmph_winner
+from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.training_utils import get_device
+from hex_ai.value_utils import validate_trmph_winner
 
 
 class SelfPlayEngine:
@@ -345,71 +344,33 @@ class SelfPlayEngine:
         
         return stats
 
-    def save_games_to_file(self, games: List[Dict[str, Any]], filename: str):
+    def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str):
         """
-        Save games to a compressed pickle file.
-        
-        Args:
-            games: List of game data dictionaries
-            filename: Output filename
-        """
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        
-        # Save with compression
-        with gzip.open(filename, 'wb') as f:
-            pickle.dump(games, f)
-        
-        if self.verbose >= 1:
-            print(f"Saved {len(games)} games to {filename}")
-
-    def save_games_with_details(self, games: List[Dict[str, Any]], base_filename: str):
-        """
-        Save games with both compressed data and detailed CSV files.
+        Save games to a TRMPH text file.
         
         Args:
             games: List of game data dictionaries
             base_filename: Base filename (without extension)
             
         Returns:
-            Tuple of (compressed_file, csv_dir)
+            The TRMPH file path
         """
-        # Save compressed data
-        compressed_file = f"{base_filename}.pkl.gz"
-        self.save_games_to_file(games, compressed_file)
+        # Save as TRMPH text file
+        trmph_file = f"{base_filename}.trmph"
         
-        # Save detailed CSV files (simplified version)
-        csv_dir = f"{base_filename}_detailed_moves"
-        self._save_detailed_moves_to_csv(games, csv_dir)
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(trmph_file), exist_ok=True)
         
-        return compressed_file, csv_dir
-
-    def _save_detailed_moves_to_csv(self, games: List[Dict[str, Any]], output_dir: str):
-        """
-        Save detailed move-by-move data to CSV files.
-        
-        Args:
-            games: List of game data dictionaries
-            output_dir: Output directory for CSV files
-        """
-        import csv
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save summary file
-        summary_file = os.path.join(output_dir, "games_summary.csv")
-        with open(summary_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['game_id', 'winner', 'final_trmph'])
-            
-            for i, game in enumerate(games):
-                self._validate_game_data(game, i)
-                writer.writerow([i, game['winner'], game['trmph']])
+        # Save as TRMPH text file using the same format as streaming
+        with open(trmph_file, 'w') as f:
+            for game in games:
+                self._validate_game_data(game)
+                f.write(f"{game['trmph']} {game['winner']}\n")
         
         if self.verbose >= 1:
-            print(f"Saved detailed move data:")
-            print(f"  Summary: {summary_file}")
-            print(f"  Individual games: {len(games)} CSV files in {output_dir}")
+            print(f"Saved {len(games)} games to {trmph_file}")
+        
+        return trmph_file
 
     def save_game_to_stream(self, game_data: Dict[str, Any]):
         """Save a single game to the streaming file."""

@@ -14,10 +14,8 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
 
 
-from hex_ai.config import (
-    EMPTY_PIECE, BLUE_PIECE, RED_PIECE,
-)
-from hex_ai.enums import Player
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Piece, Player
 
 def board_state_to_trmph(state: HexGameState) -> str:
     """Convert the move history of a HexGameState to a TRMPH string."""

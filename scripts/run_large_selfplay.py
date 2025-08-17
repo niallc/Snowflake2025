@@ -101,12 +101,11 @@ def main():
         
         # Save games
         if games:
-            # Save with detailed move data
+            # Save as TRMPH text file
             base_filename = f"{args.output_dir}/selfplay_{timestamp}"
-            compressed_file, csv_dir = engine.save_games_with_details(games, base_filename)
-            print(f"\nSaved detailed games:")
-            print(f"  Compressed: {compressed_file}")
-            print(f"  CSV details: {csv_dir}")
+            trmph_file = engine.save_games_simple(games, base_filename)
+            print(f"\nSaved games:")
+            print(f"  TRMPH file: {trmph_file}")
         
         # Print final statistics
         total_time = time.time() - start_time

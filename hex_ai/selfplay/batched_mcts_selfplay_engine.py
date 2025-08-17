@@ -5,18 +5,19 @@ This module provides a self-play engine that uses the new batched MCTS implement
 for significantly improved performance through batched neural network inference.
 """
 
-import time
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
 import logging
+import time
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
+from hex_ai.enums import Player
 from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.enums import Player
-from hex_ai.value_utils import int_to_player
 from hex_ai.training_utils import get_device
+from hex_ai.value_utils import int_to_player
 
 
 class BatchedMCTSSelfPlayEngine:

@@ -70,24 +70,25 @@ Key Features:
 # This will provide detailed performance breakdown for optimization targeting
 
 import copy
+import logging
 import math
 import threading
 import time
-import logging
 from dataclasses import dataclass, field, replace
-from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 
-from hex_ai.inference.game_engine import HexGameState
-from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.batch_processor import BatchProcessor
-from hex_ai.inference.batched_evaluator import BatchedEvaluator
-from hex_ai.inference.mcts_config import BatchedMCTSOrchestration, MCTSCoreConfig
-from hex_ai.value_utils import policy_logits_to_probs, player_to_winner
 from hex_ai.config import BOARD_SIZE
 from hex_ai.enums import Player
+from hex_ai.inference.batch_processor import BatchProcessor
+from hex_ai.inference.batched_evaluator import BatchedEvaluator
+from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.mcts_config import BatchedMCTSOrchestration, MCTSCoreConfig
+from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.utils.perf import PERF
+from hex_ai.value_utils import player_to_winner, policy_logits_to_probs
 
 logger = logging.getLogger(__name__)
 

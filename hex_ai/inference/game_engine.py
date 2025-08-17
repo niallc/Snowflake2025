@@ -5,25 +5,20 @@ This module provides the core game logic for Hex, including board representation
 move validation, winner detection, and game state management.
 """
 
+from collections import namedtuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Dict, Any
-from collections import namedtuple
 
-from hex_ai.config import (
-    BOARD_SIZE, VERBOSE_LEVEL, EMPTY_PIECE
-)
-from hex_ai.enums import Player, Winner as WinnerEnum, Piece as PieceEnum
-from hex_ai.inference.board_utils import (
-    is_empty, place_piece, board_to_string
-)
+from hex_ai.config import BOARD_SIZE, VERBOSE_LEVEL
+from hex_ai.enums import Piece as PieceEnum, Player, Winner as WinnerEnum
+from hex_ai.inference.board_utils import board_to_string, is_empty, place_piece
 from hex_ai.utils.format_conversion import (
-    board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, trmph_move_to_rowcol, split_trmph_moves
+    board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, split_trmph_moves, trmph_move_to_rowcol
 )
-from hex_ai.value_utils import (
-    get_top_k_legal_moves, sample_move_by_value, apply_move_to_tensor
-)
+from hex_ai.value_utils import apply_move_to_tensor, get_top_k_legal_moves, sample_move_by_value
 
 
 # Edge coordinates for Union-Find
@@ -88,7 +83,7 @@ class HexGameState:
     """
     Represents the state of a Hex game using N×N character format.
     """
-    board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1'))
+    board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1'))
     _current_player: Player = field(default=Player.BLUE, repr=False)
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
@@ -101,7 +96,7 @@ class HexGameState:
                  _current_player: Optional[Player] = None, move_history: Optional[List[Tuple[int, int]]] = None,
                  game_over: bool = False, winner: Optional[str] = None):
         # Initialize board
-        self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), EMPTY_PIECE, dtype='U1')
+        self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
         # Initialize current player with compatibility for legacy int
         if _current_player is not None:
             if not isinstance(_current_player, Player):

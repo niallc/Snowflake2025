@@ -6,12 +6,9 @@ and accessible from the centralized config module.
 """
 
 import pytest
-from hex_ai.config import (
-    BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
-    TRAINING_BLUE_WIN, TRAINING_RED_WIN
-)
-from hex_ai.enums import Player
+import numpy as np
+from hex_ai.enums import Piece, Channel, Player, piece_to_char, player_to_int, channel_to_int
+from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRAINING_BLUE_WIN, TRAINING_RED_WIN
 
 
 class TestPlayerConstants:
@@ -27,6 +24,14 @@ class TestPlayerConstants:
         """Test that player constants are integers."""
         assert isinstance(Player.BLUE.value, int)
         assert isinstance(Player.RED.value, int)
+    
+    def test_player_helper_functions(self):
+        """Test that player helper functions work correctly."""
+        assert player_to_int(Player.BLUE) == 0
+        assert player_to_int(Player.RED) == 1
+        assert channel_to_int(Channel.BLUE) == 0
+        assert channel_to_int(Channel.RED) == 1
+        assert channel_to_int(Channel.PLAYER_TO_MOVE) == 2
 
 
 class TestPieceConstants:
@@ -34,21 +39,27 @@ class TestPieceConstants:
     
     def test_piece_constants_defined(self):
         """Test that piece constants are properly defined."""
-        assert EMPTY_PIECE == "e"
-        assert BLUE_PIECE == "b"
-        assert RED_PIECE == "r"
+        assert Piece.EMPTY.value == "e"
+        assert Piece.BLUE.value == "b"
+        assert Piece.RED.value == "r"
     
     def test_piece_constants_unique(self):
         """Test that piece constants are unique."""
-        assert EMPTY_PIECE != BLUE_PIECE
-        assert EMPTY_PIECE != RED_PIECE
-        assert BLUE_PIECE != RED_PIECE
+        assert Piece.EMPTY.value != Piece.BLUE.value
+        assert Piece.EMPTY.value != Piece.RED.value
+        assert Piece.BLUE.value != Piece.RED.value
     
     def test_piece_constants_string(self):
         """Test that piece constants are strings."""
-        assert isinstance(EMPTY_PIECE, str)
-        assert isinstance(BLUE_PIECE, str)
-        assert isinstance(RED_PIECE, str)
+        assert isinstance(Piece.EMPTY.value, str)
+        assert isinstance(Piece.BLUE.value, str)
+        assert isinstance(Piece.RED.value, str)
+    
+    def test_piece_helper_functions(self):
+        """Test that piece helper functions work correctly."""
+        assert piece_to_char(Piece.EMPTY) == "e"
+        assert piece_to_char(Piece.BLUE) == "b"
+        assert piece_to_char(Piece.RED) == "r"
 
 
 class TestWinnerFormatConstants:
@@ -84,8 +95,8 @@ class TestConstantsConsistency:
         # while player-to-move uses 0=blue, 1=red
         assert Player.BLUE.value == 0
         assert Player.RED.value == 1
-        assert BLUE_PIECE == "b"
-        assert RED_PIECE == "r"
+        assert Piece.BLUE.value == "b"
+        assert Piece.RED.value == "r"
     
     def test_trmph_training_consistency(self):
         """Test that TRMPH and training format constants are consistent."""

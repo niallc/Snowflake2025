@@ -69,6 +69,7 @@ write_ups/batched_mcts_improvement_plan.md
 write_ups/code_review_concerns.md
 write_ups/tree_search_batching_bug_analysis.md
 write_ups/mcts_timing_analysis.md
+write_ups/redundant/enum_usage_guidelines.md
 
 # VSCode
 .vscode/

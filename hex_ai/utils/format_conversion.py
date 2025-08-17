@@ -12,7 +12,7 @@ from typing import Tuple
 from hex_ai.config import (
     BOARD_SIZE, PIECE_ONEHOT, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 )
-from hex_ai.enums import Piece, Channel
+from hex_ai.enums import Piece, Channel, piece_to_char, channel_to_int, player_to_int
 
 import string
 import logging
@@ -77,14 +77,14 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
     moves = split_trmph_moves(bare_moves)
     
     # Initialize board with empty piece ('e')
-    board = np.full((board_size, board_size), Piece.EMPTY.value, dtype='U1')
+    board = np.full((board_size, board_size), piece_to_char(Piece.EMPTY), dtype='U1')
     
     # Place moves on board
     for i, move in enumerate(moves):
         row, col = trmph_move_to_rowcol(move, board_size)
         
         # Check for duplicate moves
-        if board[row, col] != Piece.EMPTY.value:
+        if board[row, col] != piece_to_char(Piece.EMPTY):
             if duplicate_action == "ignore":
                 logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
                 break  # Do not process any moves after a duplicate.
@@ -105,7 +105,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         
         # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
         is_blue_turn = (i % 2) == 0
-        board[row, col] = Piece.BLUE.value if is_blue_turn else Piece.RED.value
+        board[row, col] = piece_to_char(Piece.BLUE) if is_blue_turn else piece_to_char(Piece.RED)
     
     return board
 
@@ -142,10 +142,10 @@ def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
     """Convert 2×N×N tensor format to N×N array format."""
     if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
-    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), Piece.EMPTY.value, dtype='U1')
+    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
     # Convert one-hot encoded channels to N×N format
-    board_nxn[board_2nxn[Channel.BLUE.value] == PIECE_ONEHOT] = Piece.BLUE.value
-    board_nxn[board_2nxn[Channel.RED.value] == PIECE_ONEHOT] = Piece.RED.value
+    board_nxn[board_2nxn[channel_to_int(Channel.BLUE)] == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
+    board_nxn[board_2nxn[channel_to_int(Channel.RED)] == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
@@ -154,8 +154,8 @@ def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
         raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
     board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
     # Convert N×N format to one-hot encoded channels
-    board_2nxn[Channel.BLUE.value] = torch.from_numpy((board_nxn == Piece.BLUE.value).astype(np.float32))
-    board_2nxn[Channel.RED.value] = torch.from_numpy((board_nxn == Piece.RED.value).astype(np.float32))
+    board_2nxn[channel_to_int(Channel.BLUE)] = torch.from_numpy((board_nxn == piece_to_char(Piece.BLUE)).astype(np.float32))
+    board_2nxn[channel_to_int(Channel.RED)] = torch.from_numpy((board_nxn == piece_to_char(Piece.RED)).astype(np.float32))
     return board_2nxn
 
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
@@ -179,7 +179,7 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     # This will use the original behavior (raise exception for invalid boards)
     player_to_move = get_player_to_move_from_board(board_np, error_tracker=None)
     # Convert Player enum to integer for tensor creation
-    player_to_move_int = player_to_move.value
+    player_to_move_int = player_to_int(player_to_move)
     player_channel = np.full((BOARD_SIZE, BOARD_SIZE), float(player_to_move_int), dtype=np.float32)
     # Add player-to-move channel as the third channel
     board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
