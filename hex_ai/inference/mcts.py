@@ -3,14 +3,6 @@
 # Compatible with flat-file or package imports via shims.
 
 # ============================== MCTS BASELINE — TODOs ==============================
-# Strictness & Error Handling
-# - [ ] Add `cfg.strict_shapes=True` and replace defensive pad/truncate with asserts:
-#       assert policy_logits.shape[-1] == action_size, "Policy size mismatch"
-# - [ ] Add `cfg.strict_probs=True` to validate priors after masking/softmax:
-#       assert np.isfinite(P).all() and abs(P.sum() - 1.0) < 1e-6 and (P >= 0).all()
-# - [ ] Validate action_size: assert action_size == board_size * board_size
-# - [ ] Validate legal index bounds: all(i in [0, action_size)) for i in `legal_indices`
-# - [ ] Fail-fast root invariants (post expansion): len(root.P) == len(root.legal_moves) and sum≈1
 
 # ===================================================================================
 
@@ -135,11 +127,19 @@ class BaselineMCTS:
         stack_ms = 0.0
         expand_ms = 0.0
         backprop_ms = 0.0
+        select_ms = 0.0
+        cache_lookup_ms = 0.0
+        state_creation_ms = 0.0
         h2d_ms_total = 0.0
         forward_ms_total = 0.0
+        pure_forward_ms_total = 0.0
+        sync_ms_total = 0.0
         d2h_ms_total = 0.0
         batch_sizes: List[int] = []
         forward_ms_list: List[float] = []
+        select_times: List[float] = []
+        cache_hit_times: List[float] = []
+        cache_miss_times: List[float] = []
 
         sims_remaining = self.cfg.sims
 
@@ -173,6 +173,8 @@ class BaselineMCTS:
                 forward_ms_list.append(float(tm["forward_ms"]))
                 h2d_ms_total += float(tm["h2d_ms"])
                 forward_ms_total += float(tm["forward_ms"])
+                pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
+                sync_ms_total += float(tm.get("sync_ms", 0.0))
                 d2h_ms_total += float(tm["d2h_ms"])
 
                 policy_np = policy_cpu[0].numpy()
@@ -192,6 +194,7 @@ class BaselineMCTS:
         # ---- Simulation loop with explicit batched leaves ----
         while sims_remaining > 0:
             # 1) SELECT up to K leaves
+            t_select_start = time.perf_counter()
             leaves: List[MCTSNode] = []
             paths: List[List[Tuple[MCTSNode, int]]] = []  # per-leaf path of (node, child_idx chosen at that node)
             # We may expand some via cache immediately; we only batch NN-evals for uncached
@@ -220,15 +223,20 @@ class BaselineMCTS:
                     child = node.children[child_idx]
                     if child is None:
                         # Materialize child state on demand
+                        t_state_start = time.perf_counter()
                         (r, c) = node.legal_moves[child_idx]
                         child_state = node.state.make_move(r, c)
                         child = MCTSNode(child_state, board_size)
+                        state_creation_ms += (time.perf_counter() - t_state_start) * 1000.0
                         node.children[child_idx] = child
                     node = child
 
                 # If we reached select_budget, stop; else continue to select next leaf
                 if len(leaves) >= select_budget:
                     break
+
+            select_ms += (time.perf_counter() - t_select_start) * 1000.0
+            select_times.append((time.perf_counter() - t_select_start) * 1000.0)
 
             # 2) STACK encodings for NN where needed and expand cached/terminal immediately
             t_stack0 = time.perf_counter()
@@ -243,12 +251,19 @@ class BaselineMCTS:
                 if leaf.is_expanded:
                     # shouldn't happen: selection stops at unexpanded
                     continue
+                
+                # Time cache lookup
+                t_cache_start = time.perf_counter()
                 cached = self.eval_cache.get(leaf.state_hash, None)
+                cache_lookup_ms += (time.perf_counter() - t_cache_start) * 1000.0
+                
                 if cached is not None:
                     self.cache_hits += 1
+                    cache_hit_times.append((time.perf_counter() - t_cache_start) * 1000.0)
                     cached_expansions.append((i, cached[0], cached[1]))
                 else:
                     self.cache_misses += 1
+                    cache_miss_times.append((time.perf_counter() - t_cache_start) * 1000.0)
                     t_enc0 = time.perf_counter()
                     enc = leaf.state.get_board_tensor().to(dtype=torch.float32)  # CPU
                     t_enc_sum += (time.perf_counter() - t_enc0) * 1000.0
@@ -269,6 +284,8 @@ class BaselineMCTS:
                 forward_ms_list.append(float(tm["forward_ms"]))
                 h2d_ms_total += float(tm["h2d_ms"])
                 forward_ms_total += float(tm["forward_ms"])
+                pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
+                sync_ms_total += float(tm.get("sync_ms", 0.0))
                 d2h_ms_total += float(tm["d2h_ms"])
 
             # 4) EXPAND nodes with policy; BACKPROP values
@@ -317,6 +334,10 @@ class BaselineMCTS:
                     break
             backprop_ms += (time.perf_counter() - t1) * 1000.0
 
+        # Calculate total search time
+        total_search_time = (encode_ms + stack_ms + h2d_ms_total + forward_ms_total + d2h_ms_total + 
+                           expand_ms + backprop_ms + select_ms + cache_lookup_ms + state_creation_ms) / 1000.0
+        
         # Build stats
         _store_root = True
         self._root_node = root
@@ -325,16 +346,29 @@ class BaselineMCTS:
             "stack_ms": stack_ms,
             "h2d_ms": h2d_ms_total,
             "forward_ms": forward_ms_total,
+            "pure_forward_ms": pure_forward_ms_total,
+            "sync_ms": sync_ms_total,
             "d2h_ms": d2h_ms_total,
             "expand_ms": expand_ms,
             "backprop_ms": backprop_ms,
+            "select_ms": select_ms,
+            "cache_lookup_ms": cache_lookup_ms,
+            "state_creation_ms": state_creation_ms,
             "batch_count": len(batch_sizes),
             "batch_sizes": batch_sizes,
             "forward_ms_list": forward_ms_list,
+            "select_times": select_times,
+            "cache_hit_times": cache_hit_times,
+            "cache_miss_times": cache_miss_times,
             "median_forward_ms_ex_warm": _median_excluding_first(forward_ms_list),
             "p90_forward_ms_ex_warm": _p90_excluding_first(forward_ms_list),
+            "median_select_ms": _median_excluding_first(select_times) if select_times else 0.0,
+            "median_cache_hit_ms": _median_excluding_first(cache_hit_times) if cache_hit_times else 0.0,
+            "median_cache_miss_ms": _median_excluding_first(cache_miss_times) if cache_miss_times else 0.0,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
+            "total_simulations": self.cfg.sims,
+            "simulations_per_second": self.cfg.sims / total_search_time if total_search_time > 0 else 0.0,
         }
         return stats
 

@@ -1,138 +1,143 @@
 #!/usr/bin/env python3
 """
-Test script for MCTS performance instrumentation.
-
-This script runs a quick MCTS search to verify that the performance
-monitoring is working correctly and to establish a baseline.
+Test script to verify MCTS performance improvements.
+Tests ModelWrapper caching and timing instrumentation.
 """
 
-import sys
 import time
-import logging
-from pathlib import Path
+import requests
+import json
+import sys
+import os
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-import hex_ai  # This validates the environment
-from hex_ai.inference.batched_mcts import BatchedNeuralMCTS
-from hex_ai.inference.game_engine import HexGameState
-from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.utils.perf import PERF
-
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def test_mcts_performance():
-    """Test MCTS performance instrumentation."""
-    print("Testing MCTS performance instrumentation...")
+    """Test MCTS performance with and without caching."""
     
-    # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    # Test parameters
+    base_url = "http://localhost:5001"
+    test_trmph = "#13,"  # Empty board in correct TRMPH format
+    model_id = "model1"
     
-    # Create a simple mock model for testing
-    class MockModel:
-        def __init__(self):
-            self.cache = {}
-        
-        def batch_infer(self, boards):
-            """Mock batch inference that returns random results."""
-            import numpy as np
-            
-            print(f"MockModel.batch_infer called with {len(boards)} boards")
-            
-            policies = []
-            values = []
-            
-            for i, board in enumerate(boards):
-                # Create a cache key
-                cache_key = board.tobytes()
-                
-                if cache_key in self.cache:
-                    # Return cached result
-                    policies.append(self.cache[cache_key][0])
-                    values.append(self.cache[cache_key][1])
-                    print(f"  Board {i}: returning cached result")
-                else:
-                    # Generate new result
-                    policy = np.random.rand(169)  # 13x13 board flattened
-                    value = np.random.uniform(-1.0, 1.0)
-                    
-                    # Cache the result
-                    self.cache[cache_key] = (policy, value)
-                    
-                    policies.append(policy)
-                    values.append(value)
-                    print(f"  Board {i}: generated new result (policy shape: {policy.shape}, value: {value:.3f})")
-            
-            print(f"MockModel.batch_infer returning {len(policies)} policies and {len(values)} values")
-            return policies, values
+    print("=== MCTS Performance Test ===")
+    print(f"Testing with model: {model_id}")
+    print(f"Base URL: {base_url}")
+    print()
     
-    # Create mock model and MCTS engine
-    model = MockModel()
-    mcts = BatchedNeuralMCTS(
-        model=model,
-        exploration_constant=1.4,
-        optimal_batch_size=8,  # Small batch size for testing
-        verbose=2  # Increase verbosity for debugging
-    )
-    
-    # Create a game state
-    state = HexGameState()
-    
-    print(f"Starting MCTS search with 100 simulations...")
-    
-    # Run MCTS search
+    # Test 1: First call (should create ModelWrapper)
+    print("Test 1: First MCTS call (ModelWrapper creation)")
     start_time = time.time()
-    root = mcts.search(state, num_simulations=100)
-    total_time = time.time() - start_time
     
-    print(f"MCTS search completed in {total_time:.3f}s")
-    print(f"Root node state: {root.node_state}")
-    print(f"Root node is leaf: {root.is_leaf()}")
-    print(f"Root node is terminal: {root.is_terminal()}")
-    print(f"Root node children: {len(root.children)}")
-    
-    # Get search statistics
-    search_stats = mcts.get_search_statistics()
-    print(f"Search statistics: {search_stats}")
-    
-    # Get performance snapshot
-    perf_snapshot = PERF.snapshot(clear=True, force=True)
-    print(f"Performance snapshot: {perf_snapshot}")
-    
-    # Analyze the results
-    if perf_snapshot:
-        timings = perf_snapshot.get('timings_s', {})
-        counters = perf_snapshot.get('counters', {})
-        samples = perf_snapshot.get('samples', {})
+    try:
+        response = requests.post(f"{base_url}/api/mcts_move", json={
+            "trmph": test_trmph,
+            "model_id": model_id,
+            "num_simulations": 50,  # Reduced for faster testing
+            "temperature": 1.0
+        }, timeout=30)
         
-        print("\n=== Performance Analysis ===")
-        print(f"Total simulations: {counters.get('mcts.sim', 0)}")
-        print(f"Total batches: {counters.get('nn.batch', 0)}")
+        first_call_time = time.time() - start_time
         
-        total_time = sum(timings.values())
-        if total_time > 0:
-            print(f"Total time: {total_time:.3f}s")
-            print(f"Simulations per second: {counters.get('mcts.sim', 0) / total_time:.1f}")
+        if response.status_code == 200:
+            result = response.json()
+            print(f"✓ First call completed in {first_call_time:.3f}s")
+            print(f"  Success: {result.get('success', False)}")
+            print(f"  Move made: {result.get('move_made', 'None')}")
+        else:
+            print(f"✗ First call failed: {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False
             
-            print("\nTime distribution:")
-            for phase, phase_time in timings.items():
-                pct = (phase_time / total_time * 100) if total_time > 0 else 0
-                print(f"  {phase}: {phase_time:.3f}s ({pct:.1f}%)")
-        
-        # Batch size analysis
-        if 'nn.batch_size' in samples:
-            count, total = samples['nn.batch_size']
-            avg_batch_size = total / count if count > 0 else 0
-            print(f"\nBatch analysis:")
-            print(f"  Average batch size: {avg_batch_size:.1f}")
-            print(f"  Total batches: {count}")
+    except Exception as e:
+        print(f"✗ First call error: {e}")
+        return False
     
-    print("\n✓ MCTS performance instrumentation test completed")
+    print()
+    
+    # Test 2: Second call (should use cached ModelWrapper)
+    print("Test 2: Second MCTS call (cached ModelWrapper)")
+    start_time = time.time()
+    
+    try:
+        response = requests.post(f"{base_url}/api/mcts_move", json={
+            "trmph": test_trmph,
+            "model_id": model_id,
+            "num_simulations": 50,
+            "temperature": 1.0
+        }, timeout=30)
+        
+        second_call_time = time.time() - start_time
+        
+        if response.status_code == 200:
+            result = response.json()
+            print(f"✓ Second call completed in {second_call_time:.3f}s")
+            print(f"  Success: {result.get('success', False)}")
+            print(f"  Move made: {result.get('move_made', 'None')}")
+        else:
+            print(f"✗ Second call failed: {response.status_code}")
+            print(f"  Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"✗ Second call error: {e}")
+        return False
+    
+    print()
+    
+    # Performance analysis
+    speedup = first_call_time / second_call_time if second_call_time > 0 else 0
+    time_saved = first_call_time - second_call_time
+    
+    print("=== Performance Analysis ===")
+    print(f"First call time:  {first_call_time:.3f}s")
+    print(f"Second call time: {second_call_time:.3f}s")
+    print(f"Time saved:       {time_saved:.3f}s")
+    print(f"Speedup:          {speedup:.1f}x")
+    
+    if speedup > 2.0:
+        print("✓ Significant performance improvement detected!")
+        return True
+    else:
+        print("⚠ Performance improvement minimal or not detected")
+        return False
 
+def test_cache_status():
+    """Test cache status endpoint."""
+    print("\n=== Cache Status Test ===")
+    
+    try:
+        response = requests.get("http://localhost:5001/api/cache/status")
+        if response.status_code == 200:
+            status = response.json()
+            print(f"✓ Cache status: {status}")
+            return True
+        else:
+            print(f"✗ Cache status failed: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"✗ Cache status error: {e}")
+        return False
 
 if __name__ == "__main__":
-    test_mcts_performance()
+    print("MCTS Performance Test")
+    print("Make sure the Flask server is running on localhost:5001")
+    print()
+    
+    # Test cache status
+    cache_ok = test_cache_status()
+    
+    # Test performance
+    perf_ok = test_mcts_performance()
+    
+    print("\n=== Test Summary ===")
+    print(f"Cache status: {'✓ PASS' if cache_ok else '✗ FAIL'}")
+    print(f"Performance:  {'✓ PASS' if perf_ok else '✗ FAIL'}")
+    
+    if cache_ok and perf_ok:
+        print("\n🎉 All tests passed! ModelWrapper caching is working correctly.")
+        sys.exit(0)
+    else:
+        print("\n❌ Some tests failed. Check the server logs for details.")
+        sys.exit(1)

@@ -66,6 +66,15 @@ CORS(app)
 @app.before_request
 def log_request_info():
     app.logger.debug(f"Request: {request.method} {request.path}")
+    # Store start time for timing analysis
+    request.start_time = time.time()
+
+@app.after_request
+def log_response_info(response):
+    if hasattr(request, 'start_time'):
+        request_time = time.time() - request.start_time
+        app.logger.info(f"HTTP Request/Response cycle: {request.method} {request.path} took {request_time:.3f}s")
+    return response
 
 # Global model instances
 MODELS = {}
@@ -79,6 +88,9 @@ MODEL_BROWSER = create_model_browser()
 
 # Dynamic model registry for user-selected models
 DYNAMIC_MODELS = {}
+
+# Global ModelWrapper cache to avoid recreating expensive ModelWrapper instances
+MODEL_WRAPPERS = {}
 
 # --- Model Management ---
 def get_model(model_id="model1"):
@@ -169,6 +181,37 @@ def get_available_models():
         {"id": "model1", "name": f"Model 1 ({model1_filename})", "path": MODEL_PATHS["model1"]},
         {"id": "model2", "name": f"Model 2 ({model2_filename})", "path": MODEL_PATHS["model2"]},
     ]
+
+def get_cached_model_wrapper(model_id: str):
+    """Get or create a cached ModelWrapper instance for the given model_id."""
+    global MODEL_WRAPPERS, MODELS
+    
+    if model_id not in MODEL_WRAPPERS:
+        app.logger.info(f"Creating new ModelWrapper for {model_id} (this may take several seconds)...")
+        wrapper_start_time = time.time()
+        
+        # Get the model instance first
+        model = get_model(model_id)
+        
+        # Create ModelWrapper
+        model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
+        
+        wrapper_creation_time = time.time() - wrapper_start_time
+        app.logger.info(f"ModelWrapper creation took {wrapper_creation_time:.3f}s for {model_id}")
+        
+        MODEL_WRAPPERS[model_id] = model_wrapper
+    else:
+        app.logger.debug(f"Using cached ModelWrapper for {model_id}")
+    
+    return MODEL_WRAPPERS[model_id]
+
+def clear_model_wrapper_cache():
+    """Clear the ModelWrapper cache to free memory."""
+    global MODEL_WRAPPERS
+    cache_size = len(MODEL_WRAPPERS)
+    MODEL_WRAPPERS.clear()
+    app.logger.info(f"Cleared ModelWrapper cache ({cache_size} instances)")
+    return cache_size
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
                        search_widths, temperature, verbose, model_move=None, search_tree=None, model_id=None):
@@ -464,26 +507,69 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         engine = HexGameEngine()
         app.logger.info("Game engine created")
         
-        # Create model wrapper for MCTS
-        app.logger.info(f"Creating ModelWrapper with checkpoint_path={model.checkpoint_path}, model_type={model.model_type}")
-        model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
-        app.logger.info("ModelWrapper created successfully")
+        # Get cached model wrapper for MCTS (avoid expensive recreation)
+        app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
+        model_wrapper_start = time.time()
+        model_wrapper = get_cached_model_wrapper(model_id)
+        model_wrapper_time = time.time() - model_wrapper_start
+        app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
         
-        # Run MCTS search
+        # Run MCTS search with comprehensive timing
         app.logger.info("Starting MCTS search...")
-        search_start_time = time.time()
+        total_start_time = time.time()
+        
+        # Time the actual MCTS run
+        mcts_start_time = time.time()
         move, stats = run_mcts_move(engine, model_wrapper, state, mcts_config)
-        search_time = time.time() - search_start_time
-        app.logger.info(f"MCTS search completed in {search_time:.3f}s")
+        mcts_search_time = time.time() - mcts_start_time
+        
+        # Time the rest of the processing
+        post_mcts_start = time.time()
+        
+        # Log detailed timing breakdown
+        app.logger.info(f"=== DETAILED TIMING BREAKDOWN ===")
+        app.logger.info(f"MCTS search completed in {mcts_search_time:.3f}s")
+        app.logger.info(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
         app.logger.info(f"MCTS selected move: {move}")
-        app.logger.info(f"MCTS stats: {stats}")
+        
+        app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.2f}")
+        app.logger.info(f"Forward pass (total): {stats.get('forward_ms', 0):.1f}ms ({stats.get('forward_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"  - Pure neural network: {stats.get('pure_forward_ms', 0):.1f}ms ({stats.get('pure_forward_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"  - Device sync: {stats.get('sync_ms', 0):.1f}ms ({stats.get('sync_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Selection: {stats.get('select_ms', 0):.1f}ms ({stats.get('select_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"State creation: {stats.get('state_creation_ms', 0):.1f}ms ({stats.get('state_creation_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Cache lookup: {stats.get('cache_lookup_ms', 0):.1f}ms ({stats.get('cache_lookup_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Encoding: {stats.get('encode_ms', 0):.1f}ms ({stats.get('encode_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Stacking: {stats.get('stack_ms', 0):.1f}ms ({stats.get('stack_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Host-to-device: {stats.get('h2d_ms', 0):.1f}ms ({stats.get('h2d_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Device-to-host: {stats.get('d2h_ms', 0):.1f}ms ({stats.get('d2h_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Expansion: {stats.get('expand_ms', 0):.1f}ms ({stats.get('expand_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Backpropagation: {stats.get('backprop_ms', 0):.1f}ms ({stats.get('backprop_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"Cache hits: {stats.get('cache_hits', 0)}, misses: {stats.get('cache_misses', 0)}")
+        app.logger.info(f"Batch count: {stats.get('batch_count', 0)}, avg batch size: {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
+        app.logger.info(f"Median forward time: {stats.get('median_forward_ms_ex_warm', 0):.1f}ms")
+        app.logger.info(f"Median select time: {stats.get('median_select_ms', 0):.1f}ms")
+        app.logger.info(f"=== END TIMING BREAKDOWN ===")
+        
+        # Add performance summary
+        forward_percentage = (stats.get('forward_ms', 0) / mcts_search_time / 10) if mcts_search_time > 0 else 0
+        app.logger.info(f"=== PERFORMANCE SUMMARY ===")
+        app.logger.info(f"Forward pass dominates: {forward_percentage:.1f}% of total time")
+        app.logger.info(f"Cache efficiency: {stats.get('cache_hits', 0)} hits, {stats.get('cache_misses', 0)} misses")
+        app.logger.info(f"Batch efficiency: {stats.get('batch_count', 0)} batches, avg size {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
+        app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.1f}")
+        app.logger.info(f"=== END PERFORMANCE SUMMARY ===")
         
         selected_move_trmph = fc.rowcol_to_trmph(*move)
         app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
         
         # Get direct policy comparison
         app.logger.info("Getting direct policy comparison...")
+        policy_start = time.time()
         policy_logits, value_logit = model.simple_infer(trmph)
+        policy_time = time.time() - policy_start
+        app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
+        
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_logit: {value_logit}")
         
@@ -498,7 +584,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             if 0 <= tensor_idx < len(policy_probs):
                 legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
-        app.logger.info(f"Legal move probabilities: {legal_move_probs}")
+        # Log only top 10 legal move probabilities to reduce verbosity
+        sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
+        app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
         
         # Apply the move
         app.logger.info(f"Applying move: {selected_move_trmph}")
@@ -509,7 +598,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         mcts_debug_info = {
             "search_stats": {
                 "num_simulations": num_simulations,
-                "search_time": search_time,
+                "search_time": mcts_search_time,
                 "exploration_constant": exploration_constant,
                 "temperature": temperature,
                 "mcts_stats": stats
@@ -543,14 +632,26 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "search_efficiency": 0.0  # Placeholder - would need inference count
             },
             "profiling_summary": {
-                "total_compute_ms": int(search_time * 1000.0),
+                "total_compute_ms": int(mcts_search_time * 1000.0),
                 "encode_ms": stats.get("encode_ms", 0),
+                "stack_ms": stats.get("stack_ms", 0),
                 "forward_ms": stats.get("forward_ms", 0),
+                "pure_forward_ms": stats.get("pure_forward_ms", 0),
+                "sync_ms": stats.get("sync_ms", 0),
+                "d2h_ms": stats.get("d2h_ms", 0),
                 "expand_ms": stats.get("expand_ms", 0),
                 "backprop_ms": stats.get("backprop_ms", 0),
+                "select_ms": stats.get("select_ms", 0),
+                "cache_lookup_ms": stats.get("cache_lookup_ms", 0),
+                "state_creation_ms": stats.get("state_creation_ms", 0),
                 "batch_count": stats.get("batch_count", 0),
                 "cache_hits": stats.get("cache_hits", 0),
                 "cache_misses": stats.get("cache_misses", 0),
+                "simulations_per_second": stats.get("simulations_per_second", 0),
+                "median_forward_ms": stats.get("median_forward_ms_ex_warm", 0),
+                "median_select_ms": stats.get("median_select_ms", 0),
+                "median_cache_hit_ms": stats.get("median_cache_hit_ms", 0),
+                "median_cache_miss_ms": stats.get("median_cache_miss_ms", 0),
             },
         }
         
@@ -594,11 +695,36 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         validate_numeric_fields(result)
         
+        # Time JSON serialization and response preparation
+        json_start_time = time.time()
+        
+        # Calculate total wall time before JSON serialization
+        total_wall_time = time.time() - total_start_time
+        post_mcts_time = total_wall_time - mcts_search_time
+        
         app.logger.info(f"=== MCTS MOVE COMPLETE ===")
+        app.logger.info(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.info(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
+        app.logger.info(f"MCTS search time: {mcts_search_time:.3f}s")
+        app.logger.info(f"Post-MCTS processing: {post_mcts_time:.3f}s")
+        app.logger.info(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
+        app.logger.info(f"=== END WALL TIME BREAKDOWN ===")
         app.logger.info(f"Final result keys: {list(result.keys())}")
         app.logger.info(f"Move made: {result['move_made']}")
         app.logger.info(f"Game over: {result['game_over']}")
         app.logger.info(f"Winner: {result['winner']}")
+        
+        # Log response size for debugging
+        import json
+        try:
+            response_json = json.dumps(result)
+            response_size = len(response_json)
+            app.logger.info(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
+        except Exception as e:
+            app.logger.warning(f"Could not serialize response for size measurement: {e}")
+        
+        json_time = time.time() - json_start_time
+        app.logger.info(f"JSON serialization timing took {json_time:.3f}s")
         
         return result
     except Exception as e:
@@ -681,6 +807,28 @@ def api_search_models():
         return jsonify({"models": models})
     except Exception as e:
         app.logger.error(f"Error searching models: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/cache/clear", methods=["POST"])
+def api_clear_cache():
+    """Clear the ModelWrapper cache."""
+    try:
+        cache_size = clear_model_wrapper_cache()
+        return jsonify({"success": True, "cleared_instances": cache_size})
+    except Exception as e:
+        app.logger.error(f"Error clearing cache: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/cache/status", methods=["GET"])
+def api_cache_status():
+    """Get cache status."""
+    try:
+        return jsonify({
+            "cached_models": list(MODEL_WRAPPERS.keys()),
+            "cache_size": len(MODEL_WRAPPERS)
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting cache status: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/model-browser/validate", methods=["POST"])

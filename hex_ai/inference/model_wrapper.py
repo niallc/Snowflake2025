@@ -149,16 +149,22 @@ class ModelWrapper:
         board_tensors = board_tensors.to(self.device, dtype=torch.float32)
         h2d_ms = (time.perf_counter() - h2d_start) * 1000.0
         
-        # Time forward pass with device sync
-        forward_start = time.perf_counter()
+        # Time the actual neural network forward pass (pure inference)
+        pure_forward_start = time.perf_counter()
         with torch.no_grad():
             policy_logits, value_logits = self.model(board_tensors)
-            # Force device sync for accurate timing
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                torch.mps.synchronize()
-        forward_ms = (time.perf_counter() - forward_start) * 1000.0
+        pure_forward_ms = (time.perf_counter() - pure_forward_start) * 1000.0
+        
+        # Time device synchronization
+        sync_start = time.perf_counter()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            torch.mps.synchronize()
+        sync_ms = (time.perf_counter() - sync_start) * 1000.0
+        
+        # Total forward time (including sync)
+        forward_ms = pure_forward_ms + sync_ms
         
         # Time device to host transfer
         d2h_start = time.perf_counter()
@@ -169,6 +175,8 @@ class ModelWrapper:
         timing_info = {
             "h2d_ms": h2d_ms,
             "forward_ms": forward_ms,
+            "pure_forward_ms": pure_forward_ms,
+            "sync_ms": sync_ms,
             "d2h_ms": d2h_ms,
             "batch_size": int(board_tensors.shape[0]),
             "device": str(self.device),
