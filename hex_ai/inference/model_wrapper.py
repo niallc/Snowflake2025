@@ -4,7 +4,7 @@ import torch
 import logging
 import time
 from hex_ai.models import create_model
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Dict, Any
 from hex_ai.training_utils import get_device
 
 # NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
@@ -126,6 +126,56 @@ class ModelWrapper:
                 )
             policy_logits, value_logits = self.model(board_tensors)
             return policy_logits.cpu(), value_logits.cpu()
+
+    def infer_timed(self, board_tensors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
+        """
+        Run inference on a batch of board tensors with detailed timing information.
+        Args:
+            board_tensors: torch.Tensor of shape (batch_size, 3, N, N)
+        Returns:
+            policy_logits: torch.Tensor of shape (batch_size, N*N) on CPU
+            value_logits: torch.Tensor of shape (batch_size, 1) on CPU
+            timing_info: Dict with timing details (h2d_ms, forward_ms, d2h_ms, batch_size, device, param_dtype)
+        """
+        self.model.eval()
+        
+        # Get device info
+        param_device = next(self.model.parameters()).device
+        param_dtype = str(next(self.model.parameters()).dtype)
+        
+        # Time host to device transfer
+        h2d_start = time.perf_counter()
+        before_device = getattr(board_tensors, 'device', 'na')
+        board_tensors = board_tensors.to(self.device, dtype=torch.float32)
+        h2d_ms = (time.perf_counter() - h2d_start) * 1000.0
+        
+        # Time forward pass with device sync
+        forward_start = time.perf_counter()
+        with torch.no_grad():
+            policy_logits, value_logits = self.model(board_tensors)
+            # Force device sync for accurate timing
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                torch.mps.synchronize()
+        forward_ms = (time.perf_counter() - forward_start) * 1000.0
+        
+        # Time device to host transfer
+        d2h_start = time.perf_counter()
+        policy_cpu = policy_logits.cpu()
+        value_cpu = value_logits.cpu()
+        d2h_ms = (time.perf_counter() - d2h_start) * 1000.0
+        
+        timing_info = {
+            "h2d_ms": h2d_ms,
+            "forward_ms": forward_ms,
+            "d2h_ms": d2h_ms,
+            "batch_size": int(board_tensors.shape[0]),
+            "device": str(self.device),
+            "param_dtype": param_dtype,
+        }
+        
+        return policy_cpu, value_cpu, timing_info
 
     def get_device(self) -> torch.device:
         """Return the torch.device used by the wrapper."""

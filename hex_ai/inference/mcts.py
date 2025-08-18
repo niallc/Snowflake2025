@@ -1,3 +1,20 @@
+# baseline_mcts.py
+# Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
+# Compatible with flat-file or package imports via shims.
+
+# ============================== MCTS BASELINE — TODOs ==============================
+# Strictness & Error Handling
+# - [ ] Add `cfg.strict_shapes=True` and replace defensive pad/truncate with asserts:
+#       assert policy_logits.shape[-1] == action_size, "Policy size mismatch"
+# - [ ] Add `cfg.strict_probs=True` to validate priors after masking/softmax:
+#       assert np.isfinite(P).all() and abs(P.sum() - 1.0) < 1e-6 and (P >= 0).all()
+# - [ ] Validate action_size: assert action_size == board_size * board_size
+# - [ ] Validate legal index bounds: all(i in [0, action_size)) for i in `legal_indices`
+# - [ ] Fail-fast root invariants (post expansion): len(root.P) == len(root.legal_moves) and sum≈1
+
+# ===================================================================================
+
+
 from __future__ import annotations
 
 import math
@@ -9,21 +26,13 @@ import torch
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from hex_ai.enums import Player
+# ---- Package imports ----
+from hex_ai.enums import Player, Winner
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import get_win_prob_from_model_output
 from hex_ai.utils.perf import PERF
-
-# Optional config (values only used for hints; logic infers sizes from tensors)
-try:
-    from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
-except Exception:
-    try:
-        from config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
-    except Exception:
-        CFG_BOARD_SIZE = None
-        CFG_POLICY_OUTPUT_SIZE = None
+from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
 
 
 # ------------------ Config ------------------
@@ -46,8 +55,7 @@ def softmax_np(logits: np.ndarray) -> np.ndarray:
     exps = np.exp(logits - m)
     s = np.sum(exps)
     if s <= 0 or not np.isfinite(s):
-        # Fallback to uniform if something went very wrong
-        return np.ones_like(logits) / len(logits)
+        raise ValueError(f"Invalid softmax input: sum={s}, logits={logits}")
     return exps / s
 
 def move_to_index(row: int, col: int, board_size: int) -> int:
@@ -106,6 +114,9 @@ class BaselineMCTS:
         self.cache_misses = 0
 
         self._root_noise_applied = False
+
+        # Root node from the last run() (used by pick_move)
+        self._root_node = None
 
     # ---------- Public API ----------
     def run(self, root_state: HexGameState) -> Dict[str, Any]:
@@ -307,6 +318,8 @@ class BaselineMCTS:
             backprop_ms += (time.perf_counter() - t1) * 1000.0
 
         # Build stats
+        _store_root = True
+        self._root_node = root
         stats = {
             "encode_ms": encode_ms,
             "stack_ms": stack_ms,
@@ -325,36 +338,42 @@ class BaselineMCTS:
         }
         return stats
 
+    
     def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None) -> Tuple[int,int]:
         """
         Choose a move from the root based on visit counts and temperature.
-        Requires that run() has been executed so the root was expanded and visited.
+        Requires that run() has been executed on the SAME root_state.
         """
-        board_size = int(root_state.get_board_tensor().shape[-1])
-        root = MCTSNode(root_state, board_size)
-        # Materialize root children stats from cache if we can
-        cached = self.eval_cache.get(root.state_hash, None)
-        if cached is not None and not root.is_terminal:
-            self._expand_node_from_policy(root, cached[0], board_size, board_size*board_size)
-        if root.is_terminal or not root.is_expanded:
-            # If still not expanded, pick a legal move uniformly
+        if self._root_node is None:
+            raise RuntimeError("BaselineMCTS.pick_move() called before run(); run() must be called first.")
+        # Verify we are selecting for the same state that was searched
+        if self._root_node.state_hash != state_hash_from(root_state):
+            raise ValueError("BaselineMCTS.pick_move() called with a different state than the last run() root.")
+        root = self._root_node
+
+        if root.is_terminal:
             if root.legal_moves:
+                # Terminal shouldn't have legal moves, but just in case
                 return random.choice(root.legal_moves)
-            raise RuntimeError("No legal moves at root.")
+            raise RuntimeError("No legal moves at root (terminal state).")
+
+        # Use visit counts accumulated during run()
+        counts = root.N.astype(np.float64)
+        if counts.sum() <= 0:
+            raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
         temp = self.cfg.temperature if temperature is None else temperature
-        counts = root.N.astype(np.float64)
         if temp <= 1e-6:
             a_idx = int(np.argmax(counts))
         else:
             pi = np.power(counts, 1.0 / temp)
             if not np.isfinite(pi).all() or np.sum(pi) <= 0:
-                # fallback to argmax if degenerate
-                a_idx = int(np.argmax(counts))
-            else:
-                pi /= np.sum(pi)
-                a_idx = int(self.rng.choice(len(pi), p=pi))
+                raise ValueError(f"Invalid temperature scaling result: pi={pi}, counts={counts}, temp={temp}")
+            pi /= np.sum(pi)
+            a_idx = int(self.rng.choice(len(pi), p=pi))
         return root.legal_moves[a_idx]
+
+    # ---------- Internal ----------
 
     # ---------- Internal ----------
 
@@ -385,14 +404,10 @@ class BaselineMCTS:
         if node.is_terminal:
             node.is_expanded = True
             return
-        # Guard on vector sizes
+        # Validate policy logits shape
         if policy_logits_np.shape[0] != action_size:
-            # Attempt a safe fallback if mismatch: pad or truncate
-            logits = np.zeros(action_size, dtype=np.float64)
-            M = min(action_size, policy_logits_np.shape[0])
-            logits[:M] = policy_logits_np[:M]
-        else:
-            logits = policy_logits_np.astype(np.float64, copy=False)
+            raise ValueError(f"Policy logits shape mismatch: expected {action_size}, got {policy_logits_np.shape[0]}")
+        logits = policy_logits_np.astype(np.float64, copy=False)
 
         legal_logits = logits[node.legal_indices] if len(node.legal_indices) > 0 else np.array([0.0], dtype=np.float64)
         node.P = softmax_np(legal_logits)

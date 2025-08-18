@@ -10,11 +10,11 @@ import time # Added for time.time()
 
 
 from hex_ai.utils import format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.batched_mcts import BatchedNeuralMCTS  # Use batched MCTS for improved performance
-from hex_ai.inference.mcts_config import BatchedMCTSOrchestration
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move
+from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.enums import Player
 from hex_ai.value_utils import (
@@ -407,28 +407,14 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
         return {"success": False, "error": str(e)}
 
 
-def _build_orchestration_from_dict(cfg: dict | None) -> BatchedMCTSOrchestration | None:
-    """Build orchestration object from a dict of overrides; returns None if cfg is falsy."""
-    if not cfg:
-        return None
-    # Only pick known keys; ignore extras from clients
-    kwargs = {}
-    for key in (
-        'evaluator_max_wait_ms',
-        'optimal_batch_size',
-        'selection_wait_ms',
-        'min_batch_before_force',
-        'min_wait_before_force_ms',
-        'max_inflight',
-        'batch_wait_s',
-    ):
-        if key in cfg and cfg[key] is not None:
-            kwargs[key] = cfg[key]
-    return BatchedMCTSOrchestration(**kwargs) if kwargs else BatchedMCTSOrchestration()
+# TODO: Remove this function
+def _build_orchestration_from_dict(cfg: dict | None) -> None:
+    """Legacy function - orchestration is now handled internally by BaselineMCTS."""
+    return None
 
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
-                   temperature=1.0, verbose=0, orchestration_overrides: BatchedMCTSOrchestration | None = None):
+                   temperature=1.0, verbose=0, orchestration_overrides=None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.debug(f"make_mcts_move called with model_id: {model_id}, simulations: {num_simulations}")
@@ -462,51 +448,28 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "error": f"Model loading failed: {e}"
             }
         
-        # Create batched MCTS engine for improved performance
-        # Leave batch/orchestration defaults to config unless explicitly provided
-        mcts = BatchedNeuralMCTS(
-            model=model,
-            exploration_constant=exploration_constant,
-            verbose=verbose,
-            orchestration=orchestration_overrides,
+        # Create MCTS configuration
+        mcts_config = BaselineMCTSConfig(
+            sims=num_simulations,
+            c_puct=exploration_constant,
+            temperature=temperature
         )
+        
+        # Create game engine
+        engine = HexGameEngine()
+        
+        # Create model wrapper for MCTS
+        model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
         
         # Run MCTS search
         search_start_time = time.time()
-        root = mcts.search(state, num_simulations)
+        move, stats = run_mcts_move(engine, model_wrapper, state, mcts_config)
         search_time = time.time() - search_start_time
         
-        # Get search statistics
-        search_stats = mcts.get_search_statistics()
-        evaluator_stats = mcts.evaluator.get_statistics()
-        bp_stats = evaluator_stats.get('batch_processor', {})
-        nn_infer_time_s = float(bp_stats.get('total_time', 0.0) or 0.0)
-        total_compute_time_s = float(search_time)
-        other_time_s = max(0.0, total_compute_time_s - nn_infer_time_s)
-        
-        # Get move sequence analysis
-        move_sequence_analysis = mcts.get_move_sequence_analysis(root, max_depth=5)
-        
-        # Select move
-        selected_move = mcts.select_move(root, temperature=temperature)
-        selected_move_trmph = fc.rowcol_to_trmph(*selected_move)
+        selected_move_trmph = fc.rowcol_to_trmph(*move)
         
         # Get direct policy comparison
         policy_logits, value_logit = model.simple_infer(trmph)
-        # Attach device diagnostics (helps verify GPU vs CPU at runtime)
-        try:
-            if verbose >= 2 and hasattr(model, 'model') and hasattr(model.model, 'get_device_info'):
-                device_info = model.model.get_device_info()
-            elif verbose >= 2 and hasattr(model, 'model'):
-                # Fallback minimal info
-                device_info = {
-                    'wrapper_device': str(model.model.get_device() if hasattr(model.model, 'get_device') else 'unknown'),
-                    'param_device': str(model.model.get_param_device() if hasattr(model.model, 'get_param_device') else 'unknown'),
-                }
-            else:
-                device_info = None
-        except Exception:
-            device_info = None
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         
         # Get legal moves and their probabilities
@@ -519,21 +482,6 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             if 0 <= tensor_idx < len(policy_probs):
                 legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
-        # Get MCTS visit counts for all legal moves
-        mcts_visit_counts = {}
-        mcts_move_probs = {}
-        total_visits = sum(child.visits for child in root.children.values())
-        
-        for move in legal_moves:
-            move_trmph = fc.rowcol_to_trmph(*move)
-            if move in root.children:
-                visits = root.children[move].visits
-                mcts_visit_counts[move_trmph] = visits
-                mcts_move_probs[move_trmph] = visits / total_visits if total_visits > 0 else 0
-            else:
-                mcts_visit_counts[move_trmph] = 0
-                mcts_move_probs[move_trmph] = 0
-        
         # Apply the move
         state = apply_move_to_state_trmph(state, selected_move_trmph)
         
@@ -542,73 +490,41 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "search_stats": {
                 "num_simulations": num_simulations,
                 "search_time": search_time,
-                "total_inferences": search_stats.get('total_inferences', 0),
                 "exploration_constant": exploration_constant,
-                "temperature": temperature
+                "temperature": temperature,
+                "mcts_stats": stats
             },
             "move_selection": {
                 "selected_move": selected_move_trmph,
-                "selected_move_coords": selected_move
-            },
-            "tree_statistics": {
-                "total_nodes": len(root.children),
-                "max_depth": _get_max_depth(root),
-                "total_visits": total_visits
+                "selected_move_coords": move
             },
             "move_probabilities": {
-                "mcts_visits": mcts_visit_counts,
-                "mcts_probabilities": mcts_move_probs,
                 "direct_policy": legal_move_probs
             },
             "comparison": {
                 "mcts_vs_direct": {}
             },
-            "win_rate_analysis": {
-                "root_value": root.mean_value if root.visits > 0 else 0.0,
-                "best_child_value": max([child.mean_value for child in root.children.values()]) if root.children else 0.0,
-                "win_probability": max(0.0, min(1.0, (-root.mean_value + 1.5) / 3.0)) if root.visits > 0 else 0.5,  # Convert from [-1.5,1.5] to [0,1] with bounds, negated for current player perspective
-                "best_child_win_probability": max(0.0, min(1.0, (-max([child.mean_value for child in root.children.values()]) + 1.5) / 3.0)) if root.children else 0.5  # Best child from current player perspective
-            },
-            "move_sequence_analysis": {
-                "principal_variation": [fc.rowcol_to_trmph(*move) for move in move_sequence_analysis["principal_variation"]],
-                "alternative_lines": [
-                    {
-                        "depth": alt["depth"],
-                        "move": fc.rowcol_to_trmph(*alt["move"]),
-                        "visits": alt["visits"],
-                        "value": alt["value"],
-                        "probability": alt["probability"]
-                    }
-                    for alt in move_sequence_analysis["alternative_lines"]
-                ],
-                "pv_length": move_sequence_analysis["pv_length"]
-            },
             "summary": {
-                "top_mcts_move": max(mcts_visit_counts.items(), key=lambda x: x[1])[0] if mcts_visit_counts else None,
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                "moves_explored": len([v for v in mcts_visit_counts.values() if v > 0]),
                 "total_legal_moves": len(legal_moves),
-                "search_efficiency": search_stats.get('total_inferences', 0) / num_simulations if num_simulations > 0 else 0
             },
             "profiling_summary": {
-                "total_compute_ms": int(total_compute_time_s * 1000.0),
-                "nn_infer_ms": int(nn_infer_time_s * 1000.0),
-                "other_ms": int(other_time_s * 1000.0),
-                "avg_batch_size": float(search_stats.get('average_batch_size', 0.0)),
-                "total_batches": int(search_stats.get('total_batches_processed', 0)),
-                "cache_hit_rate": float(search_stats.get('cache_hit_rate', 0.0)),
+                "total_compute_ms": int(search_time * 1000.0),
+                "encode_ms": stats.get("encode_ms", 0),
+                "forward_ms": stats.get("forward_ms", 0),
+                "expand_ms": stats.get("expand_ms", 0),
+                "backprop_ms": stats.get("backprop_ms", 0),
+                "batch_count": stats.get("batch_count", 0),
+                "cache_hits": stats.get("cache_hits", 0),
+                "cache_misses": stats.get("cache_misses", 0),
             },
-            "device_info": device_info,
         }
         
         # Add comparison data
         for move_trmph in legal_move_probs:
-            mcts_prob = mcts_move_probs.get(move_trmph, 0)
             direct_prob = legal_move_probs.get(move_trmph, 0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
-                "mcts_probability": mcts_prob,
                 "direct_probability": direct_prob,
-                "difference": mcts_prob - direct_prob
             }
         
         return {
@@ -632,11 +548,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         }
 
 
-def _get_max_depth(node, current_depth=0):
-    """Helper function to get maximum depth of MCTS tree."""
-    if not node.children:
-        return current_depth
-    return max(_get_max_depth(child, current_depth + 1) for child in node.children.values())
+
 
 @app.route("/api/constants", methods=["GET"])
 def api_constants():
