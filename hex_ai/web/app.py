@@ -417,15 +417,17 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                    temperature=1.0, verbose=0, orchestration_overrides=None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
-        app.logger.debug(f"make_mcts_move called with model_id: {model_id}, simulations: {num_simulations}")
+        app.logger.info(f"=== MCTS MOVE START ===")
+        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}, verbose={verbose}")
+        app.logger.info(f"Input TRMPH: {trmph}")
         
         state = HexGameState.from_trmph(trmph)
-        app.logger.debug(f"Game state created, game_over: {state.game_over}")
+        app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
         
         # If game is over, return current state
         if state.game_over:
-            app.logger.debug("Game is over, returning current state")
-            return {
+            app.logger.info("Game is over, returning current state")
+            result = {
                 "success": True,
                 "new_trmph": trmph,
                 "board": state.board.tolist(),
@@ -436,11 +438,13 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "game_over": True,
                 "mcts_debug_info": {}
             }
+            app.logger.info(f"Returning early result: {result}")
+            return result
         
         # Get model
         try:
             model = get_model(model_id)
-            app.logger.debug(f"Successfully got model: {type(model)}")
+            app.logger.info(f"Model loaded successfully: {type(model).__name__}")
         except Exception as e:
             app.logger.error(f"Failed to get model {model_id}: {e}")
             return {
@@ -454,26 +458,38 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             c_puct=exploration_constant,
             temperature=temperature
         )
+        app.logger.info(f"MCTS config created: {mcts_config}")
         
         # Create game engine
         engine = HexGameEngine()
+        app.logger.info("Game engine created")
         
         # Create model wrapper for MCTS
+        app.logger.info(f"Creating ModelWrapper with checkpoint_path={model.checkpoint_path}, model_type={model.model_type}")
         model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
+        app.logger.info("ModelWrapper created successfully")
         
         # Run MCTS search
+        app.logger.info("Starting MCTS search...")
         search_start_time = time.time()
         move, stats = run_mcts_move(engine, model_wrapper, state, mcts_config)
         search_time = time.time() - search_start_time
+        app.logger.info(f"MCTS search completed in {search_time:.3f}s")
+        app.logger.info(f"MCTS selected move: {move}")
+        app.logger.info(f"MCTS stats: {stats}")
         
         selected_move_trmph = fc.rowcol_to_trmph(*move)
+        app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
         
         # Get direct policy comparison
+        app.logger.info("Getting direct policy comparison...")
         policy_logits, value_logit = model.simple_infer(trmph)
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
+        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_logit: {value_logit}")
         
         # Get legal moves and their probabilities
         legal_moves = state.get_legal_moves()
+        app.logger.info(f"Legal moves count: {len(legal_moves)}")
         legal_move_probs = {}
         for move in legal_moves:
             move_trmph = fc.rowcol_to_trmph(*move)
@@ -482,8 +498,12 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             if 0 <= tensor_idx < len(policy_probs):
                 legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
+        app.logger.info(f"Legal move probabilities: {legal_move_probs}")
+        
         # Apply the move
+        app.logger.info(f"Applying move: {selected_move_trmph}")
         state = apply_move_to_state_trmph(state, selected_move_trmph)
+        app.logger.info(f"Move applied. New state game_over: {state.game_over}")
         
         # Generate MCTS diagnostic info
         mcts_debug_info = {
@@ -499,14 +519,28 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "selected_move_coords": move
             },
             "move_probabilities": {
-                "direct_policy": legal_move_probs
+                "direct_policy": legal_move_probs,
+                "mcts_visits": {},  # Placeholder - would need MCTS tree access
+                "mcts_probabilities": {}  # Placeholder - would need MCTS tree access
             },
             "comparison": {
                 "mcts_vs_direct": {}
             },
+            "win_rate_analysis": {
+                "root_value": 0.0,  # Placeholder - would need MCTS tree access
+                "best_child_value": 0.0,  # Placeholder - would need MCTS tree access
+                "win_probability": 0.5,  # Placeholder
+                "best_child_win_probability": 0.5  # Placeholder
+            },
+            "move_sequence_analysis": {
+                "principal_variation": [],  # Placeholder - would need MCTS tree access
+                "alternative_lines": [],  # Placeholder - would need MCTS tree access
+                "pv_length": 0  # Placeholder
+            },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
                 "total_legal_moves": len(legal_moves),
+                "search_efficiency": 0.0  # Placeholder - would need inference count
             },
             "profiling_summary": {
                 "total_compute_ms": int(search_time * 1000.0),
@@ -525,9 +559,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             direct_prob = legal_move_probs.get(move_trmph, 0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
+                "mcts_probability": 0.0,  # Placeholder - would need MCTS tree access
+                "difference": 0.0  # Placeholder
             }
         
-        return {
+        result = {
             "success": True,
             "new_trmph": state.to_trmph(),
             "board": state.board.tolist(),
@@ -538,7 +574,35 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "game_over": state.game_over,
             "mcts_debug_info": mcts_debug_info
         }
+        
+        # Validate that no None values exist in numeric fields that frontend expects
+        def validate_numeric_fields(obj, path=""):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    if key in ['search_time', 'total_compute_ms', 'encode_ms', 'forward_ms', 'expand_ms', 'backprop_ms', 
+                              'batch_count', 'cache_hits', 'cache_misses', 'root_value', 'best_child_value', 
+                              'win_probability', 'best_child_win_probability', 'pv_length', 'search_efficiency',
+                              'mcts_probability', 'direct_probability', 'difference']:
+                        if value is None:
+                            app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
+                            obj[key] = 0.0
+                    validate_numeric_fields(value, current_path)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    validate_numeric_fields(item, f"{path}[{i}]")
+        
+        validate_numeric_fields(result)
+        
+        app.logger.info(f"=== MCTS MOVE COMPLETE ===")
+        app.logger.info(f"Final result keys: {list(result.keys())}")
+        app.logger.info(f"Move made: {result['move_made']}")
+        app.logger.info(f"Game over: {result['game_over']}")
+        app.logger.info(f"Winner: {result['winner']}")
+        
+        return result
     except Exception as e:
+        app.logger.error(f"=== MCTS MOVE ERROR ===")
         app.logger.error(f"Error in make_mcts_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
@@ -1087,6 +1151,9 @@ def api_computer_move():
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
+    app.logger.info(f"=== MCTS API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     num_simulations = data.get("num_simulations", 200)
@@ -1094,9 +1161,12 @@ def api_mcts_move():
     temperature = data.get("temperature", 1.0)
     verbose = data.get("verbose", 0)
     
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}, verbose={verbose}")
+    
     # Optional orchestration overrides from request
     orchestration_cfg = data.get("orchestration", None)
     orchestration = _build_orchestration_from_dict(orchestration_cfg)
+    
     result = make_mcts_move(
         trmph,
         model_id,
@@ -1106,6 +1176,23 @@ def api_mcts_move():
         verbose,
         orchestration_overrides=orchestration,
     )
+    
+    app.logger.info(f"=== MCTS API RESPONSE ===")
+    app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
+    if result.get('success'):
+        app.logger.info(f"Result keys: {list(result.keys())}")
+        app.logger.info(f"Move made: {result.get('move_made', 'MISSING')}")
+        app.logger.info(f"Game over: {result.get('game_over', 'MISSING')}")
+        app.logger.info(f"Winner: {result.get('winner', 'MISSING')}")
+        # Log a few key numeric values that might be causing the toFixed error
+        if 'mcts_debug_info' in result:
+            debug_info = result['mcts_debug_info']
+            if 'profiling_summary' in debug_info:
+                profiling = debug_info['profiling_summary']
+                app.logger.info(f"Profiling values: {profiling}")
+    else:
+        app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
+    
     return jsonify(result)
 
 @app.route("/favicon.ico")
