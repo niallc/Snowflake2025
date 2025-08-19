@@ -8,25 +8,35 @@ both checkpoint filenames and their corresponding directories.
 
 Examples:
 
-1. Compare models from the same directory:
+1. Compare models using policy-based selection:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz,epoch2_mini26.pt.gz"
+     --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz,epoch2_mini26.pt.gz" \
+     --strategy=policy
 
-2. Compare models from different directories:
+2. Compare models using MCTS with different simulation counts:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz,epoch3_mini13.pt.gz,epoch3_mini69.pt.gz" \
-     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training"
+     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --strategy=mcts \
+     --mcts-sims=100 \
+     --mcts-c-puct=1.5
 
-3. Compare old vs new training rounds (convenience example):
+3. Compare models using fixed tree search:
    PYTHONPATH=. python scripts/run_tournament.py \
-     --num-games=200 \
-     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz,epoch2_mini36.pt.gz,epoch3_mini13.pt.gz,epoch3_mini69.pt.gz,epoch3_mini174.pt.gz" \
-     --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,loss_weight_sweep_exp0_bs256_98f719_20250724_233408,checkpoints/round2_training,checkpoints/round2_training,checkpoints/round2_training" \
-     --temperature=1.2 \
-     --no-pie-rule \
-     --seed=43
+     --num-games=50 \
+     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --strategy=fixed_tree \
+     --search-widths="20,10,5"
+
+4. Compare different inference strategies:
+   # Policy vs MCTS vs Fixed Tree
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=100 \
+     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --strategy=mcts \
+     --mcts-sims=200 \
+     --temperature=1.2
 
 Note: When using --checkpoint_dirs, the number of directories must match the number of checkpoints,
 or you can specify a single directory for all checkpoints.
@@ -65,13 +75,14 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Compare models from same directory
-  %(prog)s --num-games=50 --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz"
+  # Compare models using policy-based selection
+  %(prog)s --num-games=50 --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz" --strategy=policy
   
-  # Compare models from different directories  
-  %(prog)s --num-games=50 \\
-    --checkpoints="epoch2_mini4.pt.gz,epoch3_mini13.pt.gz" \\
-    --checkpoint_dirs="loss_weight_sweep_exp0_bs256_98f719_20250724_233408,round2_training"
+  # Compare models using MCTS
+  %(prog)s --num-games=50 --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" --strategy=mcts --mcts-sims=200
+  
+  # Compare models using fixed tree search
+  %(prog)s --num-games=50 --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" --strategy=fixed_tree --search-widths="20,10,5"
         """
     )
     parser.add_argument('--num-games', type=int, default=50, 
@@ -87,7 +98,16 @@ Examples:
         )
     )
     parser.add_argument('--temperature', type=float, default=1.2,
-                       help='Temperature for move selection (default: 0.3)')
+                       help='Temperature for move selection (default: 1.2)')
+    parser.add_argument('--strategy', type=str, default='policy',
+                       choices=['policy', 'fixed_tree', 'mcts'],
+                       help='Move selection strategy (default: policy)')
+    parser.add_argument('--mcts-sims', type=int, default=200,
+                       help='Number of MCTS simulations (default: 200)')
+    parser.add_argument('--mcts-c-puct', type=float, default=1.5,
+                       help='MCTS c_puct parameter (default: 1.5)')
+    parser.add_argument('--search-widths', type=str,
+                       help='Comma-separated search widths for fixed tree search (e.g., "20,10,5")')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed (default: 42)')
     parser.add_argument('--no-pie-rule', action='store_true',
@@ -103,35 +123,42 @@ if __name__ == "__main__":
     
     # Determine which checkpoints to use
     if args.checkpoints:
+        # User provided specific checkpoint names - use old logic
         checkpoint_names = [name.strip() for name in args.checkpoints.split(',')]
-    else:
-        checkpoint_names = DEFAULT_CHECKPOINTS
+        
+        # Build full paths for checkpoint directories
+        if args.checkpoint_dirs:
+            checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
+        else:
+            checkpoint_dirs = [DEFAULT_CHKPT_DIR]
 
-    # Build full paths for checkpoint directories
-    if args.checkpoint_dirs:
-        checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
+        # Build checkpoint paths
+        if len(checkpoint_dirs) == 1:
+            # Single directory for all checkpoints
+            base_dir = checkpoint_dirs[0]
+            if not base_dir.startswith('checkpoints/'):
+                base_dir = os.path.join(CHKPT_BASE_DIR, base_dir)
+            checkpoint_paths = [os.path.join(base_dir, fname) for fname in checkpoint_names]
+        elif len(checkpoint_dirs) == len(checkpoint_names):
+            # One directory per checkpoint
+            checkpoint_paths = []
+            for dir_name, fname in zip(checkpoint_dirs, checkpoint_names):
+                if not dir_name.startswith('checkpoints/'):
+                    dir_name = os.path.join(CHKPT_BASE_DIR, dir_name)
+                checkpoint_paths.append(os.path.join(dir_name, fname))
+        else:
+            print(f"ERROR: Number of checkpoint directories ({len(checkpoint_dirs)}) must be 1 or match the number of checkpoints ({len(checkpoint_names)})")
+            print(f"  Provided checkpoint names: {checkpoint_names}")
+            print(f"  Provided checkpoint directories: {checkpoint_dirs}")
+            sys.exit(1)
     else:
-        checkpoint_dirs = [DEFAULT_CHKPT_DIR]
-
-    # Build checkpoint paths
-    if len(checkpoint_dirs) == 1:
-        # Single directory for all checkpoints
-        base_dir = checkpoint_dirs[0]
-        if not base_dir.startswith('checkpoints/'):
-            base_dir = os.path.join(CHKPT_BASE_DIR, base_dir)
-        checkpoint_paths = [os.path.join(base_dir, fname) for fname in checkpoint_names]
-    elif len(checkpoint_dirs) == len(checkpoint_names):
-        # One directory per checkpoint
-        checkpoint_paths = []
-        for dir_name, fname in zip(checkpoint_dirs, checkpoint_names):
-            if not dir_name.startswith('checkpoints/'):
-                dir_name = os.path.join(CHKPT_BASE_DIR, dir_name)
-            checkpoint_paths.append(os.path.join(dir_name, fname))
-    else:
-        print(f"ERROR: Number of checkpoint directories ({len(checkpoint_dirs)}) must be 1 or match the number of checkpoints ({len(checkpoint_names)})")
-        print(f"  Provided checkpoint names: {checkpoint_names}")
-        print(f"  Provided checkpoint directories: {checkpoint_dirs}")
-        sys.exit(1)
+        # Use model config for defaults
+        from hex_ai.inference.model_config import get_available_models, get_model_path
+        available_models = get_available_models()
+        if len(available_models) >= 2:
+            checkpoint_paths = [get_model_path(available_models[0]), get_model_path(available_models[1])]
+        else:
+            checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS[:2]]
 
     # Check that all checkpoint paths exist before proceeding
     missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
@@ -146,17 +173,38 @@ if __name__ == "__main__":
         print("\nPlease check that the checkpoint files exist and the paths are correct.")
         sys.exit(1)
 
+    # Parse search widths if provided
+    search_widths = None
+    if args.search_widths:
+        search_widths = [int(w.strip()) for w in args.search_widths.split(',')]
+    
+    # Create strategy configuration
+    strategy_config = {}
+    if args.strategy == 'mcts':
+        strategy_config.update({
+            'mcts_sims': args.mcts_sims,
+            'mcts_c_puct': args.mcts_c_puct,
+        })
+    elif args.strategy == 'fixed_tree':
+        if not search_widths:
+            print("ERROR: --search-widths is required for fixed_tree strategy")
+            sys.exit(1)
+        strategy_config['search_widths'] = search_widths
+    
     # Create configs
     config = TournamentConfig(checkpoint_paths=checkpoint_paths, num_games=args.num_games)
     play_config = TournamentPlayConfig(
         temperature=args.temperature, 
         random_seed=args.seed, 
-        pie_rule=not args.no_pie_rule
+        pie_rule=not args.no_pie_rule,
+        strategy=args.strategy,
+        strategy_config=strategy_config,
+        search_widths=search_widths  # Legacy support
     )
 
     # Create log files with descriptive names
     timestamp = (
-        f"tournament_{args.num_games}games_{len(checkpoint_names)}models_"
+        f"tournament_{args.num_games}games_{len(checkpoint_paths)}models_"
         f"{datetime.now().strftime('%y%m%d_%H')}"
     )
     LOG_DIR = "data/tournament_play"
@@ -167,9 +215,12 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
     print(f"Tournament Configuration:")
-    print(f"  Checkpoints: {checkpoint_names}")
-    print(f"  Checkpoint directories: {checkpoint_dirs}")
+    print(f"  Checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
+    if args.checkpoints:
+        print(f"  Checkpoint directories: {checkpoint_dirs}")
     print(f"  Number of games per pair: {args.num_games}")
+    print(f"  Strategy: {play_config.strategy}")
+    print(f"  Strategy config: {play_config.strategy_config}")
     print(f"  Temperature: {play_config.temperature}")
     print(f"  Pie rule: {play_config.pie_rule}")
     print(f"  Random seed: {play_config.random_seed}")

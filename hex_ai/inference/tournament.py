@@ -186,7 +186,9 @@ class TournamentPlayConfig:
         random_seed: Optional[int] = None,
         pie_rule: bool = False,
         swap_threshold: float = 0.5,
-        search_widths: Optional[list] = None
+        search_widths: Optional[list] = None,
+        strategy: str = "policy",
+        strategy_config: Optional[Dict[str, Any]] = None
     ):
         self.temperature = temperature
         if random_seed is None:
@@ -195,20 +197,29 @@ class TournamentPlayConfig:
         self.random_seed = random_seed
         self.pie_rule = pie_rule
         self.swap_threshold = swap_threshold  # Red swaps if Blue's win prob >= this threshold
-        self.search_widths = search_widths
+        self.search_widths = search_widths  # Legacy support
+        self.strategy = strategy
+        self.strategy_config = strategy_config or {}
         random.seed(random_seed)
         np.random.seed(random_seed)
 
 def select_move(state: HexGameState, model: SimpleModelInference, 
-                search_widths: Optional[list], temperature: float) -> Optional[Tuple[int, int]]:
+                play_config: TournamentPlayConfig) -> Optional[Tuple[int, int]]:
     """
-    Select a move using either tree search or policy-based selection.
+    Select a move using the configured strategy.
     """
-    if search_widths:
-        move, _ = minimax_policy_value_search(state, model, search_widths, temperature=temperature)
-        return move
-    else:
-        return select_policy_move(state, model, temperature)
+    from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
+    
+    # Create strategy configuration
+    strategy_config = MoveSelectionConfig(
+        temperature=play_config.temperature,
+        search_widths=play_config.search_widths,  # Legacy support
+        **play_config.strategy_config
+    )
+    
+    # Get the strategy and select move
+    strategy = get_strategy(play_config.strategy)
+    return strategy.select_move(state, model, strategy_config)
 
 def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
@@ -217,7 +228,7 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     Handle pie rule logic: first move, evaluation, and potential swap.
     """
     # Always play the first move by model_1 (Blue) for consistency
-    move = select_move(state, model_1, play_config.search_widths, play_config.temperature)
+    move = select_move(state, model_1, play_config)
     state = apply_move_to_state(state, *move)
     
     if not play_config.pie_rule:
@@ -243,8 +254,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     return PieRuleResult(swap=swap, swap_decision=swap_decision, model_1=model_1, model_2=model_2)
 
 def play_game_loop(state: HexGameState, model_1: SimpleModelInference, 
-                  model_2: SimpleModelInference, search_widths: Optional[list], 
-                  temperature: float, verbose: int) -> List[Tuple[int, int]]:
+                  model_2: SimpleModelInference, play_config: TournamentPlayConfig, 
+                  verbose: int) -> List[Tuple[int, int]]:
     """
     Play the main game loop, returning the sequence of moves.
     """
@@ -260,7 +271,7 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
             raise ValueError("No legal moves available while game is not over. This indicates a bug.")
 
         # Select and apply move
-        move = select_move(state, model, search_widths, temperature)
+        move = select_move(state, model, play_config)
         if move is None:
             raise ValueError("Move selection returned None. This indicates a model or selection failure.")
         
@@ -323,7 +334,9 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
             "pie_rule": play_config.pie_rule,
             "swap": result.swap_decision,
             "temperature": play_config.temperature,
-            "search_widths": str(play_config.search_widths),
+            "strategy": play_config.strategy,
+            "strategy_config": str(play_config.strategy_config),
+            "search_widths": str(play_config.search_widths),  # Legacy
             "seed": play_config.random_seed
         }
         
@@ -347,7 +360,6 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
 def play_single_game(model_1: SimpleModelInference, 
                      model_2: SimpleModelInference, 
                      board_size: int, 
-                     search_widths: Optional[list] = None, 
                      verbose: int = 1, 
                      log_file: str = None, 
                      csv_file: str = None, 
@@ -372,7 +384,7 @@ def play_single_game(model_1: SimpleModelInference,
     
     # Play main game loop
     move_sequence, state = play_game_loop(
-        state, model_1, model_2, search_widths, play_config.temperature, verbose
+        state, model_1, model_2, play_config, verbose
     )
     
     # Convert move sequence to TRMPH string
@@ -424,13 +436,13 @@ def play_games_with_each_first(
     # Game 1: model_a goes first (blue), model_b second (red)
     result_1 = play_single_game(
         models[model_a_path], models[model_b_path], config.board_size,
-        config.search_widths, verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config
     )
     
     # Game 2: model_b goes first (blue), model_a second (red)  
     result_2 = play_single_game(
         models[model_b_path], models[model_a_path], config.board_size,
-        config.search_widths, verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config
     )
     
     return {
@@ -466,7 +478,13 @@ def run_round_robin_tournament(
     if play_config is None:
         play_config = TournamentPlayConfig()
     
-    models = {path: SimpleModelInference(path) for path in config.checkpoint_paths}
+    # Preload models for efficiency
+    from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
+    preload_tournament_models(config.checkpoint_paths)
+    
+    # Get cached models
+    model_cache = get_model_cache()
+    models = {path: model_cache.get_simple_model(path) for path in config.checkpoint_paths}
     result = TournamentResult(config.checkpoint_paths)
     
     for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
@@ -501,7 +519,8 @@ def run_round_robin_tournament(
 
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, "
                       f"Random seed: {play_config.random_seed}")
-                print(f"Search widths: {config.search_widths}")
+                print(f"Strategy: {play_config.strategy}, Config: {play_config.strategy_config}")
+                print(f"Search widths: {config.search_widths}")  # Legacy
             if verbose >= 1:
                 print(f"{game_idx+1},", end="", flush=True)
     

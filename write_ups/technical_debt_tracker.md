@@ -186,6 +186,12 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - Data files are in multiple directories
  - Tournament may use '1' & '2' for winner annotation instead of the newer (and preferred) 'b' and 'r'.
 
+### 23. Tournament code
+ - There are two execution scripts, one to compare models, one to compare algorithms given a model. Should these be merged?
+ - There's a file 
+   hex_ai/inference/move_selection.py
+   that chooses between different move strategies. Should e.g. web/app.py use this?
+
 **Status:** PARTIALLY RESOLVED - Removed duplicate `_get_top_policy_moves` from selfplay_engine.py and renamed `_get_policy_move_values` to `_get_batched_policy_move_values` for clarity. The remaining functions serve different purposes:
 - `select_top_k_moves`: Core utility for selecting top-k moves from legal policy array
 - `get_top_k_moves_with_probs`: Main function that handles policy logits → legal moves → top-k with probabilities
