@@ -520,7 +520,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Time the actual MCTS run
         mcts_start_time = time.time()
-        move, stats = run_mcts_move(engine, model_wrapper, state, mcts_config)
+        move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
         mcts_search_time = time.time() - mcts_start_time
         
         # Time the rest of the processing
@@ -575,7 +575,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Get legal moves and their probabilities
         legal_moves = state.get_legal_moves()
-        app.logger.info(f"Legal moves count: {len(legal_moves)}")
+        original_legal_moves_count = len(legal_moves)  # Store for summary
+        app.logger.info(f"Legal moves count: {original_legal_moves_count}")
         legal_move_probs = {}
         for move in legal_moves:
             move_trmph = fc.rowcol_to_trmph(*move)
@@ -601,7 +602,14 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "search_time": mcts_search_time,
                 "exploration_constant": exploration_constant,
                 "temperature": temperature,
-                "mcts_stats": stats
+                "mcts_stats": stats,
+                "inferences": tree_data.get("inferences", 0)
+            },
+            "tree_statistics": {
+                "total_visits": tree_data.get("total_visits", 0),
+                "total_nodes": tree_data.get("total_nodes", 0),
+                "max_depth": tree_data.get("max_depth", 0),
+                "inferences": tree_data.get("inferences", 0)
             },
             "move_selection": {
                 "selected_move": selected_move_trmph,
@@ -609,27 +617,29 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             },
             "move_probabilities": {
                 "direct_policy": legal_move_probs,
-                "mcts_visits": {},  # Placeholder - would need MCTS tree access
-                "mcts_probabilities": {}  # Placeholder - would need MCTS tree access
+                "mcts_visits": tree_data.get("visit_counts", {}),
+                "mcts_probabilities": tree_data.get("mcts_probabilities", {})
             },
             "comparison": {
                 "mcts_vs_direct": {}
             },
             "win_rate_analysis": {
-                "root_value": 0.0,  # Placeholder - would need MCTS tree access
-                "best_child_value": 0.0,  # Placeholder - would need MCTS tree access
-                "win_probability": 0.5,  # Placeholder
-                "best_child_win_probability": 0.5  # Placeholder
+                "root_value": tree_data.get("root_value", 0.0),
+                "best_child_value": tree_data.get("best_child_value", 0.0),
+                "win_probability": tree_data.get("root_value", 0.5),  # Frontend will multiply by 100
+                "best_child_win_probability": tree_data.get("best_child_value", 0.5)
             },
             "move_sequence_analysis": {
-                "principal_variation": [],  # Placeholder - would need MCTS tree access
-                "alternative_lines": [],  # Placeholder - would need MCTS tree access
-                "pv_length": 0  # Placeholder
+                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data.get("principal_variation", [])],
+                "alternative_lines": [],  # Placeholder - would need more complex tree analysis
+                "pv_length": len(tree_data.get("principal_variation", []))
             },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                "total_legal_moves": len(legal_moves),
-                "search_efficiency": 0.0  # Placeholder - would need inference count
+                "top_mcts_move": max(tree_data.get("mcts_probabilities", {}).items(), key=lambda x: x[1])[0] if tree_data.get("mcts_probabilities") else None,
+                "total_legal_moves": original_legal_moves_count,
+                "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}",
+                "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1))
             },
             "profiling_summary": {
                 "total_compute_ms": int(mcts_search_time * 1000.0),
@@ -658,10 +668,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         # Add comparison data
         for move_trmph in legal_move_probs:
             direct_prob = legal_move_probs.get(move_trmph, 0)
+            mcts_prob = tree_data.get("mcts_probabilities", {}).get(move_trmph, 0.0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
-                "mcts_probability": 0.0,  # Placeholder - would need MCTS tree access
-                "difference": 0.0  # Placeholder
+                "mcts_probability": mcts_prob,
+                "difference": mcts_prob - direct_prob
             }
         
         result = {
@@ -684,7 +695,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                     if key in ['search_time', 'total_compute_ms', 'encode_ms', 'forward_ms', 'expand_ms', 'backprop_ms', 
                               'batch_count', 'cache_hits', 'cache_misses', 'root_value', 'best_child_value', 
                               'win_probability', 'best_child_win_probability', 'pv_length', 'search_efficiency',
-                              'mcts_probability', 'direct_probability', 'difference']:
+                              'mcts_probability', 'direct_probability', 'difference', 'total_visits', 'total_nodes', 
+                              'max_depth', 'inferences']:
                         if value is None:
                             app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
                             obj[key] = 0.0

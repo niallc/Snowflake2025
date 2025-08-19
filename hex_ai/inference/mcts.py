@@ -122,7 +122,7 @@ class BaselineMCTS:
         action_size = board_size * board_size
         root = MCTSNode(root_state, board_size)
 
-        # One-time root expansion if not expanded and not terminal
+        # Initialize timing variables
         encode_ms = 0.0
         stack_ms = 0.0
         expand_ms = 0.0
@@ -143,7 +143,7 @@ class BaselineMCTS:
 
         sims_remaining = self.cfg.sims
 
-        # Ensure root expanded (through cache or model) unless terminal
+        # One-time root expansion if not expanded and not terminal
         if not root.is_terminal and not root.is_expanded:
             # Try cache
             cached = self.eval_cache.get(root.state_hash, None)
@@ -407,6 +407,155 @@ class BaselineMCTS:
             a_idx = int(self.rng.choice(len(pi), p=pi))
         return root.legal_moves[a_idx]
 
+    def get_principal_variation(self, root_state: HexGameState, max_length: int = 10) -> List[Tuple[int, int]]:
+        """
+        Extract the principal variation (best move sequence) from the MCTS tree.
+        Requires that run() has been executed on the SAME root_state.
+        """
+        if self._root_node is None:
+            raise RuntimeError("BaselineMCTS.get_principal_variation() called before run(); run() must be called first.")
+        # Verify we are selecting for the same state that was searched
+        if self._root_node.state_hash != state_hash_from(root_state):
+            raise ValueError("BaselineMCTS.get_principal_variation() called with a different state than the last run() root.")
+        root = self._root_node
+
+        if root.is_terminal:
+            return []
+
+        pv = []
+        current_node = root
+        
+        for _ in range(max_length):
+            if current_node.is_terminal or not current_node.is_expanded:
+                break
+                
+            # Find the move with highest visit count
+            if len(current_node.N) == 0:
+                break
+                
+            best_move_idx = int(np.argmax(current_node.N))
+            best_move = current_node.legal_moves[best_move_idx]
+            pv.append(best_move)
+            
+            # Move to the best child
+            child = current_node.children[best_move_idx]
+            if child is None:
+                break
+            current_node = child
+            
+        return pv
+
+    def get_tree_data(self, root_state: HexGameState) -> Dict[str, Any]:
+        """
+        Extract tree data for web interface display.
+        Requires that run() has been executed on the SAME root_state.
+        """
+        if self._root_node is None:
+            raise RuntimeError("BaselineMCTS.get_tree_data() called before run(); run() must be called first.")
+        # Verify we are selecting for the same state that was searched
+        if self._root_node.state_hash != state_hash_from(root_state):
+            raise ValueError("BaselineMCTS.get_tree_data() called with a different state than the last run() root.")
+        root = self._root_node
+
+        if root.is_terminal:
+            return {
+                "visit_counts": {},
+                "mcts_probabilities": {},
+                "root_value": 0.0,
+                "best_child_value": 0.0,
+                "total_visits": 0,
+                "inferences": 0,
+                "total_nodes": 0,
+                "max_depth": 0
+            }
+
+        # Get visit counts and convert to TRMPH format
+        visit_counts = {}
+        mcts_probabilities = {}
+        total_visits = int(np.sum(root.N))
+        
+        for i, (row, col) in enumerate(root.legal_moves):
+            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            visits = int(root.N[i])
+            visit_counts[move_trmph] = visits
+            
+            # Calculate MCTS probability (visit count / total visits)
+            if total_visits > 0:
+                mcts_probabilities[move_trmph] = visits / total_visits
+            else:
+                mcts_probabilities[move_trmph] = 0.0
+
+        # Get root value (average value of all children)
+        if total_visits > 0:
+            root_value = float(np.sum(root.W) / total_visits)
+        else:
+            root_value = 0.0
+
+        # Get best child value
+        if len(root.Q) > 0:
+            best_child_value = float(np.max(root.Q))
+        else:
+            best_child_value = 0.0
+
+        # Calculate total inferences (cache misses)
+        total_inferences = self.cache_misses
+
+        # Calculate tree traversal statistics
+        total_nodes, max_depth = self._calculate_tree_statistics(root)
+
+        # Get principal variation
+        principal_variation = self.get_principal_variation(root_state, max_length=10)
+
+        return {
+            "visit_counts": visit_counts,
+            "mcts_probabilities": mcts_probabilities,
+            "root_value": root_value,
+            "best_child_value": best_child_value,
+            "total_visits": total_visits,
+            "inferences": total_inferences,
+            "total_nodes": total_nodes,
+            "max_depth": max_depth,
+            "principal_variation": principal_variation
+        }
+
+    def _calculate_tree_statistics(self, node: MCTSNode) -> Tuple[int, int]:
+        """
+        Recursively calculate total nodes and max depth of the MCTS tree.
+        This is a lightweight traversal that doesn't affect performance significantly.
+        """
+        if node is None:
+            return 0, 0
+        
+        # Count this node
+        total_nodes = 1
+        max_depth = 0
+        
+        # Recursively count children
+        for child in node.children:
+            if child is not None:
+                child_nodes, child_depth = self._calculate_tree_statistics(child)
+                total_nodes += child_nodes
+                max_depth = max(max_depth, child_depth + 1)
+        
+        return total_nodes, max_depth
+
+    def get_win_probability(self, root_state: HexGameState) -> float:
+        """
+        Get the win probability for the current player based on root value.
+        Requires that run() has been executed on the SAME root_state.
+        """
+        tree_data = self.get_tree_data(root_state)
+        root_value = tree_data["root_value"]
+        
+        # Convert root value to win probability
+        # Root value is from the perspective of the player to move
+        # For RED player: root_value is probability RED wins
+        # For BLUE player: root_value is probability BLUE wins
+        if root_state.current_player_enum == Player.RED:
+            return root_value
+        else:
+            return 1.0 - root_value
+
     # ---------- Internal ----------
 
     # ---------- Internal ----------
@@ -462,14 +611,15 @@ class BaselineMCTS:
 
 # -------- Convenience ----------
 
-def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None) -> Tuple[Tuple[int,int], Dict[str, Any]]:
-    """Run MCTS for one move and return (row,col), stats."""
+def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
+    """Run MCTS for one move and return (row,col), stats, tree_data."""
     if cfg is None:
         cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
     stats = mcts.run(state)
     move = mcts.pick_move(state, temperature=cfg.temperature)
-    return move, stats
+    tree_data = mcts.get_tree_data(state)
+    return move, stats, tree_data
 
 
 # --------- Stats helpers ---------
