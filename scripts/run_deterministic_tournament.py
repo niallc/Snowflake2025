@@ -29,6 +29,7 @@ import os
 import sys
 import random
 import numpy as np
+import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 import itertools
@@ -237,42 +238,99 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = 7,
 
 
 def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
-                            target_count: int = 500) -> List[OpeningPosition]:
+                            target_count: int = 500, cache_file: str = None) -> List[OpeningPosition]:
     """
     Generate diverse opening positions from multiple TRMPH files.
+    
+    This function ensures uniqueness by checking each opening against previously
+    collected ones before adding it to the list.
     
     Args:
         trmph_files: List of TRMPH file paths
         opening_length: Number of moves per opening
         target_count: Target number of openings to generate
+        cache_file: Optional file to save/load openings for faster subsequent runs
     
     Returns:
         List of diverse OpeningPosition objects
     """
-    all_openings = []
+    # Try to load from cache first
+    if cache_file and os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                cached_data = json.load(f)
+                if (cached_data.get('opening_length') == opening_length and 
+                    len(cached_data.get('openings', [])) >= target_count):
+                    print(f"Loading {target_count} openings from cache: {cache_file}")
+                    openings = []
+                    for i, opening_data in enumerate(cached_data['openings'][:target_count]):
+                        opening = OpeningPosition(
+                            moves=opening_data['moves'],
+                            source_game=opening_data['source'],
+                            opening_length=opening_length
+                        )
+                        openings.append(opening)
+                    return openings
+        except Exception as e:
+            print(f"Warning: Could not load cache file {cache_file}: {e}")
     
-    # Extract openings from each file
+    print(f"Generating {target_count} unique openings...")
+    
+    # Set to track unique opening move sequences
+    unique_openings = set()
+    diverse_openings = []
+    
+    # Process files until we have enough unique openings
     for file_path in trmph_files:
-        if os.path.exists(file_path):
-            # Extract more openings per file to ensure we get enough
-            max_per_file = max(10, target_count // min(len(trmph_files), 50))
-            file_openings = extract_openings_from_trmph_file(
-                file_path, opening_length, max_openings=max_per_file
-            )
-            all_openings.extend(file_openings)
-            print(f"Extracted {len(file_openings)} openings from {os.path.basename(file_path)}")
+        if len(diverse_openings) >= target_count:
+            break
+            
+        if not os.path.exists(file_path):
+            continue
+            
+        print(f"Processing {os.path.basename(file_path)}...")
+        
+        # Extract all openings from this file
+        file_openings = extract_openings_from_trmph_file(
+            file_path, opening_length, max_openings=1000  # Extract many to find unique ones
+        )
+        
+        # Check each opening for uniqueness
+        for opening in file_openings:
+            if len(diverse_openings) >= target_count:
+                break
+                
+            # Create a tuple of moves for comparison (tuples are hashable)
+            moves_tuple = tuple(opening.moves)
+            
+            if moves_tuple not in unique_openings:
+                unique_openings.add(moves_tuple)
+                diverse_openings.append(opening)
+                
+                if len(diverse_openings) % 50 == 0:
+                    print(f"  Found {len(diverse_openings)} unique openings so far...")
     
-    # Shuffle and select diverse subset
-    random.shuffle(all_openings)
+    print(f"Generated {len(diverse_openings)} unique openings from {len(trmph_files)} files")
     
-    # Simple diversity: take every Nth opening to spread across different games
-    if len(all_openings) > target_count:
-        step = len(all_openings) // target_count
-        diverse_openings = all_openings[::step][:target_count]
-    else:
-        diverse_openings = all_openings
+    # Save to cache if requested
+    if cache_file and diverse_openings:
+        try:
+            cache_data = {
+                'opening_length': opening_length,
+                'openings': [
+                    {
+                        'moves': opening.moves,
+                        'source': opening.source_game
+                    }
+                    for opening in diverse_openings
+                ]
+            }
+            with open(cache_file, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+            print(f"Saved {len(diverse_openings)} openings to cache: {cache_file}")
+        except Exception as e:
+            print(f"Warning: Could not save cache file {cache_file}: {e}")
     
-    print(f"Generated {len(diverse_openings)} diverse openings from {len(trmph_files)} files")
     return diverse_openings
 
 
@@ -522,6 +580,8 @@ Examples:
                        help='Number of moves per opening (default: 7)')
     parser.add_argument('--opening-file', type=str,
                        help='File containing pre-generated openings (overrides num-openings)')
+    parser.add_argument('--cache-file', type=str,
+                       help='File to cache generated openings for faster subsequent runs')
     parser.add_argument('--trmph-source', type=str, default='data/twoNetGames',
                        help='Directory containing TRMPH files for opening generation')
     parser.add_argument('--mcts-sims', type=str,
@@ -591,7 +651,8 @@ def main():
         openings = generate_diverse_openings(
             trmph_files, 
             opening_length=args.opening_length,
-            target_count=args.num_openings
+            target_count=args.num_openings,
+            cache_file=args.cache_file
         )
     
     if not openings:
