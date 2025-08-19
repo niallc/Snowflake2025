@@ -286,7 +286,7 @@ class SimpleModelInference:
             if not self._did_warmup:
                 try:
                     logger = logging.getLogger(__name__)
-                    logger.info("NN_WARMUP starting")
+                    logger.debug("NN_WARMUP starting")
                     dummy = torch.zeros((64, 3, self.board_size, self.board_size), dtype=torch.float32)
                     t0w = time.perf_counter()
                     # Route through the wrapper/model on the correct device
@@ -302,7 +302,7 @@ class SimpleModelInference:
                     else:
                         with torch.no_grad():
                             _ = nn_model(dummy.to(device))
-                    logger.info(f"NN_WARMUP forward_ms={(time.perf_counter()-t0w)*1e3:.1f}")
+                    logger.debug(f"NN_WARMUP forward_ms={(time.perf_counter()-t0w)*1e3:.1f}")
                     self._did_warmup = True
                 except Exception:
                     # Warmup is best-effort; ignore failures
@@ -347,7 +347,7 @@ class SimpleModelInference:
                 input_tensors.append(input_tensor)
             t_conv1 = time.perf_counter()
             conv_ms = (t_conv1 - t_conv0) * 1e3
-            logging.getLogger(__name__).info(
+            logging.getLogger(__name__).debug(
                 f"NN_PREP_CONV num_uncached={len(uncached_boards)} conv_ms={conv_ms:.2f}"
             )
             # accumulate for programmatic consumption
@@ -382,7 +382,7 @@ class SimpleModelInference:
                 stack_ms = (t_stack1 - t_stack0) * 1e3
                 predict_ms = (t1 - t0) * 1e3
                 post_ms = (t_post1 - t_post0) * 1e3
-                logging.getLogger(__name__).info(
+                logging.getLogger(__name__).debug(
                     f"NN_BATCH_DETAIL batch_index={batch_index} size={len(batch_tensors)} stack_ms={stack_ms:.2f} "
                     f"predict_ms={predict_ms:.2f} post_ms={post_ms:.2f}"
                 )

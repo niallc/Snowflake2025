@@ -213,7 +213,6 @@ def select_move(state: HexGameState, model: SimpleModelInference,
     # Create strategy configuration
     strategy_config = MoveSelectionConfig(
         temperature=play_config.temperature,
-        search_widths=play_config.search_widths,  # Legacy support
         **play_config.strategy_config
     )
     
