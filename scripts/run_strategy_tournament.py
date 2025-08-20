@@ -49,101 +49,24 @@ from hex_ai.inference.tournament import (
     TournamentResult
 )
 from hex_ai.inference.move_selection import list_available_strategies
+from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs, validate_strategy_configs
 
 
-class StrategyConfig:
-    """Configuration for a single strategy."""
-    
-    def __init__(self, name: str, strategy_type: str, config: Dict[str, Any]):
-        self.name = name
-        self.strategy_type = strategy_type
-        self.config = config
-    
-    def get_play_config(self, base_config: TournamentPlayConfig) -> TournamentPlayConfig:
-        """Create a TournamentPlayConfig for this strategy."""
-        return TournamentPlayConfig(
-            temperature=base_config.temperature,
-            random_seed=base_config.random_seed,
-            pie_rule=base_config.pie_rule,
-            swap_threshold=base_config.swap_threshold,
-            strategy=self.strategy_type,
-            strategy_config=self.config
-        )
-    
-    def __str__(self) -> str:
-        return f"{self.name}({self.strategy_type})"
+# StrategyConfig class is now imported from hex_ai.inference.strategy_config
+
+def get_play_config_for_strategy(strategy_config: StrategyConfig, base_config: TournamentPlayConfig) -> TournamentPlayConfig:
+    """Create a TournamentPlayConfig for a strategy."""
+    return TournamentPlayConfig(
+        temperature=base_config.temperature,
+        random_seed=base_config.random_seed,
+        pie_rule=base_config.pie_rule,
+        swap_threshold=base_config.swap_threshold,
+        strategy=strategy_config.strategy_type,
+        strategy_config=strategy_config.config
+    )
 
 
-def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]], 
-                          search_widths: Optional[List[str]]) -> List[StrategyConfig]:
-    """
-    Parse strategy configurations from command line arguments.
-    
-    Args:
-        strategies: List of strategy names (e.g., ["policy", "mcts_100", "fixed_tree_13_8"])
-        mcts_sims: List of MCTS simulation counts
-        search_widths: List of search width strings (e.g., ["13,8", "20,10"])
-    
-    Returns:
-        List of StrategyConfig objects
-    """
-    configs = []
-    
-    for strategy_name in strategies:
-        # Parse strategy name to determine type and parameters
-        if strategy_name == "policy":
-            configs.append(StrategyConfig("policy", "policy", {}))
-        
-        elif strategy_name.startswith("mcts_"):
-            # Extract simulation count from name (e.g., "mcts_100" -> 100)
-            try:
-                sims = int(strategy_name.split("_")[1])
-                configs.append(StrategyConfig(
-                    strategy_name, "mcts", 
-                    {"mcts_sims": sims, "mcts_c_puct": 1.5}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid MCTS strategy name: {strategy_name}. Expected format: mcts_<sims>")
-        
-        elif strategy_name.startswith("fixed_tree_"):
-            # Extract widths from name (e.g., "fixed_tree_13_8" -> [13, 8])
-            try:
-                parts = strategy_name.split("_")[2:]
-                widths = [int(w) for w in parts]
-                configs.append(StrategyConfig(
-                    strategy_name, "fixed_tree", 
-                    {"search_widths": widths}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")
-        
-        else:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
-    
-    # Override with command line parameters if provided
-    if mcts_sims:
-        if len(mcts_sims) != len([c for c in configs if c.strategy_type == "mcts"]):
-            raise ValueError(f"Number of MCTS simulation counts ({len(mcts_sims)}) must match number of MCTS strategies")
-        
-        mcts_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["mcts_sims"] = mcts_sims[mcts_idx]
-                mcts_idx += 1
-    
-    if search_widths:
-        if len(search_widths) != len([c for c in configs if c.strategy_type == "fixed_tree"]):
-            raise ValueError(f"Number of search width sets ({len(search_widths)}) must match number of fixed_tree strategies")
-        
-        tree_idx = 0
-        for config in configs:
-            if config.strategy_type == "fixed_tree":
-                # Parse widths string (e.g., "13,8" -> [13, 8])
-                widths = [int(w.strip()) for w in search_widths[tree_idx].split(",")]
-                config.config["search_widths"] = widths
-                tree_idx += 1
-    
-    return configs
+# parse_strategy_configs function is now imported from hex_ai.inference.strategy_config
 
 
 def play_strategy_vs_strategy_game(

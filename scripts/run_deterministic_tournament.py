@@ -22,42 +22,73 @@ Examples:
      --model=current_best \
      --strategies=mcts_100,mcts_200 \
      --opening-file=data/deterministic_openings.txt
+
+3. Use custom temperature:
+   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+     --model=current_best \
+     --strategies=policy,mcts_100 \
+     --num-openings=150 \
+     --temperature=0.1
 """
 
 import argparse
-import os
-import sys
-import random
-import numpy as np
-import json
-from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+import csv
+import glob
 import itertools
+import json
+import logging
+import os
+import random
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 
-from hex_ai.inference.model_config import get_model_path, validate_model_path
-from hex_ai.inference.tournament import TournamentResult
-from hex_ai.inference.move_selection import list_available_strategies
-from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
-from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.config import EMPTY_PIECE
+import numpy as np
+
+from hex_ai.config import (
+    BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
+)
 from hex_ai.enums import Player, Piece
-from hex_ai.utils.format_conversion import rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
+from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
+from hex_ai.inference.model_config import get_model_path, validate_model_path
+from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
+from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs
+from hex_ai.inference.tournament import TournamentResult
+from hex_ai.utils.format_conversion import (
+    rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
+)
 from hex_ai.utils.tournament_logging import append_trmph_winner_line
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_OPENING_LENGTH = 7
+DEFAULT_NUM_OPENINGS = 100
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_SEED = 42
+DEFAULT_VERBOSE = 1
+TRMPH_SOURCE_DIR = "data/twoNetGames"
+TRMPH_FILE_PATTERN = "*.trmph"
+OUTPUT_DIR_PREFIX = "data/tournament_play/deterministic_tournament_"
+
+# TODO: Consider adding configuration for:
+# Low priority: Timeout handling for long-running strategies
+# Low priority: Progress saving/resume functionality for interrupted tournaments
 
 
 class OpeningPosition:
     """Represents an opening position with moves and metadata."""
     
     def __init__(self, moves: List[Tuple[int, int]], source_game: str = "", 
-                 opening_length: int = 7):
+                 opening_length: int = DEFAULT_OPENING_LENGTH):
         self.moves = moves
         self.source_game = source_game
         self.opening_length = opening_length
     
-    def get_state(self, board_size: int = 13) -> HexGameState:
+    def get_state(self, board_size: int = BOARD_SIZE) -> HexGameState:
         """Create a game state from this opening position."""
-        import numpy as np
-        
         # Initialize empty board
         board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
         state = HexGameState(board=board, _current_player=Player.BLUE)
@@ -68,107 +99,29 @@ class OpeningPosition:
         
         return state
     
-    def get_trmph_string(self, board_size: int = 13) -> str:
+    def get_trmph_string(self, board_size: int = BOARD_SIZE) -> str:
         """Get TRMPH representation of the opening moves."""
         trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in self.moves])
-        return f"#{board_size},{trmph_moves}"
+        return f"{TRMPH_PREFIX}{trmph_moves}"
     
     def __str__(self) -> str:
         return f"Opening({len(self.moves)} moves from {self.source_game})"
 
 
-class StrategyConfig:
-    """Configuration for a single strategy."""
-    
-    def __init__(self, name: str, strategy_type: str, config: Dict[str, Any]):
-        self.name = name
-        self.strategy_type = strategy_type
-        self.config = config
-    
-    def get_move_config(self) -> MoveSelectionConfig:
-        """Create a MoveSelectionConfig for this strategy."""
-        return MoveSelectionConfig(
-            temperature=0.0,  # Deterministic
-            **self.config
-        )
-    
-    def __str__(self) -> str:
-        return f"{self.name}({self.strategy_type})"
+def get_move_config_for_strategy(strategy_config: StrategyConfig, temperature: float = DEFAULT_TEMPERATURE) -> MoveSelectionConfig:
+    """Create a MoveSelectionConfig for a strategy with specified temperature."""
+    config_dict = strategy_config.config.copy()
+    config_dict['temperature'] = temperature
+    return MoveSelectionConfig(**config_dict)
 
 
-def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]], 
-                          search_widths: Optional[List[str]]) -> List[StrategyConfig]:
-    """
-    Parse strategy configurations from command line arguments.
-    
-    Args:
-        strategies: List of strategy names (e.g., ["policy", "mcts_100", "fixed_tree_13_8"])
-        mcts_sims: List of MCTS simulation counts
-        search_widths: List of search width strings (e.g., ["13,8", "20,10"])
-    
-    Returns:
-        List of StrategyConfig objects
-    """
-    configs = []
-    
-    for strategy_name in strategies:
-        # Parse strategy name to determine type and parameters
-        if strategy_name == "policy":
-            configs.append(StrategyConfig("policy", "policy", {}))
-        
-        elif strategy_name.startswith("mcts_"):
-            # Extract simulation count from name (e.g., "mcts_100" -> 100)
-            try:
-                sims = int(strategy_name.split("_")[1])
-                configs.append(StrategyConfig(
-                    strategy_name, "mcts", 
-                    {"mcts_sims": sims, "mcts_c_puct": 1.5}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid MCTS strategy name: {strategy_name}. Expected format: mcts_<sims>")
-        
-        elif strategy_name.startswith("fixed_tree_"):
-            # Extract widths from name (e.g., "fixed_tree_13_8" -> [13, 8])
-            try:
-                parts = strategy_name.split("_")[2:]
-                widths = [int(w) for w in parts]
-                configs.append(StrategyConfig(
-                    strategy_name, "fixed_tree", 
-                    {"search_widths": widths}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")
-        
-        else:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
-    
-    # Override with command line parameters if provided
-    if mcts_sims:
-        if len(mcts_sims) != len([c for c in configs if c.strategy_type == "mcts"]):
-            raise ValueError(f"Number of MCTS simulation counts ({len(mcts_sims)}) must match number of MCTS strategies")
-        
-        mcts_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["mcts_sims"] = mcts_sims[mcts_idx]
-                mcts_idx += 1
-    
-    if search_widths:
-        if len(search_widths) != len([c for c in configs if c.strategy_type == "fixed_tree"]):
-            raise ValueError(f"Number of search width sets ({len(search_widths)}) must match number of fixed_tree strategies")
-        
-        tree_idx = 0
-        for config in configs:
-            if config.strategy_type == "fixed_tree":
-                # Parse widths string (e.g., "13,8" -> [13, 8])
-                widths = [int(w.strip()) for w in search_widths[tree_idx].split(",")]
-                config.config["search_widths"] = widths
-                tree_idx += 1
-    
-    return configs
+def validate_coordinates(row: int, col: int, board_size: int = BOARD_SIZE) -> None:
+    """Validate that coordinates are within board bounds."""
+    if not (0 <= row < board_size and 0 <= col < board_size):
+        raise ValueError(f"Invalid coordinates ({row}, {col}) for board size {board_size}")
 
 
-def extract_openings_from_trmph_file(file_path: str, opening_length: int = 7, 
+def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH, 
                                    max_openings: int = 500) -> List[OpeningPosition]:
     """
     Extract diverse opening positions from a TRMPH file.
@@ -180,6 +133,9 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = 7,
     
     Returns:
         List of OpeningPosition objects
+    
+    Raises:
+        ValueError: If file format is invalid or moves are malformed
     """
     openings = []
     
@@ -201,27 +157,31 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = 7,
                 
                 moves_winner = parts[1]
                 # Find the winner indicator (b or r) at the end
-                if moves_winner.endswith(' b'):
+                if moves_winner.endswith(f' {TRMPH_BLUE_WIN}'):
                     moves_str = moves_winner[:-2]
-                    winner = 'b'
-                elif moves_winner.endswith(' r'):
+                    winner = TRMPH_BLUE_WIN
+                elif moves_winner.endswith(f' {TRMPH_RED_WIN}'):
                     moves_str = moves_winner[:-2]
-                    winner = 'r'
+                    winner = TRMPH_RED_WIN
                 else:
                     continue
                 
-                # Convert TRMPH moves to row,col coordinates
+                # Convert TRMPH moves to row,col coordinates with strict validation
                 moves = []
                 try:
                     # Use the proper TRMPH parsing functions
                     trmph_moves = split_trmph_moves(moves_str)
                     for trmph_move in trmph_moves:
                         try:
-                            row, col = trmph_move_to_rowcol(trmph_move, 13)
+                            row, col = trmph_move_to_rowcol(trmph_move, BOARD_SIZE)
+                            validate_coordinates(row, col, BOARD_SIZE)
                             moves.append((row, col))
-                        except ValueError:
+                        except ValueError as e:
+                            # Log and skip invalid moves, but continue processing
+                            logger.warning(f"Invalid move '{trmph_move}' in line {line_num}: {e}")
                             continue
-                except ValueError:
+                except ValueError as e:
+                    logger.warning(f"Could not parse moves in line {line_num}: {e}")
                     continue
                 
                 # Only use openings with enough moves
@@ -231,13 +191,87 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = 7,
                     openings.append(OpeningPosition(opening_moves, source_game, opening_length))
                 
             except Exception as e:
-                print(f"Warning: Could not parse line {line_num} in {file_path}: {e}")
+                logger.warning(f"Could not parse line {line_num} in {file_path}: {e}")
                 continue
     
     return openings
 
 
-def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
+def load_openings_from_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH) -> List[OpeningPosition]:
+    """
+    Load opening positions from a file.
+    
+    Expected format: One TRMPH string per line, optionally with winner indicator.
+    Examples:
+        #13,a1b2c3d4e5f6g7
+        #13,a1b2c3d4e5f6g7 b
+        #13,a1b2c3d4e5f6g7 r
+    
+    Args:
+        file_path: Path to file containing opening positions
+        opening_length: Number of moves per opening (will truncate if longer)
+    
+    Returns:
+        List of OpeningPosition objects
+    
+    Raises:
+        ValueError: If file format is invalid or moves are malformed
+    """
+    openings = []
+    
+    with open(file_path, 'r') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            # Parse TRMPH string
+            try:
+                # Extract moves (remove winner indicator if present)
+                if line.endswith(f' {TRMPH_BLUE_WIN}') or line.endswith(f' {TRMPH_RED_WIN}'):
+                    moves_str = line[:-2]
+                else:
+                    moves_str = line
+                
+                # Validate TRMPH format
+                if not moves_str.startswith(TRMPH_PREFIX):
+                    raise ValueError(f"Line {line_num}: Expected TRMPH format starting with '{TRMPH_PREFIX}'")
+                
+                # Parse moves
+                trmph_moves = split_trmph_moves(moves_str[len(TRMPH_PREFIX):])  # Remove prefix
+                moves = []
+                
+                for trmph_move in trmph_moves:
+                    row, col = trmph_move_to_rowcol(trmph_move, BOARD_SIZE)
+                    validate_coordinates(row, col, BOARD_SIZE)
+                    moves.append((row, col))
+                
+                # Truncate to opening length if necessary
+                if len(moves) >= opening_length:
+                    opening_moves = moves[:opening_length]
+                    source_game = f"{os.path.basename(file_path)}:line{line_num}"
+                    openings.append(OpeningPosition(opening_moves, source_game, opening_length))
+                else:
+                    logger.warning(f"Line {line_num} has only {len(moves)} moves, need {opening_length}")
+                
+            except Exception as e:
+                raise ValueError(f"Error parsing line {line_num} in {file_path}: {e}")
+    
+    if not openings:
+        raise ValueError(f"No valid openings found in {file_path}")
+    
+    return openings
+
+
+def find_trmph_files(source_dir: str) -> List[str]:
+    """Find all TRMPH files in the source directory."""
+    pattern = os.path.join(source_dir, TRMPH_FILE_PATTERN)
+    files = glob.glob(pattern)
+    logger.info(f"Found {len(files)} TRMPH files in {source_dir}")
+    return sorted(files)
+
+
+def generate_diverse_openings(trmph_files: List[str], opening_length: int = DEFAULT_OPENING_LENGTH,
                             target_count: int = 500, cache_file: str = None) -> List[OpeningPosition]:
     """
     Generate diverse opening positions from multiple TRMPH files.
@@ -261,7 +295,7 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
                 cached_data = json.load(f)
                 if (cached_data.get('opening_length') == opening_length and 
                     len(cached_data.get('openings', [])) >= target_count):
-                    print(f"Loading {target_count} openings from cache: {cache_file}")
+                    logger.info(f"Loading {target_count} openings from cache: {cache_file}")
                     openings = []
                     for i, opening_data in enumerate(cached_data['openings'][:target_count]):
                         opening = OpeningPosition(
@@ -272,9 +306,9 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
                         openings.append(opening)
                     return openings
         except Exception as e:
-            print(f"Warning: Could not load cache file {cache_file}: {e}")
+            logger.warning(f"Could not load cache file {cache_file}: {e}")
     
-    print(f"Generating {target_count} unique openings...")
+    logger.info(f"Generating {target_count} unique openings...")
     
     # Set to track unique opening move sequences
     unique_openings = set()
@@ -288,7 +322,7 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
         if not os.path.exists(file_path):
             continue
             
-        print(f"Processing {os.path.basename(file_path)}...")
+        logger.info(f"Processing {os.path.basename(file_path)}...")
         
         # Extract all openings from this file
         file_openings = extract_openings_from_trmph_file(
@@ -308,9 +342,9 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
                 diverse_openings.append(opening)
                 
                 if len(diverse_openings) % 50 == 0:
-                    print(f"  Found {len(diverse_openings)} unique openings so far...")
+                    logger.info(f"  Found {len(diverse_openings)} unique openings so far...")
     
-    print(f"Generated {len(diverse_openings)} unique openings from {len(trmph_files)} files")
+    logger.info(f"Generated {len(diverse_openings)} unique openings from {len(trmph_files)} files")
     
     # Save to cache if requested
     if cache_file and diverse_openings:
@@ -327,9 +361,9 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = 7,
             }
             with open(cache_file, 'w') as f:
                 json.dump(cache_data, f, indent=2)
-            print(f"Saved {len(diverse_openings)} openings to cache: {cache_file}")
+            logger.info(f"Saved {len(diverse_openings)} openings to cache: {cache_file}")
         except Exception as e:
-            print(f"Warning: Could not save cache file {cache_file}: {e}")
+            logger.warning(f"Could not save cache file {cache_file}: {e}")
     
     return diverse_openings
 
@@ -339,7 +373,8 @@ def play_deterministic_game(
     strategy_a: StrategyConfig,
     strategy_b: StrategyConfig,
     opening: OpeningPosition,
-    board_size: int = 13,
+    temperature: float = DEFAULT_TEMPERATURE,
+    board_size: int = BOARD_SIZE,
     verbose: int = 0
 ) -> Dict[str, Any]:
     """
@@ -350,6 +385,7 @@ def play_deterministic_game(
         strategy_a: Strategy configuration for player A (Blue)
         strategy_b: Strategy configuration for player B (Red)
         opening: Opening position to start from
+        temperature: Temperature for move selection (0.0 = deterministic)
         board_size: Board size for the game
         verbose: Verbosity level
     
@@ -359,9 +395,9 @@ def play_deterministic_game(
     # Start from the opening position
     state = opening.get_state(board_size)
     
-    # Create strategy configurations (deterministic)
-    config_a = strategy_a.get_move_config()
-    config_b = strategy_b.get_move_config()
+    # Create strategy configurations with specified temperature
+    config_a = get_move_config_for_strategy(strategy_a, temperature)
+    config_b = get_move_config_for_strategy(strategy_b, temperature)
     
     # Get strategy objects
     strategy_a_obj = get_strategy(strategy_a.strategy_type)
@@ -378,8 +414,8 @@ def play_deterministic_game(
         else:
             strategy_obj = strategy_b_obj
             strategy_config = config_b
-        
-        # Select move (deterministic)
+    
+        # Select move
         move = strategy_obj.select_move(state, model, strategy_config)
         if move is None:
             raise ValueError(f"Move selection returned None for {strategy_obj.get_name()}")
@@ -393,7 +429,7 @@ def play_deterministic_game(
     
     # Convert to TRMPH format
     trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
-    trmph_str = f"#{board_size},{trmph_moves}"
+    trmph_str = f"{TRMPH_PREFIX}{trmph_moves}"
     
     # Determine winner
     winner_enum = state.winner_enum
@@ -402,10 +438,10 @@ def play_deterministic_game(
     
     if winner_enum.name == 'BLUE':
         winner_strategy = strategy_a.name
-        winner_char = 'b'
+        winner_char = TRMPH_BLUE_WIN
     elif winner_enum.name == 'RED':
         winner_strategy = strategy_b.name
-        winner_char = 'r'
+        winner_char = TRMPH_RED_WIN
     else:
         raise ValueError(f"Unknown winner enum: {winner_enum}")
     
@@ -419,11 +455,26 @@ def play_deterministic_game(
     }
 
 
+def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
+    """Write CSV results to file."""
+    csv_path = Path(csv_file)
+    write_header = not csv_path.exists()
+    headers = list(rows[0].keys())
+    
+    with open(csv_path, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        if write_header:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
 def run_deterministic_tournament(
     model_path: str,
     strategy_configs: List[StrategyConfig],
     openings: List[OpeningPosition],
-    verbose: int = 1
+    temperature: float = DEFAULT_TEMPERATURE,
+    verbose: int = DEFAULT_VERBOSE
 ) -> TournamentResult:
     """
     Run a deterministic tournament using pre-generated opening positions.
@@ -432,6 +483,7 @@ def run_deterministic_tournament(
         model_path: Path to the model checkpoint
         strategy_configs: List of strategy configurations
         openings: List of opening positions to use
+        temperature: Temperature for move selection (0.0 = deterministic)
         verbose: Verbosity level
     
     Returns:
@@ -449,7 +501,7 @@ def run_deterministic_tournament(
     
     # Create output directory and files
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-    output_dir = f"data/tournament_play/deterministic_tournament_{timestamp}"
+    output_dir = f"{OUTPUT_DIR_PREFIX}{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
     # Save opening positions
@@ -460,7 +512,7 @@ def run_deterministic_tournament(
     
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
-        print(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
+        logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
         
         # Create output files for this strategy pair
         pair_name = f"{strategy_a.name}_vs_{strategy_b.name}"
@@ -474,17 +526,13 @@ def run_deterministic_tournament(
             
             # Game 1: Strategy A (Blue) vs Strategy B (Red)
             result_1 = play_deterministic_game(
-                model, strategy_a, strategy_b, opening, verbose=verbose-1
+                model, strategy_a, strategy_b, opening, temperature, verbose=verbose-1
             )
             
             # Game 2: Strategy B (Blue) vs Strategy A (Red)
             result_2 = play_deterministic_game(
-                model, strategy_b, strategy_a, opening, verbose=verbose-1
+                model, strategy_b, strategy_a, opening, temperature, verbose=verbose-1
             )
-            
-            # Log results to files
-            import csv
-            from pathlib import Path
             
             # Log TRMPH results
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], trmph_file)
@@ -504,7 +552,8 @@ def run_deterministic_tournament(
                     "winner": result_1['winner_char'],
                     "winner_strategy": result_1['winner_strategy'],
                     "num_moves": result_1['num_moves'],
-                    "opening_length": opening.opening_length
+                    "opening_length": opening.opening_length,
+                    "temperature": temperature
                 },
                 {
                     "timestamp": timestamp,
@@ -517,21 +566,12 @@ def run_deterministic_tournament(
                     "winner": result_2['winner_char'],
                     "winner_strategy": result_2['winner_strategy'],
                     "num_moves": result_2['num_moves'],
-                    "opening_length": opening.opening_length
+                    "opening_length": opening.opening_length,
+                    "temperature": temperature
                 }
             ]
             
-            # Write CSV
-            csv_path = Path(csv_file)
-            write_header = not csv_path.exists()
-            headers = list(rows[0].keys())
-            
-            with open(csv_path, 'a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
-                if write_header:
-                    writer.writeheader()
-                for row in rows:
-                    writer.writerow(row)
+            write_csv_results(rows, csv_file)
             
             # Record results for tournament tracking
             # Game 1: Strategy A vs Strategy B
@@ -565,8 +605,8 @@ Examples:
   # Use specific opening file
   %(prog)s --model=current_best --strategies=mcts_100,mcts_200 --opening-file=data/deterministic_openings.txt
   
-  # Compare with custom opening length
-  %(prog)s --model=current_best --strategies=policy,mcts_122 --num-openings=200 --opening-length=5
+  # Compare with custom opening length and temperature
+  %(prog)s --model=current_best --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
         """
     )
     
@@ -574,24 +614,26 @@ Examples:
                        help='Model to use for all strategies (default: current_best)')
     parser.add_argument('--strategies', type=str, required=True,
                        help='Comma-separated list of strategies to compare')
-    parser.add_argument('--num-openings', type=int, default=100,
-                       help='Number of opening positions to generate (default: 100)')
-    parser.add_argument('--opening-length', type=int, default=7,
-                       help='Number of moves per opening (default: 7)')
+    parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
+                       help=f'Number of opening positions to generate (default: {DEFAULT_NUM_OPENINGS})')
+    parser.add_argument('--opening-length', type=int, default=DEFAULT_OPENING_LENGTH,
+                       help=f'Number of moves per opening (default: {DEFAULT_OPENING_LENGTH})')
     parser.add_argument('--opening-file', type=str,
                        help='File containing pre-generated openings (overrides num-openings)')
     parser.add_argument('--cache-file', type=str,
                        help='File to cache generated openings for faster subsequent runs')
-    parser.add_argument('--trmph-source', type=str, default='data/twoNetGames',
-                       help='Directory containing TRMPH files for opening generation')
+    parser.add_argument('--trmph-source', type=str, default=TRMPH_SOURCE_DIR,
+                       help=f'Directory containing TRMPH files for opening generation (default: {TRMPH_SOURCE_DIR})')
     parser.add_argument('--mcts-sims', type=str,
                        help='Comma-separated MCTS simulation counts (overrides strategy names)')
     parser.add_argument('--search-widths', type=str,
                        help='Semicolon-separated search width sets (e.g., "13,8;20,10")')
-    parser.add_argument('--seed', type=int, default=42,
-                       help='Random seed for opening generation (default: 42)')
-    parser.add_argument('--verbose', type=int, default=1,
-                       help='Verbosity level (default: 1)')
+    parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
+                       help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
+    parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
+                       help=f'Random seed for opening generation (default: {DEFAULT_SEED})')
+    parser.add_argument('--verbose', type=int, default=DEFAULT_VERBOSE,
+                       help=f'Verbosity level (default: {DEFAULT_VERBOSE})')
     
     return parser.parse_args()
 
@@ -635,14 +677,16 @@ def main():
     # Generate or load opening positions
     if args.opening_file and os.path.exists(args.opening_file):
         print(f"Loading openings from: {args.opening_file}")
-        # TODO: Implement loading from file
-        openings = []  # Placeholder
+        try:
+            openings = load_openings_from_file(args.opening_file, args.opening_length)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
     else:
         print(f"Generating {args.num_openings} diverse openings...")
         
         # Find TRMPH files
-        import glob
-        trmph_files = glob.glob(os.path.join(args.trmph_source, "*.trmph"))
+        trmph_files = find_trmph_files(args.trmph_source)
         if not trmph_files:
             print(f"ERROR: No TRMPH files found in {args.trmph_source}")
             sys.exit(1)
@@ -665,8 +709,8 @@ def main():
     print(f"  Strategies: {[str(c) for c in strategy_configs]}")
     print(f"  Number of openings: {len(openings)}")
     print(f"  Opening length: {args.opening_length} moves")
+    print(f"  Temperature: {args.temperature}")
     print(f"  Random seed: {args.seed}")
-    print(f"  Temperature: 0.0 (deterministic)")
     print()
     
     # Run tournament
@@ -674,6 +718,7 @@ def main():
         model_path=model_path,
         strategy_configs=strategy_configs,
         openings=openings,
+        temperature=args.temperature,
         verbose=args.verbose
     )
     
@@ -683,7 +728,7 @@ def main():
     
     # Print output location
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-    output_dir = f"data/tournament_play/deterministic_tournament_{timestamp}"
+    output_dir = f"{OUTPUT_DIR_PREFIX}{timestamp}"
     print(f"\nResults saved to: {output_dir}/")
 
 
