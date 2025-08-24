@@ -187,8 +187,15 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAU
                 # Only use openings with enough moves
                 if len(moves) >= opening_length:
                     opening_moves = moves[:opening_length]
-                    source_game = f"{os.path.basename(file_path)}:line{line_num}"
-                    openings.append(OpeningPosition(opening_moves, source_game, opening_length))
+                    
+                    # Check for duplicate moves within the opening
+                    unique_moves = set(opening_moves)
+                    if len(unique_moves) == len(opening_moves):
+                        # No duplicates within this opening
+                        source_game = f"{os.path.basename(file_path)}:line{line_num}"
+                        openings.append(OpeningPosition(opening_moves, source_game, opening_length))
+                    else:
+                        logger.warning(f"Skipping opening with duplicate moves in line {line_num}: {opening_moves}")
                 
             except Exception as e:
                 logger.warning(f"Could not parse line {line_num} in {file_path}: {e}")
@@ -375,19 +382,21 @@ def play_deterministic_game(
     opening: OpeningPosition,
     temperature: float = DEFAULT_TEMPERATURE,
     board_size: int = BOARD_SIZE,
-    verbose: int = 0
+    verbose: int = 0,
+    strategy_a_is_blue: bool = True
 ) -> Dict[str, Any]:
     """
     Play a deterministic game from an opening position.
     
     Args:
         model: The model to use for both strategies
-        strategy_a: Strategy configuration for player A (Blue)
-        strategy_b: Strategy configuration for player B (Red)
+        strategy_a: Strategy configuration for player A
+        strategy_b: Strategy configuration for player B
         opening: Opening position to start from
         temperature: Temperature for move selection (0.0 = deterministic)
         board_size: Board size for the game
         verbose: Verbosity level
+        strategy_a_is_blue: Whether strategy_a plays as Blue (True) or Red (False)
     
     Returns:
         Dictionary with game results
@@ -405,20 +414,82 @@ def play_deterministic_game(
     
     # Play the game from the opening position
     move_sequence = list(opening.moves)  # Start with opening moves
+    
+    # The filename that a logger writes to (if using a FileHandler) can be accessed via:
+    # logger.handlers[0].baseFilename  # if the first handler is a FileHandler
+    #
+    # If logger.handlers has length 0, then the logger has no handlers attached.
+    # In this case, logging calls will propagate up to the parent logger (unless propagate=False).
+    # If no ancestor logger has a handler, the logging output is lost (not shown anywhere).
+    # By default, the root logger has a StreamHandler to stderr, so output is usually visible unless all handlers are removed.
+    #
+    # To inspect a logger for an upstream (parent) logger and its handlers in the interactive debugger, you can use:
+    #   logger.parent         # This gives you the parent logger object (or None for the root logger)
+    #   logger.parent.handlers
+    #   logger.parent.name
+    #   logger.parent.parent  # And so on, up the chain
+    #
+    # To walk up the logger hierarchy and print all handlers, you can use:
+    #   l = logger
+    #   while l:
+    #       print(f"Logger: {l.name}, Handlers: {l.handlers}")
+    #       l = l.parent
+    #
+    # If you see <StreamHandler <stderr> (NOTSET)> in logger.parent.handlers[0], this means that
+    # the parent logger (often the root logger) is configured to output log messages to standard error (stderr).
+    # So, unless you have added a FileHandler or other handler, your log output will go to the terminal's stderr.
+    #
+    # If you are NOT seeing log output in your terminal, possible reasons include:
+    #   - The logger's level is set higher than the messages you are emitting (e.g., logger.level is WARNING, but you are logging INFO).
+    #   - The handler's level is set higher than your messages.
+    #   - The terminal in Cursor may not be showing stderr output, or stderr is not connected to the visible terminal.
+    #   - Some environments (e.g., certain IDEs, Jupyter, or subprocesses) may redirect or suppress stderr.
+    #   - There may be code elsewhere that removes or reconfigures handlers.
+    #
+    # To debug, try adding this at the top of your script (after imports) to force logging to stdout:
+    # import logging, sys
+    # root = logging.getLogger()
+    # root.setLevel(logging.DEBUG)
+    # for h in root.handlers:
+    #     root.removeHandler(h)
+    # handler = logging.StreamHandler(sys.stdout)
+    # handler.setLevel(logging.DEBUG)
+    # root.addHandler(handler)
+    #
+    # This will ensure all log output goes to stdout, which is almost always visible in terminal windows.
+    logger.debug(f"Starting game: {strategy_a.name} vs {strategy_b.name}")
+    logger.debug(f"Opening moves: {opening.moves}")
+    logger.debug(f"Initial state current player: {state.current_player_enum}")
+    logger.debug(f"Strategy A is Blue: {strategy_a_is_blue}")
+    
     while not state.game_over:
-        # Determine which strategy to use based on current player
+        # Determine which strategy to use based on current player and color assignment
         current_player = state.current_player_enum
         if current_player == Player.BLUE:
-            strategy_obj = strategy_a_obj
-            strategy_config = config_a
-        else:
-            strategy_obj = strategy_b_obj
-            strategy_config = config_b
+            if strategy_a_is_blue:
+                strategy_obj = strategy_a_obj
+                strategy_config = config_a
+                strategy_name = strategy_a.name
+            else:
+                strategy_obj = strategy_b_obj
+                strategy_config = config_b
+                strategy_name = strategy_b.name
+        else:  # Player.RED
+            if strategy_a_is_blue:
+                strategy_obj = strategy_b_obj
+                strategy_config = config_b
+                strategy_name = strategy_b.name
+            else:
+                strategy_obj = strategy_a_obj
+                strategy_config = config_a
+                strategy_name = strategy_a.name
     
         # Select move
         move = strategy_obj.select_move(state, model, strategy_config)
         if move is None:
             raise ValueError(f"Move selection returned None for {strategy_obj.get_name()}")
+        
+        logger.debug(f"Player {current_player.name} ({strategy_name}) plays move {move}")
         
         # Apply move
         move_sequence.append(move)
@@ -437,13 +508,16 @@ def play_deterministic_game(
         raise ValueError("Game is not over or winner missing")
     
     if winner_enum.name == 'BLUE':
-        winner_strategy = strategy_a.name
+        winner_strategy = strategy_a.name if strategy_a_is_blue else strategy_b.name
         winner_char = TRMPH_BLUE_WIN
     elif winner_enum.name == 'RED':
-        winner_strategy = strategy_b.name
+        winner_strategy = strategy_b.name if strategy_a_is_blue else strategy_a.name
         winner_char = TRMPH_RED_WIN
     else:
         raise ValueError(f"Unknown winner enum: {winner_enum}")
+    
+    logger.debug(f"Game complete: {winner_strategy} wins with {len(move_sequence)} moves")
+    logger.debug(f"Final TRMPH: {trmph_str}")
     
     return {
         'winner_strategy': winner_strategy,
@@ -489,6 +563,11 @@ def run_deterministic_tournament(
     Returns:
         TournamentResult with results
     """
+    # TODO: Add progress tracking and resume functionality
+    # TODO: Add parallel processing for multiple strategy pairs
+    # TODO: Add memory usage monitoring for large tournaments
+    # TODO: Consider adding early termination if one strategy dominates
+    
     # Create tournament result tracking strategy names
     strategy_names = [config.name for config in strategy_configs]
     result = TournamentResult(strategy_names)
@@ -510,6 +589,9 @@ def run_deterministic_tournament(
         for i, opening in enumerate(openings):
             f.write(f"Opening {i+1}: {opening.get_trmph_string()}\n")
     
+    # Track games for duplicate detection
+    seen_games = set()
+    
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
         logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
@@ -525,14 +607,41 @@ def run_deterministic_tournament(
                 print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
             
             # Game 1: Strategy A (Blue) vs Strategy B (Red)
+            logger.debug(f"Playing game 1: {strategy_a.name} (Blue) vs {strategy_b.name} (Red) from opening {opening_idx + 1}")
             result_1 = play_deterministic_game(
-                model, strategy_a, strategy_b, opening, temperature, verbose=verbose-1
+                model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
             )
             
             # Game 2: Strategy B (Blue) vs Strategy A (Red)
+            logger.debug(f"Playing game 2: {strategy_b.name} (Blue) vs {strategy_a.name} (Red) from opening {opening_idx + 1}")
             result_2 = play_deterministic_game(
-                model, strategy_b, strategy_a, opening, temperature, verbose=verbose-1
+                model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
             )
+            
+            # Check for duplicate games
+            game_1_key = f"{result_1['trmph_str']}_{result_1['winner_char']}"
+            game_2_key = f"{result_2['trmph_str']}_{result_2['winner_char']}"
+            
+            logger.debug(f"Game 1 key: {game_1_key}")
+            logger.debug(f"Game 2 key: {game_2_key}")
+            logger.debug(f"Game 1 winner: {result_1['winner_strategy']} ({result_1['winner_char']})")
+            logger.debug(f"Game 2 winner: {result_2['winner_strategy']} ({result_2['winner_char']})")
+            
+            if game_1_key in seen_games:
+                logger.warning(f"DUPLICATE GAME DETECTED! Game 1 already seen: {game_1_key}")
+                logger.warning(f"  Strategy A: {strategy_a.name}, Strategy B: {strategy_b.name}")
+                logger.warning(f"  Opening: {opening_idx + 1}, Opening moves: {opening.moves}")
+                logger.warning(f"  Result: {result_1['winner_strategy']} wins with {result_1['num_moves']} moves")
+            else:
+                seen_games.add(game_1_key)
+            
+            if game_2_key in seen_games:
+                logger.warning(f"DUPLICATE GAME DETECTED! Game 2 already seen: {game_2_key}")
+                logger.warning(f"  Strategy B: {strategy_b.name}, Strategy A: {strategy_a.name}")
+                logger.warning(f"  Opening: {opening_idx + 1}, Opening moves: {opening.moves}")
+                logger.warning(f"  Result: {result_2['winner_strategy']} wins with {result_2['num_moves']} moves")
+            else:
+                seen_games.add(game_2_key)
             
             # Log TRMPH results
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], trmph_file)
@@ -590,6 +699,7 @@ def run_deterministic_tournament(
         if verbose >= 1:
             print()  # New line after games
     
+    logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
     return result
 
 
