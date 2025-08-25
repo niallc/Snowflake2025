@@ -29,6 +29,11 @@ class SelfPlayEngine:
                  streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = 500):
+        
+        # Generate a unique run seed based on current time
+        self.run_seed = int(time.time() * 1000000) % (2**32)
+        if verbose >= 1:
+            print(f"SelfPlayEngine run seed: {self.run_seed}")
         """
         Initialize the self-play engine.
         
@@ -131,13 +136,18 @@ class SelfPlayEngine:
         """
         # Set unique random seed for this game to ensure diversity
         if game_id is not None:
-            # Use game_id to create a deterministic but unique seed
-            seed = 42 + game_id * 1000
+            # Combine run seed with game_id to ensure uniqueness across runs
+            seed = self.run_seed + game_id * 1000
         else:
             # Use time-based seed for uniqueness
             seed = int(time.time() * 1000000) % (2**32)
+        
+        # Set both Python and numpy random seeds to ensure MCTS uses the correct randomness
         random.seed(seed)
         np.random.seed(seed)
+        
+        if self.verbose >= 3:
+            print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
         
         state = HexGameState()  # Always uses 13x13 board
         
