@@ -52,7 +52,6 @@ write_ups/redundant/mcts_test_analysis.md
 write_ups/redundant/pipeline_code_review.md
 write_ups/redundant/tmp_hyperparam_sweep_improvements_guide.md
 write_ups/redundant/training_instability_analysis_summary.md
-hex_ai/inference/model_config.py
 hex_ai/web/README.md
 hex_ai/web/mcts_explorer.html
 scripts/run_mcts_explorer.py

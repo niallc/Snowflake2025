@@ -8,9 +8,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
+from hex_ai.enums import Winner
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
 from hex_ai.inference.game_engine import HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -173,12 +172,12 @@ class SelfPlayEngine:
         
         # Game data - TRMPH string and winner
         # Only handle enum case - fail fast on legacy values
-        if not hasattr(state.winner, 'name'):
+        if not isinstance(state.winner, Winner):
             raise ValueError(f"Expected Winner enum, got: {state.winner!r} (type: {type(state.winner)})")
         
-        if state.winner.name == "RED":
+        if state.winner == Winner.RED:
             winner_char = TRMPH_RED_WIN
-        elif state.winner.name == "BLUE":
+        elif state.winner == Winner.BLUE:
             winner_char = TRMPH_BLUE_WIN
         else:
             raise ValueError(f"Unexpected winner enum: {state.winner!r}")
@@ -348,7 +347,7 @@ class SelfPlayEngine:
         
         return stats
 
-    def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str):
+    def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str) -> str:
         """
         Save games to a TRMPH text file.
         
