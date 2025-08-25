@@ -363,7 +363,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 "board": state.board.tolist(),
                 "player": winner_to_color(state.current_player),
                 "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": state.winner,
+                "winner": winner_to_color(state.winner) if state.winner is not None else None,
                 "move_made": None,
                 "game_over": True
             }
@@ -439,7 +439,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
             "board": state.board.tolist(),
             "player": winner_to_color(state.current_player),
             "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": state.winner,
+            "winner": winner_to_color(state.winner) if state.winner is not None else None,
             "move_made": best_move_trmph,
             "game_over": state.game_over,
             "debug_info": debug_info if verbose >= 1 else None
@@ -476,7 +476,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "board": state.board.tolist(),
                 "player": winner_to_color(state.current_player),
                 "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": state.winner,
+                "winner": winner_to_color(state.winner) if state.winner is not None else None,
                 "move_made": None,
                 "game_over": True,
                 "mcts_debug_info": {}
@@ -681,7 +681,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "board": state.board.tolist(),
             "player": winner_to_color(state.current_player),
             "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": state.winner,
+            "winner": winner_to_color(state.winner) if state.winner is not None else None,
             "move_made": selected_move_trmph,
             "game_over": state.game_over,
             "mcts_debug_info": mcts_debug_info
@@ -1020,6 +1020,7 @@ def api_apply_move():
 
     # Use enum-based color conversion - much safer
     player_color = winner_to_color(player_enum)
+    winner_color = winner_to_color(winner) if winner is not None else None
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
@@ -1039,7 +1040,7 @@ def api_apply_move():
         "player_enum": player_enum_name,
         "player_index": player_index,
         "legal_moves": legal_moves,
-        "winner": winner,
+        "winner": winner_color,
         "model_move": None,  # No computer move made
         "policy": policy_dict,
         "value": float(value_logit) if 'value_logit' in locals() else 0.0,
@@ -1089,6 +1090,7 @@ def api_apply_trmph_sequence():
 
     # Use enum-based color conversion - much safer
     player_color = winner_to_color(player_enum)
+    winner_color = winner_to_color(winner) if winner is not None else None
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
@@ -1108,7 +1110,7 @@ def api_apply_trmph_sequence():
         "player_enum": player_enum_name,
         "player_index": player_index,
         "legal_moves": legal_moves,
-        "winner": winner,
+        "winner": winner_color,
         "policy": policy_dict,
         "value": float(value_logit) if 'value_logit' in locals() else 0.0,
         "win_prob": win_prob,
@@ -1259,6 +1261,7 @@ def api_move():
     
     # Use enum-based color conversion - much safer
     player_color = winner_to_color(player_enum)
+    winner_color = winner_to_color(winner) if winner is not None else None
 
     # Recompute policy/value for final state using centralized utilities
     model = get_model(model_id)
@@ -1279,7 +1282,7 @@ def api_move():
         "player_enum": player_enum_name,
         "player_index": player_index,
         "legal_moves": legal_moves,
-        "winner": winner,
+        "winner": winner_color,
         "model_move": model_move,
         "policy": policy_dict,
         "value": float(value_logit) if 'value_logit' in locals() else 0.0,
