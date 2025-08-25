@@ -103,9 +103,12 @@ class PieRuleOpeningStrategy(OpeningStrategy):
         Returns:
             Tuple of (row, col) coordinates, or None for empty board
         """
+        # If beyond our strategy, cycle through the moves
         if game_index >= self._total_games:
-            # Beyond our strategy, return None (empty board)
-            return None
+            # Calculate which cycle we're in and the offset within that cycle
+            cycle = game_index // self._total_games
+            offset = game_index % self._total_games
+            game_index = offset
         
         # Balanced moves first
         if game_index < self.balanced_games:
