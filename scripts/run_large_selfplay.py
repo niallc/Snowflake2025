@@ -4,16 +4,20 @@ Large-scale self-play generation script with optimized performance.
 """
 
 import argparse
-import sys
+import numpy as np
 import os
+import random
+import sys
 import time
 from datetime import datetime
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.inference.model_config import get_model_path
+from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
+from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
+
 
 
 def main():
@@ -28,6 +32,11 @@ def main():
     parser.add_argument('--mcts_sims', type=int, default=500, 
                        help='Number of MCTS simulations per move')
     parser.add_argument('--temperature', type=float, default=0.2, help='Temperature for move sampling')
+    parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
+                       choices=['pie_rule', 'random', 'none'],
+                       help='Opening strategy: pie_rule (default), random, or none')
+    parser.add_argument('--bad_move_frequency', type=float, default=0.1,
+                       help='Frequency of bad moves in pie rule openings (0.0-1.0)')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
@@ -37,6 +46,9 @@ def main():
                        help='How often to print progress updates')
     
     args = parser.parse_args()
+    
+    # Don't set global seeds - let each game use different randomness
+    # This ensures games are diverse while maintaining reproducibility within each game
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -50,9 +62,14 @@ def main():
     print(f"Batch size: {args.batch_size}")
     print(f"Search method: MCTS ({args.mcts_sims} simulations)")
     print(f"Temperature: {args.temperature}")
+    print(f"Opening strategy: {args.opening_strategy}")
+    if args.opening_strategy == 'pie_rule':
+        print(f"Bad move frequency: {args.bad_move_frequency}")
     print(f"Batched inference: {not args.no_batched_inference}")
     print(f"Output directory: {args.output_dir}")
     print(f"Timestamp: {timestamp}")
+    
+
     
     # Note about execution configuration
     if not args.no_batched_inference:
@@ -63,6 +80,19 @@ def main():
         print("This configuration may provide better performance for non-batched inference.")
     
     print()
+    
+    # Create opening strategy
+    opening_strategy = None
+    if args.opening_strategy != 'none':
+        if args.opening_strategy == 'pie_rule':
+            opening_strategy = create_pie_rule_strategy(
+                board_size=13,
+                bad_move_frequency=args.bad_move_frequency
+            )
+        elif args.opening_strategy == 'random':
+            # Create random strategy with some common opening moves
+            common_moves = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (9, 9), (10, 10), (11, 11), (12, 12)]
+            opening_strategy = RandomOpeningStrategy(common_moves, board_size=13, empty_board_prob=0.1)
     
     # Initialize self-play engine
     engine = SelfPlayEngine(
@@ -84,12 +114,16 @@ def main():
         if args.streaming_save:
             games = engine.generate_games_streaming(
                 num_games=args.num_games,
-                progress_interval=args.progress_interval
+                board_size=13,
+                progress_interval=args.progress_interval,
+                opening_strategy=opening_strategy
             )
         else:
             games = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
-                progress_interval=args.progress_interval
+                board_size=13,
+                progress_interval=args.progress_interval,
+                opening_strategy=opening_strategy
             )
         
         # Save games

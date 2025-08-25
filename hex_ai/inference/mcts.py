@@ -36,8 +36,16 @@ class BaselineMCTSConfig:
     dirichlet_alpha: float = 0.3
     dirichlet_eps: float = 0.25
     add_root_noise: bool = False
-    temperature: float = 1.0  # for pick_move
-    seed: int = 1234
+    temperature: float = 1.0  # Legacy parameter - now sets temperature_start when decay is enabled
+    # Temperature decay parameters
+    temperature_decay: bool = True  # Whether to enable temperature decay
+    temperature_decay_type: str = "exponential"  # "linear", "exponential", "step", "game_progress"
+    temperature_start: Optional[float] = None  # Starting temperature (if None, uses temperature field)
+    temperature_end: float = 0.1  # Final temperature (minimum)
+    temperature_decay_moves: int = 50  # Number of moves for decay (for linear/exponential)
+    temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
+    temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
+    # Removed seed parameter - randomness should be controlled externally
 
 # ------------------ Helpers ------------------
 
@@ -63,6 +71,62 @@ def state_hash_from(state: HexGameState) -> int:
     key = (tuple(state.move_history), int(state.current_player_enum.value))
     h = hash(key) & ((1 << 63) - 1)
     return h
+
+def calculate_temperature_decay(cfg: BaselineMCTSConfig, move_count: int) -> float:
+    """
+    Calculate temperature based on decay configuration and current move count.
+    
+    Args:
+        cfg: MCTS configuration with temperature decay parameters
+        move_count: Number of moves played so far (0-based)
+    
+    Returns:
+        Current temperature value
+    """
+    if not cfg.temperature_decay:
+        return cfg.temperature
+    
+    # Determine the starting temperature
+    # If temperature_start is explicitly set, use it; otherwise use the legacy temperature field
+    start_temp = cfg.temperature_start if cfg.temperature_start is not None else cfg.temperature
+    
+    if cfg.temperature_decay_type == "linear":
+        # Linear decay from temperature_start to temperature_end over temperature_decay_moves
+        progress = min(move_count / max(1, cfg.temperature_decay_moves), 1.0)
+        return start_temp + (cfg.temperature_end - start_temp) * progress
+    
+    elif cfg.temperature_decay_type == "exponential":
+        # Exponential decay: T = T_start * (T_end/T_start)^(move_count/decay_moves)
+        if start_temp <= 0 or cfg.temperature_end <= 0:
+            return cfg.temperature_end  # Safety fallback
+        progress = min(move_count / max(1, cfg.temperature_decay_moves), 1.0)
+        decay_factor = (cfg.temperature_end / start_temp) ** progress
+        return start_temp * decay_factor
+    
+    elif cfg.temperature_decay_type == "step":
+        # Step decay: temperature drops at specific move thresholds
+        if not cfg.temperature_step_thresholds or not cfg.temperature_step_values:
+            return start_temp
+        
+        # Find the appropriate temperature for current move count
+        for i, threshold in enumerate(cfg.temperature_step_thresholds):
+            if move_count < threshold:
+                return cfg.temperature_step_values[i] if i < len(cfg.temperature_step_values) else cfg.temperature_end
+        
+        # If we've passed all thresholds, use the final temperature
+        return cfg.temperature_end
+    
+    elif cfg.temperature_decay_type == "game_progress":
+        # Temperature based on percentage of game completed
+        # Estimate total game length as board_size^2 (full board)
+        board_size = CFG_BOARD_SIZE
+        estimated_total_moves = board_size * board_size
+        progress = min(move_count / max(1, estimated_total_moves), 1.0)
+        return start_temp + (cfg.temperature_end - start_temp) * progress
+    
+    else:
+        # Unknown decay type, return base temperature
+        return cfg.temperature
 
 # ------------------ Data structures ------------------
 
@@ -97,8 +161,8 @@ class BaselineMCTS:
         self.engine = engine
         self.model = model
         self.cfg = cfg
-        self.rng = np.random.default_rng(cfg.seed)
-        random.seed(cfg.seed)
+        # Always use global RNG state - randomness should be controlled externally
+        # This ensures MCTS instances don't interfere with each other's randomness
 
         # Cache: state_hash -> (policy_logits_np [A], value_logit_float)
         self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
@@ -396,7 +460,17 @@ class BaselineMCTS:
         if counts.sum() <= 0:
             raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
-        temp = self.cfg.temperature if temperature is None else temperature
+        # Calculate temperature with decay if enabled
+        if temperature is None:
+            if self.cfg.temperature_decay:
+                # Calculate temperature based on current move count
+                move_count = len(root_state.move_history)
+                temp = calculate_temperature_decay(self.cfg, move_count)
+            else:
+                temp = self.cfg.temperature
+        else:
+            temp = temperature
+            
         if temp <= 1e-6:
             a_idx = int(np.argmax(counts))
         else:
@@ -404,7 +478,7 @@ class BaselineMCTS:
             if not np.isfinite(pi).all() or np.sum(pi) <= 0:
                 raise ValueError(f"Invalid temperature scaling result: pi={pi}, counts={counts}, temp={temp}")
             pi /= np.sum(pi)
-            a_idx = int(self.rng.choice(len(pi), p=pi))
+            a_idx = int(np.random.choice(len(pi), p=pi))
         return root.legal_moves[a_idx]
 
     def get_principal_variation(self, root_state: HexGameState, max_length: int = 10) -> List[Tuple[int, int]]:
@@ -579,7 +653,7 @@ class BaselineMCTS:
         if not root.is_expanded or not root.legal_moves:
             return
         L = len(root.legal_moves)
-        noise = self.rng.dirichlet([self.cfg.dirichlet_alpha] * L)
+        noise = np.random.dirichlet([self.cfg.dirichlet_alpha] * L)
         root.P = (1 - self.cfg.dirichlet_eps) * root.P + self.cfg.dirichlet_eps * noise
 
     def _expand_node_from_policy(self, node: MCTSNode, policy_logits_np: np.ndarray, board_size: int, action_size: int):

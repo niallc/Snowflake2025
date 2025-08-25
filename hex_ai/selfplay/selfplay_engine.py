@@ -3,19 +3,21 @@ Self-play engine for generating training data using the Hex AI model.
 """
 
 import logging
+import numpy as np
 import os
+import random
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
 from hex_ai.enums import Winner
+from hex_ai.inference.game_engine import HexGameEngine, HexGameState
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
-from hex_ai.inference.game_engine import HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.training_utils import get_device
+from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import validate_trmph_winner
 
 
@@ -60,7 +62,7 @@ class SelfPlayEngine:
         self.game_engine = HexGameEngine()
         # Create ModelWrapper for MCTS
         self.model_wrapper = ModelWrapper(model_path, device=get_device())
-        # Create MCTS configuration
+        # Create MCTS configuration (randomness controlled externally)
         self.mcts_config = BaselineMCTSConfig(
             sims=self.mcts_sims,
             batch_cap=64,  # Optimize for throughput
@@ -68,8 +70,7 @@ class SelfPlayEngine:
             dirichlet_alpha=0.3,
             dirichlet_eps=0.25,
             add_root_noise=False,  # Disable for self-play consistency
-            temperature=self.temperature,
-            seed=1234  # Fixed seed for reproducibility
+            temperature=self.temperature
         )
         
         # Performance tracking
@@ -116,17 +117,37 @@ class SelfPlayEngine:
             
 
 
-    def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
+    def _generate_single_game(self, board_size: int, opening_move: Optional[Tuple[int, int]] = None, game_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Generate a single self-play game.
         
         Args:
             board_size: Size of the board (ignored, always uses 13)
+            opening_move: Optional opening move as (row, col) tuple
+            game_id: Optional game ID for setting unique random seed
             
         Returns:
             Dictionary containing game data with TRMPH string and winner
         """
+        # Set unique random seed for this game to ensure diversity
+        if game_id is not None:
+            # Use game_id to create a deterministic but unique seed
+            seed = 42 + game_id * 1000
+        else:
+            # Use time-based seed for uniqueness
+            seed = int(time.time() * 1000000) % (2**32)
+        random.seed(seed)
+        np.random.seed(seed)
+        
         state = HexGameState()  # Always uses 13x13 board
+        
+        # Apply opening move if provided
+        if opening_move is not None:
+            row, col = opening_move
+            if self.verbose >= 3:
+                trmph_move = rowcol_to_trmph(row, col)
+                print(f"🎮 SELF-PLAY: Starting with opening move {trmph_move} ({row}, {col})")
+            state = state.make_move(row, col)
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Starting new game with MCTS ({self.mcts_sims} simulations)")
@@ -235,7 +256,7 @@ class SelfPlayEngine:
             raise ValueError(f"Invalid TRMPH format{game_info}: must start with {TRMPH_PREFIX!r}")
 
     def generate_games_with_monitoring(self, num_games: int, board_size: int = 13, 
-                                     progress_interval: int = 10) -> List[Dict[str, Any]]:
+                                     progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate self-play games with monitoring and statistics.
         
@@ -256,7 +277,12 @@ class SelfPlayEngine:
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
             try:
-                game_data = self._generate_single_game(board_size)
+                # Get opening move if strategy provided
+                opening_move = None
+                if opening_strategy is not None:
+                    opening_move = opening_strategy.get_opening_move(i)
+                
+                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
                 self._validate_game_data(game_data, i)
                 games.append(game_data)
                 
@@ -283,7 +309,7 @@ class SelfPlayEngine:
         return games
 
     def generate_games_streaming(self, num_games: int, board_size: int = 13, 
-                               progress_interval: int = 10) -> List[Dict[str, Any]]:
+                               progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate games with streaming save to avoid data loss on interruption.
         
@@ -307,7 +333,12 @@ class SelfPlayEngine:
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
             try:
-                game_data = self._generate_single_game(board_size)
+                # Get opening move if strategy provided
+                opening_move = None
+                if opening_strategy is not None:
+                    opening_move = opening_strategy.get_opening_move(i)
+                
+                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
                 self._validate_game_data(game_data, i)
                 games.append(game_data)
                 
@@ -334,6 +365,59 @@ class SelfPlayEngine:
         
         print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
         print(f"Games saved to: {self.streaming_file}")
+        
+        return games
+
+    def generate_games_with_opening_strategy(self, opening_strategy, num_games: int, 
+                                           board_size: int = 13, progress_interval: int = 10) -> List[Dict[str, Any]]:
+        """
+        Generate self-play games using a specific opening strategy.
+        
+        Args:
+            opening_strategy: OpeningStrategy instance that provides opening moves
+            num_games: Number of games to generate
+            board_size: Size of the board (default: 13)
+            progress_interval: How often to print progress updates
+            
+        Returns:
+            List of game data dictionaries
+        """
+        start_time = time.time()
+        print(f"Generating {num_games} games with opening strategy...")
+        print(f"Strategy covers {opening_strategy.get_total_games()} games")
+        print(f"Using {'batched' if self.use_batched_inference else 'individual'} inference")
+        
+        games = []
+        
+        # Generate games sequentially (single-threaded)
+        for i in range(num_games):
+            try:
+                # Get opening move from strategy
+                opening_move = opening_strategy.get_opening_move(i)
+                
+                game_data = self._generate_single_game(board_size, opening_move)
+                self._validate_game_data(game_data, i)
+                games.append(game_data)
+                
+                # Progress update
+                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                    elapsed = time.time() - start_time
+                    games_per_sec = (i + 1) / elapsed
+                    if self.verbose >= 1:
+                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                elif self.verbose >= 1:
+                    print(".", end="", flush=True)  # Progress dot for each game
+                    
+            except Exception as e:
+                self.logger.error(f"Error generating game {i}: {e}")
+        
+        # Update statistics
+        total_time = time.time() - start_time
+        self.stats['games_generated'] += len(games)
+        self.stats['total_time'] += total_time
+        self.stats['games_per_second'] = len(games) / total_time if total_time > 0 else 0
+        
+        print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
         
         return games
 
