@@ -60,12 +60,7 @@ scripts/test_mcts_tree_reuse.py
 scripts/test_model_config_integration.py
 write_ups/mcts_explorer_summary.md
 write_ups/mcts_tree_reuse_optimization.md
-scripts/test_batched_mcts.py
-write_ups/batched_mcts_implementation_summary.md
-write_ups/redundant/batched_mcts_asynchronous_design_challenge.md
-write_ups/redundant/batched_mcts_backpropagation_fix_summary.md
 scripts/deprecated/test_enhanced_inference.py
-write_ups/batched_mcts_improvement_plan.md
 write_ups/code_review_concerns.md
 write_ups/tree_search_batching_bug_analysis.md
 write_ups/mcts_timing_analysis.md
