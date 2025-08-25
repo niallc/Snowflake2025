@@ -23,11 +23,10 @@ def main():
                        default=get_model_path("current_best"),
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
-    parser.add_argument('--num_workers', type=int, default=1, help='Number of worker threads (use 1 for batched inference)')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
     parser.add_argument('--cache_size', type=int, default=60000, help='Cache size for model inference')
-    parser.add_argument('--search_widths', type=int, nargs='+', default=[3, 2], 
-                       help='Search widths for minimax (e.g., 3 2 for width 3 at depth 1, width 2 at depth 2)')
+    parser.add_argument('--mcts_sims', type=int, default=500, 
+                       help='Number of MCTS simulations per move')
     parser.add_argument('--temperature', type=float, default=0.2, help='Temperature for move sampling')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
     parser.add_argument('--streaming_save', action='store_true', 
@@ -48,24 +47,19 @@ def main():
     print(f"=== Large-Scale Self-Play Generation ===")
     print(f"Model: {args.model_path}")
     print(f"Games: {args.num_games}")
-    print(f"Workers: {args.num_workers}")
     print(f"Batch size: {args.batch_size}")
-    print(f"Search widths: {args.search_widths}")
+    print(f"Search method: MCTS ({args.mcts_sims} simulations)")
     print(f"Temperature: {args.temperature}")
     print(f"Batched inference: {not args.no_batched_inference}")
     print(f"Output directory: {args.output_dir}")
     print(f"Timestamp: {timestamp}")
     
-    # Note about threading configuration
-    if args.num_workers > 1 and not args.no_batched_inference:
-        print(f"\nNOTE: Using {args.num_workers} workers with batched inference.")
-        print("This may not provide significant performance benefits due to GPU serialization.")
-        print("Consider using --num_workers=1 for optimal batched inference performance.")
-    elif args.num_workers == 1 and not args.no_batched_inference:
+    # Note about execution configuration
+    if not args.no_batched_inference:
         print(f"\nNOTE: Using single-threaded execution with batched inference.")
         print("This is the recommended configuration for optimal performance.")
-    elif not args.no_batched_inference:
-        print(f"\nNOTE: Using {args.num_workers} workers with individual inference calls.")
+    else:
+        print(f"\nNOTE: Using individual inference calls.")
         print("This configuration may provide better performance for non-batched inference.")
     
     print()
@@ -73,15 +67,14 @@ def main():
     # Initialize self-play engine
     engine = SelfPlayEngine(
         model_path=args.model_path,
-        num_workers=args.num_workers,
         batch_size=args.batch_size,
         cache_size=args.cache_size,
-        search_widths=args.search_widths,
         temperature=args.temperature,
         verbose=args.verbose,
         streaming_save=args.streaming_save,
         use_batched_inference=not args.no_batched_inference,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        mcts_sims=args.mcts_sims
     )
     
     start_time = time.time()

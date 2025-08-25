@@ -5,14 +5,15 @@ Self-play engine for generating training data using the Hex AI model.
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
+from hex_ai.inference.game_engine import HexGameEngine
+from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.training_utils import get_device
@@ -22,41 +23,55 @@ from hex_ai.value_utils import validate_trmph_winner
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
-    def __init__(self, model_path: str, num_workers: int = 4, batch_size: int = 32, 
-                 cache_size: int = 10000, search_widths: List[int] = None, 
-                 temperature: float = 1.0, verbose: int = 1, 
+    def __init__(self, model_path: str, batch_size: int = 32, 
+                 cache_size: int = 10000, temperature: float = 1.0, verbose: int = 1, 
                  streaming_save: bool = False, streaming_file: str = None,
-                 use_batched_inference: bool = True, output_dir: str = None):
+                 use_batched_inference: bool = True, output_dir: str = None,
+                 mcts_sims: int = 500):
         """
         Initialize the self-play engine.
         
         Args:
             model_path: Path to the model checkpoint
-            num_workers: Number of worker threads
             batch_size: Batch size for inference
             cache_size: Size of the LRU cache
-            search_widths: List of search widths for minimax
             temperature: Temperature for move sampling
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
             streaming_save: Save games incrementally to avoid data loss
             streaming_file: File path for streaming save (auto-generated if None)
             use_batched_inference: Whether to use batched inference for better performance
             output_dir: Output directory for streaming files (used if streaming_file is None)
+            mcts_sims: Number of MCTS simulations per move
         """
         self.model_path = model_path
-        self.num_workers = num_workers
         self.batch_size = batch_size
         self.cache_size = cache_size
-        self.search_widths = search_widths or [3, 2]
         self.temperature = temperature
         self.verbose = verbose
         self.streaming_save = streaming_save
         self.streaming_file = streaming_file
         self.use_batched_inference = use_batched_inference
         self.output_dir = output_dir
+        self.mcts_sims = mcts_sims
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
+        
+        # Initialize MCTS components
+        self.game_engine = HexGameEngine()
+        # Create ModelWrapper for MCTS
+        self.model_wrapper = ModelWrapper(model_path, device=get_device())
+        # Create MCTS configuration
+        self.mcts_config = BaselineMCTSConfig(
+            sims=self.mcts_sims,
+            batch_cap=64,  # Optimize for throughput
+            c_puct=1.5,
+            dirichlet_alpha=0.3,
+            dirichlet_eps=0.25,
+            add_root_noise=False,  # Disable for self-play consistency
+            temperature=self.temperature,
+            seed=1234  # Fixed seed for reproducibility
+        )
         
         # Performance tracking
         self.stats = {
@@ -83,7 +98,7 @@ class SelfPlayEngine:
             with open(self.streaming_file, 'w') as f:
                 f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
                 f.write(f"# Model: {model_path}\n")
-                f.write(f"# Search widths: {search_widths}\n")
+                f.write(f"# MCTS simulations: {mcts_sims}\n")
                 f.write(f"# Temperature: {temperature}\n")
                 f.write("# Format: trmph_string winner\n")
         
@@ -93,19 +108,14 @@ class SelfPlayEngine:
         if self.verbose >= 1:
             print(f"SelfPlayEngine initialized:")
             print(f"  Model: {model_path}")
-            print(f"  Workers: {num_workers}")
             print(f"  Batch size: {batch_size}")
             print(f"  Cache size: {cache_size}")
-            print(f"  Search widths: {search_widths}")
+            print(f"  Search method: MCTS ({mcts_sims} simulations)")
             print(f"  Temperature: {temperature}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
             
-        # Warn about multi-threading incompatibility with batched inference
-        if num_workers > 1 and use_batched_inference:
-            print(f"\nWARNING: Multi-threading (num_workers={num_workers}) is incompatible with batched inference.")
-            print("The PositionCollector requires single-threaded usage. Consider setting --num_workers=1")
-            print("or --no_batched_inference to avoid this issue.\n")
+
 
     def _generate_single_game(self, board_size: int) -> Dict[str, Any]:
         """
@@ -120,42 +130,58 @@ class SelfPlayEngine:
         state = HexGameState()  # Always uses 13x13 board
         
         if self.verbose >= 3:
-            print(f"🎮 SELF-PLAY: Starting new game with search widths {self.search_widths}")
+            print(f"🎮 SELF-PLAY: Starting new game with MCTS ({self.mcts_sims} simulations)")
         
         while not state.game_over:
-            # Use batched minimax search
+            # Use MCTS for move generation
             if self.verbose >= 3:
                 print(f"🎮 SELF-PLAY: Move {len(state.move_history)}, player {state.current_player}, legal moves: {len(state.get_legal_moves())}")
             
-            move, minimax_value, _, search_stats = minimax_policy_value_search_with_batching(
-                state=state,
-                model=self.model,
-                widths=self.search_widths,
-                temperature=self.temperature,
-                verbose=self.verbose
-            )
+            # Use natural MCTS interface
+            mcts = BaselineMCTS(self.game_engine, self.model_wrapper, self.mcts_config)
+            
+            # Run MCTS
+            if self.verbose >= 3:
+                print(f"🎮 SELF-PLAY: Running MCTS with {self.mcts_sims} simulations")
+            
+            start_time = time.perf_counter()
+            mcts_stats = mcts.run(state)
+            search_time = time.perf_counter() - start_time
+            
+            # Get the best move
+            move = mcts.pick_move(state, temperature=self.temperature)
+            
+            # Get root value (approximate from MCTS)
+            tree_data = mcts.get_tree_data(state)
+            search_value = tree_data.get('root_value', 0.0)
+            
+            # Log MCTS statistics
+            if self.verbose >= 2:
+                cache_hit_rate = mcts.cache_hits / max(1, mcts.cache_hits + mcts.cache_misses)
+                print(
+                    f"[Move {len(state.move_history)}] MCTS: sims={self.mcts_sims}, "
+                    f"inferences={mcts_stats.get('inferences', 0)}, "
+                    f"cache_hit_rate={cache_hit_rate:.1%}, "
+                    f"time={search_time:.4f}s"
+                )
             
             if self.verbose >= 3:
-                print(f"🎮 SELF-PLAY: Selected move {move}, value {minimax_value:.4f}")
-            
-            # Log search statistics
-            if self.verbose >= 2:
-                print(
-                    f"[Move {len(state.move_history)}] evals: policy={search_stats['policy_items_processed']} "
-                    f"(waves={search_stats['policy_batches_processed']}, avg_batch={search_stats['avg_policy_batch']:.2f}, "
-                    f"nn_time={search_stats['policy_nn_time']:.4f}s, total_phase={search_stats['policy_total_time']:.4f}s)"
-                )
+                print(f"🎮 SELF-PLAY: Selected move {move}, value {search_value:.4f}")
             
             # Apply move
             state = state.make_move(*move)
         
         # Game data - TRMPH string and winner
-        if state.winner == "red":
+        # Only handle enum case - fail fast on legacy values
+        if not hasattr(state.winner, 'name'):
+            raise ValueError(f"Expected Winner enum, got: {state.winner!r} (type: {type(state.winner)})")
+        
+        if state.winner.name == "RED":
             winner_char = TRMPH_RED_WIN
-        elif state.winner == "blue":
+        elif state.winner.name == "BLUE":
             winner_char = TRMPH_BLUE_WIN
         else:
-            raise ValueError(f"Unexpected winner value: {state.winner!r} (expected 'red' or 'blue')")
+            raise ValueError(f"Unexpected winner enum: {state.winner!r}")
         
         game_data = {
             'trmph': state.to_trmph(),
@@ -223,39 +249,29 @@ class SelfPlayEngine:
             List of game data dictionaries
         """
         start_time = time.time()
-        print(f"Generating {num_games} games with {self.num_workers} workers...")
+        print(f"Generating {num_games} games...")
         print(f"Using {'batched' if self.use_batched_inference else 'individual'} inference")
         
         games = []
         
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            # Submit game generation tasks
-            future_to_game_id = {
-                executor.submit(self._generate_single_game, board_size): i 
-                for i in range(num_games)
-            }
-            
-            # Collect results
-            completed = 0
-            for future in as_completed(future_to_game_id):
-                game_id = future_to_game_id[future]
-                try:
-                    game_data = future.result()
-                    self._validate_game_data(game_data, game_id)
-                    games.append(game_data)
-                    completed += 1
+        # Generate games sequentially (single-threaded)
+        for i in range(num_games):
+            try:
+                game_data = self._generate_single_game(board_size)
+                self._validate_game_data(game_data, i)
+                games.append(game_data)
+                
+                # Progress update
+                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                    elapsed = time.time() - start_time
+                    games_per_sec = (i + 1) / elapsed
+                    if self.verbose >= 1:
+                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                elif self.verbose >= 1:
+                    print(".", end="", flush=True)  # Progress dot for each game
                     
-                    # Progress update
-                    if completed % progress_interval == 0 or completed == num_games:
-                        elapsed = time.time() - start_time
-                        games_per_sec = completed / elapsed
-                        if self.verbose >= 1:
-                            print(f"\nGenerated {completed}/{num_games} games ({games_per_sec:.1f} games/s)")
-                    elif self.verbose >= 1:
-                        print(".", end="", flush=True)  # Progress dot for each game
-                        
-                except Exception as e:
-                    self.logger.error(f"Error generating game {game_id}: {e}")
+            except Exception as e:
+                self.logger.error(f"Error generating game {i}: {e}")
         
         # Update statistics
         total_time = time.time() - start_time
@@ -282,7 +298,6 @@ class SelfPlayEngine:
         """
         if not self.streaming_save:
             raise RuntimeError("Streaming save is not enabled. Set self.streaming_save=True to use generate_games_streaming.")
-            # return self.generate_games_with_monitoring(num_games, board_size, progress_interval)
         
         start_time = time.time()
         print(f"Generating {num_games} games with streaming save...")
@@ -290,38 +305,27 @@ class SelfPlayEngine:
         
         games = []
         
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            # Submit game generation tasks
-            future_to_game_id = {
-                executor.submit(self._generate_single_game, board_size): i 
-                for i in range(num_games)
-            }
-            
-            # Collect results and save immediately
-            completed = 0
-            for future in as_completed(future_to_game_id):
-                game_id = future_to_game_id[future]
-                try:
-                    game_data = future.result()
-                    self._validate_game_data(game_data, game_id)
-                    games.append(game_data)
+        # Generate games sequentially (single-threaded)
+        for i in range(num_games):
+            try:
+                game_data = self._generate_single_game(board_size)
+                self._validate_game_data(game_data, i)
+                games.append(game_data)
+                
+                # Save immediately to avoid data loss
+                self.save_game_to_stream(game_data)
+                
+                # Progress update
+                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                    elapsed = time.time() - start_time
+                    games_per_sec = (i + 1) / elapsed
+                    if self.verbose >= 1:
+                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                elif self.verbose >= 1:
+                    print(".", end="", flush=True)  # Progress dot for each game
                     
-                    # Save immediately to avoid data loss
-                    self.save_game_to_stream(game_data)
-                    
-                    completed += 1
-                    
-                    # Progress update
-                    if completed % progress_interval == 0 or completed == num_games:
-                        elapsed = time.time() - start_time
-                        games_per_sec = completed / elapsed
-                        if self.verbose >= 1:
-                            print(f"\nGenerated {completed}/{num_games} games ({games_per_sec:.1f} games/s)")
-                    elif self.verbose >= 1:
-                        print(".", end="", flush=True)  # Progress dot for each game
-                        
-                except Exception as e:
-                    self.logger.error(f"Error generating game {game_id}: {e}")
+            except Exception as e:
+                self.logger.error(f"Error generating game {i}: {e}")
         
         # Update statistics
         total_time = time.time() - start_time
