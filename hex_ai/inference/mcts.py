@@ -1,6 +1,14 @@
 # baseline_mcts.py
 # Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
 # Compatible with flat-file or package imports via shims.
+#
+# TODO: Future improvements to consider:
+# - Add memory pooling for large tree structures to reduce allocation overhead
+# - Implement cleanup of old cached evaluations to prevent memory leaks
+# - Add support for parallel MCTS with proper synchronization
+# - Create extensible early termination strategy framework
+# - Add tree visualization utilities for debugging
+# - Implement different tree policies (UCB1, etc.) as pluggable components
 
 from __future__ import annotations
 
@@ -20,7 +28,54 @@ from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
 from hex_ai.utils.format_conversion import rowcol_to_tensor as move_to_index, tensor_to_rowcol as index_to_move
 from hex_ai.utils.temperature import calculate_temperature_decay
+from hex_ai.utils.state_utils import state_hash_from, validate_move_coordinates, is_valid_move_coordinates
+from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
+
+# ---- MCTS Constants ----
+# Temperature comparison threshold for move selection
+TEMPERATURE_COMPARISON_THRESHOLD = 1e-6
+
+# Principal variation extraction limit
+PRINCIPAL_VARIATION_MAX_LENGTH = 10
+
+# PUCT calculation threshold for avoiding division by zero
+PUCT_CALCULATION_THRESHOLD = 1e-9
+
+# Default early termination threshold
+DEFAULT_EARLY_TERMINATION_THRESHOLD = 0.9
+
+# Default terminal move boost factor
+DEFAULT_TERMINAL_MOVE_BOOST = 10.0
+
+# Default virtual loss for non-terminal moves
+DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
+
+# Default depth discount factor
+DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.95
+
+# Default terminal win value boost
+DEFAULT_TERMINAL_WIN_VALUE_BOOST = 1.5
+
+# Default batch cap for neural network evaluation
+DEFAULT_BATCH_CAP = 64
+
+# Default PUCT exploration constant
+DEFAULT_C_PUCT = 1.5
+
+# Default Dirichlet noise parameters
+DEFAULT_DIRICHLET_ALPHA = 0.3
+DEFAULT_DIRICHLET_EPS = 0.25
+
+# Default temperature parameters
+DEFAULT_TEMPERATURE_START = 1.0
+DEFAULT_TEMPERATURE_END = 0.1
+DEFAULT_TEMPERATURE_DECAY_TYPE = "exponential"
+DEFAULT_TEMPERATURE_DECAY_MOVES = 50
+
+# Default terminal detection parameters
+DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
+DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 3  # Multiplier for board size
 
 
 # ------------------ Terminal Move Detector ------------------
@@ -37,7 +92,7 @@ class TerminalMoveDetector:
             return False
         
         # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * 3
+        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION
         if len(node.state.move_history) < min_move_count:
             return False
         
@@ -86,7 +141,7 @@ class EarlyTerminationInfo:
     win_prob: float  # Win probability
 
 # ------------------ MCTS Result ------------------
-@dataclass
+@dataclass(frozen=True)
 class MCTSResult:
     """Complete result of an MCTS search."""
     move: Tuple[int, int]  # The selected move
@@ -198,52 +253,84 @@ class EarlyTerminationChecker:
 @dataclass
 class BaselineMCTSConfig:
     sims: int = 200
-    batch_cap: int = 64
-    c_puct: float = 1.5
-    dirichlet_alpha: float = 0.3
-    dirichlet_eps: float = 0.25
+    batch_cap: int = DEFAULT_BATCH_CAP
+    c_puct: float = DEFAULT_C_PUCT
+    dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
+    dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
     add_root_noise: bool = False
     # Temperature scaling parameters (always used)
-    temperature_start: float = 1.0  # Starting temperature
-    temperature_end: float = 0.1  # Final temperature (minimum)
-    temperature_decay_type: str = "exponential"  # "linear", "exponential", "step", "game_progress"
-    temperature_decay_moves: int = 50  # Number of moves for decay (for linear/exponential)
+    temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
+    temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
+    temperature_decay_type: str = DEFAULT_TEMPERATURE_DECAY_TYPE  # "linear", "exponential", "step", "game_progress"
+    temperature_decay_moves: int = DEFAULT_TEMPERATURE_DECAY_MOVES  # Number of moves for decay (for linear/exponential)
     temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
     temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
     # Terminal move detection parameters
     enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
-    terminal_move_boost: float = 10.0  # Boost factor for terminal moves in PUCT calculation
-    virtual_loss_for_non_terminal: float = 0.01  # Small penalty for non-terminal moves
-    terminal_detection_max_depth: int = 3  # Maximum depth for terminal move detection
+    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
+    virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
+    terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
     # Removed seed parameter - randomness should be controlled externally
 
     # Early termination parameters
     enable_early_termination: bool = False
-    early_termination_threshold: float = 0.9
+    early_termination_threshold: float = DEFAULT_EARLY_TERMINATION_THRESHOLD
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
-    depth_discount_factor: float = 0.95  # Discount wins by this factor per depth level
+    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR  # Discount wins by this factor per depth level
     # When enabled, wins found deeper in the search tree are discounted to encourage
     # the algorithm to prefer shorter winning sequences. This helps avoid meandering
     # when the position is already won. Only applies during MCTS search, not during
     # early termination when using the policy network.
     
     # Terminal move value boosting
-    terminal_win_value_boost: float = 1.5  # Multiply terminal win values by this factor
+    terminal_win_value_boost: float = DEFAULT_TERMINAL_WIN_VALUE_BOOST  # Multiply terminal win values by this factor
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
-
-# ------------------ Helpers ------------------
-
-def state_hash_from(state: HexGameState) -> int:
-    """Hash only immutable, CPU-native parts (no tensor bytes)."""
-    # Use move history and current player enum value.
-    # Ensure stable, bounded integer (mask to 63 bits to avoid Python hash randomization effects).
-    key = (tuple(state.move_history), int(state.current_player_enum.value))
-    h = hash(key) & ((1 << 63) - 1)
-    return h
+    
+    def __post_init__(self):
+        """Validate configuration parameters after initialization."""
+        if self.sims <= 0:
+            raise ValueError(f"sims must be positive, got {self.sims}")
+        if self.batch_cap <= 0:
+            raise ValueError(f"batch_cap must be positive, got {self.batch_cap}")
+        if self.c_puct <= 0:
+            raise ValueError(f"c_puct must be positive, got {self.c_puct}")
+        if self.dirichlet_alpha <= 0:
+            raise ValueError(f"dirichlet_alpha must be positive, got {self.dirichlet_alpha}")
+        if not 0 <= self.dirichlet_eps <= 1:
+            raise ValueError(f"dirichlet_eps must be between 0 and 1, got {self.dirichlet_eps}")
+        if self.temperature_start <= 0:
+            raise ValueError(f"temperature_start must be positive, got {self.temperature_start}")
+        if self.temperature_end <= 0:
+            raise ValueError(f"temperature_end must be positive, got {self.temperature_end}")
+        if self.temperature_start < self.temperature_end:
+            raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
+        if self.temperature_decay_moves <= 0:
+            raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
+        if self.terminal_move_boost < 0:
+            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
+        if self.virtual_loss_for_non_terminal < 0:
+            raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
+        if self.terminal_detection_max_depth < 0:
+            raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
+        if not 0 <= self.early_termination_threshold <= 1:
+            raise ValueError(f"early_termination_threshold must be between 0 and 1, got {self.early_termination_threshold}")
+        if not 0 < self.depth_discount_factor <= 1:
+            raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
+        if self.terminal_win_value_boost <= 0:
+            raise ValueError(f"terminal_win_value_boost must be positive, got {self.terminal_win_value_boost}")
+        
+        # Validate temperature step parameters if using step decay
+        if self.temperature_decay_type == "step":
+            if len(self.temperature_step_thresholds) != len(self.temperature_step_values):
+                raise ValueError("temperature_step_thresholds and temperature_step_values must have the same length")
+            if not all(t >= 0 for t in self.temperature_step_thresholds):
+                raise ValueError("All temperature_step_thresholds must be non-negative")
+            if not all(0 < v <= 1 for v in self.temperature_step_values):
+                raise ValueError("All temperature_step_values must be between 0 and 1")
 
 # ------------------ Data structures ------------------
 
@@ -255,10 +342,20 @@ class MCTSNode:
         "_terminal_moves_detected", "depth"
     )
     def __init__(self, state: HexGameState, board_size: int):
+        if state is None:
+            raise ValueError("State cannot be None")
+        if board_size <= 0:
+            raise ValueError(f"Board size must be positive, got {board_size}")
+        
         self.state: HexGameState = state
         self.to_play: Player = state.current_player_enum
         # Legal moves
         self.legal_moves: List[Tuple[int,int]] = state.get_legal_moves()
+        
+        # Validate legal moves
+        for row, col in self.legal_moves:
+            validate_move_coordinates(row, col, board_size)
+        
         self.legal_indices: List[int] = [move_to_index(r, c, board_size) for (r,c) in self.legal_moves]
         L = len(self.legal_moves)
         # Stats (aligned to legal_moves order)
@@ -279,6 +376,13 @@ class MCTSNode:
 
 class BaselineMCTS:
     def __init__(self, engine: HexGameEngine, model: ModelWrapper, cfg: BaselineMCTSConfig):
+        if engine is None:
+            raise ValueError("Engine cannot be None")
+        if model is None:
+            raise ValueError("Model cannot be None")
+        if cfg is None:
+            raise ValueError("Configuration cannot be None")
+        
         self.engine = engine
         self.model = model
         self.cfg = cfg
@@ -286,12 +390,11 @@ class BaselineMCTS:
         # This ensures MCTS instances don't interfere with each other's randomness
 
         # Cache: state_hash -> (policy_logits_np [A], value_logit_float)
+        # TODO: Consider implementing LRU cache with size limit to prevent memory leaks
         self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
         self.cache_hits = 0
         self.cache_misses = 0
 
-
-        
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
             max_detection_depth=cfg.terminal_detection_max_depth
@@ -312,7 +415,17 @@ class BaselineMCTS:
         Args:
             root_state: The game state to search from
             verbose: Verbosity level for logging (0=quiet, 1=basic, 2=detailed)
+            
+        Raises:
+            ValueError: If root_state is None or invalid
+            RuntimeError: If the game state is terminal
         """
+        if root_state is None:
+            raise ValueError("root_state cannot be None")
+        if root_state.game_over:
+            raise RuntimeError("Cannot run MCTS on a terminal game state")
+        if verbose < 0:
+            raise ValueError(f"verbose must be non-negative, got {verbose}")
         # Prepare root node
         root = self._prepare_root_node(root_state, verbose)
         
@@ -691,7 +804,7 @@ class BaselineMCTS:
         if verbose >= 4:
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
         
-        if temp <= 1e-6:
+        if temp <= TEMPERATURE_COMPARISON_THRESHOLD:
             a_idx = int(np.argmax(counts))
         else:
             pi = np.power(counts, 1.0 / temp)
@@ -703,6 +816,7 @@ class BaselineMCTS:
 
     def _compute_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
         """Compute tree data for analysis."""
+        # TODO: Consider caching this computation if called multiple times
         if root.is_terminal:
             return {
                 "visit_counts": {},
@@ -750,7 +864,7 @@ class BaselineMCTS:
         total_nodes, max_depth = self._calculate_tree_statistics(root)
 
         # Get principal variation
-        principal_variation = self._extract_principal_variation(root, max_length=10)
+        principal_variation = self._extract_principal_variation(root, max_length=PRINCIPAL_VARIATION_MAX_LENGTH)
 
         return {
             "visit_counts": visit_counts,
@@ -780,6 +894,11 @@ class BaselineMCTS:
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
         """Extract the principal variation (best move sequence) from the MCTS tree."""
+        if root is None:
+            raise ValueError("Root node cannot be None")
+        if max_length <= 0:
+            raise ValueError(f"max_length must be positive, got {max_length}")
+        
         if root.is_terminal:
             return []
 
@@ -806,102 +925,35 @@ class BaselineMCTS:
             
         return pv
 
-
-class MCTSTimingTracker:
-    """Tracks timing information for MCTS operations."""
-    
-    def __init__(self):
-        self.timings = {}
-        self.batch_count = 0
-        self.batch_sizes = []
-        self.forward_ms_list = []
-        self.select_times = []
-        self.cache_hit_times = []
-        self.cache_miss_times = []
-        self.puct_calc_times = []
-        self.make_move_times = []
+    def _calculate_tree_statistics(self, root: MCTSNode) -> Tuple[int, int]:
+        """
+        Calculate tree traversal statistics.
         
-        # Cumulative totals
-        self.h2d_ms_total = 0.0
-        self.forward_ms_total = 0.0
-        self.pure_forward_ms_total = 0.0
-        self.sync_ms_total = 0.0
-        self.d2h_ms_total = 0.0
+        Args:
+            root: Root node of the tree
+            
+        Returns:
+            Tuple of (total_nodes, max_depth)
+        """
+        if root is None:
+            return 0, 0
         
-        # Current timing
-        self.current_timing = None
-        self.current_timing_start = None
-    
-    def start_timing(self, operation: str):
-        """Start timing an operation."""
-        self.current_timing = operation
-        self.current_timing_start = time.perf_counter()
-    
-    def end_timing(self, operation: str):
-        """End timing an operation."""
-        if self.current_timing == operation and self.current_timing_start is not None:
-            duration_ms = (time.perf_counter() - self.current_timing_start) * 1000.0
-            if operation not in self.timings:
-                self.timings[operation] = 0.0
-            self.timings[operation] += duration_ms
-            self.current_timing = None
-            self.current_timing_start = None
-    
-    def record_batch_metrics(self, tm: Dict[str, Any]):
-        """Record metrics from a neural network batch."""
-        self.batch_count += 1
-        self.batch_sizes.append(int(tm["batch_size"]))
-        self.forward_ms_list.append(float(tm["forward_ms"]))
-        self.h2d_ms_total += float(tm["h2d_ms"])
-        self.forward_ms_total += float(tm["forward_ms"])
-        self.pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
-        self.sync_ms_total += float(tm.get("sync_ms", 0.0))
-        self.d2h_ms_total += float(tm["d2h_ms"])
-    
-    def get_final_stats(self) -> Dict[str, Any]:
-        """Get final timing statistics."""
-        total_search_time = (
-            self.timings.get("encode", 0.0) + self.timings.get("stack", 0.0) + 
-            self.h2d_ms_total + self.forward_ms_total + self.d2h_ms_total + 
-            self.timings.get("expand", 0.0) + self.timings.get("backprop", 0.0) + 
-            self.timings.get("select", 0.0) + self.timings.get("cache_lookup", 0.0) + 
-            self.timings.get("state_creation", 0.0)
-        ) / 1000.0
+        def count_nodes_and_depth(node: MCTSNode, current_depth: int) -> Tuple[int, int]:
+            if node is None:
+                return 0, current_depth - 1
+            
+            total_nodes = 1
+            max_depth = current_depth
+            
+            for child in node.children:
+                if child is not None:
+                    child_nodes, child_depth = count_nodes_and_depth(child, current_depth + 1)
+                    total_nodes += child_nodes
+                    max_depth = max(max_depth, child_depth)
+            
+            return total_nodes, max_depth
         
-        return {
-            "encode_ms": self.timings.get("encode", 0.0),
-            "stack_ms": self.timings.get("stack", 0.0),
-            "h2d_ms": self.h2d_ms_total,
-            "forward_ms": self.forward_ms_total,
-            "pure_forward_ms": self.pure_forward_ms_total,
-            "sync_ms": self.sync_ms_total,
-            "d2h_ms": self.d2h_ms_total,
-            "expand_ms": self.timings.get("expand", 0.0),
-            "backprop_ms": self.timings.get("backprop", 0.0),
-            "select_ms": self.timings.get("select", 0.0),
-            "cache_lookup_ms": self.timings.get("cache_lookup", 0.0),
-            "state_creation_ms": self.timings.get("state_creation", 0.0),
-            "puct_calc_ms": self.timings.get("puct_calc", 0.0),
-            "make_move_ms": self.timings.get("make_move", 0.0),
-            "batch_count": self.batch_count,
-            "batch_sizes": self.batch_sizes,
-            "forward_ms_list": self.forward_ms_list,
-            "select_times": self.select_times,
-            "cache_hit_times": self.cache_hit_times,
-            "cache_miss_times": self.cache_miss_times,
-            "puct_calc_times": self.puct_calc_times,
-            "make_move_times": self.make_move_times,
-            "median_forward_ms_ex_warm": _median_excluding_first(self.forward_ms_list),
-            "p90_forward_ms_ex_warm": _p90_excluding_first(self.forward_ms_list),
-            "median_select_ms": _median_excluding_first(self.select_times) if self.select_times else 0.0,
-            "median_cache_hit_ms": _median_excluding_first(self.cache_hit_times) if self.cache_hit_times else 0.0,
-            "median_cache_miss_ms": _median_excluding_first(self.cache_miss_times) if self.cache_miss_times else 0.0,
-            "median_puct_calc_ms": _median_excluding_first(self.puct_calc_times) if self.puct_calc_times else 0.0,
-            "median_make_move_ms": _median_excluding_first(self.make_move_times) if self.make_move_times else 0.0,
-            "total_search_time": total_search_time,
-        }
-
-    
+        return count_nodes_and_depth(root, 0)
 
 
     # ---------- Internal ----------
@@ -963,7 +1015,7 @@ class MCTSTimingTracker:
         t_puct_start = time.perf_counter()
         
         N_sum = np.sum(node.N, dtype=np.float64)
-        if N_sum <= 1e-9:
+        if N_sum <= PUCT_CALCULATION_THRESHOLD:
             # All U terms reduce to c*P; just pick argmax P
             # But prioritize terminal moves
             if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
@@ -996,6 +1048,17 @@ class MCTSTimingTracker:
         self._puct_calc_times.append(puct_time_ms)
         
         return result
+
+    def clear_cache(self) -> None:
+        """
+        Clear the evaluation cache to free memory.
+        
+        This method can be called periodically to prevent memory leaks
+        in long-running processes.
+        """
+        self.eval_cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
 
 
 def create_mcts_config(
@@ -1058,24 +1121,24 @@ def create_mcts_config(
     
     # Add common parameters that are the same across all presets
     config_params.update({
-        "batch_cap": 64,
-        "c_puct": 1.5,
-        "dirichlet_alpha": 0.3,
-        "dirichlet_eps": 0.25,
-        "temperature_decay_type": "exponential",
-        "temperature_decay_moves": 50,
+        "batch_cap": DEFAULT_BATCH_CAP,
+        "c_puct": DEFAULT_C_PUCT,
+        "dirichlet_alpha": DEFAULT_DIRICHLET_ALPHA,
+        "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
+        "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
+        "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
         # Terminal move detection (always enabled)
         "enable_terminal_move_detection": True,
-        "terminal_move_boost": 10.0,
-        "virtual_loss_for_non_terminal": 0.01,
-        "terminal_detection_max_depth": 3,
+        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
+        "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
+        "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
         # Early termination (always enabled)
         "enable_early_termination": True,
         # Depth-based discounting to encourage shorter wins
         "enable_depth_discounting": True,
-        "depth_discount_factor": 0.95,
+        "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
         # Terminal win value boosting
-        "terminal_win_value_boost": 1.5,
+        "terminal_win_value_boost": DEFAULT_TERMINAL_WIN_VALUE_BOOST,
     })
     
     return BaselineMCTSConfig(**config_params)
@@ -1093,21 +1156,3 @@ def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameStat
 
 
 # --------- Stats helpers ---------
-
-def _median_excluding_first(xs: List[float]) -> float:
-    if not xs:
-        return 0.0
-    if len(xs) == 1:
-        return xs[0]
-    arr = np.array(xs[1:], dtype=np.float64)
-    return float(np.median(arr))
-
-def _p90_excluding_first(xs: List[float]) -> float:
-    if not xs:
-        return 0.0
-    if len(xs) == 1:
-        return xs[0]
-    arr = np.array(xs[1:], dtype=np.float64)
-    k = max(0, int(math.ceil(0.9 * len(arr)) - 1))
-    arr.sort()
-    return float(arr[k])
