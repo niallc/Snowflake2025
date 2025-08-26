@@ -384,310 +384,401 @@ class BaselineMCTS:
             root_state: The game state to search from
             verbose: Verbosity level for logging (0=quiet, 1=basic, 2=detailed)
         """
-        # Prepare root
-        board_tensor = root_state.get_board_tensor()
-        board_size = int(board_tensor.shape[-1])
-        action_size = board_size * board_size
-        root = MCTSNode(root_state, board_size)
-
+        # Prepare root node
+        root = self._prepare_root_node(root_state, verbose)
+        
         # Check for early termination opportunities
-        early_info = self.early_termination_checker.should_terminate_early(root, board_size, verbose, self.eval_cache)
+        early_info = self._check_early_termination(root, verbose)
         if early_info:
             self._early_termination_info = early_info
-            self._root_node = root  # Store root node for pick_move()
+            self._root_node = root
             return self._get_stats_builder().create_early_termination_stats(early_info)
+        
+        # Run main simulation loop
+        timing_stats = self._run_simulation_loop(root, verbose)
+        
+        # Store root for pick_move() and return final stats
+        self._root_node = root
+        return self._get_stats_builder().create_final_stats(
+            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
+        )
 
-        # Initialize timing variables
-        encode_ms = 0.0
-        stack_ms = 0.0
-        expand_ms = 0.0
-        backprop_ms = 0.0
-        select_ms = 0.0
-        cache_lookup_ms = 0.0
-        state_creation_ms = 0.0
-        puct_calc_ms = 0.0  # New: PUCT calculation time
-        make_move_ms = 0.0  # New: make_move operation time
-        h2d_ms_total = 0.0
-        forward_ms_total = 0.0
-        pure_forward_ms_total = 0.0
-        sync_ms_total = 0.0
-        d2h_ms_total = 0.0
-        batch_sizes: List[int] = []
-        forward_ms_list: List[float] = []
-        select_times: List[float] = []
-        cache_hit_times: List[float] = []
-        cache_miss_times: List[float] = []
-        puct_calc_times: List[float] = []  # New: PUCT calculation times
-        make_move_times: List[float] = []  # New: make_move operation times
-
-        sims_remaining = self.cfg.sims
-
-        # One-time root expansion if not expanded and not terminal
+    def _prepare_root_node(self, root_state: HexGameState, verbose: int) -> MCTSNode:
+        """Prepare and initialize the root node for MCTS search."""
+        board_tensor = root_state.get_board_tensor()
+        board_size = int(board_tensor.shape[-1])
+        root = MCTSNode(root_state, board_size)
+        
+        # Expand root if not terminal
         if not root.is_terminal and not root.is_expanded:
-            # Try cache
-            cached = self.eval_cache.get(root.state_hash, None)
-            if cached is not None:
-                self.cache_hits += 1
-                t0 = time.perf_counter()
-                policy_np, value_logit = cached
-                p_red = float(torch.sigmoid(torch.tensor(value_logit)).item())
-                self._expand_node_from_policy(root, policy_np, board_size, action_size)
-                expand_ms += (time.perf_counter() - t0) * 1000.0
-                # No backprop for root on initial expansion
-            else:
-                self.cache_misses += 1
-                # Evaluate just the root in a micro-batch of size 1
-                t_enc0 = time.perf_counter()
-                root_enc = root_state.get_board_tensor().to(dtype=torch.float32)  # CPU
-                encode_ms += (time.perf_counter() - t_enc0) * 1000.0
-
-                t_stack0 = time.perf_counter()
-                batch = torch.stack([root_enc], dim=0)  # [1,3,N,N]
-                stack_ms += (time.perf_counter() - t_stack0) * 1000.0
-
-                policy_cpu, value_cpu, tm = self.model.infer_timed(batch)
-                # PERF per-batch
-                self._record_eval_perf(tm, is_first=(len(batch_sizes) == 0))
-                batch_sizes.append(int(tm["batch_size"]))
-                forward_ms_list.append(float(tm["forward_ms"]))
-                h2d_ms_total += float(tm["h2d_ms"])
-                forward_ms_total += float(tm["forward_ms"])
-                pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
-                sync_ms_total += float(tm.get("sync_ms", 0.0))
-                d2h_ms_total += float(tm["d2h_ms"])
-
-                policy_np = policy_cpu[0].numpy()
-                value_logit = float(value_cpu[0].item())
-                # Cache CPU-native
-                self.eval_cache[root.state_hash] = (policy_np, value_logit)
-
-                t0 = time.perf_counter()
-                self._expand_node_from_policy(root, policy_np, board_size, action_size)
-                expand_ms += (time.perf_counter() - t0) * 1000.0
-
-        # Optionally add root Dirichlet noise (once)
+            self._expand_root_node(root, board_size)
+        
+        # Apply root noise if configured
         if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded and not self._root_noise_applied:
             self._apply_root_noise(root)
             self._root_noise_applied = True
+        
+        return root
 
-        # Check for neural network confidence-based termination after root expansion
+    def _expand_root_node(self, root: MCTSNode, board_size: int):
+        """Expand the root node using neural network evaluation."""
+        action_size = board_size * board_size
+        
+        # Try cache first
+        cached = self.eval_cache.get(root.state_hash, None)
+        if cached is not None:
+            self.cache_hits += 1
+            policy_np, value_logit = cached
+            self._expand_node_from_policy(root, policy_np, board_size, action_size)
+        else:
+            self.cache_misses += 1
+            # Evaluate root in micro-batch of size 1
+            root_enc = root.state.get_board_tensor().to(dtype=torch.float32)
+            batch = torch.stack([root_enc], dim=0)
+            
+            policy_cpu, value_cpu, _ = self.model.infer_timed(batch)
+            policy_np = policy_cpu[0].numpy()
+            value_logit = float(value_cpu[0].item())
+            
+            # Cache results
+            self.eval_cache[root.state_hash] = (policy_np, value_logit)
+            self._expand_node_from_policy(root, policy_np, board_size, action_size)
+
+    def _check_early_termination(self, root: MCTSNode, verbose: int) -> Optional[EarlyTerminationInfo]:
+        """Check if MCTS should terminate early."""
+        board_size = int(root.state.get_board_tensor().shape[-1])
+        
+        # Check before root expansion
+        early_info = self.early_termination_checker.should_terminate_early(
+            root, board_size, verbose, self.eval_cache
+        )
+        if early_info:
+            return early_info
+        
+        # Check after root expansion (for neural network confidence)
         if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
-            early_info = self.early_termination_checker.should_terminate_early(root, board_size, verbose, self.eval_cache)
+            early_info = self.early_termination_checker.should_terminate_early(
+                root, board_size, verbose, self.eval_cache
+            )
             if early_info:
-                self._early_termination_info = early_info
-                self._root_node = root  # Store root node for pick_move()
-                timing_stats = {
-                    "encode_ms": encode_ms, "stack_ms": stack_ms, "h2d_ms": h2d_ms_total,
-                    "forward_ms": forward_ms_total, "pure_forward_ms": pure_forward_ms_total,
-                    "sync_ms": sync_ms_total, "d2h_ms": d2h_ms_total, "expand_ms": expand_ms,
-                    "cache_lookup_ms": cache_lookup_ms, "state_creation_ms": state_creation_ms,
-                    "batch_count": len(batch_sizes), "batch_sizes": batch_sizes,
-                    "forward_ms_list": forward_ms_list, "cache_hit_times": cache_hit_times,
-                    "cache_miss_times": cache_miss_times
-                }
-                stats = self._get_stats_builder().create_early_termination_stats(early_info)
-                stats.update(timing_stats)
-                return stats
+                return early_info
+        
+        return None
 
-        # ---- Simulation loop with explicit batched leaves ----
+    def _run_simulation_loop(self, root: MCTSNode, verbose: int) -> Dict[str, Any]:
+        """Run the main MCTS simulation loop with batching."""
+        timing_tracker = MCTSTimingTracker()
+        sims_remaining = self.cfg.sims
+        
         while sims_remaining > 0:
-            # 1) SELECT up to K leaves
-            t_select_start = time.perf_counter()
-            leaves: List[MCTSNode] = []
-            paths: List[List[Tuple[MCTSNode, int]]] = []  # per-leaf path of (node, child_idx chosen at that node)
-            # We may expand some via cache immediately; we only batch NN-evals for uncached
-            encodings: List[torch.Tensor] = []
+            # Select leaves for this batch
+            leaves, paths = self._select_leaves_batch(root, sims_remaining, timing_tracker)
+            
+            # Process leaves (expand and backpropagate)
+            batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker)
+            sims_remaining -= batch_simulations
+        
+        return timing_tracker.get_final_stats()
 
-            select_budget = min(self.cfg.batch_cap, sims_remaining)
-            while len(leaves) < select_budget:
-                node = root
-                path: List[Tuple[MCTSNode, int]] = []
-                # Descend until reaching a leaf (not expanded) or terminal
-                while True:
-                    if node.is_terminal:
-                        # terminal leaf: no expansion; we will backprop a value directly
-                        path_terminal = path.copy()
-                        leaves.append(node)
-                        paths.append(path_terminal)
-                        break
-                    if not node.is_expanded:
-                        # unexpanded leaf
-                        leaves.append(node)
-                        paths.append(path)
-                        break
-                    # select child via PUCT among legal actions
-                    child_idx = self._select_child_puct(node)
-                    path.append((node, child_idx))
-                    child = node.children[child_idx]
-                    if child is None:
-                        # Materialize child state on demand
-                        t_state_start = time.perf_counter()
-                        (r, c) = node.legal_moves[child_idx]
-                        
-                        # Time the make_move operation specifically
-                        t_make_move_start = time.perf_counter()
-                        child_state = node.state.make_move(r, c)
-                        t_make_move_end = time.perf_counter()
-                        make_move_time_ms = (t_make_move_end - t_make_move_start) * 1000.0
-                        make_move_ms += make_move_time_ms
-                        make_move_times.append(make_move_time_ms)
-                        
-                        child = MCTSNode(child_state, board_size)
-                        child.depth = node.depth + 1  # Set child depth
-                        state_creation_ms += (time.perf_counter() - t_state_start) * 1000.0
-                        node.children[child_idx] = child
-                    node = child
-
-                # If we reached select_budget, stop; else continue to select next leaf
+    def _select_leaves_batch(self, root: MCTSNode, sims_remaining: int, 
+                           timing_tracker: MCTSTimingTracker) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
+        """Select a batch of leaves for expansion."""
+        timing_tracker.start_timing("select")
+        
+        leaves: List[MCTSNode] = []
+        paths: List[List[Tuple[MCTSNode, int]]] = []
+        board_size = int(root.state.get_board_tensor().shape[-1])
+        
+        select_budget = min(self.cfg.batch_cap, sims_remaining)
+        
+        while len(leaves) < select_budget:
+            node = root
+            path: List[Tuple[MCTSNode, int]] = []
+            
+            # Descend until reaching a leaf or terminal
+            while True:
+                if node.is_terminal:
+                    leaves.append(node)
+                    paths.append(path.copy())
+                    break
+                if not node.is_expanded:
+                    leaves.append(node)
+                    paths.append(path)
+                    break
+                
+                # Select child via PUCT
+                child_idx = self._select_child_puct(node)
+                path.append((node, child_idx))
+                child = node.children[child_idx]
+                
+                if child is None:
+                    # Materialize child state on demand
+                    timing_tracker.start_timing("state_creation")
+                    (r, c) = node.legal_moves[child_idx]
+                    
+                    timing_tracker.start_timing("make_move")
+                    child_state = node.state.make_move(r, c)
+                    timing_tracker.end_timing("make_move")
+                    
+                    child = MCTSNode(child_state, board_size)
+                    child.depth = node.depth + 1
+                    timing_tracker.end_timing("state_creation")
+                    node.children[child_idx] = child
+                
+                node = child
+                
                 if len(leaves) >= select_budget:
                     break
-
-            select_ms += (time.perf_counter() - t_select_start) * 1000.0
-            select_times.append((time.perf_counter() - t_select_start) * 1000.0)
-                        
-            # Collect PUCT calculation times from this batch
-            if hasattr(self, '_puct_calc_times') and self._puct_calc_times:
-                puct_calc_times.extend(self._puct_calc_times)
-                puct_calc_ms += sum(self._puct_calc_times)
-                self._puct_calc_times = []  # Reset for next batch
-
-            # 2) STACK encodings for NN where needed and expand cached/terminal immediately
-            t_stack0 = time.perf_counter()
-            t_enc_sum = 0.0
-            need_eval_idxs: List[int] = []
-            cached_expansions: List[Tuple[int, np.ndarray, float]] = []  # (leaf_idx, policy_np, value_logit)
-
-            for i, leaf in enumerate(leaves):
-                if leaf.is_terminal:
-                    # immediate value from winner
-                    continue
-                if leaf.is_expanded:
-                    # shouldn't happen: selection stops at unexpanded
-                    continue
-                
-                # Time cache lookup
-                t_cache_start = time.perf_counter()
-                cached = self.eval_cache.get(leaf.state_hash, None)
-                cache_lookup_ms += (time.perf_counter() - t_cache_start) * 1000.0
-                
-                if cached is not None:
-                    self.cache_hits += 1
-                    cache_hit_times.append((time.perf_counter() - t_cache_start) * 1000.0)
-                    cached_expansions.append((i, cached[0], cached[1]))
-                else:
-                    self.cache_misses += 1
-                    cache_miss_times.append((time.perf_counter() - t_cache_start) * 1000.0)
-                    t_enc0 = time.perf_counter()
-                    enc = leaf.state.get_board_tensor().to(dtype=torch.float32)  # CPU
-                    t_enc_sum += (time.perf_counter() - t_enc0) * 1000.0
-                    encodings.append(enc)
-                    need_eval_idxs.append(i)
-            encode_ms += t_enc_sum
-            batch_tensor: Optional[torch.Tensor] = None
-            if encodings:
-                batch_tensor = torch.stack(encodings, dim=0)  # [B,3,N,N]
-            stack_ms += (time.perf_counter() - t_stack0) * 1000.0
-
-            # 3) INFER once on the batch
-            if batch_tensor is not None:
-                policy_cpu, value_cpu, tm = self.model.infer_timed(batch_tensor)
-                # PERF per-batch
-                self._record_eval_perf(tm, is_first=(len(batch_sizes) == 0))
-                batch_sizes.append(int(tm["batch_size"]))
-                forward_ms_list.append(float(tm["forward_ms"]))
-                h2d_ms_total += float(tm["h2d_ms"])
-                forward_ms_total += float(tm["forward_ms"])
-                pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
-                sync_ms_total += float(tm.get("sync_ms", 0.0))
-                d2h_ms_total += float(tm["d2h_ms"])
-
-            # 4) EXPAND nodes with policy; BACKPROP values
-            # First expand any cached ones
-            t0 = time.perf_counter()
-            for (leaf_idx, policy_np, value_logit) in cached_expansions:
-                leaf = leaves[leaf_idx]
-                if not leaf.is_expanded and not leaf.is_terminal:
-                    self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
-                    # cache already contains this state, nothing to update
-            # Then expand evaluated ones
-            if batch_tensor is not None:
-                # iterate over need_eval_idxs in order
-                for j, leaf_idx in enumerate(need_eval_idxs):
-                    leaf = leaves[leaf_idx]
-                    pol = policy_cpu[j].numpy()
-                    val_logit = float(value_cpu[j].item())
-                    # cache CPU-native results
-                    self.eval_cache[leaf.state_hash] = (pol, val_logit)
-                    self._expand_node_from_policy(leaf, pol, board_size, action_size)
-            expand_ms += (time.perf_counter() - t0) * 1000.0
-
-            # Backprop for all leaves (terminal or just expanded)
-            t1 = time.perf_counter()
-            for leaf, path in zip(leaves, paths):
-                # Determine p_red for this leaf
-                if leaf.is_terminal:
-                    # winner_str is "blue" | "red"
-                    if leaf.winner_str is None:
-                        # Shouldn't happen; treat as draw ~0.5 for safety
-                        p_red = 0.5
-                    else:
-                        p_red = 1.0 if leaf.winner_str == "red" else 0.0
-                        # Apply terminal win value boost to make terminal wins more attractive
-                        if self.cfg.terminal_win_value_boost != 1.0:
-                            # For terminal wins, boost the value; for terminal losses, keep at 0
-                            if (leaf.winner_str == "red" and leaf.to_play == Player.RED) or \
-                               (leaf.winner_str == "blue" and leaf.to_play == Player.BLUE):
-                                # This is a win for the current player
-                                p_red = min(1.0, p_red * self.cfg.terminal_win_value_boost)
-                            # For losses, p_red stays at 0.0 (no boost needed)
-                else:
-                    # Use cached value_logit
-                    _, val_logit = self.eval_cache[leaf.state_hash]
-                    p_red = float(torch.sigmoid(torch.tensor(val_logit)).item())
-                # Backprop along path: for each (node, action idx) pair
-                for (node, a_idx) in reversed(path):
-                    v_node = p_red if node.to_play == Player.RED else (1.0 - p_red)
-                    
-                    # Apply depth discounting to encourage shorter wins
-                    if self.cfg.enable_depth_discounting and node.depth > 0:
-                        discount = self.cfg.depth_discount_factor ** node.depth
-                        v_node *= discount
-                    
-                    node.N[a_idx] += 1
-                    node.W[a_idx] += v_node
-                    node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
-                sims_remaining -= 1
-                if sims_remaining <= 0:
-                    break
-            backprop_ms += (time.perf_counter() - t1) * 1000.0
-
-        # Calculate total search time
-        total_search_time = (encode_ms + stack_ms + h2d_ms_total + forward_ms_total + d2h_ms_total + 
-                           expand_ms + backprop_ms + select_ms + cache_lookup_ms + state_creation_ms) / 1000.0
         
-        # Build stats
-        _store_root = True
-        self._root_node = root
+        timing_tracker.end_timing("select")
+        return leaves, paths
+
+    def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
+                            timing_tracker: MCTSTimingTracker) -> int:
+        """Process a batch of leaves: expand and backpropagate."""
+        if not leaves:
+            return 0
         
-        timing_stats = {
-            "encode_ms": encode_ms, "stack_ms": stack_ms, "h2d_ms": h2d_ms_total,
-            "forward_ms": forward_ms_total, "pure_forward_ms": pure_forward_ms_total,
-            "sync_ms": sync_ms_total, "d2h_ms": d2h_ms_total, "expand_ms": expand_ms,
-            "backprop_ms": backprop_ms, "select_ms": select_ms, "cache_lookup_ms": cache_lookup_ms,
-            "state_creation_ms": state_creation_ms, "puct_calc_ms": puct_calc_ms, "make_move_ms": make_move_ms,
-            "batch_count": len(batch_sizes), "batch_sizes": batch_sizes, "forward_ms_list": forward_ms_list,
-            "select_times": select_times, "cache_hit_times": cache_hit_times, "cache_miss_times": cache_miss_times,
-            "puct_calc_times": puct_calc_times, "make_move_times": make_move_times,
-            "median_forward_ms_ex_warm": _median_excluding_first(forward_ms_list),
-            "p90_forward_ms_ex_warm": _p90_excluding_first(forward_ms_list),
-            "median_select_ms": _median_excluding_first(select_times) if select_times else 0.0,
-            "median_cache_hit_ms": _median_excluding_first(cache_hit_times) if cache_hit_times else 0.0,
-            "median_cache_miss_ms": _median_excluding_first(cache_miss_times) if cache_miss_times else 0.0,
-            "median_puct_calc_ms": _median_excluding_first(puct_calc_times) if puct_calc_times else 0.0,
-            "median_make_move_ms": _median_excluding_first(make_move_times) if make_move_times else 0.0,
+        # Prepare encodings for neural network evaluation
+        encodings, need_eval_idxs, cached_expansions = self._prepare_leaf_evaluations(leaves, timing_tracker)
+        
+        # Run neural network inference if needed
+        if encodings:
+            self._run_neural_network_batch(encodings, need_eval_idxs, leaves, timing_tracker)
+        
+        # Expand cached leaves
+        self._expand_cached_leaves(cached_expansions, leaves, timing_tracker)
+        
+        # Backpropagate values
+        simulations_completed = self._backpropagate_batch(leaves, paths, timing_tracker)
+        
+        return simulations_completed
+
+    def _prepare_leaf_evaluations(self, leaves: List[MCTSNode], 
+                                timing_tracker: MCTSTimingTracker) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
+        """Prepare leaf evaluations, separating cached from uncached."""
+        encodings: List[torch.Tensor] = []
+        need_eval_idxs: List[int] = []
+        cached_expansions: List[Tuple[int, np.ndarray, float]] = []
+        
+        timing_tracker.start_timing("stack")
+        timing_tracker.start_timing("encode")
+        
+        for i, leaf in enumerate(leaves):
+            if leaf.is_terminal or leaf.is_expanded:
+                continue
+            
+            # Check cache
+            timing_tracker.start_timing("cache_lookup")
+            cached = self.eval_cache.get(leaf.state_hash, None)
+            timing_tracker.end_timing("cache_lookup")
+            
+            if cached is not None:
+                self.cache_hits += 1
+                cached_expansions.append((i, cached[0], cached[1]))
+            else:
+                self.cache_misses += 1
+                # Prepare encoding for neural network
+                enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
+                encodings.append(enc)
+                need_eval_idxs.append(i)
+        
+        timing_tracker.end_timing("encode")
+        timing_tracker.end_timing("stack")
+        
+        return encodings, need_eval_idxs, cached_expansions
+
+    def _run_neural_network_batch(self, encodings: List[torch.Tensor], need_eval_idxs: List[int], 
+                                leaves: List[MCTSNode], timing_tracker: MCTSTimingTracker):
+        """Run neural network inference on a batch of leaves."""
+        if not encodings:
+            return
+        
+        batch_tensor = torch.stack(encodings, dim=0)
+        board_size = int(batch_tensor.shape[-1])
+        action_size = board_size * board_size
+        
+        policy_cpu, value_cpu, tm = self.model.infer_timed(batch_tensor)
+        
+        # Record performance metrics
+        self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
+        timing_tracker.record_batch_metrics(tm)
+        
+        # Cache results and expand nodes
+        for j, leaf_idx in enumerate(need_eval_idxs):
+            leaf = leaves[leaf_idx]
+            pol = policy_cpu[j].numpy()
+            val_logit = float(value_cpu[j].item())
+            
+            # Cache CPU-native results
+            self.eval_cache[leaf.state_hash] = (pol, val_logit)
+            self._expand_node_from_policy(leaf, pol, board_size, action_size)
+
+    def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
+                            leaves: List[MCTSNode], timing_tracker: MCTSTimingTracker):
+        """Expand leaves that were found in cache."""
+        if not cached_expansions:
+            return
+        
+        timing_tracker.start_timing("expand")
+        board_size = int(leaves[0].state.get_board_tensor().shape[-1])
+        action_size = board_size * board_size
+        
+        for (leaf_idx, policy_np, value_logit) in cached_expansions:
+            leaf = leaves[leaf_idx]
+            if not leaf.is_expanded and not leaf.is_terminal:
+                self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
+        
+        timing_tracker.end_timing("expand")
+
+    def _backpropagate_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
+                           timing_tracker: MCTSTimingTracker) -> int:
+        """Backpropagate values for a batch of leaves."""
+        timing_tracker.start_timing("backprop")
+        
+        simulations_completed = 0
+        for leaf, path in zip(leaves, paths):
+            # Determine value for this leaf
+            if leaf.is_terminal:
+                p_red = self._get_terminal_value(leaf)
+            else:
+                p_red = self._get_neural_network_value(leaf)
+            
+            # Backpropagate along path
+            self._backpropagate_path(path, p_red)
+            simulations_completed += 1
+        
+        timing_tracker.end_timing("backprop")
+        return simulations_completed
+
+    def _get_terminal_value(self, leaf: MCTSNode) -> float:
+        """Get value for a terminal leaf."""
+        if leaf.winner_str is None:
+            return 0.5  # Draw
+        
+        p_red = 1.0 if leaf.winner_str == "red" else 0.0
+        
+        # Apply terminal win value boost
+        if self.cfg.terminal_win_value_boost != 1.0:
+            if (leaf.winner_str == "red" and leaf.to_play == Player.RED) or \
+               (leaf.winner_str == "blue" and leaf.to_play == Player.BLUE):
+                p_red = min(1.0, p_red * self.cfg.terminal_win_value_boost)
+        
+        return p_red
+
+    def _get_neural_network_value(self, leaf: MCTSNode) -> float:
+        """Get value for a non-terminal leaf from neural network."""
+        _, value_logit = self.eval_cache[leaf.state_hash]
+        return float(torch.sigmoid(torch.tensor(value_logit)).item())
+
+    def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], p_red: float):
+        """Backpropagate value along a path from leaf to root."""
+        for (node, a_idx) in reversed(path):
+            v_node = p_red if node.to_play == Player.RED else (1.0 - p_red)
+            
+            # Apply depth discounting
+            if self.cfg.enable_depth_discounting and node.depth > 0:
+                discount = self.cfg.depth_discount_factor ** node.depth
+                v_node *= discount
+            
+            node.N[a_idx] += 1
+            node.W[a_idx] += v_node
+            node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
+
+
+class MCTSTimingTracker:
+    """Tracks timing information for MCTS operations."""
+    
+    def __init__(self):
+        self.timings = {}
+        self.batch_count = 0
+        self.batch_sizes = []
+        self.forward_ms_list = []
+        self.select_times = []
+        self.cache_hit_times = []
+        self.cache_miss_times = []
+        self.puct_calc_times = []
+        self.make_move_times = []
+        
+        # Cumulative totals
+        self.h2d_ms_total = 0.0
+        self.forward_ms_total = 0.0
+        self.pure_forward_ms_total = 0.0
+        self.sync_ms_total = 0.0
+        self.d2h_ms_total = 0.0
+        
+        # Current timing
+        self.current_timing = None
+        self.current_timing_start = None
+    
+    def start_timing(self, operation: str):
+        """Start timing an operation."""
+        self.current_timing = operation
+        self.current_timing_start = time.perf_counter()
+    
+    def end_timing(self, operation: str):
+        """End timing an operation."""
+        if self.current_timing == operation and self.current_timing_start is not None:
+            duration_ms = (time.perf_counter() - self.current_timing_start) * 1000.0
+            if operation not in self.timings:
+                self.timings[operation] = 0.0
+            self.timings[operation] += duration_ms
+            self.current_timing = None
+            self.current_timing_start = None
+    
+    def record_batch_metrics(self, tm: Dict[str, Any]):
+        """Record metrics from a neural network batch."""
+        self.batch_count += 1
+        self.batch_sizes.append(int(tm["batch_size"]))
+        self.forward_ms_list.append(float(tm["forward_ms"]))
+        self.h2d_ms_total += float(tm["h2d_ms"])
+        self.forward_ms_total += float(tm["forward_ms"])
+        self.pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
+        self.sync_ms_total += float(tm.get("sync_ms", 0.0))
+        self.d2h_ms_total += float(tm["d2h_ms"])
+    
+    def get_final_stats(self) -> Dict[str, Any]:
+        """Get final timing statistics."""
+        total_search_time = (
+            self.timings.get("encode", 0.0) + self.timings.get("stack", 0.0) + 
+            self.h2d_ms_total + self.forward_ms_total + self.d2h_ms_total + 
+            self.timings.get("expand", 0.0) + self.timings.get("backprop", 0.0) + 
+            self.timings.get("select", 0.0) + self.timings.get("cache_lookup", 0.0) + 
+            self.timings.get("state_creation", 0.0)
+        ) / 1000.0
+        
+        return {
+            "encode_ms": self.timings.get("encode", 0.0),
+            "stack_ms": self.timings.get("stack", 0.0),
+            "h2d_ms": self.h2d_ms_total,
+            "forward_ms": self.forward_ms_total,
+            "pure_forward_ms": self.pure_forward_ms_total,
+            "sync_ms": self.sync_ms_total,
+            "d2h_ms": self.d2h_ms_total,
+            "expand_ms": self.timings.get("expand", 0.0),
+            "backprop_ms": self.timings.get("backprop", 0.0),
+            "select_ms": self.timings.get("select", 0.0),
+            "cache_lookup_ms": self.timings.get("cache_lookup", 0.0),
+            "state_creation_ms": self.timings.get("state_creation", 0.0),
+            "puct_calc_ms": self.timings.get("puct_calc", 0.0),
+            "make_move_ms": self.timings.get("make_move", 0.0),
+            "batch_count": self.batch_count,
+            "batch_sizes": self.batch_sizes,
+            "forward_ms_list": self.forward_ms_list,
+            "select_times": self.select_times,
+            "cache_hit_times": self.cache_hit_times,
+            "cache_miss_times": self.cache_miss_times,
+            "puct_calc_times": self.puct_calc_times,
+            "make_move_times": self.make_move_times,
+            "median_forward_ms_ex_warm": _median_excluding_first(self.forward_ms_list),
+            "p90_forward_ms_ex_warm": _p90_excluding_first(self.forward_ms_list),
+            "median_select_ms": _median_excluding_first(self.select_times) if self.select_times else 0.0,
+            "median_cache_hit_ms": _median_excluding_first(self.cache_hit_times) if self.cache_hit_times else 0.0,
+            "median_cache_miss_ms": _median_excluding_first(self.cache_miss_times) if self.cache_miss_times else 0.0,
+            "median_puct_calc_ms": _median_excluding_first(self.puct_calc_times) if self.puct_calc_times else 0.0,
+            "median_make_move_ms": _median_excluding_first(self.make_move_times) if self.make_move_times else 0.0,
+            "total_search_time": total_search_time,
         }
-        
-        return self._get_stats_builder().create_final_stats(timing_stats, self.cfg.sims, total_search_time)
 
     
     def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None, verbose: int = 0) -> Tuple[int,int]:
