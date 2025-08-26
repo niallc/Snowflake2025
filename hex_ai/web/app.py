@@ -538,6 +538,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"  - Pure neural network: {stats.get('pure_forward_ms', 0):.1f}ms ({stats.get('pure_forward_ms', 0)/mcts_search_time/10:.1f}%)")
         app.logger.info(f"  - Device sync: {stats.get('sync_ms', 0):.1f}ms ({stats.get('sync_ms', 0)/mcts_search_time/10:.1f}%)")
         app.logger.info(f"Selection: {stats.get('select_ms', 0):.1f}ms ({stats.get('select_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"  - Terminal move detection: {stats.get('terminal_detect_ms', 0):.1f}ms ({stats.get('terminal_detect_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.info(f"  - PUCT calculation: {stats.get('puct_calc_ms', 0):.1f}ms ({stats.get('puct_calc_ms', 0)/mcts_search_time/10:.1f}%)")
         app.logger.info(f"State creation: {stats.get('state_creation_ms', 0):.1f}ms ({stats.get('state_creation_ms', 0)/mcts_search_time/10:.1f}%)")
         app.logger.info(f"Cache lookup: {stats.get('cache_lookup_ms', 0):.1f}ms ({stats.get('cache_lookup_ms', 0)/mcts_search_time/10:.1f}%)")
         app.logger.info(f"Encoding: {stats.get('encode_ms', 0):.1f}ms ({stats.get('encode_ms', 0)/mcts_search_time/10:.1f}%)")
@@ -550,6 +552,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"Batch count: {stats.get('batch_count', 0)}, avg batch size: {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
         app.logger.info(f"Median forward time: {stats.get('median_forward_ms_ex_warm', 0):.1f}ms")
         app.logger.info(f"Median select time: {stats.get('median_select_ms', 0):.1f}ms")
+        app.logger.info(f"Median terminal detect time: {stats.get('median_terminal_detect_ms', 0):.1f}ms")
+        app.logger.info(f"Median PUCT calc time: {stats.get('median_puct_calc_ms', 0):.1f}ms")
         app.logger.info(f"=== END TIMING BREAKDOWN ===")
         
         # Add performance summary
@@ -642,12 +646,14 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}",
                 "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1))
             },
-            "profiling_summary": {
-                "total_compute_ms": int(mcts_search_time * 1000.0),
-                "encode_ms": stats.get("encode_ms", 0),
-                "stack_ms": stats.get("stack_ms", 0),
-                "forward_ms": stats.get("forward_ms", 0),
-                "pure_forward_ms": stats.get("pure_forward_ms", 0),
+                    "profiling_summary": {
+            "total_compute_ms": int(mcts_search_time * 1000.0),
+            "encode_ms": stats.get("encode_ms", 0),
+            "stack_ms": stats.get("stack_ms", 0),
+            "forward_ms": stats.get("forward_ms", 0),
+            "pure_forward_ms": stats.get("pure_forward_ms", 0),
+            "terminal_detect_ms": stats.get("terminal_detect_ms", 0),
+            "puct_calc_ms": stats.get("puct_calc_ms", 0),
                 "sync_ms": stats.get("sync_ms", 0),
                 "d2h_ms": stats.get("d2h_ms", 0),
                 "expand_ms": stats.get("expand_ms", 0),

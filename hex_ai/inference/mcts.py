@@ -142,7 +142,8 @@ class MCTSNode:
     __slots__ = (
         "state", "to_play", "legal_moves", "legal_indices",
         "children", "N", "W", "Q", "P", "is_expanded",
-        "state_hash", "is_terminal", "winner_str", "terminal_moves"
+        "state_hash", "is_terminal", "winner_str", "terminal_moves",
+        "_terminal_moves_detected", "depth"
     )
     def __init__(self, state: HexGameState, board_size: int):
         self.state: HexGameState = state
@@ -162,6 +163,8 @@ class MCTSNode:
         self.is_terminal: bool = bool(state.game_over)
         self.winner_str: Optional[str] = state.winner if self.is_terminal else None
         self.terminal_moves: List[bool] = [False] * L # New attribute for terminal move detection
+        self._terminal_moves_detected: bool = False  # Track if terminal moves have been detected
+        self.depth: int = 0  # Track node depth in the tree
 
 # ------------------ Core MCTS ------------------
 
@@ -258,6 +261,9 @@ class BaselineMCTS:
         select_ms = 0.0
         cache_lookup_ms = 0.0
         state_creation_ms = 0.0
+        terminal_detect_ms = 0.0  # New: terminal move detection time
+        puct_calc_ms = 0.0  # New: PUCT calculation time
+        make_move_ms = 0.0  # New: make_move operation time
         h2d_ms_total = 0.0
         forward_ms_total = 0.0
         pure_forward_ms_total = 0.0
@@ -268,6 +274,9 @@ class BaselineMCTS:
         select_times: List[float] = []
         cache_hit_times: List[float] = []
         cache_miss_times: List[float] = []
+        terminal_detect_times: List[float] = []  # New: terminal detection times
+        puct_calc_times: List[float] = []  # New: PUCT calculation times
+        make_move_times: List[float] = []  # New: make_move operation times
 
         sims_remaining = self.cfg.sims
 
@@ -406,8 +415,17 @@ class BaselineMCTS:
                         # Materialize child state on demand
                         t_state_start = time.perf_counter()
                         (r, c) = node.legal_moves[child_idx]
+                        
+                        # Time the make_move operation specifically
+                        t_make_move_start = time.perf_counter()
                         child_state = node.state.make_move(r, c)
+                        t_make_move_end = time.perf_counter()
+                        make_move_time_ms = (t_make_move_end - t_make_move_start) * 1000.0
+                        make_move_ms += make_move_time_ms
+                        make_move_times.append(make_move_time_ms)
+                        
                         child = MCTSNode(child_state, board_size)
+                        child.depth = node.depth + 1  # Set child depth
                         state_creation_ms += (time.perf_counter() - t_state_start) * 1000.0
                         node.children[child_idx] = child
                     node = child
@@ -418,6 +436,18 @@ class BaselineMCTS:
 
             select_ms += (time.perf_counter() - t_select_start) * 1000.0
             select_times.append((time.perf_counter() - t_select_start) * 1000.0)
+            
+            # Collect terminal detection times from this batch
+            if hasattr(self, '_terminal_detect_times') and self._terminal_detect_times:
+                terminal_detect_times.extend(self._terminal_detect_times)
+                terminal_detect_ms += sum(self._terminal_detect_times)
+                self._terminal_detect_times = []  # Reset for next batch
+            
+            # Collect PUCT calculation times from this batch
+            if hasattr(self, '_puct_calc_times') and self._puct_calc_times:
+                puct_calc_times.extend(self._puct_calc_times)
+                puct_calc_ms += sum(self._puct_calc_times)
+                self._puct_calc_times = []  # Reset for next batch
 
             # 2) STACK encodings for NN where needed and expand cached/terminal immediately
             t_stack0 = time.perf_counter()
@@ -535,17 +565,26 @@ class BaselineMCTS:
             "select_ms": select_ms,
             "cache_lookup_ms": cache_lookup_ms,
             "state_creation_ms": state_creation_ms,
+            "terminal_detect_ms": terminal_detect_ms,  # New: terminal move detection time
+            "puct_calc_ms": puct_calc_ms,  # New: PUCT calculation time
+            "make_move_ms": make_move_ms,  # New: make_move operation time
             "batch_count": len(batch_sizes),
             "batch_sizes": batch_sizes,
             "forward_ms_list": forward_ms_list,
             "select_times": select_times,
             "cache_hit_times": cache_hit_times,
             "cache_miss_times": cache_miss_times,
+            "terminal_detect_times": terminal_detect_times,  # New: terminal detection times
+            "puct_calc_times": puct_calc_times,  # New: PUCT calculation times
+            "make_move_times": make_move_times,  # New: make_move operation times
             "median_forward_ms_ex_warm": _median_excluding_first(forward_ms_list),
             "p90_forward_ms_ex_warm": _p90_excluding_first(forward_ms_list),
             "median_select_ms": _median_excluding_first(select_times) if select_times else 0.0,
             "median_cache_hit_ms": _median_excluding_first(cache_hit_times) if cache_hit_times else 0.0,
             "median_cache_miss_ms": _median_excluding_first(cache_miss_times) if cache_miss_times else 0.0,
+            "median_terminal_detect_ms": _median_excluding_first(terminal_detect_times) if terminal_detect_times else 0.0,
+            "median_puct_calc_ms": _median_excluding_first(puct_calc_times) if puct_calc_times else 0.0,
+            "median_make_move_ms": _median_excluding_first(make_move_times) if make_move_times else 0.0,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
             "total_simulations": self.cfg.sims,
@@ -839,6 +878,21 @@ class BaselineMCTS:
         if node.is_terminal:
             return  # Already terminal state
         
+        # Only detect terminal moves if we haven't done so already
+        # This prevents repeated expensive state creation during selection
+        if hasattr(node, '_terminal_moves_detected') and node._terminal_moves_detected:
+            return
+        
+        # SHALLOW DETECTION: Only detect terminal moves at shallow depths
+        # This targets the specific problem of missing 1-move wins while avoiding
+        # expensive detection on deep nodes that are unlikely to have terminal moves
+        node_depth = self._get_node_depth(node)
+        if node_depth > 3:  # Only detect at top 3 levels
+            return
+        
+        # Start timing for this detection
+        t_detect_start = time.perf_counter()
+        
         for i, (row, col) in enumerate(node.legal_moves):
             # Try the move and check if it wins
             try:
@@ -848,6 +902,18 @@ class BaselineMCTS:
             except Exception:
                 # If move fails, it's not terminal
                 pass
+        
+        # End timing and record
+        t_detect_end = time.perf_counter()
+        detect_time_ms = (t_detect_end - t_detect_start) * 1000.0
+        
+        # Store timing info for later reporting
+        if not hasattr(self, '_terminal_detect_times'):
+            self._terminal_detect_times = []
+        self._terminal_detect_times.append(detect_time_ms)
+        
+        # Mark that we've detected terminal moves for this node
+        node._terminal_moves_detected = True
 
     def _select_child_puct(self, node: MCTSNode) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
@@ -857,6 +923,9 @@ class BaselineMCTS:
         # Detect terminal moves if enabled
         if self.cfg.enable_terminal_move_detection:
             self._detect_terminal_moves(node, int(node.state.get_board_tensor().shape[-1]))
+        
+        # Start timing PUCT calculation
+        t_puct_start = time.perf_counter()
         
         N_sum = np.sum(node.N, dtype=np.float64)
         if N_sum <= 1e-9:
@@ -880,7 +949,30 @@ class BaselineMCTS:
                     U[i] -= self.cfg.virtual_loss_for_non_terminal
         
         score = node.Q + U
-        return int(np.argmax(score))
+        result = int(np.argmax(score))
+        
+        # End timing PUCT calculation
+        t_puct_end = time.perf_counter()
+        puct_time_ms = (t_puct_end - t_puct_start) * 1000.0
+        
+        # Store timing info for later reporting
+        if not hasattr(self, '_puct_calc_times'):
+            self._puct_calc_times = []
+        self._puct_calc_times.append(puct_time_ms)
+        
+        return result
+
+    def _get_node_depth(self, node: MCTSNode) -> int:
+        """
+        Get the depth of a node in the MCTS tree.
+        
+        Args:
+            node: The MCTS node to get depth for
+            
+        Returns:
+            The depth of the node (0 for root, 1 for root's children, etc.)
+        """
+        return node.depth
 
 
 # -------- Convenience ----------
