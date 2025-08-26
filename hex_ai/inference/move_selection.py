@@ -13,7 +13,7 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_tournament_mcts_config
 from hex_ai.inference.model_cache import get_model_cache
 
 
@@ -93,18 +93,10 @@ class MCTSStrategy(MoveSelectionStrategy):
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig) -> Tuple[int, int]:
-        # Create MCTS configuration
-        mcts_config = BaselineMCTSConfig(
+        # Create MCTS configuration optimized for tournament play
+        mcts_config = create_tournament_mcts_config(
             sims=config.mcts_sims,
-            c_puct=config.mcts_c_puct,
-            dirichlet_alpha=config.mcts_dirichlet_alpha,
-            dirichlet_eps=config.mcts_dirichlet_eps,
-            temperature_start=config.temperature,
-            temperature_end=config.temperature / 20.0,
-            # Terminal move detection parameters
-            enable_terminal_move_detection=True,
-            terminal_move_boost=10.0,
-            virtual_loss_for_non_terminal=0.01
+            early_termination_threshold=0.95  # Conservative early termination for quality
         )
         
         # Create required components
@@ -114,7 +106,7 @@ class MCTSStrategy(MoveSelectionStrategy):
         
         # Run MCTS and select move
         mcts = BaselineMCTS(engine, model_wrapper, mcts_config)
-        mcts.run(state)
+        mcts.run(state, verbose=0)  # Quiet mode for tournaments
         return mcts.pick_move(state, temperature=config.temperature)
     
     def get_name(self) -> str:

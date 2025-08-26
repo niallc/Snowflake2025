@@ -57,6 +57,29 @@ def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, 
     col = LETTERS.index(letter)
     return row, col
 
+def trmph_to_moves(trmph_text: str, board_size: int = BOARD_SIZE) -> list[tuple[int, int]]:
+    """
+    Convert a TRMPH string to a list of (row, col) moves.
+    
+    Args:
+        trmph_text: TRMPH string (can include preamble)
+        board_size: Size of the board
+        
+    Returns:
+        List of (row, col) tuples representing the moves
+    """
+    # Strip preamble and get moves
+    bare_moves = strip_trmph_preamble(trmph_text)
+    moves = split_trmph_moves(bare_moves)
+    
+    # Convert to (row, col) format
+    rowcol_moves = []
+    for move in moves:
+        row, col = trmph_move_to_rowcol(move, board_size)
+        rowcol_moves.append((row, col))
+    
+    return rowcol_moves
+
 def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicate_action: str = "exception") -> np.ndarray:
     """
     Parse a trmph string to a board matrix.

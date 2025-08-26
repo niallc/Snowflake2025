@@ -68,6 +68,7 @@ tests/test_winner_to_color_failfast.py
 write_ups/mcts_performance_fix.md
 write_ups/strategy_tournament_implementation_summary.md
 docs/terminal_move_detection.md
+docs/mcts_early_termination.md
 
 # VSCode
 .vscode/

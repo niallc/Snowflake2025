@@ -50,6 +50,10 @@ class BaselineMCTSConfig:
     # Note: Pre-check only happens after move 25 (minimum moves needed for a win)
     # Removed seed parameter - randomness should be controlled externally
 
+    # Early termination parameters
+    enable_early_termination: bool = False
+    early_termination_threshold: float = 0.9
+
 # ------------------ Helpers ------------------
 
 def softmax_np(logits: np.ndarray) -> np.ndarray:
@@ -178,12 +182,20 @@ class BaselineMCTS:
 
         # Root node from the last run() (used by pick_move)
         self._root_node = None
+        
+        # Early termination tracking
+        self._early_termination_occurred = False
+        self._early_termination_win_prob = 0.0
 
     # ---------- Public API ----------
-    def run(self, root_state: HexGameState) -> Dict[str, Any]:
+    def run(self, root_state: HexGameState, verbose: int = 0) -> Dict[str, Any]:
         """
         Run MCTS for cfg.sims simulations starting from root_state.
         Returns a dict of timing and batching stats for this move.
+        
+        Args:
+            root_state: The game state to search from
+            verbose: Verbosity level for logging (0=quiet, 1=basic, 2=detailed)
         """
         # Prepare root
         board_tensor = root_state.get_board_tensor()
@@ -306,6 +318,59 @@ class BaselineMCTS:
         if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded and not self._root_noise_applied:
             self._apply_root_noise(root)
             self._root_noise_applied = True
+
+        # Simple confidence check after root expansion (using neural network value)
+        if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
+            # Get the neural network value directly
+            _, value_logit = self.eval_cache[root.state_hash]
+            nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
+            
+            # Convert to win probability for current player
+            if root.to_play == Player.RED:
+                win_prob = nn_win_prob
+            else:
+                win_prob = 1.0 - nn_win_prob
+            
+            # Check if position is clearly won or lost
+            if (win_prob >= self.cfg.early_termination_threshold or 
+                win_prob <= (1.0 - self.cfg.early_termination_threshold)):
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Simple confidence-based termination (NN win prob: {win_prob:.3f})")
+                # Store early termination info for pick_move()
+                self._early_termination_occurred = True
+                self._early_termination_win_prob = win_prob
+                self._root_node = root  # Store root node for pick_move()
+                # Return early with minimal stats
+                return {
+                    "encode_ms": encode_ms,
+                    "stack_ms": stack_ms,
+                    "h2d_ms": h2d_ms_total,
+                    "forward_ms": forward_ms_total,
+                    "pure_forward_ms": pure_forward_ms_total,
+                    "sync_ms": sync_ms_total,
+                    "d2h_ms": d2h_ms_total,
+                    "expand_ms": expand_ms,
+                    "backprop_ms": 0.0,
+                    "select_ms": 0.0,
+                    "cache_lookup_ms": cache_lookup_ms,
+                    "state_creation_ms": state_creation_ms,
+                    "batch_count": len(batch_sizes),
+                    "batch_sizes": batch_sizes,
+                    "forward_ms_list": forward_ms_list,
+                    "select_times": [],
+                    "cache_hit_times": cache_hit_times,
+                    "cache_miss_times": cache_miss_times,
+                    "median_forward_ms_ex_warm": _median_excluding_first(forward_ms_list),
+                    "p90_forward_ms_ex_warm": _p90_excluding_first(forward_ms_list),
+                    "median_select_ms": 0.0,
+                    "median_cache_hit_ms": _median_excluding_first(cache_hit_times) if cache_hit_times else 0.0,
+                    "median_cache_miss_ms": _median_excluding_first(cache_miss_times) if cache_miss_times else 0.0,
+                    "cache_hits": self.cache_hits,
+                    "cache_misses": self.cache_misses,
+                    "total_simulations": 0,
+                    "simulations_per_second": 0.0,
+                    "early_termination_occurred": True,
+                }
 
         # ---- Simulation loop with explicit batched leaves ----
         while sims_remaining > 0:
@@ -485,6 +550,7 @@ class BaselineMCTS:
             "cache_misses": self.cache_misses,
             "total_simulations": self.cfg.sims,
             "simulations_per_second": self.cfg.sims / total_search_time if total_search_time > 0 else 0.0,
+            "early_termination_occurred": False,  # Will be set to True in early termination case
         }
         return stats
 
@@ -500,6 +566,16 @@ class BaselineMCTS:
         if self._root_node.state_hash != state_hash_from(root_state):
             raise ValueError("BaselineMCTS.pick_move() called with a different state than the last run() root.")
         root = self._root_node
+        
+        # Check if early termination occurred - use top policy move
+        if self._early_termination_occurred:
+            # Use the top policy move from the neural network
+            policy_probs = root.P
+            best_move_idx = int(np.argmax(policy_probs))
+            best_move = root.legal_moves[best_move_idx]
+            if verbose >= 2:
+                print(f"🎮 MCTS: Using top policy move due to early termination (win prob: {self._early_termination_win_prob:.3f}): {best_move}")
+            return best_move
 
         if root.is_terminal:
             if root.legal_moves:
@@ -526,6 +602,8 @@ class BaselineMCTS:
                 if verbose >= 2:
                     print(f"🎮 MCTS: Found terminal move, immediately selecting: {root.legal_moves[terminal_indices[0]]}")
                 return root.legal_moves[terminal_indices[0]]
+
+
 
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
@@ -807,12 +885,105 @@ class BaselineMCTS:
 
 # -------- Convenience ----------
 
+def create_selfplay_mcts_config(sims: int = 500, early_termination_threshold: float = 0.85) -> BaselineMCTSConfig:
+    """
+    Create an MCTS configuration optimized for self-play game generation.
+    
+    Args:
+        sims: Number of simulations (default: 500)
+        early_termination_threshold: Win probability threshold for simple termination (default: 0.85)
+        
+    Returns:
+        BaselineMCTSConfig optimized for self-play
+    """
+    return BaselineMCTSConfig(
+        sims=sims,
+        batch_cap=64,
+        c_puct=1.5,
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+        add_root_noise=False,  # Disable for self-play consistency
+        temperature_start=0.5,
+        temperature_end=0.01,
+        temperature_decay_type="exponential",
+        temperature_decay_moves=50,
+        # Terminal move detection (always enabled)
+        enable_terminal_move_detection=True,
+        terminal_move_boost=10.0,
+        virtual_loss_for_non_terminal=0.01,
+        # Simple confidence-based termination for speed
+        enable_early_termination=True,
+        early_termination_threshold=early_termination_threshold,
+    )
+
+def create_tournament_mcts_config(sims: int = 200, early_termination_threshold: float = 0.95) -> BaselineMCTSConfig:
+    """
+    Create an MCTS configuration optimized for tournament play.
+    
+    Args:
+        sims: Number of simulations (default: 200)
+        early_termination_threshold: Win probability threshold for simple termination (default: 0.95)
+        
+    Returns:
+        BaselineMCTSConfig optimized for tournament play
+    """
+    return BaselineMCTSConfig(
+        sims=sims,
+        batch_cap=64,
+        c_puct=1.5,
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+        add_root_noise=False,
+        temperature_start=1.0,
+        temperature_end=0.1,
+        temperature_decay_type="exponential",
+        temperature_decay_moves=50,
+        # Terminal move detection (always enabled)
+        enable_terminal_move_detection=True,
+        terminal_move_boost=10.0,
+        virtual_loss_for_non_terminal=0.01,
+        # Conservative simple termination for quality
+        enable_early_termination=True,
+        early_termination_threshold=early_termination_threshold,
+    )
+
+def create_fast_selfplay_mcts_config(sims: int = 200, early_termination_threshold: float = 0.8) -> BaselineMCTSConfig:
+    """
+    Create an MCTS configuration for very fast self-play game generation.
+    
+    Args:
+        sims: Number of simulations (default: 200)
+        early_termination_threshold: Win probability threshold for simple termination (default: 0.8)
+        
+    Returns:
+        BaselineMCTSConfig optimized for very fast self-play
+    """
+    return BaselineMCTSConfig(
+        sims=sims,
+        batch_cap=64,
+        c_puct=1.5,
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+        add_root_noise=False,
+        temperature_start=0.5,
+        temperature_end=0.01,
+        temperature_decay_type="exponential",
+        temperature_decay_moves=50,
+        # Terminal move detection (always enabled)
+        enable_terminal_move_detection=True,
+        terminal_move_boost=10.0,
+        virtual_loss_for_non_terminal=0.01,
+        # Very aggressive simple termination for maximum speed
+        enable_early_termination=True,
+        early_termination_threshold=early_termination_threshold,
+    )
+
 def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
     """Run MCTS for one move and return (row,col), stats, tree_data."""
     if cfg is None:
         cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
-    stats = mcts.run(state)
+    stats = mcts.run(state, verbose=verbose)
     move = mcts.pick_move(state, temperature=cfg.temperature_start, verbose=verbose)
     tree_data = mcts.get_tree_data(state)
     return move, stats, tree_data

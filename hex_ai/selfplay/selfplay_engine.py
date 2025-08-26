@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
 from hex_ai.enums import Winner
 from hex_ai.inference.game_engine import HexGameEngine, HexGameState
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_selfplay_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.training_utils import get_device
@@ -69,16 +69,10 @@ class SelfPlayEngine:
         self.game_engine = HexGameEngine()
         # Create ModelWrapper for MCTS
         self.model_wrapper = ModelWrapper(model_path, device=get_device())
-        # Create MCTS configuration (randomness controlled externally)
-        self.mcts_config = BaselineMCTSConfig(
+        # Create MCTS configuration optimized for self-play with early termination
+        self.mcts_config = create_selfplay_mcts_config(
             sims=self.mcts_sims,
-            batch_cap=64,  # Optimize for throughput
-            c_puct=1.5,
-            dirichlet_alpha=0.3,
-            dirichlet_eps=0.25,
-            add_root_noise=False,  # Disable for self-play consistency
-            temperature_start=self.temperature,
-            temperature_end=self.temperature_end
+            early_termination_threshold=0.85  # Aggressive early termination for speed
         )
         
         # Performance tracking
