@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hex_ai.inference.game_engine import HexGameEngine, HexGameState
 from hex_ai.inference.mcts import (
     BaselineMCTS, BaselineMCTSConfig, 
-    create_selfplay_mcts_config, create_tournament_mcts_config, create_fast_selfplay_mcts_config
+    create_mcts_config
 )
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.model_config import get_model_path
@@ -50,9 +50,9 @@ def test_early_termination():
     # Test different configurations
     configs = [
         ("Standard MCTS (no early termination)", BaselineMCTSConfig(sims=200)),
-        ("Self-play config (aggressive)", create_selfplay_mcts_config(sims=200, early_termination_threshold=0.85)),
-        ("Tournament config (conservative)", create_tournament_mcts_config(sims=200, early_termination_threshold=0.95)),
-        ("Fast self-play config (very aggressive)", create_fast_selfplay_mcts_config(sims=200, early_termination_threshold=0.8)),
+        ("Self-play config (aggressive)", create_mcts_config("selfplay", sims=200, early_termination_threshold=0.85)),
+        ("Tournament config (conservative)", create_mcts_config("tournament", sims=200, early_termination_threshold=0.95)),
+        ("Fast self-play config (very aggressive)", create_mcts_config("fast_selfplay", sims=200, early_termination_threshold=0.8)),
     ]
     
     results = []
@@ -122,7 +122,7 @@ def test_early_termination_on_different_positions():
     model = ModelWrapper(model_path, device="cpu")
     
     # Use fast self-play config for testing
-    config = create_fast_selfplay_mcts_config(sims=100, early_termination_threshold=0.8)
+    config = create_mcts_config("fast_selfplay", sims=100, early_termination_threshold=0.8)
     
     print(f"\n🎯 Testing early termination on different game positions:")
     print(f"Config: {config.early_termination_threshold} threshold")
@@ -160,9 +160,9 @@ if __name__ == "__main__":
         
         print(f"\n✅ Simple termination testing completed!")
         print(f"\n💡 Usage tips:")
-        print(f"   - Use create_selfplay_mcts_config() for fast game generation")
-        print(f"   - Use create_tournament_mcts_config() for high-quality play")
-        print(f"   - Use create_fast_selfplay_mcts_config() for maximum speed")
+        print(f"   - Use create_mcts_config('selfplay', ...) for fast game generation")
+        print(f"   - Use create_mcts_config('tournament', ...) for high-quality play")
+        print(f"   - Use create_mcts_config('fast_selfplay', ...) for maximum speed")
         print(f"   - Adjust early_termination_threshold based on your needs")
         print(f"   - Feature stops when neural network is very confident")
         

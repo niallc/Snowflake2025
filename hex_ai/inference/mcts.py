@@ -2,28 +2,24 @@
 # Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
 # Compatible with flat-file or package imports via shims.
 
-# ============================== MCTS BASELINE — TODOs ==============================
-
-# ===================================================================================
-
-
 from __future__ import annotations
 
 import math
 import time
-import json
 import random
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, NamedTuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.value_utils import get_win_prob_from_model_output
 from hex_ai.utils.perf import PERF
+from hex_ai.utils.math_utils import softmax_np
+from hex_ai.utils.format_conversion import rowcol_to_tensor as move_to_index, tensor_to_rowcol as index_to_move
+from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
 
 
@@ -88,6 +84,17 @@ class EarlyTerminationInfo:
     reason: str  # "terminal_move" or "neural_network_confidence"
     move: Optional[Tuple[int, int]]  # The move to play (None for NN confidence)
     win_prob: float  # Win probability
+
+# ------------------ MCTS Result ------------------
+@dataclass
+class MCTSResult:
+    """Complete result of an MCTS search."""
+    move: Tuple[int, int]  # The selected move
+    stats: Dict[str, Any]  # Performance statistics
+    tree_data: Dict[str, Any]  # Tree information for analysis
+    root_node: MCTSNode  # The search tree root (for advanced use cases)
+    early_termination_info: Optional[EarlyTerminationInfo]  # Early termination details
+    win_probability: float  # Win probability for current player
 
 # ------------------ Stats Builder ------------------
 class MCTSStatsBuilder:
@@ -230,21 +237,6 @@ class BaselineMCTSConfig:
 
 # ------------------ Helpers ------------------
 
-def softmax_np(logits: np.ndarray) -> np.ndarray:
-    """Numerically stable softmax over 1D logits -> probs that sum to 1."""
-    m = np.max(logits)
-    exps = np.exp(logits - m)
-    s = np.sum(exps)
-    if s <= 0 or not np.isfinite(s):
-        raise ValueError(f"Invalid softmax input: sum={s}, logits={logits}")
-    return exps / s
-
-def move_to_index(row: int, col: int, board_size: int) -> int:
-    return row * board_size + col
-
-def index_to_move(a: int, board_size: int) -> Tuple[int, int]:
-    return divmod(a, board_size)
-
 def state_hash_from(state: HexGameState) -> int:
     """Hash only immutable, CPU-native parts (no tensor bytes)."""
     # Use move history and current player enum value.
@@ -252,63 +244,6 @@ def state_hash_from(state: HexGameState) -> int:
     key = (tuple(state.move_history), int(state.current_player_enum.value))
     h = hash(key) & ((1 << 63) - 1)
     return h
-
-def calculate_temperature_decay(cfg: BaselineMCTSConfig, move_count: int, start_temp_override: Optional[float] = None) -> float:
-    """
-    Calculate temperature based on decay configuration and current move count.
-    
-    Args:
-        cfg: MCTS configuration with temperature decay parameters
-        move_count: Number of moves played so far (0-based)
-        start_temp_override: Optional override for starting temperature
-    
-    Returns:
-        Current temperature value
-    """
-    # Determine the starting temperature
-    # Use override if provided, otherwise use temperature_start
-    if start_temp_override is not None:
-        start_temp = start_temp_override
-    else:
-        start_temp = cfg.temperature_start
-    
-    if cfg.temperature_decay_type == "linear":
-        # Linear decay from temperature_start to temperature_end over temperature_decay_moves
-        progress = min(move_count / max(1, cfg.temperature_decay_moves), 1.0)
-        return start_temp + (cfg.temperature_end - start_temp) * progress
-    
-    elif cfg.temperature_decay_type == "exponential":
-        # Exponential decay: T = T_start * (T_end/T_start)^(move_count/decay_moves)
-        if start_temp <= 0 or cfg.temperature_end <= 0:
-            return cfg.temperature_end  # Safety fallback
-        progress = min(move_count / max(1, cfg.temperature_decay_moves), 1.0)
-        decay_factor = (cfg.temperature_end / start_temp) ** progress
-        return start_temp * decay_factor
-    
-    elif cfg.temperature_decay_type == "step":
-        # Step decay: temperature drops at specific move thresholds
-        if not cfg.temperature_step_thresholds or not cfg.temperature_step_values:
-            return start_temp
-        
-        # Find the appropriate temperature for current move count
-        for i, threshold in enumerate(cfg.temperature_step_thresholds):
-            if move_count < threshold:
-                return cfg.temperature_step_values[i] if i < len(cfg.temperature_step_values) else cfg.temperature_end
-        
-        # If we've passed all thresholds, use the final temperature
-        return cfg.temperature_end
-    
-    elif cfg.temperature_decay_type == "game_progress":
-        # Temperature based on percentage of game completed
-        # Estimate total game length as board_size^2 (full board)
-        board_size = CFG_BOARD_SIZE
-        estimated_total_moves = board_size * board_size
-        progress = min(move_count / max(1, estimated_total_moves), 1.0)
-        return start_temp + (cfg.temperature_end - start_temp) * progress
-    
-    else:
-        # Unknown decay type, return starting temperature
-        return start_temp
 
 # ------------------ Data structures ------------------
 
@@ -355,13 +290,7 @@ class BaselineMCTS:
         self.cache_hits = 0
         self.cache_misses = 0
 
-        self._root_noise_applied = False
 
-        # Root node from the last run() (used by pick_move)
-        self._root_node = None
-        
-        # Early termination tracking
-        self._early_termination_info: Optional[EarlyTerminationInfo] = None
         
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -375,10 +304,10 @@ class BaselineMCTS:
         self.stats_builder = None
 
     # ---------- Public API ----------
-    def run(self, root_state: HexGameState, verbose: int = 0) -> Dict[str, Any]:
+    def run(self, root_state: HexGameState, verbose: int = 0) -> MCTSResult:
         """
         Run MCTS for cfg.sims simulations starting from root_state.
-        Returns a dict of timing and batching stats for this move.
+        Returns a complete MCTSResult with move, stats, and analysis data.
         
         Args:
             root_state: The game state to search from
@@ -390,17 +319,37 @@ class BaselineMCTS:
         # Check for early termination opportunities
         early_info = self._check_early_termination(root, verbose)
         if early_info:
-            self._early_termination_info = early_info
-            self._root_node = root
-            return self._get_stats_builder().create_early_termination_stats(early_info)
+            # Handle early termination
+            move = self._get_early_termination_move(root, early_info, verbose)
+            tree_data = self._compute_tree_data(root)
+            win_probability = early_info.win_prob
+            
+            return MCTSResult(
+                move=move,
+                stats=self._get_stats_builder().create_early_termination_stats(early_info),
+                tree_data=tree_data,
+                root_node=root,
+                early_termination_info=early_info,
+                win_probability=win_probability
+            )
         
         # Run main simulation loop
         timing_stats = self._run_simulation_loop(root, verbose)
         
-        # Store root for pick_move() and return final stats
-        self._root_node = root
-        return self._get_stats_builder().create_final_stats(
-            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
+        # Compute results directly
+        move = self._compute_move(root, root_state, verbose)
+        tree_data = self._compute_tree_data(root)
+        win_probability = self._compute_win_probability(root, root_state)
+        
+        return MCTSResult(
+            move=move,
+            stats=self._get_stats_builder().create_final_stats(
+                timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
+            ),
+            tree_data=tree_data,
+            root_node=root,
+            early_termination_info=None,
+            win_probability=win_probability
         )
 
     def _prepare_root_node(self, root_state: HexGameState, verbose: int) -> MCTSNode:
@@ -413,10 +362,9 @@ class BaselineMCTS:
         if not root.is_terminal and not root.is_expanded:
             self._expand_root_node(root, board_size)
         
-        # Apply root noise if configured
-        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded and not self._root_noise_applied:
+        # Apply root noise if configured (only on first move for consistency)
+        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded and len(root_state.move_history) == 0:
             self._apply_root_noise(root)
-            self._root_noise_applied = True
         
         return root
 
@@ -685,6 +633,179 @@ class BaselineMCTS:
             node.W[a_idx] += v_node
             node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
 
+    # ---------- New Result Computation Methods ----------
+    
+    def _get_early_termination_move(self, root: MCTSNode, early_info: EarlyTerminationInfo, verbose: int) -> Tuple[int, int]:
+        """Get the move for early termination cases."""
+        if early_info.reason == "terminal_move":
+            return early_info.move
+        elif early_info.reason == "neural_network_confidence":
+            # Use top policy move
+            best_move_idx = int(np.argmax(root.P))
+            best_move = root.legal_moves[best_move_idx]
+            if verbose >= 2:
+                print(f"🎮 MCTS: Using top policy move (early termination, win prob: {early_info.win_prob:.3f}): {best_move}")
+            return best_move
+        else:
+            raise ValueError(f"Unknown early termination reason: {early_info.reason}")
+
+    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[int, int]:
+        """Compute the selected move from the root node."""
+        # Check if a terminal move was found during pre-check
+        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
+            terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+            if terminal_indices:
+                terminal_move = root.legal_moves[terminal_indices[0]]
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
+                return terminal_move
+
+        # Check terminal moves (no fallback needed - already detected if appropriate)
+        if self.cfg.enable_terminal_move_detection:
+            terminal_move = self.terminal_detector.get_terminal_move(root)
+            if terminal_move:
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Using terminal move: {terminal_move}")
+                return terminal_move
+
+        # Use visit counts accumulated during run()
+        counts = root.N.astype(np.float64)
+        if counts.sum() <= 0:
+            raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
+
+        # Calculate temperature with decay
+        move_count = len(root_state.move_history)
+        start_temp = self.cfg.temperature_start
+        temp = calculate_temperature_decay(
+            temperature_start=self.cfg.temperature_start,
+            temperature_end=self.cfg.temperature_end,
+            temperature_decay_type=self.cfg.temperature_decay_type,
+            temperature_decay_moves=self.cfg.temperature_decay_moves,
+            temperature_step_thresholds=self.cfg.temperature_step_thresholds,
+            temperature_step_values=self.cfg.temperature_step_values,
+            move_count=move_count,
+            start_temp_override=start_temp
+        )
+        
+        # Log effective temperature if verbose
+        if verbose >= 4:
+            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
+        
+        if temp <= 1e-6:
+            a_idx = int(np.argmax(counts))
+        else:
+            pi = np.power(counts, 1.0 / temp)
+            if not np.isfinite(pi).all() or np.sum(pi) <= 0:
+                raise ValueError(f"Invalid temperature scaling result: pi={pi}, counts={counts}, temp={temp}")
+            pi /= np.sum(pi)
+            a_idx = int(np.random.choice(len(pi), p=pi))
+        return root.legal_moves[a_idx]
+
+    def _compute_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
+        """Compute tree data for analysis."""
+        if root.is_terminal:
+            return {
+                "visit_counts": {},
+                "mcts_probabilities": {},
+                "root_value": 0.0,
+                "best_child_value": 0.0,
+                "total_visits": 0,
+                "inferences": 0,
+                "total_nodes": 0,
+                "max_depth": 0
+            }
+
+        # Get visit counts and convert to TRMPH format
+        visit_counts = {}
+        mcts_probabilities = {}
+        total_visits = int(np.sum(root.N))
+        
+        for i, (row, col) in enumerate(root.legal_moves):
+            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            visits = int(root.N[i])
+            visit_counts[move_trmph] = visits
+            
+            # Calculate MCTS probability (visit count / total visits)
+            if total_visits > 0:
+                mcts_probabilities[move_trmph] = visits / total_visits
+            else:
+                mcts_probabilities[move_trmph] = 0.0
+
+        # Get root value (average value of all children)
+        if total_visits > 0:
+            root_value = float(np.sum(root.W) / total_visits)
+        else:
+            root_value = 0.0
+
+        # Get best child value
+        if len(root.Q) > 0:
+            best_child_value = float(np.max(root.Q))
+        else:
+            best_child_value = 0.0
+
+        # Calculate total inferences (cache misses)
+        total_inferences = self.cache_misses
+
+        # Calculate tree traversal statistics
+        total_nodes, max_depth = self._calculate_tree_statistics(root)
+
+        # Get principal variation
+        principal_variation = self._extract_principal_variation(root, max_length=10)
+
+        return {
+            "visit_counts": visit_counts,
+            "mcts_probabilities": mcts_probabilities,
+            "root_value": root_value,
+            "best_child_value": best_child_value,
+            "total_visits": total_visits,
+            "inferences": total_inferences,
+            "total_nodes": total_nodes,
+            "max_depth": max_depth,
+            "principal_variation": principal_variation
+        }
+
+    def _compute_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
+        """Compute win probability for the current player based on root value."""
+        tree_data = self._compute_tree_data(root)
+        root_value = tree_data["root_value"]
+        
+        # Convert root value to win probability
+        # Root value is from the perspective of the player to move
+        # For RED player: root_value is probability RED wins
+        # For BLUE player: root_value is probability BLUE wins
+        if root_state.current_player_enum == Player.RED:
+            return root_value
+        else:
+            return 1.0 - root_value
+
+    def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
+        """Extract the principal variation (best move sequence) from the MCTS tree."""
+        if root.is_terminal:
+            return []
+
+        pv = []
+        current_node = root
+        
+        for _ in range(max_length):
+            if current_node.is_terminal or not current_node.is_expanded:
+                break
+                
+            # Find the move with highest visit count
+            if len(current_node.N) == 0:
+                break
+                
+            best_move_idx = int(np.argmax(current_node.N))
+            best_move = current_node.legal_moves[best_move_idx]
+            pv.append(best_move)
+            
+            # Move to the best child
+            child = current_node.children[best_move_idx]
+            if child is None:
+                break
+            current_node = child
+            
+        return pv
+
 
 class MCTSTimingTracker:
     """Tracks timing information for MCTS operations."""
@@ -781,241 +902,7 @@ class MCTSTimingTracker:
         }
 
     
-    def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None, verbose: int = 0) -> Tuple[int,int]:
-        """
-        Choose a move from the root based on visit counts and temperature.
-        Requires that run() has been executed on the SAME root_state.
-        """
-        if self._root_node is None:
-            raise RuntimeError("BaselineMCTS.pick_move() called before run(); run() must be called first.")
-        # Verify we are selecting for the same state that was searched
-        if self._root_node.state_hash != state_hash_from(root_state):
-            raise ValueError("BaselineMCTS.pick_move() called with a different state than the last run() root.")
-        root = self._root_node
-        
-        # Check early termination
-        if self._early_termination_info:
-            if self._early_termination_info.reason == "terminal_move":
-                return self._early_termination_info.move
-            elif self._early_termination_info.reason == "neural_network_confidence":
-                # Use top policy move
-                best_move_idx = int(np.argmax(root.P))
-                best_move = root.legal_moves[best_move_idx]
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using top policy move (early termination, win prob: {self._early_termination_info.win_prob:.3f}): {best_move}")
-                return best_move
 
-        if root.is_terminal:
-            if root.legal_moves:
-                # Terminal shouldn't have legal moves, but just in case
-                return random.choice(root.legal_moves)
-            raise RuntimeError("No legal moves at root (terminal state).")
-
-        # Check if a terminal move was found during pre-check
-        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
-            terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
-            if terminal_indices:
-                terminal_move = root.legal_moves[terminal_indices[0]]
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
-                return terminal_move
-
-        # Check terminal moves (no fallback needed - already detected if appropriate)
-        if self.cfg.enable_terminal_move_detection:
-            terminal_move = self.terminal_detector.get_terminal_move(root)
-            if terminal_move:
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using terminal move: {terminal_move}")
-                return terminal_move
-
-        # Use visit counts accumulated during run()
-        counts = root.N.astype(np.float64)
-        if counts.sum() <= 0:
-            raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
-
-        # Calculate temperature with decay
-        move_count = len(root_state.move_history)
-        # Use passed temperature as starting point if provided, otherwise use config
-        start_temp = temperature if temperature is not None else self.cfg.temperature_start
-        temp = calculate_temperature_decay(self.cfg, move_count, start_temp_override=start_temp)
-        
-        # Log effective temperature if verbose
-        if verbose >= 4:
-            move_count = len(root_state.move_history)
-            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
-        
-        # Detailed temperature calculation logging at verbose 5+
-        if verbose >= 5:
-            move_count = len(root_state.move_history)
-            print(f"🎮 MCTS DEBUG: move_count={move_count}, decay_type={self.cfg.temperature_decay_type}")
-            # Use same logic as the actual calculation
-            start_temp = temperature if temperature is not None else self.cfg.temperature_start
-            print(f"🎮 MCTS DEBUG: start_temp={start_temp:.3f}, end_temp={self.cfg.temperature_end:.3f}, decay_moves={self.cfg.temperature_decay_moves}")
-            if self.cfg.temperature_decay_type == "exponential":
-                progress = min(move_count / max(1, self.cfg.temperature_decay_moves), 1.0)
-                decay_factor = (self.cfg.temperature_end / start_temp) ** progress
-                calculated_temp = start_temp * decay_factor
-                print(f"🎮 MCTS DEBUG: progress={progress:.3f}, decay_factor={decay_factor:.3f}, calculated_temp={calculated_temp:.3f}")
-            print(f"🎮 MCTS DEBUG: Final temperature used: {temp:.3f}")
-            
-        if temp <= 1e-6:
-            a_idx = int(np.argmax(counts))
-        else:
-            pi = np.power(counts, 1.0 / temp)
-            if not np.isfinite(pi).all() or np.sum(pi) <= 0:
-                raise ValueError(f"Invalid temperature scaling result: pi={pi}, counts={counts}, temp={temp}")
-            pi /= np.sum(pi)
-            a_idx = int(np.random.choice(len(pi), p=pi))
-        return root.legal_moves[a_idx]
-
-    def get_principal_variation(self, root_state: HexGameState, max_length: int = 10) -> List[Tuple[int, int]]:
-        """
-        Extract the principal variation (best move sequence) from the MCTS tree.
-        Requires that run() has been executed on the SAME root_state.
-        """
-        if self._root_node is None:
-            raise RuntimeError("BaselineMCTS.get_principal_variation() called before run(); run() must be called first.")
-        # Verify we are selecting for the same state that was searched
-        if self._root_node.state_hash != state_hash_from(root_state):
-            raise ValueError("BaselineMCTS.get_principal_variation() called with a different state than the last run() root.")
-        root = self._root_node
-
-        if root.is_terminal:
-            return []
-
-        pv = []
-        current_node = root
-        
-        for _ in range(max_length):
-            if current_node.is_terminal or not current_node.is_expanded:
-                break
-                
-            # Find the move with highest visit count
-            if len(current_node.N) == 0:
-                break
-                
-            best_move_idx = int(np.argmax(current_node.N))
-            best_move = current_node.legal_moves[best_move_idx]
-            pv.append(best_move)
-            
-            # Move to the best child
-            child = current_node.children[best_move_idx]
-            if child is None:
-                break
-            current_node = child
-            
-        return pv
-
-    def get_tree_data(self, root_state: HexGameState) -> Dict[str, Any]:
-        """
-        Extract tree data for web interface display.
-        Requires that run() has been executed on the SAME root_state.
-        """
-        if self._root_node is None:
-            raise RuntimeError("BaselineMCTS.get_tree_data() called before run(); run() must be called first.")
-        # Verify we are selecting for the same state that was searched
-        if self._root_node.state_hash != state_hash_from(root_state):
-            raise ValueError("BaselineMCTS.get_tree_data() called with a different state than the last run() root.")
-        root = self._root_node
-
-        if root.is_terminal:
-            return {
-                "visit_counts": {},
-                "mcts_probabilities": {},
-                "root_value": 0.0,
-                "best_child_value": 0.0,
-                "total_visits": 0,
-                "inferences": 0,
-                "total_nodes": 0,
-                "max_depth": 0
-            }
-
-        # Get visit counts and convert to TRMPH format
-        visit_counts = {}
-        mcts_probabilities = {}
-        total_visits = int(np.sum(root.N))
-        
-        for i, (row, col) in enumerate(root.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
-            visits = int(root.N[i])
-            visit_counts[move_trmph] = visits
-            
-            # Calculate MCTS probability (visit count / total visits)
-            if total_visits > 0:
-                mcts_probabilities[move_trmph] = visits / total_visits
-            else:
-                mcts_probabilities[move_trmph] = 0.0
-
-        # Get root value (average value of all children)
-        if total_visits > 0:
-            root_value = float(np.sum(root.W) / total_visits)
-        else:
-            root_value = 0.0
-
-        # Get best child value
-        if len(root.Q) > 0:
-            best_child_value = float(np.max(root.Q))
-        else:
-            best_child_value = 0.0
-
-        # Calculate total inferences (cache misses)
-        total_inferences = self.cache_misses
-
-        # Calculate tree traversal statistics
-        total_nodes, max_depth = self._calculate_tree_statistics(root)
-
-        # Get principal variation
-        principal_variation = self.get_principal_variation(root_state, max_length=10)
-
-        return {
-            "visit_counts": visit_counts,
-            "mcts_probabilities": mcts_probabilities,
-            "root_value": root_value,
-            "best_child_value": best_child_value,
-            "total_visits": total_visits,
-            "inferences": total_inferences,
-            "total_nodes": total_nodes,
-            "max_depth": max_depth,
-            "principal_variation": principal_variation
-        }
-
-    def _calculate_tree_statistics(self, node: MCTSNode) -> Tuple[int, int]:
-        """
-        Recursively calculate total nodes and max depth of the MCTS tree.
-        This is a lightweight traversal that doesn't affect performance significantly.
-        """
-        if node is None:
-            return 0, 0
-        
-        # Count this node
-        total_nodes = 1
-        max_depth = 0
-        
-        # Recursively count children
-        for child in node.children:
-            if child is not None:
-                child_nodes, child_depth = self._calculate_tree_statistics(child)
-                total_nodes += child_nodes
-                max_depth = max(max_depth, child_depth + 1)
-        
-        return total_nodes, max_depth
-
-    def get_win_probability(self, root_state: HexGameState) -> float:
-        """
-        Get the win probability for the current player based on root value.
-        Requires that run() has been executed on the SAME root_state.
-        """
-        tree_data = self.get_tree_data(root_state)
-        root_value = tree_data["root_value"]
-        
-        # Convert root value to win probability
-        # Root value is from the perspective of the player to move
-        # For RED player: root_value is probability RED wins
-        # For BLUE player: root_value is probability BLUE wins
-        if root_state.current_player_enum == Player.RED:
-            return root_value
-        else:
-            return 1.0 - root_value
 
     # ---------- Internal ----------
 
@@ -1111,126 +998,98 @@ class MCTSTimingTracker:
         return result
 
 
-def create_selfplay_mcts_config(sims: int = 500, early_termination_threshold: float = 0.85) -> BaselineMCTSConfig:
+def create_mcts_config(
+    config_type: str = "tournament",
+    sims: Optional[int] = None,
+    early_termination_threshold: Optional[float] = None,
+    **kwargs
+) -> BaselineMCTSConfig:
     """
-    Create an MCTS configuration optimized for self-play game generation.
+    Create an MCTS configuration with preset defaults for different use cases.
     
     Args:
-        sims: Number of simulations (default: 500)
-        early_termination_threshold: Win probability threshold for simple termination (default: 0.85)
+        config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
+        sims: Number of simulations (overrides preset default)
+        early_termination_threshold: Win probability threshold for early termination (overrides preset default)
+        **kwargs: Additional parameters to override in the configuration
         
     Returns:
-        BaselineMCTSConfig optimized for self-play
+        BaselineMCTSConfig with appropriate settings for the specified use case
     """
-    return BaselineMCTSConfig(
-        sims=sims,
-        batch_cap=64,
-        c_puct=1.5,
-        dirichlet_alpha=0.3,
-        dirichlet_eps=0.25,
-        add_root_noise=False,  # Disable for self-play consistency
-        temperature_start=0.5,
-        temperature_end=0.01,
-        temperature_decay_type="exponential",
-        temperature_decay_moves=50,
+    # Define preset configurations
+    presets = {
+        "tournament": {
+            "sims": 200,
+            "early_termination_threshold": 0.95,
+            "temperature_start": 1.0,
+            "temperature_end": 0.1,
+            "add_root_noise": False,
+        },
+        "selfplay": {
+            "sims": 500,
+            "early_termination_threshold": 0.85,
+            "temperature_start": 0.5,
+            "temperature_end": 0.01,
+            "add_root_noise": False,  # Disable for self-play consistency
+        },
+        "fast_selfplay": {
+            "sims": 200,
+            "early_termination_threshold": 0.8,
+            "temperature_start": 0.5,
+            "temperature_end": 0.01,
+            "add_root_noise": False,
+        }
+    }
+    
+    if config_type not in presets:
+        raise ValueError(f"Unknown config_type: {config_type}. Must be one of {list(presets.keys())}")
+    
+    # Start with preset configuration
+    config_params = presets[config_type].copy()
+    
+    # Override with provided parameters
+    if sims is not None:
+        config_params["sims"] = sims
+    if early_termination_threshold is not None:
+        config_params["early_termination_threshold"] = early_termination_threshold
+    
+    # Override with any additional kwargs
+    config_params.update(kwargs)
+    
+    # Add common parameters that are the same across all presets
+    config_params.update({
+        "batch_cap": 64,
+        "c_puct": 1.5,
+        "dirichlet_alpha": 0.3,
+        "dirichlet_eps": 0.25,
+        "temperature_decay_type": "exponential",
+        "temperature_decay_moves": 50,
         # Terminal move detection (always enabled)
-        enable_terminal_move_detection=True,
-        terminal_move_boost=10.0,
-        virtual_loss_for_non_terminal=0.01,
-        terminal_detection_max_depth=3,
-        # Simple confidence-based termination for speed
-        enable_early_termination=True,
-        early_termination_threshold=early_termination_threshold,
+        "enable_terminal_move_detection": True,
+        "terminal_move_boost": 10.0,
+        "virtual_loss_for_non_terminal": 0.01,
+        "terminal_detection_max_depth": 3,
+        # Early termination (always enabled)
+        "enable_early_termination": True,
         # Depth-based discounting to encourage shorter wins
-        enable_depth_discounting=True,
-        depth_discount_factor=0.95,
+        "enable_depth_discounting": True,
+        "depth_discount_factor": 0.95,
         # Terminal win value boosting
-        terminal_win_value_boost=1.5,
-    )
+        "terminal_win_value_boost": 1.5,
+    })
+    
+    return BaselineMCTSConfig(**config_params)
 
-def create_tournament_mcts_config(sims: int = 200, early_termination_threshold: float = 0.95) -> BaselineMCTSConfig:
-    """
-    Create an MCTS configuration optimized for tournament play.
-    
-    Args:
-        sims: Number of simulations (default: 200)
-        early_termination_threshold: Win probability threshold for simple termination (default: 0.95)
-        
-    Returns:
-        BaselineMCTSConfig optimized for tournament play
-    """
-    return BaselineMCTSConfig(
-        sims=sims,
-        batch_cap=64,
-        c_puct=1.5,
-        dirichlet_alpha=0.3,
-        dirichlet_eps=0.25,
-        add_root_noise=False,
-        temperature_start=1.0,
-        temperature_end=0.1,
-        temperature_decay_type="exponential",
-        temperature_decay_moves=50,
-        # Terminal move detection (always enabled)
-        enable_terminal_move_detection=True,
-        terminal_move_boost=10.0,
-        virtual_loss_for_non_terminal=0.01,
-        terminal_detection_max_depth=3,
-        # Conservative simple termination for quality
-        enable_early_termination=True,
-        early_termination_threshold=early_termination_threshold,
-        # Depth-based discounting to encourage shorter wins
-        enable_depth_discounting=True,
-        depth_discount_factor=0.95,
-        # Terminal win value boosting
-        terminal_win_value_boost=1.5,
-    )
 
-def create_fast_selfplay_mcts_config(sims: int = 200, early_termination_threshold: float = 0.8) -> BaselineMCTSConfig:
-    """
-    Create an MCTS configuration for very fast self-play game generation.
-    
-    Args:
-        sims: Number of simulations (default: 200)
-        early_termination_threshold: Win probability threshold for simple termination (default: 0.8)
-        
-    Returns:
-        BaselineMCTSConfig optimized for very fast self-play
-    """
-    return BaselineMCTSConfig(
-        sims=sims,
-        batch_cap=64,
-        c_puct=1.5,
-        dirichlet_alpha=0.3,
-        dirichlet_eps=0.25,
-        add_root_noise=False,
-        temperature_start=0.5,
-        temperature_end=0.01,
-        temperature_decay_type="exponential",
-        temperature_decay_moves=50,
-        # Terminal move detection (always enabled)
-        enable_terminal_move_detection=True,
-        terminal_move_boost=10.0,
-        virtual_loss_for_non_terminal=0.01,
-        terminal_detection_max_depth=3,
-        # Very aggressive simple termination for maximum speed
-        enable_early_termination=True,
-        early_termination_threshold=early_termination_threshold,
-        # Depth-based discounting to encourage shorter wins
-        enable_depth_discounting=True,
-        depth_discount_factor=0.95,
-        # Terminal win value boosting
-        terminal_win_value_boost=1.5,
-    )
+
 
 def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
     """Run MCTS for one move and return (row,col), stats, tree_data."""
     if cfg is None:
         cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
-    stats = mcts.run(state, verbose=verbose)
-    move = mcts.pick_move(state, temperature=cfg.temperature_start, verbose=verbose)
-    tree_data = mcts.get_tree_data(state)
-    return move, stats, tree_data
+    result = mcts.run(state, verbose=verbose)
+    return result.move, result.stats, result.tree_data
 
 
 # --------- Stats helpers ---------

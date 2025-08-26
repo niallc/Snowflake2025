@@ -13,7 +13,7 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_tournament_mcts_config
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_cache import get_model_cache
 
 
@@ -94,7 +94,7 @@ class MCTSStrategy(MoveSelectionStrategy):
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig) -> Tuple[int, int]:
         # Create MCTS configuration optimized for tournament play
-        mcts_config = create_tournament_mcts_config(
+        mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
             early_termination_threshold=0.95  # Conservative early termination for quality
         )
