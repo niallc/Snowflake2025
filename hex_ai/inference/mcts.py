@@ -81,13 +81,111 @@ class TerminalMoveDetector:
                 return node.legal_moves[i]
         return None
 
-# ------------------ Early Termination Result ------------------
-class EarlyTerminationResult(NamedTuple):
-    """Result of early termination check with unified interface."""
-    terminated: bool
-    reason: str  # "terminal_move", "neural_network_confidence", "none"
-    move: Optional[Tuple[int, int]] = None
-    win_prob: Optional[float] = None
+# ------------------ Early Termination Info ------------------
+@dataclass
+class EarlyTerminationInfo:
+    """Simple info about early termination."""
+    reason: str  # "terminal_move" or "neural_network_confidence"
+    move: Optional[Tuple[int, int]]  # The move to play (None for NN confidence)
+    win_prob: float  # Win probability
+
+# ------------------ Stats Builder ------------------
+class MCTSStatsBuilder:
+    """Centralized stats creation with consistent structure."""
+    
+    def __init__(self, cache_hits: int, cache_misses: int):
+        self.cache_hits = cache_hits
+        self.cache_misses = cache_misses
+    
+    def create_base_stats(self) -> Dict[str, Any]:
+        """Create base stats structure with all common fields."""
+        return {
+            "encode_ms": 0.0, "stack_ms": 0.0, "h2d_ms": 0.0, "forward_ms": 0.0,
+            "pure_forward_ms": 0.0, "sync_ms": 0.0, "d2h_ms": 0.0, "expand_ms": 0.0,
+            "backprop_ms": 0.0, "select_ms": 0.0, "cache_lookup_ms": 0.0, "state_creation_ms": 0.0,
+            "batch_count": 0, "batch_sizes": [], "forward_ms_list": [],
+            "select_times": [], "cache_hit_times": [], "cache_miss_times": [],
+            "median_forward_ms_ex_warm": 0.0, "p90_forward_ms_ex_warm": 0.0,
+            "median_select_ms": 0.0, "median_cache_hit_ms": 0.0, "median_cache_miss_ms": 0.0,
+            "cache_hits": self.cache_hits, "cache_misses": self.cache_misses,
+        }
+    
+    def create_early_termination_stats(self, early_info: Optional[EarlyTerminationInfo] = None) -> Dict[str, Any]:
+        """Create stats for early termination cases."""
+        stats = self.create_base_stats()
+        stats.update({
+            "total_simulations": 0, "simulations_per_second": 0.0,
+            "early_termination_occurred": True,
+            "early_termination_reason": early_info.reason if early_info else "unknown"
+        })
+        return stats
+    
+    def create_final_stats(self, timing_stats: Dict[str, Any], total_simulations: int, 
+                          total_search_time: float) -> Dict[str, Any]:
+        """Create final stats for completed MCTS runs."""
+        stats = self.create_base_stats()
+        stats.update(timing_stats)
+        stats.update({
+            "total_simulations": total_simulations,
+            "simulations_per_second": total_simulations / total_search_time if total_search_time > 0 else 0.0,
+            "early_termination_occurred": False,
+            "early_termination_reason": "none"
+        })
+        return stats
+
+# ------------------ Early Termination Checker ------------------
+class EarlyTerminationChecker:
+    """Centralized early termination checking with simple priority order."""
+    
+    def __init__(self, cfg: BaselineMCTSConfig, terminal_detector: TerminalMoveDetector):
+        self.cfg = cfg
+        self.terminal_detector = terminal_detector
+    
+    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> Optional[EarlyTerminationInfo]:
+        """
+        Check if we should terminate early. Returns None if we should continue with MCTS.
+        Returns EarlyTerminationInfo if we should terminate.
+        """
+        # 1. Check for terminal moves (highest priority)
+        if self.cfg.enable_terminal_move_detection:
+            if self.terminal_detector.detect_terminal_moves(root, board_size):
+                terminal_move = self.terminal_detector.get_terminal_move(root)
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Found terminal move: {terminal_move}")
+                return EarlyTerminationInfo(
+                    reason="terminal_move",
+                    move=terminal_move,
+                    win_prob=1.0  # Guaranteed win
+                )
+        
+        # 2. Check neural network confidence (requires root expansion)
+        if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
+            win_prob = self._get_root_win_probability(root, eval_cache)
+            if self._is_position_clearly_decided(win_prob):
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Early termination (win prob: {win_prob:.3f})")
+                return EarlyTerminationInfo(
+                    reason="neural_network_confidence",
+                    move=None,  # Will use top policy move
+                    win_prob=win_prob
+                )
+        
+        return None  # Continue with MCTS
+    
+    def _get_root_win_probability(self, root: MCTSNode, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> float:
+        """Get win probability for current player from neural network."""
+        _, value_logit = eval_cache[root.state_hash]
+        nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
+        
+        if root.to_play == Player.RED:
+            return nn_win_prob
+        else:
+            return 1.0 - nn_win_prob
+    
+    def _is_position_clearly_decided(self, win_prob: float) -> bool:
+        """Check if position is clearly won or lost."""
+        return (win_prob >= self.cfg.early_termination_threshold or 
+                win_prob <= (1.0 - self.cfg.early_termination_threshold))
 
 # ------------------ Config ------------------
 @dataclass
@@ -263,12 +361,18 @@ class BaselineMCTS:
         self._root_node = None
         
         # Early termination tracking
-        self._early_termination_result: Optional[EarlyTerminationResult] = None
+        self._early_termination_info: Optional[EarlyTerminationInfo] = None
         
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
             max_detection_depth=cfg.terminal_detection_max_depth
         )
+        
+        # Early termination checker
+        self.early_termination_checker = EarlyTerminationChecker(cfg, self.terminal_detector)
+        
+        # Stats builder (will be updated with current cache counts when needed)
+        self.stats_builder = None
 
     # ---------- Public API ----------
     def run(self, root_state: HexGameState, verbose: int = 0) -> Dict[str, Any]:
@@ -287,10 +391,11 @@ class BaselineMCTS:
         root = MCTSNode(root_state, board_size)
 
         # Check for early termination opportunities
-        early_result = self._check_early_termination(root, board_size, verbose)
-        if early_result.terminated:
-            self._early_termination_result = early_result
-            return self._create_early_termination_stats(early_result)
+        early_info = self.early_termination_checker.should_terminate_early(root, board_size, verbose, self.eval_cache)
+        if early_info:
+            self._early_termination_info = early_info
+            self._root_node = root  # Store root node for pick_move()
+            return self._get_stats_builder().create_early_termination_stats(early_info)
 
         # Initialize timing variables
         encode_ms = 0.0
@@ -367,10 +472,11 @@ class BaselineMCTS:
 
         # Check for neural network confidence-based termination after root expansion
         if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
-            early_result = self._check_neural_network_confidence(root, verbose)
-            if early_result.terminated:
-                self._early_termination_result = early_result
-                return self._create_early_termination_stats(early_result, {
+            early_info = self.early_termination_checker.should_terminate_early(root, board_size, verbose, self.eval_cache)
+            if early_info:
+                self._early_termination_info = early_info
+                self._root_node = root  # Store root node for pick_move()
+                timing_stats = {
                     "encode_ms": encode_ms, "stack_ms": stack_ms, "h2d_ms": h2d_ms_total,
                     "forward_ms": forward_ms_total, "pure_forward_ms": pure_forward_ms_total,
                     "sync_ms": sync_ms_total, "d2h_ms": d2h_ms_total, "expand_ms": expand_ms,
@@ -378,7 +484,10 @@ class BaselineMCTS:
                     "batch_count": len(batch_sizes), "batch_sizes": batch_sizes,
                     "forward_ms_list": forward_ms_list, "cache_hit_times": cache_hit_times,
                     "cache_miss_times": cache_miss_times
-                })
+                }
+                stats = self._get_stats_builder().create_early_termination_stats(early_info)
+                stats.update(timing_stats)
+                return stats
 
         # ---- Simulation loop with explicit batched leaves ----
         while sims_remaining > 0:
@@ -559,29 +668,16 @@ class BaselineMCTS:
         # Build stats
         _store_root = True
         self._root_node = root
-        stats = {
-            "encode_ms": encode_ms,
-            "stack_ms": stack_ms,
-            "h2d_ms": h2d_ms_total,
-            "forward_ms": forward_ms_total,
-            "pure_forward_ms": pure_forward_ms_total,
-            "sync_ms": sync_ms_total,
-            "d2h_ms": d2h_ms_total,
-            "expand_ms": expand_ms,
-            "backprop_ms": backprop_ms,
-            "select_ms": select_ms,
-            "cache_lookup_ms": cache_lookup_ms,
-            "state_creation_ms": state_creation_ms,
-            "puct_calc_ms": puct_calc_ms,  
-            "make_move_ms": make_move_ms,  
-            "batch_count": len(batch_sizes),
-            "batch_sizes": batch_sizes,
-            "forward_ms_list": forward_ms_list,
-            "select_times": select_times,
-            "cache_hit_times": cache_hit_times,
-            "cache_miss_times": cache_miss_times,
-            "puct_calc_times": puct_calc_times, 
-            "make_move_times": make_move_times, 
+        
+        timing_stats = {
+            "encode_ms": encode_ms, "stack_ms": stack_ms, "h2d_ms": h2d_ms_total,
+            "forward_ms": forward_ms_total, "pure_forward_ms": pure_forward_ms_total,
+            "sync_ms": sync_ms_total, "d2h_ms": d2h_ms_total, "expand_ms": expand_ms,
+            "backprop_ms": backprop_ms, "select_ms": select_ms, "cache_lookup_ms": cache_lookup_ms,
+            "state_creation_ms": state_creation_ms, "puct_calc_ms": puct_calc_ms, "make_move_ms": make_move_ms,
+            "batch_count": len(batch_sizes), "batch_sizes": batch_sizes, "forward_ms_list": forward_ms_list,
+            "select_times": select_times, "cache_hit_times": cache_hit_times, "cache_miss_times": cache_miss_times,
+            "puct_calc_times": puct_calc_times, "make_move_times": make_move_times,
             "median_forward_ms_ex_warm": _median_excluding_first(forward_ms_list),
             "p90_forward_ms_ex_warm": _p90_excluding_first(forward_ms_list),
             "median_select_ms": _median_excluding_first(select_times) if select_times else 0.0,
@@ -589,14 +685,9 @@ class BaselineMCTS:
             "median_cache_miss_ms": _median_excluding_first(cache_miss_times) if cache_miss_times else 0.0,
             "median_puct_calc_ms": _median_excluding_first(puct_calc_times) if puct_calc_times else 0.0,
             "median_make_move_ms": _median_excluding_first(make_move_times) if make_move_times else 0.0,
-            "cache_hits": self.cache_hits,
-            "cache_misses": self.cache_misses,
-            "total_simulations": self.cfg.sims,
-            "simulations_per_second": self.cfg.sims / total_search_time if total_search_time > 0 else 0.0,
-            "early_termination_occurred": False,  # Will be set to True in early termination case
-            "early_termination_reason": "none",  # Will be set in early termination case
         }
-        return stats
+        
+        return self._get_stats_builder().create_final_stats(timing_stats, self.cfg.sims, total_search_time)
 
     
     def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None, verbose: int = 0) -> Tuple[int,int]:
@@ -611,16 +702,16 @@ class BaselineMCTS:
             raise ValueError("BaselineMCTS.pick_move() called with a different state than the last run() root.")
         root = self._root_node
         
-        # Check early termination result
-        if self._early_termination_result and self._early_termination_result.terminated:
-            if self._early_termination_result.reason == "terminal_move":
-                return self._early_termination_result.move
-            elif self._early_termination_result.reason == "neural_network_confidence":
+        # Check early termination
+        if self._early_termination_info:
+            if self._early_termination_info.reason == "terminal_move":
+                return self._early_termination_info.move
+            elif self._early_termination_info.reason == "neural_network_confidence":
                 # Use top policy move
                 best_move_idx = int(np.argmax(root.P))
                 best_move = root.legal_moves[best_move_idx]
                 if verbose >= 2:
-                    print(f"🎮 MCTS: Using top policy move (early termination, win prob: {self._early_termination_result.win_prob:.3f}): {best_move}")
+                    print(f"🎮 MCTS: Using top policy move (early termination, win prob: {self._early_termination_info.win_prob:.3f}): {best_move}")
                 return best_move
 
         if root.is_terminal:
@@ -837,77 +928,11 @@ class BaselineMCTS:
 
     # ---------- Internal ----------
 
-    def _check_early_termination(self, root: MCTSNode, board_size: int, verbose: int) -> EarlyTerminationResult:
-        """Unified early termination check - returns result object."""
-        
-        # 1. Check for terminal moves (highest priority)
-        if self.cfg.enable_terminal_move_detection:
-            if self.terminal_detector.detect_terminal_moves(root, board_size):
-                terminal_move = self.terminal_detector.get_terminal_move(root)
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Found terminal move: {terminal_move}")
-                return EarlyTerminationResult(
-                    terminated=True, 
-                    reason="terminal_move", 
-                    move=terminal_move
-                )
-        
-        return EarlyTerminationResult(terminated=False, reason="none")
+    # Removed old early termination methods - replaced by EarlyTerminationChecker
 
-    def _check_neural_network_confidence(self, root: MCTSNode, verbose: int) -> EarlyTerminationResult:
-        """Check for neural network confidence-based termination."""
-        # Get the neural network value directly
-        _, value_logit = self.eval_cache[root.state_hash]
-        nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
-        
-        # Convert to win probability for current player
-        if root.to_play == Player.RED:
-            win_prob = nn_win_prob
-        else:
-            win_prob = 1.0 - nn_win_prob
-        
-        # Check if position is clearly won or lost
-        if (win_prob >= self.cfg.early_termination_threshold or 
-            win_prob <= (1.0 - self.cfg.early_termination_threshold)):
-            if verbose >= 2:
-                print(f"🎮 MCTS: Neural network confidence-based termination (win prob: {win_prob:.3f})")
-            return EarlyTerminationResult(
-                terminated=True,
-                reason="neural_network_confidence",
-                win_prob=win_prob
-            )
-        
-        return EarlyTerminationResult(terminated=False, reason="none")
-
-    def _create_early_termination_stats(self, early_result: EarlyTerminationResult, 
-                                      additional_stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Create consistent stats for all early termination cases."""
-        base_stats = {
-            "encode_ms": 0.0, "stack_ms": 0.0, "h2d_ms": 0.0, "forward_ms": 0.0,
-            "pure_forward_ms": 0.0, "sync_ms": 0.0, "d2h_ms": 0.0, "expand_ms": 0.0,
-            "backprop_ms": 0.0, "select_ms": 0.0, "cache_lookup_ms": 0.0, "state_creation_ms": 0.0,
-            "batch_count": 0, "batch_sizes": [], "forward_ms_list": [],
-            "select_times": [], "cache_hit_times": [], "cache_miss_times": [],
-            "median_forward_ms_ex_warm": 0.0, "p90_forward_ms_ex_warm": 0.0,
-            "median_select_ms": 0.0, "median_cache_hit_ms": 0.0, "median_cache_miss_ms": 0.0,
-            "cache_hits": self.cache_hits, "cache_misses": self.cache_misses,
-            "total_simulations": 0, "simulations_per_second": 0.0,
-            "early_termination_occurred": True,
-            "early_termination_reason": early_result.reason
-        }
-        
-        # Override with additional stats if provided
-        if additional_stats:
-            base_stats.update(additional_stats)
-        
-        # Add reason-specific stats
-        if early_result.reason == "terminal_move":
-            base_stats["terminal_move_found"] = True
-            base_stats["terminal_move"] = early_result.move
-        elif early_result.reason == "neural_network_confidence":
-            base_stats["early_termination_win_prob"] = early_result.win_prob
-            
-        return base_stats
+    def _get_stats_builder(self) -> MCTSStatsBuilder:
+        """Get stats builder with current cache counts."""
+        return MCTSStatsBuilder(self.cache_hits, self.cache_misses)
 
     # ---------- Internal ----------
 
