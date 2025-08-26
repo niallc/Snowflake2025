@@ -99,7 +99,12 @@ class MCTSStrategy(MoveSelectionStrategy):
             c_puct=config.mcts_c_puct,
             dirichlet_alpha=config.mcts_dirichlet_alpha,
             dirichlet_eps=config.mcts_dirichlet_eps,
-            temperature=config.temperature
+            temperature_start=config.temperature,
+            temperature_end=config.temperature / 20.0,
+            # Terminal move detection parameters
+            enable_terminal_move_detection=True,
+            terminal_move_boost=10.0,
+            virtual_loss_for_non_terminal=0.01
         )
         
         # Create required components

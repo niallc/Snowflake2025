@@ -25,8 +25,8 @@ class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
     def __init__(self, model_path: str, batch_size: int = 32, 
-                 cache_size: int = 10000, temperature: float = 1.0, verbose: int = 1, 
-                 streaming_save: bool = False, streaming_file: str = None,
+                 cache_size: int = 10000, temperature: float = 0.5, temperature_end: float = 0.01, 
+                 verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = 500):
         
@@ -41,7 +41,8 @@ class SelfPlayEngine:
             model_path: Path to the model checkpoint
             batch_size: Batch size for inference
             cache_size: Size of the LRU cache
-            temperature: Temperature for move sampling
+            temperature: Starting temperature for move sampling
+            temperature_end: Final temperature for move sampling (for decay)
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
             streaming_save: Save games incrementally to avoid data loss
             streaming_file: File path for streaming save (auto-generated if None)
@@ -53,6 +54,7 @@ class SelfPlayEngine:
         self.batch_size = batch_size
         self.cache_size = cache_size
         self.temperature = temperature
+        self.temperature_end = temperature_end
         self.verbose = verbose
         self.streaming_save = streaming_save
         self.streaming_file = streaming_file
@@ -75,7 +77,8 @@ class SelfPlayEngine:
             dirichlet_alpha=0.3,
             dirichlet_eps=0.25,
             add_root_noise=False,  # Disable for self-play consistency
-            temperature=self.temperature
+            temperature_start=self.temperature,
+            temperature_end=self.temperature_end
         )
         
         # Performance tracking
@@ -116,7 +119,7 @@ class SelfPlayEngine:
             print(f"  Batch size: {batch_size}")
             print(f"  Cache size: {cache_size}")
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
-            print(f"  Temperature: {temperature}")
+            print(f"  Temperature: {temperature} -> {temperature_end}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
             
@@ -161,6 +164,9 @@ class SelfPlayEngine:
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Starting new game with MCTS ({self.mcts_sims} simulations)")
+            print(f"🎮 SELF-PLAY: MCTS config - decay_type: {self.mcts_config.temperature_decay_type}, "
+                  f"start_temp: {self.mcts_config.temperature_start}, "
+                  f"end_temp: {self.mcts_config.temperature_end}")
         
         while not state.game_over:
             # Use MCTS for move generation
@@ -179,7 +185,7 @@ class SelfPlayEngine:
             search_time = time.perf_counter() - start_time
             
             # Get the best move
-            move = mcts.pick_move(state, temperature=self.temperature)
+            move = mcts.pick_move(state, temperature=self.temperature, verbose=self.verbose)
             
             # Get root value (approximate from MCTS)
             tree_data = mcts.get_tree_data(state)

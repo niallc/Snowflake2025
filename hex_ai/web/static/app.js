@@ -34,8 +34,8 @@ let state = {
   // MCTS settings
   blue_use_mcts: true,
   red_use_mcts: true,
-  blue_num_simulations: 122,
-  red_num_simulations: 122,
+  blue_num_simulations: 2005,
+  red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
   red_exploration_constant: 1.4,
   auto_step_active: false,

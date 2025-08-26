@@ -31,7 +31,8 @@ def main():
     parser.add_argument('--cache_size', type=int, default=60000, help='Cache size for model inference')
     parser.add_argument('--mcts_sims', type=int, default=500, 
                        help='Number of MCTS simulations per move')
-    parser.add_argument('--temperature', type=float, default=0.2, help='Temperature for move sampling')
+    parser.add_argument('--temperature', type=float, default=0.5, help='Starting temperature for move sampling')
+    parser.add_argument('--temperature_end', type=float, default=0.01, help='Final temperature for move sampling (for decay)')
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'random', 'none'],
                        help='Opening strategy: pie_rule (default), random, or none')
@@ -61,7 +62,7 @@ def main():
     print(f"Games: {args.num_games}")
     print(f"Batch size: {args.batch_size}")
     print(f"Search method: MCTS ({args.mcts_sims} simulations)")
-    print(f"Temperature: {args.temperature}")
+    print(f"Temperature: {args.temperature} -> {args.temperature_end}")
     print(f"Opening strategy: {args.opening_strategy}")
     if args.opening_strategy == 'pie_rule':
         print(f"Bad move frequency: {args.bad_move_frequency}")
@@ -100,6 +101,7 @@ def main():
         batch_size=args.batch_size,
         cache_size=args.cache_size,
         temperature=args.temperature,
+        temperature_end=args.temperature_end,
         verbose=args.verbose,
         streaming_save=args.streaming_save,
         use_batched_inference=not args.no_batched_inference,

@@ -36,15 +36,18 @@ class BaselineMCTSConfig:
     dirichlet_alpha: float = 0.3
     dirichlet_eps: float = 0.25
     add_root_noise: bool = False
-    temperature: float = 1.0  # Legacy parameter - now sets temperature_start when decay is enabled
-    # Temperature decay parameters
-    temperature_decay: bool = True  # Whether to enable temperature decay
-    temperature_decay_type: str = "exponential"  # "linear", "exponential", "step", "game_progress"
-    temperature_start: Optional[float] = None  # Starting temperature (if None, uses temperature field)
+    # Temperature scaling parameters (always used)
+    temperature_start: float = 1.0  # Starting temperature
     temperature_end: float = 0.1  # Final temperature (minimum)
+    temperature_decay_type: str = "exponential"  # "linear", "exponential", "step", "game_progress"
     temperature_decay_moves: int = 50  # Number of moves for decay (for linear/exponential)
     temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
     temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
+    # Terminal move detection parameters
+    enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
+    terminal_move_boost: float = 10.0  # Boost factor for terminal moves in PUCT calculation
+    virtual_loss_for_non_terminal: float = 0.01  # Small penalty for non-terminal moves
+    # Note: Pre-check only happens after move 25 (minimum moves needed for a win)
     # Removed seed parameter - randomness should be controlled externally
 
 # ------------------ Helpers ------------------
@@ -72,23 +75,24 @@ def state_hash_from(state: HexGameState) -> int:
     h = hash(key) & ((1 << 63) - 1)
     return h
 
-def calculate_temperature_decay(cfg: BaselineMCTSConfig, move_count: int) -> float:
+def calculate_temperature_decay(cfg: BaselineMCTSConfig, move_count: int, start_temp_override: Optional[float] = None) -> float:
     """
     Calculate temperature based on decay configuration and current move count.
     
     Args:
         cfg: MCTS configuration with temperature decay parameters
         move_count: Number of moves played so far (0-based)
+        start_temp_override: Optional override for starting temperature
     
     Returns:
         Current temperature value
     """
-    if not cfg.temperature_decay:
-        return cfg.temperature
-    
     # Determine the starting temperature
-    # If temperature_start is explicitly set, use it; otherwise use the legacy temperature field
-    start_temp = cfg.temperature_start if cfg.temperature_start is not None else cfg.temperature
+    # Use override if provided, otherwise use temperature_start
+    if start_temp_override is not None:
+        start_temp = start_temp_override
+    else:
+        start_temp = cfg.temperature_start
     
     if cfg.temperature_decay_type == "linear":
         # Linear decay from temperature_start to temperature_end over temperature_decay_moves
@@ -125,8 +129,8 @@ def calculate_temperature_decay(cfg: BaselineMCTSConfig, move_count: int) -> flo
         return start_temp + (cfg.temperature_end - start_temp) * progress
     
     else:
-        # Unknown decay type, return base temperature
-        return cfg.temperature
+        # Unknown decay type, return starting temperature
+        return start_temp
 
 # ------------------ Data structures ------------------
 
@@ -134,7 +138,7 @@ class MCTSNode:
     __slots__ = (
         "state", "to_play", "legal_moves", "legal_indices",
         "children", "N", "W", "Q", "P", "is_expanded",
-        "state_hash", "is_terminal", "winner_str"
+        "state_hash", "is_terminal", "winner_str", "terminal_moves"
     )
     def __init__(self, state: HexGameState, board_size: int):
         self.state: HexGameState = state
@@ -153,6 +157,7 @@ class MCTSNode:
         self.state_hash: int = state_hash_from(state)
         self.is_terminal: bool = bool(state.game_over)
         self.winner_str: Optional[str] = state.winner if self.is_terminal else None
+        self.terminal_moves: List[bool] = [False] * L # New attribute for terminal move detection
 
 # ------------------ Core MCTS ------------------
 
@@ -185,6 +190,53 @@ class BaselineMCTS:
         board_size = int(board_tensor.shape[-1])
         action_size = board_size * board_size
         root = MCTSNode(root_state, board_size)
+
+        # Pre-check for immediate terminal moves (before any MCTS work)
+        if self.cfg.enable_terminal_move_detection:
+            # Only check after move 25 (impossible to win before then)
+            if len(root_state.move_history) >= 25:
+                self._detect_terminal_moves(root, board_size)
+                if any(root.terminal_moves):
+                    # Found a terminal move - return early with minimal stats
+                    terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+                    terminal_move = root.legal_moves[terminal_indices[0]]
+                    
+                    # Store the terminal move for pick_move to use
+                    root.terminal_moves = [False] * len(root.legal_moves)  # Reset
+                    root.terminal_moves[terminal_indices[0]] = True  # Mark the found move
+                    
+                    # Return minimal stats since we didn't do any MCTS work
+                    return {
+                        "encode_ms": 0.0,
+                        "stack_ms": 0.0,
+                        "h2d_ms": 0.0,
+                        "forward_ms": 0.0,
+                        "pure_forward_ms": 0.0,
+                        "sync_ms": 0.0,
+                        "d2h_ms": 0.0,
+                        "expand_ms": 0.0,
+                        "backprop_ms": 0.0,
+                        "select_ms": 0.0,
+                        "cache_lookup_ms": 0.0,
+                        "state_creation_ms": 0.0,
+                        "batch_count": 0,
+                        "batch_sizes": [],
+                        "forward_ms_list": [],
+                        "select_times": [],
+                        "cache_hit_times": [],
+                        "cache_miss_times": [],
+                        "median_forward_ms_ex_warm": 0.0,
+                        "p90_forward_ms_ex_warm": 0.0,
+                        "median_select_ms": 0.0,
+                        "median_cache_hit_ms": 0.0,
+                        "median_cache_miss_ms": 0.0,
+                        "cache_hits": self.cache_hits,
+                        "cache_misses": self.cache_misses,
+                        "total_simulations": 0,  # No simulations needed
+                        "simulations_per_second": 0.0,
+                        "terminal_move_found": True,  # Flag that we found a terminal move
+                        "terminal_move": terminal_move,
+                    }
 
         # Initialize timing variables
         encode_ms = 0.0
@@ -437,7 +489,7 @@ class BaselineMCTS:
         return stats
 
     
-    def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None) -> Tuple[int,int]:
+    def pick_move(self, root_state: HexGameState, temperature: Optional[float] = None, verbose: int = 0) -> Tuple[int,int]:
         """
         Choose a move from the root based on visit counts and temperature.
         Requires that run() has been executed on the SAME root_state.
@@ -455,21 +507,55 @@ class BaselineMCTS:
                 return random.choice(root.legal_moves)
             raise RuntimeError("No legal moves at root (terminal state).")
 
+        # Check if a terminal move was found during pre-check
+        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
+            terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+            if terminal_indices:
+                terminal_move = root.legal_moves[terminal_indices[0]]
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
+                return terminal_move
+
+        # Check for immediate terminal moves if enabled (fallback for cases not caught by pre-check)
+        if self.cfg.enable_terminal_move_detection:
+            board_size = int(root_state.get_board_tensor().shape[-1])
+            self._detect_terminal_moves(root, board_size)
+            if any(root.terminal_moves):
+                # Return the first terminal move found
+                terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+                if verbose >= 2:
+                    print(f"🎮 MCTS: Found terminal move, immediately selecting: {root.legal_moves[terminal_indices[0]]}")
+                return root.legal_moves[terminal_indices[0]]
+
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
         if counts.sum() <= 0:
             raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
-        # Calculate temperature with decay if enabled
-        if temperature is None:
-            if self.cfg.temperature_decay:
-                # Calculate temperature based on current move count
-                move_count = len(root_state.move_history)
-                temp = calculate_temperature_decay(self.cfg, move_count)
-            else:
-                temp = self.cfg.temperature
-        else:
-            temp = temperature
+        # Calculate temperature with decay
+        move_count = len(root_state.move_history)
+        # Use passed temperature as starting point if provided, otherwise use config
+        start_temp = temperature if temperature is not None else self.cfg.temperature_start
+        temp = calculate_temperature_decay(self.cfg, move_count, start_temp_override=start_temp)
+        
+        # Log effective temperature if verbose
+        if verbose >= 4:
+            move_count = len(root_state.move_history)
+            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
+        
+        # Detailed temperature calculation logging at verbose 5+
+        if verbose >= 5:
+            move_count = len(root_state.move_history)
+            print(f"🎮 MCTS DEBUG: move_count={move_count}, decay_type={self.cfg.temperature_decay_type}")
+            # Use same logic as the actual calculation
+            start_temp = temperature if temperature is not None else self.cfg.temperature_start
+            print(f"🎮 MCTS DEBUG: start_temp={start_temp:.3f}, end_temp={self.cfg.temperature_end:.3f}, decay_moves={self.cfg.temperature_decay_moves}")
+            if self.cfg.temperature_decay_type == "exponential":
+                progress = min(move_count / max(1, self.cfg.temperature_decay_moves), 1.0)
+                decay_factor = (self.cfg.temperature_end / start_temp) ** progress
+                calculated_temp = start_temp * decay_factor
+                print(f"🎮 MCTS DEBUG: progress={progress:.3f}, decay_factor={decay_factor:.3f}, calculated_temp={calculated_temp:.3f}")
+            print(f"🎮 MCTS DEBUG: Final temperature used: {temp:.3f}")
             
         if temp <= 1e-6:
             a_idx = int(np.argmax(counts))
@@ -670,28 +756,64 @@ class BaselineMCTS:
         node.P = softmax_np(legal_logits)
         node.is_expanded = True
 
+    def _detect_terminal_moves(self, node: MCTSNode, board_size: int) -> None:
+        """Detect which legal moves immediately win the game."""
+        if node.is_terminal:
+            return  # Already terminal state
+        
+        for i, (row, col) in enumerate(node.legal_moves):
+            # Try the move and check if it wins
+            try:
+                new_state = node.state.make_move(row, col)
+                if new_state.game_over and new_state.winner == node.to_play:
+                    node.terminal_moves[i] = True
+            except Exception:
+                # If move fails, it's not terminal
+                pass
+
     def _select_child_puct(self, node: MCTSNode) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
+        
+        # Detect terminal moves if enabled
+        if self.cfg.enable_terminal_move_detection:
+            self._detect_terminal_moves(node, int(node.state.get_board_tensor().shape[-1]))
+        
         N_sum = np.sum(node.N, dtype=np.float64)
         if N_sum <= 1e-9:
             # All U terms reduce to c*P; just pick argmax P
+            # But prioritize terminal moves
+            if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
+                terminal_indices = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
+                return terminal_indices[0]  # Return first terminal move
             return int(np.argmax(node.P))
+        
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
+        
+        # Apply terminal move detection modifications
+        if self.cfg.enable_terminal_move_detection:
+            for i, is_terminal in enumerate(node.terminal_moves):
+                if is_terminal:
+                    # Boost terminal moves
+                    U[i] += self.cfg.terminal_move_boost
+                else:
+                    # Apply small penalty to non-terminal moves
+                    U[i] -= self.cfg.virtual_loss_for_non_terminal
+        
         score = node.Q + U
         return int(np.argmax(score))
 
 
 # -------- Convenience ----------
 
-def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
+def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
     """Run MCTS for one move and return (row,col), stats, tree_data."""
     if cfg is None:
         cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
     stats = mcts.run(state)
-    move = mcts.pick_move(state, temperature=cfg.temperature)
+    move = mcts.pick_move(state, temperature=cfg.temperature_start, verbose=verbose)
     tree_data = mcts.get_tree_data(state)
     return move, stats, tree_data
 

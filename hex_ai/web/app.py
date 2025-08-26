@@ -457,11 +457,11 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
 
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
-                   temperature=1.0, verbose=0, orchestration_overrides=None):
+                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}, verbose={verbose}")
+        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
         state = HexGameState.from_trmph(trmph)
@@ -499,7 +499,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         mcts_config = BaselineMCTSConfig(
             sims=num_simulations,
             c_puct=exploration_constant,
-            temperature=temperature
+            temperature_start=temperature,
+            temperature_end=temperature_end
         )
         app.logger.info(f"MCTS config created: {mcts_config}")
         
@@ -1126,6 +1127,7 @@ def api_move():
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 0.15)  # Default temperature
+    temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 1)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     # MCTS parameters
@@ -1165,6 +1167,7 @@ def api_move():
                 computer_model_id = data.get("blue_model_id", model_id)
                 computer_search_widths = data.get("blue_search_widths", search_widths)
                 computer_temperature = data.get("blue_temperature", temperature)
+                computer_temperature_end = data.get("blue_temperature_end", temperature_end)
                 computer_use_mcts = data.get("blue_use_mcts", use_mcts)
                 computer_num_simulations = data.get("blue_num_simulations", num_simulations)
                 computer_exploration_constant = data.get("blue_exploration_constant", exploration_constant)
@@ -1173,6 +1176,7 @@ def api_move():
                 computer_model_id = data.get("red_model_id", model_id)
                 computer_search_widths = data.get("red_search_widths", search_widths)
                 computer_temperature = data.get("red_temperature", temperature)
+                computer_temperature_end = data.get("red_temperature_end", temperature_end)
                 computer_use_mcts = data.get("red_use_mcts", use_mcts)
                 computer_num_simulations = data.get("red_num_simulations", num_simulations)
                 computer_exploration_constant = data.get("red_exploration_constant", exploration_constant)
@@ -1196,7 +1200,8 @@ def api_move():
                         computer_model_id, 
                         computer_num_simulations, 
                         computer_exploration_constant, 
-                        computer_temperature, 
+                        computer_temperature,
+                        computer_temperature_end,
                         verbose
                     )
                     
@@ -1322,9 +1327,10 @@ def api_mcts_move():
     num_simulations = data.get("num_simulations", 200)
     exploration_constant = data.get("exploration_constant", 1.4)
     temperature = data.get("temperature", 1.0)
+    temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
     
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}, verbose={verbose}")
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
     
     # Optional orchestration overrides from request
     orchestration_cfg = data.get("orchestration", None)
@@ -1336,6 +1342,7 @@ def api_mcts_move():
         num_simulations,
         exploration_constant,
         temperature,
+        temperature_end,
         verbose,
         orchestration_overrides=orchestration,
     )
