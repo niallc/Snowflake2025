@@ -25,7 +25,7 @@ from hex_ai.value_utils import (
     sample_move_by_value,
     select_policy_move  # Add the new public function
 )
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER
+from hex_ai.enums import Player
 from hex_ai.inference.board_display import ansi_colored
 from hex_ai.utils.format_conversion import trmph_move_to_rowcol, rowcol_to_trmph
 from hex_ai.inference.model_config import get_model_path
@@ -105,7 +105,7 @@ def main():
             sys.exit(1)
     else:
         state = HexGameState()
-    human_player = 0 if args.human_first else 1
+    human_player = Player.BLUE if args.human_first else Player.RED
     move_num = 0
 
     shutdown_handler = GracefulShutdown()
@@ -115,16 +115,16 @@ def main():
             if shutdown_handler.shutdown_requested:
                 print("\nGraceful shutdown requested. Exiting game loop.")
                 break
-            print(f"\nMove {move_num+1} - {'Human' if state.current_player == human_player else 'Model'} to play:")
+            print(f"\nMove {move_num+1} - {'Human' if state.current_player_enum == human_player else 'Model'} to play:")
             display_hex_board(state.board)
             print(f"Current .trmph: {state.to_trmph()}")
             # Show network's confidence (value head) for current player
             _, _, value_logit = model.simple_infer(state.board)
-            current_winner = Winner.BLUE if state.current_player == BLUE_PLAYER else Winner.RED
+            current_winner = Winner.BLUE if state.current_player_enum == Player.BLUE else Winner.RED
             value = get_win_prob_from_model_output(value_logit, current_winner)
             player_str = current_winner.name.capitalize()
             print(f"Network confidence ({player_str} to play): {value:.3f} (probability {player_str} wins)")
-            if state.current_player == human_player:
+            if state.current_player_enum == human_player:
                 row, col = get_human_move(state, shutdown_handler)
                 state = apply_move_to_state(state, row, col)
             else:
@@ -144,7 +144,7 @@ def main():
                     break
                 trmph_move = rowcol_to_trmph(move[0], move[1], board_size=args.board_size)
                 # The model just played, so the player to move is now the human; the model's color is the opposite
-                model_color_enum = Winner.RED if state.current_player == BLUE_PLAYER else Winner.BLUE
+                model_color_enum = Winner.RED if state.current_player_enum == Player.BLUE else Winner.BLUE
                 colored_move = ansi_colored(trmph_move, winner_to_color(model_color_enum))
                 print(f"Model plays: {colored_move}")
                 # Print model's win probability for its own color after its move

@@ -19,7 +19,8 @@ from hex_ai.inference.game_engine import (
     apply_move_to_tensor_trmph,
     HexGameState
 )
-from hex_ai.config import BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, EMPTY_ONEHOT, PIECE_ONEHOT
+from hex_ai.config import BOARD_SIZE, EMPTY_ONEHOT, PIECE_ONEHOT
+from hex_ai.enums import Piece, Player
 
 
 class TestIsPositionEmpty:
@@ -106,45 +107,45 @@ class TestApplyMoveToTensor:
         # Create empty 3-channel tensor
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         # Set player-to-move to blue
-        board_tensor[2, :, :] = float(BLUE_PLAYER)
+        board_tensor[2, :, :] = float(Player.BLUE.value)
         
         # Apply blue move at (0, 0)
-        new_tensor = apply_move_to_tensor(board_tensor, 0, 0, BLUE_PLAYER)
+        new_tensor = apply_move_to_tensor(board_tensor, 0, 0, Player.BLUE)
         
         # Check blue piece was placed
         assert new_tensor[0, 0, 0] == 1.0  # Blue channel
         assert new_tensor[1, 0, 0] == 0.0  # Red channel should be empty
         # Check player-to-move switched to red
-        assert new_tensor[2, 0, 0] == float(RED_PLAYER)
-        assert torch.all(new_tensor[2, :, :] == float(RED_PLAYER))
+        assert new_tensor[2, 0, 0] == float(Player.RED.value)
+        assert torch.all(new_tensor[2, :, :] == float(Player.RED.value))
     
     def test_apply_red_move_to_empty_tensor(self):
         """Test applying a red move to an empty 3-channel tensor."""
         # Create empty 3-channel tensor
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         # Set player-to-move to red
-        board_tensor[2, :, :] = float(RED_PLAYER)
+        board_tensor[2, :, :] = float(Player.RED.value)
         
         # Apply red move at (1, 1)
-        new_tensor = apply_move_to_tensor(board_tensor, 1, 1, RED_PLAYER)
+        new_tensor = apply_move_to_tensor(board_tensor, 1, 1, Player.RED)
         
         # Check red piece was placed
         assert new_tensor[0, 1, 1] == 0.0  # Blue channel should be empty
         assert new_tensor[1, 1, 1] == 1.0  # Red channel
         # Check player-to-move switched to blue
-        assert new_tensor[2, 1, 1] == float(BLUE_PLAYER)
-        assert torch.all(new_tensor[2, :, :] == float(BLUE_PLAYER))
+        assert new_tensor[2, 1, 1] == float(Player.BLUE.value)
+        assert torch.all(new_tensor[2, :, :] == float(Player.BLUE.value))
     
     def test_apply_move_to_occupied_position(self):
         """Test that applying a move to an occupied position raises an error."""
         # Create tensor with blue piece at (0, 0)
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         board_tensor[0, 0, 0] = 1.0  # Blue piece
-        board_tensor[2, :, :] = float(RED_PLAYER)  # Red to move
+        board_tensor[2, :, :] = float(Player.RED.value)  # Red to move
         
         # Try to place red piece at same position
         with pytest.raises(ValueError, match="already occupied"):
-            apply_move_to_tensor(board_tensor, 0, 0, RED_PLAYER)
+            apply_move_to_tensor(board_tensor, 0, 0, Player.RED)
     
     def test_apply_move_out_of_bounds(self):
         """Test that applying a move out of bounds raises an error."""
@@ -152,18 +153,18 @@ class TestApplyMoveToTensor:
         
         # Test negative coordinates
         with pytest.raises(IndexError, match="out of bounds"):
-            apply_move_to_tensor(board_tensor, -1, 0, BLUE_PLAYER)
+            apply_move_to_tensor(board_tensor, -1, 0, Piece.BLUE)
         
         # Test coordinates beyond board size
         with pytest.raises(IndexError, match="out of bounds"):
-            apply_move_to_tensor(board_tensor, BOARD_SIZE, 0, BLUE_PLAYER)
+            apply_move_to_tensor(board_tensor, BOARD_SIZE, 0, Piece.BLUE)
     
     def test_invalid_player(self):
         """Test that using an invalid player raises an error."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         
-        with pytest.raises(ValueError, match="2 is not a valid Player"):
-            apply_move_to_tensor(board_tensor, 0, 0, 2)  # Invalid player ID
+        with pytest.raises(TypeError, match="player must be Player"):
+            apply_move_to_tensor(board_tensor, 0, 0, 2)  # Invalid player type
     
     def test_invalid_tensor_shape(self):
         """Test that using wrong tensor shape raises an error."""
@@ -171,15 +172,15 @@ class TestApplyMoveToTensor:
         board_tensor = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         
         with pytest.raises(ValueError, match="Expected tensor shape"):
-            apply_move_to_tensor(board_tensor, 0, 0, BLUE_PLAYER)
+            apply_move_to_tensor(board_tensor, 0, 0, Piece.BLUE)
     
     def test_tensor_immutability(self):
         """Test that the original tensor is not modified."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-        board_tensor[2, :, :] = float(BLUE_PLAYER)
+        board_tensor[2, :, :] = float(Player.BLUE.value)
         
         original_tensor = board_tensor.clone()
-        apply_move_to_tensor(board_tensor, 0, 0, BLUE_PLAYER)
+        apply_move_to_tensor(board_tensor, 0, 0, Player.BLUE)
         
         # Original tensor should be unchanged
         assert torch.allclose(board_tensor, original_tensor)
@@ -196,8 +197,8 @@ class TestApplyMoveToState:
         new_state = apply_move_to_state(state, 0, 0)
         
         # Check the move was applied
-        assert new_state.board[0, 0] == BLUE_PIECE
-        assert new_state.current_player == RED_PLAYER
+        assert new_state.board[0, 0] == Piece.BLUE.value
+        assert new_state.current_player == Player.RED.value
         assert new_state.move_history == [(0, 0)]
     
     def test_apply_invalid_move(self):
@@ -238,8 +239,8 @@ class TestApplyMoveToStateTrmph:
         new_state = apply_move_to_state_trmph(state, "a1")  # (0, 0)
         
         # Check the move was applied
-        assert new_state.board[0, 0] == BLUE_PIECE
-        assert new_state.current_player == RED_PLAYER
+        assert new_state.board[0, 0] == Piece.BLUE.value
+        assert new_state.current_player == Player.RED.value
         assert new_state.move_history == [(0, 0)]
     
     def test_apply_invalid_trmph_move(self):
@@ -267,21 +268,21 @@ class TestApplyMoveToTensorTrmph:
     def test_apply_valid_trmph_move_to_tensor(self):
         """Test applying a valid TRMPH move to a tensor."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-        board_tensor[2, :, :] = float(BLUE_PLAYER)
+        board_tensor[2, :, :] = float(Player.BLUE.value)
         
         # Apply blue move using TRMPH
-        new_tensor = apply_move_to_tensor_trmph(board_tensor, "a1", BLUE_PLAYER)
+        new_tensor = apply_move_to_tensor_trmph(board_tensor, "a1", Player.BLUE)
         
         # Check the move was applied
         assert new_tensor[0, 0, 0] == 1.0  # Blue channel
-        assert new_tensor[2, 0, 0] == float(RED_PLAYER)  # Player switched
+        assert new_tensor[2, 0, 0] == float(Player.RED.value)  # Player switched
     
     def test_apply_invalid_trmph_move_to_tensor(self):
         """Test that applying an invalid TRMPH move to tensor raises an error."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
         
         with pytest.raises(ValueError, match="Invalid TRMPH move"):
-            apply_move_to_tensor_trmph(board_tensor, "invalid", BLUE_PLAYER)
+            apply_move_to_tensor_trmph(board_tensor, "invalid", Player.BLUE)
 
 
 class TestIntegration:
@@ -300,7 +301,7 @@ class TestIntegration:
         board_tensor = board_nxn_to_3nxn(state.board)
         
         # Apply same move using tensor approach
-        new_tensor = apply_move_to_tensor(board_tensor, 0, 0, BLUE_PLAYER)
+        new_tensor = apply_move_to_tensor(board_tensor, 0, 0, Player.BLUE)
         
         # Convert new state to tensor for comparison
         new_state_tensor = board_nxn_to_3nxn(new_state.board)
@@ -336,23 +337,23 @@ class TestEdgeCases:
         moves = [(0, 0), (1, 1), (2, 2), (3, 3)]
         for i, (row, col) in enumerate(moves):
             state = apply_move_to_state(state, row, col)
-            expected_player = RED_PLAYER if i % 2 == 0 else BLUE_PLAYER
+            expected_player = Player.RED.value if i % 2 == 0 else Player.BLUE.value
             assert state.current_player == expected_player
     
     def test_tensor_sequence_of_moves(self):
         """Test applying a sequence of moves to tensors."""
         board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-        board_tensor[2, :, :] = float(BLUE_PLAYER)
+        board_tensor[2, :, :] = float(Player.BLUE.value)
         
         # Apply several moves
         moves = [(0, 0), (1, 1), (2, 2)]
-        players = [BLUE_PLAYER, RED_PLAYER, BLUE_PLAYER]
+        players = [Player.BLUE, Player.RED, Player.BLUE]
         
         for (row, col), player in zip(moves, players):
             board_tensor = apply_move_to_tensor(board_tensor, row, col, player)
             
             # Check piece was placed correctly
-            if player == BLUE_PLAYER:
+            if player == Player.BLUE:
                 assert board_tensor[0, row, col] == 1.0
                 assert board_tensor[1, row, col] == 0.0
             else:

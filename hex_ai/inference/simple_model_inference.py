@@ -1,32 +1,25 @@
-import torch
-import numpy as np
-import time
-import psutil
-from typing import List, Tuple, Union, Optional, Dict, Any
-from collections import OrderedDict
 import logging
+import time
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from hex_ai.utils import format_conversion as fc
+import numpy as np
+import psutil
+import torch
+
+from hex_ai.config import (
+    MODEL_CHANNELS, PLAYER_CHANNEL, TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+)
 from hex_ai.data_utils import create_board_from_moves
-from hex_ai.value_utils import policy_logits_to_probs, get_top_k_moves_with_probs
+from hex_ai.enums import Channel
+from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.training_utils import get_device  # Use centralized device detection
-from hex_ai.inference.board_display import display_hex_board
-from hex_ai.config import (
-    PLAYER_CHANNEL, MODEL_CHANNELS,
-    BLUE_PLAYER, RED_PLAYER, BLUE_CHANNEL, RED_CHANNEL,
-    BLUE_PIECE, RED_PIECE, EMPTY_PIECE,
-    TRAINING_BLUE_WIN, TRAINING_RED_WIN,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN,
-)
+from hex_ai.utils import format_conversion as fc
 from hex_ai.utils.player_utils import get_player_to_move_from_board
-from hex_ai.value_utils import trmph_winner_to_training_value, trmph_winner_to_clear_str, model_output_to_prob, ValuePerspective
 from hex_ai.value_utils import (
-    # Add new utilities
-    policy_logits_to_probs,
-    get_legal_policy_probs,
-    select_top_k_moves,
-    get_top_k_moves_with_probs,
+    get_legal_policy_probs, get_top_k_moves_with_probs, model_output_to_prob, policy_logits_to_probs,
+    select_top_k_moves, trmph_winner_to_clear_str, trmph_winner_to_training_value, ValuePerspective
 )
 
 
@@ -76,6 +69,10 @@ class SimpleModelInference:
     # 5) Add performance instrumentation using PERF utility
     # 6) Optimize tensor stacking and device transfers
     # Expected gain: 1.5-3x speedup in inference, 0.5-2x from device optimization
+    # TODO: ENUM MIGRATION - Prefer Enums internally where applicable
+    # - Keep TRMPH/tensor interfaces as boundary conversions (str/float)
+    # - Avoid using raw BLUE/RED channel constants directly; prefer Channel enum
+    # - Add type hints to all public methods and enforce fail-fast for invalid inputs
     def __init__(
         self,
         checkpoint_path: str,
@@ -123,10 +120,13 @@ class SimpleModelInference:
             'total_batch_inferences': 0,
             'total_time': 0.0,
             'cache_hits': 0,
-            'cache_misses': 0
+            'cache_misses': 0,
+            'batch_records': [],  # per-batch: {size, stack_ms, predict_ms, post_ms}
+            'conv_ms_total': 0.0,  # accumulated conversion time in ms
         }
         
         self.max_batch_size = max_batch_size
+        self._did_warmup = False
 
     def _get_board_hash(self, board: Union[str, np.ndarray, torch.Tensor]) -> str:
         """Create a hash for caching board positions."""
@@ -229,6 +229,14 @@ class SimpleModelInference:
         else:
             raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
 
+        # Diagnostics: capture device info before/after
+        if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
+            from hex_ai.utils.perf import PERF
+            try:
+                from_device = getattr(input_tensor, 'device', 'na')
+                logging.getLogger(__name__).debug(f"simple_infer: input_device={from_device}")
+            except Exception:
+                pass
         policy_logits, value_logit = self.model.predict(input_tensor)
         policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
         value_logit_val = value_logit.item() if hasattr(value_logit, 'item') else float(value_logit)
@@ -274,10 +282,37 @@ class SimpleModelInference:
         
         # Process uncached boards in optimal batch sizes
         if uncached_boards:
+            # One-time warmup to remove cold-start effects
+            if not self._did_warmup:
+                try:
+                    logger = logging.getLogger(__name__)
+                    logger.debug("NN_WARMUP starting")
+                    dummy = torch.zeros((64, 3, self.board_size, self.board_size), dtype=torch.float32)
+                    t0w = time.perf_counter()
+                    # Route through the wrapper/model on the correct device
+                    device = self.model.get_device()
+                    nn_model = self.model.model  # underlying torch.nn.Module
+                    if str(device).startswith("mps"):
+                        with torch.autocast(device_type="mps", dtype=torch.float16):
+                            _ = nn_model(dummy.to(device))
+                        try:
+                            torch.mps.synchronize()
+                        except Exception:
+                            pass
+                    else:
+                        with torch.no_grad():
+                            _ = nn_model(dummy.to(device))
+                    logger.debug(f"NN_WARMUP forward_ms={(time.perf_counter()-t0w)*1e3:.1f}")
+                    self._did_warmup = True
+                except Exception:
+                    # Warmup is best-effort; ignore failures
+                    self._did_warmup = True
+
             optimal_batch_size = self._calculate_optimal_batch_size(len(uncached_boards))
             
             # Convert all uncached boards to 3-channel tensors
             input_tensors = []
+            t_conv0 = time.perf_counter()
             for board in uncached_boards:
                 # Use the same conversion logic as simple_infer
                 if isinstance(board, str):
@@ -310,6 +345,16 @@ class SimpleModelInference:
                     raise TypeError("Board must be a trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor")
                 
                 input_tensors.append(input_tensor)
+            t_conv1 = time.perf_counter()
+            conv_ms = (t_conv1 - t_conv0) * 1e3
+            logging.getLogger(__name__).debug(
+                f"NN_PREP_CONV num_uncached={len(uncached_boards)} conv_ms={conv_ms:.2f}"
+            )
+            # accumulate for programmatic consumption
+            try:
+                self.stats['conv_ms_total'] += float(conv_ms)
+            except Exception:
+                pass
             
             # Process in batches
             all_policies = []
@@ -317,21 +362,44 @@ class SimpleModelInference:
             
             for i in range(0, len(input_tensors), optimal_batch_size):
                 batch_tensors = input_tensors[i:i + optimal_batch_size]
+                t_stack0 = time.perf_counter()
                 batch_tensor = torch.stack(batch_tensors)
-                
+                t_stack1 = time.perf_counter()
+                if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
+                    logging.getLogger(__name__).debug(
+                        f"batch_infer: stacked_batch_shape={tuple(batch_tensor.shape)}, device_before={batch_tensor.device}"
+                    )
                 # Run batch inference
+                batch_index = i // optimal_batch_size
+                t0 = time.perf_counter()
                 policy_logits_batch, value_logits_batch = self.model.batch_predict(batch_tensor)
-                
+                t1 = time.perf_counter()
                 # Convert results
+                t_post0 = time.perf_counter()
                 batch_policies = [logits.detach().cpu().numpy() for logits in policy_logits_batch]
                 batch_values = [logit.item() for logit in value_logits_batch]
+                t_post1 = time.perf_counter()
+                stack_ms = (t_stack1 - t_stack0) * 1e3
+                predict_ms = (t1 - t0) * 1e3
+                post_ms = (t_post1 - t_post0) * 1e3
+                logging.getLogger(__name__).debug(
+                    f"NN_BATCH_DETAIL batch_index={batch_index} size={len(batch_tensors)} stack_ms={stack_ms:.2f} "
+                    f"predict_ms={predict_ms:.2f} post_ms={post_ms:.2f}"
+                )
+                # record programmatically
+                try:
+                    self.stats['batch_records'].append({
+                        'batch_index': int(batch_index),
+                        'size': int(len(batch_tensors)),
+                        'stack_ms': float(stack_ms),
+                        'predict_ms': float(predict_ms),
+                        'post_ms': float(post_ms),
+                    })
+                except Exception:
+                    pass
                 
                 all_policies.extend(batch_policies)
                 all_values.extend(batch_values)
-                
-                # Clear GPU cache if needed
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
             
             # Store results and update cache
             for idx, board, policy, value in zip(uncached_indices, uncached_boards, all_policies, all_values):
@@ -349,6 +417,18 @@ class SimpleModelInference:
         self.stats['total_time'] += time.time() - start_time
         
         return policies, values
+
+    def reset_stats(self) -> None:
+        """Reset performance stats (including per-batch records)."""
+        self.stats = {
+            'total_inferences': 0,
+            'total_batch_inferences': 0,
+            'total_time': 0.0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'batch_records': [],
+            'conv_ms_total': 0.0,
+        }
 
     def get_top_k_moves(self, policy_logits: np.ndarray, k: int = 3, temperature: float = 1.0) -> List[Tuple[str, float]]:
         """

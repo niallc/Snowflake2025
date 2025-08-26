@@ -150,9 +150,6 @@ The batched implementation is designed to be a drop-in replacement for the origi
 
 1. **Import Changes**:
    ```python
-   # Old
-   from hex_ai.inference.mcts import NeuralMCTS, MCTSNode
-   
    # New
    from hex_ai.inference.batched_mcts import BatchedNeuralMCTS, BatchedMCTSNode
    ```

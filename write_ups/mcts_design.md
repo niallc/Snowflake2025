@@ -203,13 +203,13 @@ This plan prioritizes correctness before performance. Each phase should be compl
 
 ### Self-Play Integration
 ```python
-class MCTSSelfPlayEngine(SelfPlayEngine):
-    """Self-play engine using MCTS instead of minimax."""
+class BatchedMCTSSelfPlayEngine(SelfPlayEngine):
+    """Self-play engine using batched MCTS instead of minimax."""
     
     def __init__(self, *args, mcts_simulations: int = 800, **kwargs):
         super().__init__(*args, **kwargs)
         self.mcts_simulations = mcts_simulations
-        self.mcts_engine = NeuralMCTS(
+        self.mcts_engine = BatchedNeuralMCTS(
             model=self.model,
             exploration_constant=1.4
         )
@@ -219,7 +219,7 @@ class MCTSSelfPlayEngine(SelfPlayEngine):
         root = self.mcts_engine.search(state, self.mcts_simulations)
         return self._select_move_from_visits(root)
     
-    def _select_move_from_visits(self, root: MCTSNode) -> Tuple[int, int]:
+    def _select_move_from_visits(self, root: BatchedMCTSNode) -> Tuple[int, int]:
         """Select move based on visit counts with temperature scaling."""
         moves = list(root.children.keys())
         visit_counts = [root.children[move].visits for move in moves]
@@ -229,12 +229,12 @@ class MCTSSelfPlayEngine(SelfPlayEngine):
 
 ### Tournament Integration
 ```python
-class MCTSPlayer:
-    """Player that uses MCTS for move selection."""
+class BatchedMCTSPlayer:
+    """Player that uses batched MCTS for move selection."""
     
     def __init__(self, model_path: str, mcts_config: Dict[str, Any]):
         self.model = SimpleModelInference(model_path)
-        self.mcts_engine = NeuralMCTS(
+        self.mcts_engine = BatchedNeuralMCTS(
             model=self.model,
             exploration_constant=mcts_config.get('exploration_constant', 1.4)
         )
@@ -245,7 +245,7 @@ class MCTSPlayer:
         root = self.mcts_engine.search(state, self.num_simulations)
         return self._select_best_move(root)
     
-    def _select_best_move(self, root: MCTSNode) -> Tuple[int, int]:
+    def _select_best_move(self, root: BatchedMCTSNode) -> Tuple[int, int]:
         """Select the most visited move (deterministic)."""
         return max(root.children.items(), key=lambda x: x[1].visits)[0]
 ```

@@ -6,6 +6,7 @@ import time
 from hex_ai.utils import tournament_logging
 from hex_ai.inference import tournament
 from hex_ai.value_utils import get_win_prob_from_model_output, Winner
+from hex_ai.enums import Piece
 import numpy as np
 
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
@@ -51,9 +52,9 @@ def test_get_win_prob_from_model_output_valid():
     # Should work for Winner enums
     p_blue = get_win_prob_from_model_output(logit, Winner.BLUE)
     p_red = get_win_prob_from_model_output(logit, Winner.RED)
-    # Should work for strings
-    p_blue2 = get_win_prob_from_model_output(logit, 'blue')
-    p_red2 = get_win_prob_from_model_output(logit, 'red')
+    # Should also work for Winner enums (no string support)
+    p_blue2 = get_win_prob_from_model_output(logit, Winner.BLUE)
+    p_red2 = get_win_prob_from_model_output(logit, Winner.RED)
     assert abs(p_blue + p_red - 1.0) < 1e-6
     assert abs(p_blue - p_blue2) < 1e-6
     assert abs(p_red - p_red2) < 1e-6
@@ -65,7 +66,7 @@ def test_get_win_prob_from_model_output_invalid():
     with pytest.raises(ValueError):
         get_win_prob_from_model_output(logit, 0)  # int not allowed
     with pytest.raises(ValueError):
-        get_win_prob_from_model_output(logit, 'invalid')
+        get_win_prob_from_model_output(logit, 'blue')  # strings no longer accepted
 
 def test_determine_winner_and_swap_logic():
     """Test that determine_winner correctly maps winner to model and color, with and without swap."""
@@ -73,18 +74,26 @@ def test_determine_winner_and_swap_logic():
     class DummyModel: pass
     model_1 = DummyModel()
     model_2 = DummyModel()
-    # Dummy state with .winner attribute
+    # Dummy state with winner string and winner_enum property to match new internal usage
     class DummyState:
         def __init__(self, winner):
             self.winner = winner
+        @property
+        def winner_enum(self):
+            if self.winner == Winner.BLUE:
+                return Winner.BLUE
+            if self.winner == Winner.RED:
+                return Winner.RED
+            return None
+    
     # Blue wins
-    state = DummyState("blue")
+    state = DummyState(Winner.BLUE)
     result, winner_char = determine_winner(state, model_1, model_2, swap=False)
-    assert result == "b" and winner_char == "b"
+    assert result == Piece.BLUE and winner_char == "b"
     # Red wins
-    state = DummyState("red")
+    state = DummyState(Winner.RED)
     result, winner_char = determine_winner(state, model_1, model_2, swap=False)
-    assert result == "r" and winner_char == "r"
+    assert result == Piece.RED and winner_char == "r"
     # No winner (should raise)
     state = DummyState(None)
     with pytest.raises(ValueError):
@@ -210,12 +219,12 @@ def test_winner_detection_with_known_positions():
     # Test cases: (trmph_string, expected_winner, description)
     test_cases = [
         # Minimal finished games
-        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7", "blue", "Minimal blue win"),
-        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2g7", "red", "Minimal red win"),
+        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7", Winner.BLUE, "Minimal blue win"),
+        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2g7", Winner.RED, "Minimal red win"),
         
         # Real game positions
-        ("#13,a6i2d10d9f8e9g9g10i9h9i8h8i7j4g6g7f7h6g8f10h7i10j10j11h10g4e5e4f4g12i11g2h2g3h4h13g11f12f11e12l11k12h12g13l12k10i12h3j3i4i3h5g5j2k2j12i13h11j9f3d5k1l1", "blue", "Real game blue win"),
-        ("#13,a12g5f5f6j4j5h6i4i5h7i7i6g7f9g8g10i9k2h4h8g9f10h9i10h10g12g11f12f11e12e11d12h11h12i11i12j11j12d11c12a13b11a11b10a10b9a9b8a8b7a7b6c11b12a6b5a5b3b4c3c4d3d4e3e4f3g4h2i3j1l2k3i2i1l3k4j2k1l4k6l5l7l6k7l11k12l12k13l13e5f4g2k9l10m7m8m6l8k10e6j3m1j6k5a3a4", "red", "Real game red win"),
+        ("#13,a6i2d10d9f8e9g9g10i9h9i8h8i7j4g6g7f7h6g8f10h7i10j10j11h10g4e5e4f4g12i11g2h2g3h4h13g11f12f11e12l11k12h12g13l12k10i12h3j3i4i3h5g5j2k2j12i13h11j9f3d5k1l1", Winner.BLUE, "Real game blue win"),
+        ("#13,a12g5f5f6j4j5h6i4i5h7i7i6g7f9g8g10i9k2h4h8g9f10h9i10h10g12g11f12f11e12e11d12h11h12i11i12j11j12d11c12a13b11a11b10a10b9a9b8a8b7a7b6c11b12a6b5a5b3b4c3c4d3d4e3e4f3g4h2i3j1l2k3i2i1l3k4j2k1l4k6l5l7l6k7l11k12l12k13l13e5f4g2k9l10m7m8m6l8k10e6j3m1j6k5a3a4", Winner.RED, "Real game red win"),
     ]
     
     for trmph, expected_winner, description in test_cases:
@@ -231,8 +240,8 @@ def test_one_move_to_win_positions():
     
     # Test cases: (trmph_string, winning_move, expected_winner, description)
     test_cases = [
-        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7", (6, 6), "blue", "Blue wins with g7"),
-        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2", (6, 6), "red", "Red wins with g7"),
+        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7", (6, 6), Winner.BLUE, "Blue wins with g7"),
+        ("#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2", (6, 6), Winner.RED, "Red wins with g7"),
     ]
     
     for trmph, winning_move, expected_winner, description in test_cases:
@@ -257,7 +266,7 @@ def test_tournament_structural_integrity_with_known_positions():
     
     # Verify the game is over
     assert state.game_over, "Game should be over"
-    assert state.winner == "blue", "Winner should be blue"
+    assert state.winner == Winner.BLUE, "Winner should be blue"
     
     # Verify all moves in the sequence are legal
     test_state = HexGameState()

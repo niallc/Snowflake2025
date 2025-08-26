@@ -52,21 +52,23 @@ write_ups/redundant/mcts_test_analysis.md
 write_ups/redundant/pipeline_code_review.md
 write_ups/redundant/tmp_hyperparam_sweep_improvements_guide.md
 write_ups/redundant/training_instability_analysis_summary.md
-hex_ai/inference/model_config.py
 hex_ai/web/README.md
-hex_ai/web/mcts_api.py
 hex_ai/web/mcts_explorer.html
 scripts/run_mcts_explorer.py
 scripts/test_mcts_tree_reuse.py
 scripts/test_model_config_integration.py
 write_ups/mcts_explorer_summary.md
 write_ups/mcts_tree_reuse_optimization.md
-scripts/test_batched_mcts.py
-write_ups/batched_mcts_implementation_summary.md
-write_ups/redundant/batched_mcts_asynchronous_design_challenge.md
-write_ups/redundant/batched_mcts_backpropagation_fix_summary.md
 scripts/deprecated/test_enhanced_inference.py
-
+write_ups/code_review_concerns.md
+write_ups/tree_search_batching_bug_analysis.md
+write_ups/mcts_timing_analysis.md
+write_ups/redundant/enum_usage_guidelines.md
+tests/test_winner_to_color_failfast.py
+write_ups/mcts_performance_fix.md
+write_ups/strategy_tournament_implementation_summary.md
+docs/terminal_move_detection.md
+docs/mcts_early_termination.md
 
 # VSCode
 .vscode/

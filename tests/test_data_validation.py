@@ -16,7 +16,8 @@ from hex_ai.data_utils import (
     tensor_to_rowcol, rowcol_to_trmph, trmph_move_to_rowcol,
     strip_trmph_preamble, split_trmph_moves
 )
-from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE, BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.config import BOARD_SIZE, POLICY_OUTPUT_SIZE
+from hex_ai.enums import Piece, piece_to_char
 
 
 class TestDataValidation:
@@ -50,8 +51,8 @@ class TestDataValidation:
         # Convert board tensor to matrix format
         board_np = board.numpy()
         board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-        board_matrix[board_np[0] > 0.5] = BLUE_PIECE  # Blue pieces
-        board_matrix[board_np[1] > 0.5] = RED_PIECE   # Red pieces
+        board_matrix[board_np[0] > 0.5] = piece_to_char(Piece.BLUE)  # Blue pieces
+        board_matrix[board_np[1] > 0.5] = piece_to_char(Piece.RED)   # Red pieces
         
         # Get the predicted move from policy
         move_pos = policy.argmax().item()
@@ -66,7 +67,7 @@ class TestDataValidation:
         
         # The predicted move should NOT be in the reconstructed trmph since it's the next move to be played
         # Check that the predicted move position is empty in the board
-        assert board_matrix[row, col] == EMPTY_PIECE, f"Predicted move position ({row}, {col}) is occupied"
+        assert board_matrix[row, col] == piece_to_char(Piece.EMPTY), f"Predicted move position ({row}, {col}) is occupied"
         
         # Check that the reconstructed trmph contains valid moves
         bare_moves = strip_trmph_preamble(reconstructed_trmph)
@@ -120,11 +121,11 @@ class TestDataValidation:
             # Convert board to matrix format
             board_np = board.numpy()
             board_matrix = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
-            board_matrix[board_np[0] > 0.5] = BLUE_PIECE  # Blue pieces
-            board_matrix[board_np[1] > 0.5] = RED_PIECE   # Red pieces
+            board_matrix[board_np[0] > 0.5] = piece_to_char(Piece.BLUE)  # Blue pieces
+            board_matrix[board_np[1] > 0.5] = piece_to_char(Piece.RED)   # Red pieces
             
             # Check if predicted move position is empty
-            assert board_matrix[row, col] == EMPTY_PIECE, f"Predicted move at ({row}, {col}) is occupied"
+            assert board_matrix[row, col] == piece_to_char(Piece.EMPTY), f"Predicted move at ({row}, {col}) is occupied"
     
     def test_dataset_statistics(self, sample_shard_data):
         """Test that dataset has expected structure and statistics."""
@@ -175,7 +176,7 @@ class TestDataValidation:
         moves = []
         for row in range(BOARD_SIZE):
             for col in range(BOARD_SIZE):
-                if board_matrix[row, col] in [BLUE_PIECE, RED_PIECE]:  # Blue or Red piece
+                if board_matrix[row, col] in [piece_to_char(Piece.BLUE), piece_to_char(Piece.RED)]:  # Blue or Red piece
                     move = rowcol_to_trmph(row, col)
                     moves.append(move)
         

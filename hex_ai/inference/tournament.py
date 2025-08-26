@@ -21,7 +21,7 @@ from hex_ai.inference.game_engine import (
     apply_move_to_state,  # Add move application utilities
 )
 from hex_ai.config import (
-    BOARD_SIZE, BLUE_PLAYER, RED_PLAYER, BLUE_PIECE, RED_PIECE, 
+    BOARD_SIZE,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
@@ -29,6 +29,8 @@ import random
 from datetime import datetime
 import csv
 from pathlib import Path
+from hex_ai.enums import Player, Piece
+from hex_ai.value_utils import int_to_player
 
 # TODO: In the future, support different play configs (search_widths, MCTS, etc.)
 # TODO: Batch model inference for efficiency (currently sequential)
@@ -39,7 +41,7 @@ from pathlib import Path
 @dataclass
 class GameResult:
     """Result of a single game."""
-    winner: str  # "b" or "r" (color-based)
+    winner: Piece  # Piece.BLUE or Piece.RED (color-based)
     trmph_str: str
     winner_char: str  # 'b', 'r', 'd'
     swap_decision: Optional[str]
@@ -184,7 +186,9 @@ class TournamentPlayConfig:
         random_seed: Optional[int] = None,
         pie_rule: bool = False,
         swap_threshold: float = 0.5,
-        search_widths: Optional[list] = None
+        search_widths: Optional[list] = None,
+        strategy: str = "policy",
+        strategy_config: Optional[Dict[str, Any]] = None
     ):
         self.temperature = temperature
         if random_seed is None:
@@ -193,20 +197,28 @@ class TournamentPlayConfig:
         self.random_seed = random_seed
         self.pie_rule = pie_rule
         self.swap_threshold = swap_threshold  # Red swaps if Blue's win prob >= this threshold
-        self.search_widths = search_widths
+        self.search_widths = search_widths  # Legacy support
+        self.strategy = strategy
+        self.strategy_config = strategy_config or {}
         random.seed(random_seed)
         np.random.seed(random_seed)
 
 def select_move(state: HexGameState, model: SimpleModelInference, 
-                search_widths: Optional[list], temperature: float) -> Optional[Tuple[int, int]]:
+                play_config: TournamentPlayConfig) -> Optional[Tuple[int, int]]:
     """
-    Select a move using either tree search or policy-based selection.
+    Select a move using the configured strategy.
     """
-    if search_widths:
-        move, _ = minimax_policy_value_search(state, model, search_widths, temperature=temperature)
-        return move
-    else:
-        return select_policy_move(state, model, temperature)
+    from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
+    
+    # Create strategy configuration
+    strategy_config = MoveSelectionConfig(
+        temperature=play_config.temperature,
+        **play_config.strategy_config
+    )
+    
+    # Get the strategy and select move
+    strategy = get_strategy(play_config.strategy)
+    return strategy.select_move(state, model, strategy_config)
 
 def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
@@ -215,7 +227,7 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     Handle pie rule logic: first move, evaluation, and potential swap.
     """
     # Always play the first move by model_1 (Blue) for consistency
-    move = select_move(state, model_1, play_config.search_widths, play_config.temperature)
+    move = select_move(state, model_1, play_config)
     state = apply_move_to_state(state, *move)
     
     if not play_config.pie_rule:
@@ -241,21 +253,26 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
     return PieRuleResult(swap=swap, swap_decision=swap_decision, model_1=model_1, model_2=model_2)
 
 def play_game_loop(state: HexGameState, model_1: SimpleModelInference, 
-                  model_2: SimpleModelInference, search_widths: Optional[list], 
-                  temperature: float, verbose: int) -> List[Tuple[int, int]]:
+                  model_2: SimpleModelInference, play_config: TournamentPlayConfig, 
+                  verbose: int) -> List[Tuple[int, int]]:
     """
     Play the main game loop, returning the sequence of moves.
     """
     move_sequence = []
     
     while not state.game_over:
-        # Determine which model to use
-        model = model_1 if state.current_player == BLUE_PLAYER else model_2
+        # Determine which model to use using Player enum for safety
+        current_player_enum = state.current_player_enum
+        model = model_1 if current_player_enum == Player.BLUE else model_2
         
+        # Fail fast if there are no legal moves while not game over (shouldn't happen in Hex)
+        if not state.get_legal_moves():
+            raise ValueError("No legal moves available while game is not over. This indicates a bug.")
+
         # Select and apply move
-        move = select_move(state, model, search_widths, temperature)
+        move = select_move(state, model, play_config)
         if move is None:
-            break  # No valid moves
+            raise ValueError("Move selection returned None. This indicates a model or selection failure.")
         
         move_sequence.append(move)
         state = apply_move_to_state(state, *move)
@@ -271,23 +288,27 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
     return move_sequence, state
 
 def determine_winner(state: HexGameState, model_1: SimpleModelInference, 
-                    model_2: SimpleModelInference, swap: bool) -> Tuple[str, str]:
+                    model_2: SimpleModelInference, swap: bool) -> Tuple[Piece, str]:
     """
     Determine the winner of the game.
     
     Returns:
         Tuple of (winner_color, winner_char) where:
-        - winner_color: "b" or "r" (color-based)
+        - winner_color: Piece.BLUE or Piece.RED (color-based)
         - winner_char: "b" or "r" (color-based)
     """
-    if state.winner == "blue":
-        winner_color = TRMPH_BLUE_WIN
-        winner_char = TRMPH_BLUE_WIN
-    elif state.winner == "red":
-        winner_color = TRMPH_RED_WIN
-        winner_char = TRMPH_RED_WIN
+    # Fail fast and use Enum internally; convert at IO boundary
+    winner_enum = state.winner_enum
+    if winner_enum is None:
+        raise ValueError("Game is not over or winner missing")
+    if winner_enum.name == 'BLUE':
+        winner_color = Piece.BLUE
+        winner_char = Piece.BLUE.value
+    elif winner_enum.name == 'RED':
+        winner_color = Piece.RED
+        winner_char = Piece.RED.value
     else:
-        raise ValueError("Game is not over")
+        raise ValueError(f"Unknown winner enum: {winner_enum}")
     
     return winner_color, winner_char
 
@@ -312,7 +333,9 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
             "pie_rule": play_config.pie_rule,
             "swap": result.swap_decision,
             "temperature": play_config.temperature,
-            "search_widths": str(play_config.search_widths),
+            "strategy": play_config.strategy,
+            "strategy_config": str(play_config.strategy_config),
+            "search_widths": str(play_config.search_widths),  # Legacy
             "seed": play_config.random_seed
         }
         
@@ -336,7 +359,6 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
 def play_single_game(model_1: SimpleModelInference, 
                      model_2: SimpleModelInference, 
                      board_size: int, 
-                     search_widths: Optional[list] = None, 
                      verbose: int = 1, 
                      log_file: str = None, 
                      csv_file: str = None, 
@@ -352,7 +374,7 @@ def play_single_game(model_1: SimpleModelInference,
     # Initialize game state
     state = HexGameState(
         board=np.full((board_size, board_size), EMPTY_PIECE, dtype='U1'), 
-        current_player=BLUE_PLAYER
+        _current_player=Player.BLUE
     )
     
     # Handle pie rule
@@ -361,7 +383,7 @@ def play_single_game(model_1: SimpleModelInference,
     
     # Play main game loop
     move_sequence, state = play_game_loop(
-        state, model_1, model_2, search_widths, play_config.temperature, verbose
+        state, model_1, model_2, play_config, verbose
     )
     
     # Convert move sequence to TRMPH string
@@ -413,28 +435,28 @@ def play_games_with_each_first(
     # Game 1: model_a goes first (blue), model_b second (red)
     result_1 = play_single_game(
         models[model_a_path], models[model_b_path], config.board_size,
-        config.search_widths, verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config
     )
     
     # Game 2: model_b goes first (blue), model_a second (red)  
     result_2 = play_single_game(
         models[model_b_path], models[model_a_path], config.board_size,
-        config.search_widths, verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config
     )
     
     return {
         'model_a_first': {
-            'winner_position': result_1.winner,  # "b" or "r" based on color
-            'winner_model': model_a_path if result_1.winner == "b" else model_b_path,
-            'loser_model': model_b_path if result_1.winner == "b" else model_a_path,
+            'winner_position': result_1.winner,  # Piece.BLUE or Piece.RED based on color
+            'winner_model': model_a_path if result_1.winner == Piece.BLUE else model_b_path,
+            'loser_model': model_b_path if result_1.winner == Piece.BLUE else model_a_path,
             'trmph_str': result_1.trmph_str,
             'winner_char': result_1.winner_char,
             'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
-            'winner_position': result_2.winner,  # "b" or "r" based on color
-            'winner_model': model_b_path if result_2.winner == "b" else model_a_path,
-            'loser_model': model_a_path if result_2.winner == "b" else model_b_path,
+            'winner_position': result_2.winner,  # Piece.BLUE or Piece.RED based on color
+            'winner_model': model_b_path if result_2.winner == Piece.BLUE else model_a_path,
+            'loser_model': model_a_path if result_2.winner == Piece.BLUE else model_b_path,
             'trmph_str': result_2.trmph_str,
             'winner_char': result_2.winner_char,
             'swap_decision': result_2.swap_decision
@@ -455,7 +477,13 @@ def run_round_robin_tournament(
     if play_config is None:
         play_config = TournamentPlayConfig()
     
-    models = {path: SimpleModelInference(path) for path in config.checkpoint_paths}
+    # Preload models for efficiency
+    from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
+    preload_tournament_models(config.checkpoint_paths)
+    
+    # Get cached models
+    model_cache = get_model_cache()
+    models = {path: model_cache.get_simple_model(path) for path in config.checkpoint_paths}
     result = TournamentResult(config.checkpoint_paths)
     
     for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
@@ -490,7 +518,8 @@ def run_round_robin_tournament(
 
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, "
                       f"Random seed: {play_config.random_seed}")
-                print(f"Search widths: {config.search_widths}")
+                print(f"Strategy: {play_config.strategy}, Config: {play_config.strategy_config}")
+                print(f"Search widths: {config.search_widths}")  # Legacy
             if verbose >= 1:
                 print(f"{game_idx+1},", end="", flush=True)
     

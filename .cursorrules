@@ -19,10 +19,20 @@ python scripts/validate_environment.py
 ```
 
 ## Principles
-1. In general and throughout this project I prefer fail fast and catch bugs -- not fallback mechanisms. I'm very keen to avoid silent failures.
+1. Strongly to fail fast and catch bugs. Avoid fallback mechanisms -- these can hide problems, producing silent failures.
 2. Be very careful about memory usage when handling the data. A common pattern is for coding agents ot try to read in all of the data to calculate things. *NEVER READ IN LARGE AMOUNTS OF DATA at once*.
-3. Try to have one code path, don't have lots of alternatives. When we update, clean up old code paths.
+3. Avoid duplicating code and forking the code path unnecessarily. Use existing utilities. When we update, clean up old code paths.
 4. Use `PYTHONPATH=.` for portability, rather than absolute paths
+5. Do not try to write your own hex games, ask me for game sequences that achieve certain goals. In trmph format here are some sequences that you can use:
+ - A finished game where BLUE has won: g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
+ - A finished game where RED has won: a1g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
+ - An unfinished game where BLUE can win next move by playing at g7 (6,6) g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7
+ - An unfinished game where RED can win next move by playing at g7 (6,6) a1g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7
+  - An unfinished game where I expect a high win probability for RED from the network
+    red_is_winning = "#13,a2g7f6e8d7c9b8b10h8i6j7k5l6l4", and for BLUE:
+    blue_is_winning = a2g7i6j4h5i3g4h2f3g1e2j7h8g10i9h11j10i12k11j13l12
+ You can convert these sequences to other formats using the functions in hex_ai/utils/format_conversion.py
+ 
 
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions

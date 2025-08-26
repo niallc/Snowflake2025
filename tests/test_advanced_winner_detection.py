@@ -14,9 +14,8 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
 
 
-from hex_ai.config import (
-    EMPTY_PIECE, BLUE_PIECE, RED_PIECE, BLUE_PLAYER, RED_PLAYER,
-)
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Piece, Player
 
 def board_state_to_trmph(state: HexGameState) -> str:
     """Convert the move history of a HexGameState to a TRMPH string."""
@@ -58,11 +57,11 @@ class TestTrmphAdvancedCases:
         # No winner yet
         self.assert_winner(state, None, context="centre_connects before g7")
         # Blue plays g7
-        state.current_player = BLUE_PLAYER
+        state.current_player = Player.BLUE
         blue_state = state.make_move(6, 6)
         self.assert_winner(blue_state, "blue", context="centre_connects blue g7")
         # Red plays g7 (from the same pre-move state)
-        state.current_player = RED_PLAYER
+        state.current_player = Player.RED
         red_state = state.make_move(6, 6)
         self.assert_winner(red_state, "red", context="centre_connects red g7")
 
@@ -76,11 +75,11 @@ class TestTrmphAdvancedCases:
         state = self.play_moves_except(state, moves, centre_move)
         self.assert_winner(state, None, context="ccts_blue before g7")
         # Blue plays g7
-        state.current_player = BLUE_PLAYER
+        state.current_player = Player.BLUE
         blue_state = state.make_move(6, 6)
         self.assert_winner(blue_state, "blue", context="ccts_blue blue g7")
         # Red plays g7 (should not win)
-        state.current_player = RED_PLAYER
+        state.current_player = Player.RED
         red_state = state.make_move(6, 6)
         self.assert_winner(red_state, None, context="ccts_blue red g7")
 
@@ -93,11 +92,11 @@ class TestTrmphAdvancedCases:
         state = self.play_moves_except(state, moves, centre_move)
         self.assert_winner(state, None, context="ccts_red before g7")
         # Red plays g7
-        state.current_player = RED_PLAYER
+        state.current_player = Player.RED
         red_state = state.make_move(6, 6)
         self.assert_winner(red_state, "red", context="ccts_red red g7")
         # Blue plays g7 (should not win)
-        state.current_player = BLUE_PLAYER
+        state.current_player = Player.BLUE
         blue_state = state.make_move(6, 6)
         self.assert_winner(blue_state, None, context="ccts_red blue g7")
 
@@ -110,7 +109,7 @@ class TestTrmphAdvancedCases:
             row, col = trmph_move_to_rowcol(move)
             state = state.make_move(row, col)
         self.assert_winner(state, None, context="real_game red win")
-        state.current_player = RED_PLAYER
+        state.current_player = Player.RED
         red_state = state.make_move(7, 6) # g8
         self.assert_winner(red_state, "red", context="ccts_red red g7")
 

@@ -1,6 +1,6 @@
 import numpy as np
 from hex_ai.utils.format_conversion import board_2nxn_to_nxn
-from hex_ai.config import BLUE_PIECE, RED_PIECE, EMPTY_PIECE
+from hex_ai.enums import Piece, char_to_piece, get_piece_unicode_symbol
 import sys
 
 def ansi_colored(text, color):
@@ -11,7 +11,7 @@ def ansi_colored(text, color):
     }
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
-def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
+def display_hex_board(board: np.ndarray, file=None, highlight_move=None) -> None:
     """
     Display a Hex board (NxN format) as ASCII art, with optional move highlighting.
     Args:
@@ -19,36 +19,37 @@ def display_hex_board(board: np.ndarray, file=None, highlight_move=None):
         file: file-like object to write to (default: stdout)
         highlight_move: (row, col) tuple to highlight, or None
     """
+    # TODO: ENUM MIGRATION - Upstream callers should pass domain types consistently.
     # Convert (2, N, N) format to (N, N) if needed
     if board.ndim == 3 and board.shape[0] == 2:
         board = board_2nxn_to_nxn(board)
     N = board.shape[0]
-    # Use uniform size symbols
-    symbols = {
-        EMPTY_PIECE: '◯',  # empty
-        BLUE_PIECE: '●',   # blue
-        RED_PIECE: '●',    # red
-    }
+    
     highlight_symbol = '*'  # Symbol for highlighted move
     lines = []
     header = '   ' + ' '.join(str(i) for i in range(N))
     lines.append(header)
     use_color = file is None and sys.stdout.isatty()
+    
     for row in range(N):
         indent = ' ' * row
         row_str = f"{row:2d} " + indent
         for col in range(N):
-            symbol = symbols[board[row, col]]
+            piece_char = board[row, col]
+            piece = char_to_piece(piece_char)
+            symbol = get_piece_unicode_symbol(piece)
+            
             if highlight_move is not None and (row, col) == highlight_move:
                 row_str += highlight_symbol + ' '
             else:
                 if use_color:
-                    if board[row, col] == BLUE_PIECE:
+                    if piece == Piece.BLUE:
                         symbol = ansi_colored(symbol, 'blue')
-                    elif board[row, col] == RED_PIECE:
+                    elif piece == Piece.RED:
                         symbol = ansi_colored(symbol, 'red')
                 row_str += symbol + ' '
         lines.append(row_str)
+    
     output = '\n'.join(lines)
     if file is not None:
         print(output, file=file)

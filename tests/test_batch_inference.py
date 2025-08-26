@@ -13,7 +13,8 @@ import torch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.config import BLUE_PLAYER, RED_PLAYER, EMPTY_PIECE
+from hex_ai.config import BOARD_SIZE
+from hex_ai.enums import Piece, Player
 from hex_ai.inference.game_engine import HexGameState
 
 
@@ -23,14 +24,14 @@ def create_test_boards(num_boards=10, board_size=13):
     
     for i in range(num_boards):
         # Create a simple board with some moves
-        board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
+        board = np.full((board_size, board_size), Piece.EMPTY.value, dtype='U1')
         
         # Add some moves to make it interesting
         num_moves = min(i + 1, board_size * board_size // 4)  # Vary the number of moves
         for j in range(num_moves):
             row = j % board_size
             col = (j + i) % board_size
-            player = BLUE_PLAYER if j % 2 == 0 else RED_PLAYER
+            player = Player.BLUE.value if j % 2 == 0 else Player.RED.value
             board[row, col] = player
         
         boards.append(board)
@@ -167,7 +168,7 @@ def test_batch_inference_edge_cases():
     print("Testing mixed input formats...")
     test_boards = create_test_boards(3)
     # Convert one board to TRMPH string format
-    state = HexGameState(board=test_boards[1], current_player=BLUE_PLAYER)
+    state = HexGameState(board=test_boards[1], current_player=Player.BLUE.value)
     trmph_board = state.to_trmph()
     mixed_boards = [test_boards[0], trmph_board, test_boards[2]]
     

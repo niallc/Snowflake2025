@@ -103,7 +103,7 @@ def manual_verification_3x2():
     print(f"\n=== Testing Batched Search ===")
     
     # Run batched search
-    best_move, best_value = minimax_policy_value_search_with_batching(
+    best_move, best_value, _, search_stats = minimax_policy_value_search_with_batching(
         state=state,
         model=model,
         widths=[3, 2],
@@ -113,6 +113,7 @@ def manual_verification_3x2():
     print(f"Batched search result:")
     print(f"  Best move: {best_move}")
     print(f"  Best value: {best_value:.3f}")
+    print(f"  Search stats: {search_stats['policy_items_processed']} policy evals in {search_stats['policy_nn_time']:.4f}s")
     
     # Verify the result makes sense
     print(f"\n=== Verification ===")
@@ -176,7 +177,7 @@ def test_position_collector_manual():
     
     batched_results = []
     def make_callback(index):
-        def callback(policy):
+        def callback(policy, metadata):
             batched_results.append((index, policy))
         return callback
     

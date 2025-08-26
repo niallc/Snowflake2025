@@ -32,16 +32,16 @@ let state = {
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_use_mcts: false,
-  red_use_mcts: false,
-  blue_num_simulations: 200,
-  red_num_simulations: 200,
+  blue_use_mcts: true,
+  red_use_mcts: true,
+  blue_num_simulations: 2005,
+  red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
   red_exploration_constant: 1.4,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
-  verbose_level: 1, // Debug output level
+  verbose_level: 2, 
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
   constants: null // Will be populated from backend
@@ -119,8 +119,8 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
 async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
                        blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
                        red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
-                       blue_use_mcts = false, blue_num_simulations = 200, blue_exploration_constant = 1.4,
-                       red_use_mcts = false, red_num_simulations = 200, red_exploration_constant = 1.4,
+                       blue_use_mcts = true, blue_num_simulations = 200, blue_exploration_constant = 1.4,
+                       red_use_mcts = true, red_num_simulations = 200, red_exploration_constant = 1.4,
                        verbose = 1) {
   console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
@@ -162,7 +162,7 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 }
 
 async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0,
-                               use_mcts = false, num_simulations = 200, exploration_constant = 1.4) {
+                               use_mcts = true, num_simulations = 200, exploration_constant = 1.4) {
   console.log(`makeComputerMove called with model_id: ${model_id}, use_mcts: ${use_mcts}`);
   
   if (use_mcts) {
@@ -682,7 +682,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('reset-btn').addEventListener('click', async () => {
     if (state.auto_step_active) {
       stopAutoStep();
-      document.getElementById('auto-step-checkbox').checked = false;
+      document.getElementById('auto-step-checkbox').checked = true;
     }
     
     state.trmph = '#13,';

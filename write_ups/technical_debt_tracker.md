@@ -1,103 +1,13 @@
 # Technical Debt Tracker & Improvement Plan
 
-**Date:** 2024-12-19  
-**Last Updated:** 2024-12-19
+**Last Updated:** 2025-08-14
 
 This document tracks specific technical debt items and refactoring tasks that need to be addressed. Focus is on actionable items that improve code quality and maintainability.
 
 ---
 
-## 🎯 High Priority - Critical Issues
-
-### 1. TRMPH Processing Pipeline Cleanup ✅ COMPLETED
-**Priority:** High  
-**Estimated Time:** 1-2 days  
-**Impact:** High - enables reliable data processing for training
-
-**Issue:** TRMPH processing pipeline had outdated tests and inconsistent APIs
-
-**Tasks:**
-- [x] Modernize test suite to use new TRMPHProcessor architecture
-- [x] Fix API inconsistencies between old and new implementations
-- [x] Update data format validation to use current TRMPH format
-- [x] Fix file size metadata issues in output files
-- [x] Add comprehensive test coverage for all functionality
-- [x] Document current architecture and usage patterns
-- [x] Add support for new files with headers that use a leading #
-
-**Files modified:**
-- `tests/test_trmph_processor.py` ✅ **COMPLETED**
-- `hex_ai/trmph_processing/workers.py` ✅ **COMPLETED**
-- `write_ups/trmph_processing_cleanup_summary.md` ✅ **CREATED**
-
-**Status:** ✅ **COMPLETED** - All 20 tests passing, pipeline ready for production use with new data format
-
-### 1.1. Self-Play Data Preprocessing ✅ COMPLETED
-**Priority:** High  
-**Estimated Time:** 1 day  
-**Impact:** High - enables efficient processing of large self-play datasets
-
-**Issue:** Need to clean up self-play data by removing duplicates and splitting into manageable chunks
-
-**Tasks:**
-- [x] Create preprocessing script to combine multiple .trmph files
-- [x] Implement duplicate detection and removal
-- [x] Add chunking functionality for manageable file sizes
-- [x] Create comprehensive test suite
-- [x] Test on real data (493,617 games → 184,998 unique games, 62.5% duplicates removed)
-
-**Files created:**
-- `scripts/preprocess_selfplay_data.py` ✅ **COMPLETED**
-- `tests/test_preprocess_selfplay_data.py` ✅ **COMPLETED**
-
-**Status:** ✅ **COMPLETED** - Script successfully processed real data, removing 308,619 duplicates
-
-### 1.2. Memory Safety Cleanup ✅ COMPLETED
-**Priority:** Critical  
-**Estimated Time:** 1 day  
-**Impact:** Critical - prevents crashes on large datasets
-
-**Issue:** `create_combined_dataset` function was a memory disaster that loaded all files into memory at once
-
-**Tasks:**
-- [x] Remove `create_combined_dataset` function from `BatchProcessor`
-- [x] Remove `--combine` argument from CLI
-- [x] Remove `create_combined_dataset` function from CLI
-- [x] Update configuration to deprecate `combine_output` parameter
-- [x] Update data processing plan to reflect changes
-- [x] Test that all functionality still works
-
-**Files modified:**
-- `hex_ai/batch_processor.py` ✅ **COMPLETED** - Removed dangerous function
-- `hex_ai/trmph_processing/cli.py` ✅ **COMPLETED** - Removed combine functionality
-- `hex_ai/trmph_processing/config.py` ✅ **COMPLETED** - Deprecated parameter
-- `write_ups/data_processing_plan.md` ✅ **COMPLETED** - Updated plan
-
-**Status:** ✅ **COMPLETED** - Memory disaster averted, all tests passing
-
----
-
 ## 🔧 Medium Priority - Code Quality
 
-### 2. Import Organization
-**Priority:** Medium  
-**Estimated Time:** 1 day  
-**Impact:** Medium - improves code readability and maintainability
-
-**Issue:** Many inline imports should be moved to the top and alphabetized
-
-**Tasks:**
-- [x] Audit all Python files for inline imports
-- [x] Move all imports to top of files
-- [ ] Alphabetize imports within categories (standard library, third-party, local)
-- [ ] Add import organization to linting rules if possible
-
-**Files to audit:**
-- All Python files in `hex_ai/` ✅ **COMPLETED**
-- All Python files in `scripts/` ✅ **COMPLETED**
-- All Python files in `tests/` (not part of main scope)
-
-**Completed:** Moved all inline imports to the top of files in `scripts/` and `hex_ai/` directories. The remaining inline imports are primarily in test files which were not part of the main scope.
 
 ### 2. Inference and CLI Duplication Review
 **Priority:** Medium  
@@ -208,22 +118,9 @@ This document tracks specific technical debt items and refactoring tasks that ne
 - [ ] Consider migrating files to appropriate locations
 - [ ] Document the organization system
 
-### 8. Dependency Management
+### 8. Dependency Management ✅ COMPLETED
 **Priority:** Low  
-**Estimated Time:** 1 day  
-**Impact:** Low - ensures reproducible builds
-
-**Issue:** Requirements may be outdated or include unnecessary dependencies
-
-**Tasks:**
-- [ ] Audit and update `requirements.txt`
-- [ ] Add version pinning where appropriate
-- [ ] Create environment validation script
-- [ ] Document dependency update process
-
-**Files to modify:**
-- `requirements.txt`
-- Create: `scripts/validate_environment.py`
+**Status:** ✅ **COMPLETED** - Updated requirements.txt with version pinning and better organization.
 
 ### 9. Rationalize hex_ai/config.py and hex_ai/value_utils.py
  - These two files strongly overlap in their goals.
@@ -261,11 +158,13 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - hex_ai/training_orchestration.py:288:    device = select_device()
  - scripts/validate_checkpoints.py:38:        self.device = get_device()
 
-### 18. Self-play is still writing .pkl.gz files instead of raw plain text .trmph strings
- - Remove pkl.dump type writing and just append a simple text line.
+### 18. Self-play Data Format ✅ COMPLETED
+**Priority:** Medium  
+**Status:** ✅ **COMPLETED** - Removed .pkl.gz format and CSV output. Self-play now writes only TRMPH text files.
 
-### 19. The self-play code still refers to detailed output and a CSV file.
- - I have no plans to use this so it should all be deleted.
+### 19. Self-play CSV Output ✅ COMPLETED  
+**Priority:** Low  
+**Status:** ✅ **COMPLETED** - Removed detailed CSV output functionality as it was not needed.
 
 ### 20. self_play_engine.py has relative paths to its imports
  - Also
@@ -286,6 +185,12 @@ This document tracks specific technical debt items and refactoring tasks that ne
  - The new data from self play has metadata
  - Data files are in multiple directories
  - Tournament may use '1' & '2' for winner annotation instead of the newer (and preferred) 'b' and 'r'.
+
+### 23. Tournament code
+ - There are two execution scripts, one to compare models, one to compare algorithms given a model. Should these be merged?
+ - There's a file 
+   hex_ai/inference/move_selection.py
+   that chooses between different move strategies. Should e.g. web/app.py use this?
 
 **Status:** PARTIALLY RESOLVED - Removed duplicate `_get_top_policy_moves` from selfplay_engine.py and renamed `_get_policy_move_values` to `_get_batched_policy_move_values` for clarity. The remaining functions serve different purposes:
 - `select_top_k_moves`: Core utility for selecting top-k moves from legal policy array
