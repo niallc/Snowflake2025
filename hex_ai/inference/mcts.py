@@ -28,7 +28,7 @@ from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
 from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index, tensor_to_rowcol as index_to_move
 from hex_ai.utils.temperature import calculate_temperature_decay
-from hex_ai.utils.state_utils import state_hash_from, validate_move_coordinates, is_valid_move_coordinates
+from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
 
@@ -365,7 +365,7 @@ class MCTSNode:
         self.Q = np.zeros(L, dtype=np.float64) # mean value per action
         self.P = np.zeros(L, dtype=np.float64) # prior probability per action (set on expand)
         self.is_expanded: bool = False
-        self.state_hash: int = state_hash_from(state)
+        self.state_hash: int = board_key(state)
         self.is_terminal: bool = bool(state.game_over)
         self.winner_str: Optional[str] = state.winner if self.is_terminal else None
         self.terminal_moves: List[bool] = [False] * L # New attribute for terminal move detection
@@ -389,7 +389,7 @@ class BaselineMCTS:
         # Always use global RNG state - randomness should be controlled externally
         # This ensures MCTS instances don't interfere with each other's randomness
 
-        # Cache: state_hash -> (policy_logits_np [A], value_logit_float)
+        # Cache: board_key -> (policy_logits_np [A], value_logit_float)
         # TODO: Consider implementing LRU cache with size limit to prevent memory leaks
         self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
         self.cache_hits = 0
@@ -559,22 +559,38 @@ class BaselineMCTS:
         
         return timing_tracker.get_final_stats()
 
-    def _select_leaves_batch(self, root: MCTSNode, sims_remaining: int, 
-                           timing_tracker: MCTSTimingTracker) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
-        """Select a batch of leaves for expansion."""
+    def _select_leaves_batch(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        timing_tracker: MCTSTimingTracker
+    ) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
+        """Select a batch of leaves for expansion with early flush triggers."""
         timing_tracker.start_timing("select")
-        
+
         leaves: List[MCTSNode] = []
         paths: List[List[Tuple[MCTSNode, int]]] = []
+
         board_size = int(root.state.get_board_tensor().shape[-1])
-        
         select_budget = min(self.cfg.batch_cap, sims_remaining)
-        
-        while len(leaves) < select_budget:
+
+        # Distinct-leaf target: ~50% of budget, clamped to [16, budget]
+        distinct_target = max(16, int(round(select_budget * 0.5)))
+        distinct_target = min(distinct_target, select_budget)
+
+        # Track distinct (uncached+unexpanded) leaf hashes this batch
+        distinct_hashes: Set[int] = set()
+
+        # Cheap guardrail on selection work
+        max_selection_descents = 4 * select_budget
+        descents = 0
+
+        while len(leaves) < select_budget and descents < max_selection_descents:
+            descents += 1
+
             node = root
             path: List[Tuple[MCTSNode, int]] = []
-            
-            # Descend until reaching a leaf or terminal
+
             while True:
                 if node.is_terminal:
                     leaves.append(node)
@@ -583,32 +599,44 @@ class BaselineMCTS:
                 if not node.is_expanded:
                     leaves.append(node)
                     paths.append(path)
+
+                    # Only count toward distinct if this state actually needs eval
+                    if node.state_hash not in self.eval_cache and not node.is_terminal:
+                        distinct_hashes.add(node.state_hash)
+
+                    # Flush triggers
+                    U = len(distinct_hashes)
+                    T = len(leaves)
+                    if U >= distinct_target:
+                        timing_tracker.end_timing("select")
+                        return leaves, paths
+                    if T >= 16 and U / max(1, T) < 0.5:
+                        timing_tracker.end_timing("select")
+                        return leaves, paths
                     break
-                
-                # Select child via PUCT
+
+                # PUCT descent
                 child_idx = self._select_child_puct(node)
                 path.append((node, child_idx))
                 child = node.children[child_idx]
-                
+
                 if child is None:
-                    # Materialize child state on demand
                     timing_tracker.start_timing("state_creation")
                     (r, c) = node.legal_moves[child_idx]
-                    
                     timing_tracker.start_timing("make_move")
                     child_state = node.state.make_move(r, c)
                     timing_tracker.end_timing("make_move")
-                    
                     child = MCTSNode(child_state, board_size)
                     child.depth = node.depth + 1
                     timing_tracker.end_timing("state_creation")
                     node.children[child_idx] = child
-                
+
                 node = child
-                
+
+                # Outer budget guard (kept from original)
                 if len(leaves) >= select_budget:
                     break
-        
+
         timing_tracker.end_timing("select")
         return leaves, paths
 
@@ -639,7 +667,7 @@ class BaselineMCTS:
         timing_tracker: MCTSTimingTracker
     ) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
         """
-        Prepare encodings for NN; separate cached from uncached; de-duplicate uncached by state_hash.
+        Prepare encodings for NN; separate cached from uncached; de-duplicate uncached by board_key.
         Returns:
           encodings          – tensors for unique, uncached leaves (order aligned with need_eval_idxs)
           need_eval_idxs     – indices into `leaves` for those unique encodings

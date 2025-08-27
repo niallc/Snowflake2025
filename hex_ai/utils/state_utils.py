@@ -9,27 +9,34 @@ from typing import Tuple
 from hex_ai.inference.game_engine import HexGameState
 
 
-def state_hash_from(state: HexGameState) -> int:
+def board_key(state: HexGameState) -> int:
     """
-    Create a hash of a game state using only immutable, CPU-native parts.
+    Create a hash key based on the canonical board state and side to move.
     
-    This function creates a stable hash that can be used for caching and
-    state comparison. It only uses the move history and current player,
-    avoiding any tensor data that could cause issues with hash randomization.
+    This function creates a stable hash that can be used for caching neural network
+    evaluations. It keys on the board state (stone positions) and current player,
+    ignoring the move history path. This allows cache hits when the same position
+    is reached via different move orders.
     
     Args:
         state: The Hex game state to hash
         
     Returns:
-        A stable integer hash of the state
+        A stable integer hash of the board state and current player
         
     Note:
         The hash is masked to 63 bits to avoid Python hash randomization effects.
     """
-    # Use move history and current player enum value.
-    # Ensure stable, bounded integer (mask to 63 bits to avoid Python hash randomization effects).
-    key = (tuple(state.move_history), int(state.current_player_enum.value))
-    h = hash(key) & ((1 << 63) - 1)
+    # Convert board to a canonical representation
+    # Board is numpy array with string values: "e" (empty), "b" (blue), "r" (red)
+    board_tuple = tuple(state.board.flatten())  # Flatten to 1D tuple for hashing
+    
+    # Include current player (side to move)
+    current_player = int(state.current_player_enum.value)
+    
+    # Create hash key from board state and current player
+    key = (board_tuple, current_player)
+    h = hash(key) & ((1 << 63) - 1)  # Mask to 63 bits to avoid Python hash randomization
     return h
 
 
