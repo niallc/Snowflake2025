@@ -521,7 +521,15 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Time the actual MCTS run
         mcts_start_time = time.time()
-        move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+        app.logger.info("About to call run_mcts_move...")
+        try:
+            move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+            app.logger.info("run_mcts_move completed successfully")
+        except Exception as e:
+            app.logger.error(f"run_mcts_move failed with exception: {e}")
+            import traceback
+            app.logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
         mcts_search_time = time.time() - mcts_start_time
         
         # Time the rest of the processing
@@ -1401,4 +1409,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.DEBUG)
-    app.run(debug=True, host=args.host, port=args.port) 
+    app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port) 

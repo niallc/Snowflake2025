@@ -822,6 +822,7 @@ class BaselineMCTS:
             
             node.N[a_idx] += 1
             node.W[a_idx] += v_node
+            # TODO: The max(1, node.N[a_idx]) looks redundant, surely node.N[a_idx] >= 1 from above.
             node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
 
     # ---------- New Result Computation Methods ----------

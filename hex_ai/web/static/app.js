@@ -225,18 +225,31 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
     COLORS.VERY_DARK_BLUE
   ));
-  // Red: left and right (use pi/4 for offset)
-  const redAngle = Math.PI / 4;
-  svg.appendChild(makeEdgeLine(
-    hexCenter(0, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(0, 0).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y - HEX_RADIUS * Math.sin(redAngle),
-    COLORS.VERY_DARK_RED
-  ));
-  svg.appendChild(makeEdgeLine(
-    hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS * Math.sin(redAngle),
-    COLORS.VERY_DARK_RED
-  ));
+  // Red edges: pass through midpoints of the true outer edges
+
+  function edgeMidpoint(vA, vB) {
+    return { x: (vA.x + vB.x) / 2, y: (vA.y + vB.y) / 2 };
+  }
+
+  const tl = hexVertices(hexCenter(0, 0).x, hexCenter(0, 0).y, HEX_RADIUS);
+  const bl = hexVertices(hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x,
+                        hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y, HEX_RADIUS);
+
+  // left side uses edge between vertices 2 and 3
+  const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
+  const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.VERY_DARK_RED));
+
+  const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
+                        hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
+  const br = hexVertices(hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x,
+                        hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
+
+  // right side uses edge between vertices 0 and 5
+  const rightTopMid = edgeMidpoint(tr[0], tr[5]);
+  const rightBotMid = edgeMidpoint(br[0], br[5]);
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.VERY_DARK_RED));
+
 
   // Draw hexes
   for (let row = 0; row < GAME_CONSTANTS.BOARD_SIZE; row++) {
@@ -289,6 +302,18 @@ function makeHex(cx, cy, r, fill, highlight) {
   hex.setAttribute('stroke-width', highlight ? 4 : 2);
   if (highlight) hex.style.cursor = 'pointer';
   return hex;
+}
+
+function hexVertices(cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 3 * i + Math.PI / 6; // same orientation as makeHex
+    pts.push({ 
+      x: cx + r * Math.cos(angle), 
+      y: cy + r * Math.sin(angle) 
+    });
+  }
+  return pts;
 }
 
 function makeEdgeLine(x1, y1, x2, y2, color) {

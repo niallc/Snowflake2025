@@ -293,12 +293,9 @@ class SimpleModelInference:
                     device = self.model.get_device()
                     nn_model = self.model.model  # underlying torch.nn.Module
                     if str(device).startswith("mps"):
-                        with torch.autocast(device_type="mps", dtype=torch.float16):
-                            _ = nn_model(dummy.to(device))
-                        try:
-                            torch.mps.synchronize()
-                        except Exception:
-                            pass
+                        with torch.inference_mode(), torch.autocast(device_type="mps", dtype=torch.float16):
+                            warm = nn_model(dummy.to(device))
+                        _ = warm.sum().item()  # implicit sync when moving result to host
                     else:
                         with torch.no_grad():
                             _ = nn_model(dummy.to(device))
