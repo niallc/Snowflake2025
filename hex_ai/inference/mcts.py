@@ -18,7 +18,7 @@ import random
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
@@ -394,6 +394,9 @@ class BaselineMCTS:
         self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
         self.cache_hits = 0
         self.cache_misses = 0
+        # Metrics
+        self._unique_evals_total = 0     # post-dedup, network calls actually done
+        self._effective_sims_total = 0   # counts every backprop (incl. duplicates)
 
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -437,9 +440,17 @@ class BaselineMCTS:
             tree_data = self._compute_tree_data(root)
             win_probability = early_info.win_prob
             
+            # Attach metrics for early termination cases too
+            stats = self._get_stats_builder().create_early_termination_stats(early_info)
+            total_time = 0.0  # Early termination has minimal time
+            stats["unique_evals_total"] = int(self._unique_evals_total)
+            stats["effective_sims_total"] = int(self._effective_sims_total)
+            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for early termination
+            stats["effective_sims_per_sec"] = 0.0
+            
             return MCTSResult(
                 move=move,
-                stats=self._get_stats_builder().create_early_termination_stats(early_info),
+                stats=stats,
                 tree_data=tree_data,
                 root_node=root,
                 early_termination_info=early_info,
@@ -448,6 +459,12 @@ class BaselineMCTS:
         
         # Run main simulation loop
         timing_stats = self._run_simulation_loop(root, verbose)
+        # Attach metrics (don't rely on TimingTracker internals)
+        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
+        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
+        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
+        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
+        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
         
         # Compute results directly
         move = self._compute_move(root, root_state, verbose)
@@ -538,6 +555,7 @@ class BaselineMCTS:
             # Process leaves (expand and backpropagate)
             batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker)
             sims_remaining -= batch_simulations
+            self._effective_sims_total += batch_simulations
         
         return timing_tracker.get_final_stats()
 
@@ -615,38 +633,56 @@ class BaselineMCTS:
         
         return simulations_completed
 
-    def _prepare_leaf_evaluations(self, leaves: List[MCTSNode], 
-                                timing_tracker: MCTSTimingTracker) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
-        """Prepare leaf evaluations, separating cached from uncached."""
+    def _prepare_leaf_evaluations(
+        self,
+        leaves: List[MCTSNode],
+        timing_tracker: MCTSTimingTracker
+    ) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
+        """
+        Prepare encodings for NN; separate cached from uncached; de-duplicate uncached by state_hash.
+        Returns:
+          encodings          – tensors for unique, uncached leaves (order aligned with need_eval_idxs)
+          need_eval_idxs     – indices into `leaves` for those unique encodings
+          cached_expansions  – (leaf_idx, policy_np, value_logit) for cache hits
+        """
         encodings: List[torch.Tensor] = []
         need_eval_idxs: List[int] = []
         cached_expansions: List[Tuple[int, np.ndarray, float]] = []
-        
+
         timing_tracker.start_timing("stack")
         timing_tracker.start_timing("encode")
-        
+
+        seen_uncached: Set[int] = set()
+
         for i, leaf in enumerate(leaves):
+            # Skip leaves that don't need eval
             if leaf.is_terminal or leaf.is_expanded:
                 continue
-            
-            # Check cache
+
+            # Cached?
             timing_tracker.start_timing("cache_lookup")
             cached = self.eval_cache.get(leaf.state_hash, None)
             timing_tracker.end_timing("cache_lookup")
-            
+
             if cached is not None:
                 self.cache_hits += 1
-                cached_expansions.append((i, cached[0], cached[1]))
-            else:
-                self.cache_misses += 1
-                # Prepare encoding for neural network
-                enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
-                encodings.append(enc)
-                need_eval_idxs.append(i)
-        
+                policy_np, value_logit = cached
+                cached_expansions.append((i, policy_np, value_logit))
+                continue
+
+            # Uncached → only encode the first occurrence of this state in the batch
+            if leaf.state_hash in seen_uncached:
+                # Another copy will piggy-back on the first result via eval_cache.
+                continue
+            seen_uncached.add(leaf.state_hash)
+
+            self.cache_misses += 1
+            enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
+            encodings.append(enc)
+            need_eval_idxs.append(i)
+
         timing_tracker.end_timing("encode")
         timing_tracker.end_timing("stack")
-        
         return encodings, need_eval_idxs, cached_expansions
 
     def _run_neural_network_batch(self, encodings: List[torch.Tensor], need_eval_idxs: List[int], 
@@ -660,6 +696,7 @@ class BaselineMCTS:
         action_size = board_size * board_size
         
         policy_cpu, value_cpu, tm = self.model.infer_timed(batch_tensor)
+        self._unique_evals_total += int(tm.get("batch_size", len(encodings)))
         
         # Record performance metrics
         self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
@@ -1059,6 +1096,9 @@ class BaselineMCTS:
         self.eval_cache.clear()
         self.cache_hits = 0
         self.cache_misses = 0
+        # Reset metrics when clearing cache
+        self._unique_evals_total = 0
+        self._effective_sims_total = 0
 
 
 def create_mcts_config(
