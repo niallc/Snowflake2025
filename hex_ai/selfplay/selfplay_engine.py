@@ -72,7 +72,8 @@ class SelfPlayEngine:
         # Create MCTS configuration optimized for self-play with early termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
-            early_termination_threshold=0.85  # Aggressive early termination for speed
+            early_termination_threshold=0.85,  # Aggressive early termination for speed
+            cache_size=self.cache_size  # Use same cache size as SimpleModelInference
         )
         
         # Performance tracking

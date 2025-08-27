@@ -1199,6 +1199,7 @@ def create_mcts_config(
     config_type: str = "tournament",
     sims: Optional[int] = None,
     early_termination_threshold: Optional[float] = None,
+    cache_size: Optional[int] = None,
     **kwargs
 ) -> BaselineMCTSConfig:
     """
@@ -1208,6 +1209,7 @@ def create_mcts_config(
         config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
         sims: Number of simulations (overrides preset default)
         early_termination_threshold: Win probability threshold for early termination (overrides preset default)
+        cache_size: Cache size for MCTS evaluation cache (overrides preset default)
         **kwargs: Additional parameters to override in the configuration
         
     Returns:
@@ -1249,6 +1251,8 @@ def create_mcts_config(
         config_params["sims"] = sims
     if early_termination_threshold is not None:
         config_params["early_termination_threshold"] = early_termination_threshold
+    if cache_size is not None:
+        config_params["cache_size"] = cache_size
     
     # Override with any additional kwargs
     config_params.update(kwargs)
