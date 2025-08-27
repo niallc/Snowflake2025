@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Set
+from collections import OrderedDict
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
@@ -62,6 +63,9 @@ DEFAULT_BATCH_CAP = 64
 
 # Default PUCT exploration constant
 DEFAULT_C_PUCT = 1.5
+
+# Default cache size for LRU eviction
+DEFAULT_CACHE_SIZE = 100000  # 100k entries
 
 # Default Dirichlet noise parameters
 DEFAULT_DIRICHLET_ALPHA = 0.3
@@ -234,9 +238,12 @@ class EarlyTerminationChecker:
         
         return None  # Continue with MCTS
     
-    def _get_root_win_probability(self, root: MCTSNode, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> float:
+    def _get_root_win_probability(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
         """Get win probability for current player from neural network."""
-        _, value_logit = eval_cache[root.state_hash]
+        cached = eval_cache.get(root.state_hash)
+        if cached is None:
+            raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
+        _, value_logit = cached
         nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
         
         if root.to_play == Player.RED:
@@ -255,6 +262,7 @@ class BaselineMCTSConfig:
     sims: int = 200
     batch_cap: int = DEFAULT_BATCH_CAP
     c_puct: float = DEFAULT_C_PUCT
+    cache_size: int = DEFAULT_CACHE_SIZE
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
     add_root_noise: bool = False
@@ -298,6 +306,8 @@ class BaselineMCTSConfig:
             raise ValueError(f"batch_cap must be positive, got {self.batch_cap}")
         if self.c_puct <= 0:
             raise ValueError(f"c_puct must be positive, got {self.c_puct}")
+        if self.cache_size <= 0:
+            raise ValueError(f"cache_size must be positive, got {self.cache_size}")
         if self.dirichlet_alpha <= 0:
             raise ValueError(f"dirichlet_alpha must be positive, got {self.dirichlet_alpha}")
         if not 0 <= self.dirichlet_eps <= 1:
@@ -389,9 +399,9 @@ class BaselineMCTS:
         # Always use global RNG state - randomness should be controlled externally
         # This ensures MCTS instances don't interfere with each other's randomness
 
-        # Cache: board_key -> (policy_logits_np [A], value_logit_float)
-        # TODO: Consider implementing LRU cache with size limit to prevent memory leaks
-        self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
+        # LRU Cache: board_key -> (policy_logits_np [A], value_logit_float)
+        # Uses OrderedDict for O(1) LRU eviction
+        self.eval_cache: OrderedDict[int, Tuple[np.ndarray, float]] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
         # Metrics
@@ -503,7 +513,7 @@ class BaselineMCTS:
         action_size = board_size * board_size
         
         # Try cache first
-        cached = self.eval_cache.get(root.state_hash, None)
+        cached = self._get_from_cache(root.state_hash)
         if cached is not None:
             self.cache_hits += 1
             policy_np, value_logit = cached
@@ -519,7 +529,7 @@ class BaselineMCTS:
             value_logit = float(value_cpu[0].item())
             
             # Cache results
-            self.eval_cache[root.state_hash] = (policy_np, value_logit)
+            self._put_in_cache(root.state_hash, policy_np, value_logit)
             self._expand_node_from_policy(root, policy_np, board_size, action_size)
 
     def _check_early_termination(self, root: MCTSNode, verbose: int) -> Optional[EarlyTerminationInfo]:
@@ -689,7 +699,7 @@ class BaselineMCTS:
 
             # Cached?
             timing_tracker.start_timing("cache_lookup")
-            cached = self.eval_cache.get(leaf.state_hash, None)
+            cached = self._get_from_cache(leaf.state_hash)
             timing_tracker.end_timing("cache_lookup")
 
             if cached is not None:
@@ -737,7 +747,7 @@ class BaselineMCTS:
             val_logit = float(value_cpu[j].item())
             
             # Cache CPU-native results
-            self.eval_cache[leaf.state_hash] = (pol, val_logit)
+            self._put_in_cache(leaf.state_hash, pol, val_logit)
             self._expand_node_from_policy(leaf, pol, board_size, action_size)
 
     def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
@@ -794,7 +804,10 @@ class BaselineMCTS:
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
         """Get value for a non-terminal leaf from neural network."""
-        _, value_logit = self.eval_cache[leaf.state_hash]
+        cached = self._get_from_cache(leaf.state_hash)
+        if cached is None:
+            raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
+        _, value_logit = cached
         return float(torch.sigmoid(torch.tensor(value_logit)).item())
 
     def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], p_red: float):
@@ -1128,6 +1141,59 @@ class BaselineMCTS:
         self._unique_evals_total = 0
         self._effective_sims_total = 0
 
+    def _get_from_cache(self, board_key: int) -> Optional[Tuple[np.ndarray, float]]:
+        """
+        Get a value from the LRU cache, updating access order.
+        
+        Args:
+            board_key: The board state key to look up
+            
+        Returns:
+            The cached (policy, value) tuple if found, None otherwise
+        """
+        if board_key in self.eval_cache:
+            # Move to end (most recently used)
+            value = self.eval_cache.pop(board_key)
+            self.eval_cache[board_key] = value
+            return value
+        return None
+
+    def _put_in_cache(self, board_key: int, policy: np.ndarray, value: float) -> None:
+        """
+        Put a value in the LRU cache, evicting least recently used if needed.
+        
+        Args:
+            board_key: The board state key
+            policy: The policy logits
+            value: The value logit
+        """
+        # If key already exists, remove it first (will be re-added at end)
+        if board_key in self.eval_cache:
+            self.eval_cache.pop(board_key)
+        
+        # If cache is full, evict least recently used (first item)
+        if len(self.eval_cache) >= self.cfg.cache_size:
+            self.eval_cache.popitem(last=False)  # Remove first (least recently used)
+        
+        # Add new item at end (most recently used)
+        self.eval_cache[board_key] = (policy, value)
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics for monitoring.
+        
+        Returns:
+            Dictionary with cache statistics
+        """
+        return {
+            "cache_size": len(self.eval_cache),
+            "max_cache_size": self.cfg.cache_size,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "cache_hit_rate": self.cache_hits / max(1, self.cache_hits + self.cache_misses),
+            "cache_utilization": len(self.eval_cache) / self.cfg.cache_size
+        }
+
 
 def create_mcts_config(
     config_type: str = "tournament",
@@ -1221,6 +1287,3 @@ def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameStat
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
     return result.move, result.stats, result.tree_data
-
-
-# --------- Stats helpers ---------
