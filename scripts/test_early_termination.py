@@ -66,26 +66,26 @@ def test_early_termination():
         # Run MCTS
         mcts = BaselineMCTS(engine, model, config)
         start_time = time.perf_counter()
-        stats = mcts.run(state, verbose=2)
+        result = mcts.run(state, verbose=2)
         end_time = time.perf_counter()
         
         # Get move and win probability
-        move = mcts.pick_move(state, temperature=1.0, verbose=0)
-        win_prob = mcts.get_win_probability(state)
+        move = result.move
+        win_prob = result.win_probability
         
         # Record results
         results.append({
             'name': name,
             'time': end_time - start_time,
-            'simulations': stats['total_simulations'],
-            'early_termination': stats.get('early_termination_occurred', False),
+            'simulations': result.stats['total_simulations'],
+            'early_termination': result.stats.get('early_termination_occurred', False),
             'win_probability': win_prob,
             'selected_move': move
         })
         
         print(f"   Time: {end_time - start_time:.3f}s")
-        print(f"   Simulations: {stats['total_simulations']}")
-        print(f"   Simple termination occurred: {stats.get('early_termination_occurred', False)}")
+        print(f"   Simulations: {result.stats['total_simulations']}")
+        print(f"   Simple termination occurred: {result.stats.get('early_termination_occurred', False)}")
         print(f"   Win probability: {win_prob:.3f}")
         print(f"   Selected move: {move}")
     
@@ -139,14 +139,14 @@ def test_early_termination_on_different_positions():
         # Run MCTS
         mcts = BaselineMCTS(engine, model, config)
         start_time = time.perf_counter()
-        stats = mcts.run(state, verbose=1)
+        result = mcts.run(state, verbose=1)
         end_time = time.perf_counter()
         
-        win_prob = mcts.get_win_probability(state)
+        win_prob = result.win_probability
         
         print(f"   Time: {end_time - start_time:.3f}s")
-        print(f"   Simulations: {stats['total_simulations']}")
-        print(f"   Simple termination: {stats.get('early_termination_occurred', False)}")
+        print(f"   Simulations: {result.stats['total_simulations']}")
+        print(f"   Simple termination: {result.stats.get('early_termination_occurred', False)}")
         print(f"   Win probability: {win_prob:.3f}")
 
 

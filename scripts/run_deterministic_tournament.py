@@ -717,6 +717,9 @@ Examples:
   
   # Compare with custom opening length and temperature
   %(prog)s --model=current_best --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
+  
+  # Compare different batch sizes for MCTS
+  %(prog)s --model=current_best --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
         """
     )
     
@@ -738,6 +741,8 @@ Examples:
                        help='Comma-separated MCTS simulation counts (overrides strategy names)')
     parser.add_argument('--search-widths', type=str,
                        help='Semicolon-separated search width sets (e.g., "13,8;20,10")')
+    parser.add_argument('--batch-sizes', type=str,
+                       help='Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
@@ -777,9 +782,13 @@ def main():
     if args.search_widths:
         search_widths = [s.strip() for s in args.search_widths.split(';')]
     
+    batch_sizes = None
+    if args.batch_sizes:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
+    
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths)
+        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes)
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)

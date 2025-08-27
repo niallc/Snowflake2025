@@ -26,7 +26,7 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
-from hex_ai.utils.format_conversion import rowcol_to_tensor as move_to_index, tensor_to_rowcol as index_to_move
+from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index, tensor_to_rowcol as index_to_move
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import state_hash_from, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker

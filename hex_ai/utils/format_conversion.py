@@ -155,6 +155,12 @@ def rowcol_to_tensor(row: int, col: int) -> int:
         raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
     return row * BOARD_SIZE + col
 
+def rowcol_to_tensor_with_size(row: int, col: int, board_size: int) -> int:
+    """Convert row, col coordinates to tensor index with specified board size."""
+    if not (0 <= row < board_size) or not (0 <= col < board_size):
+        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {board_size}")
+    return row * board_size + col
+
 def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
     row, col = trmph_move_to_rowcol(move, board_size)
     return rowcol_to_tensor(row, col)

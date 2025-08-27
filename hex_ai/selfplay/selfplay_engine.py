@@ -175,14 +175,14 @@ class SelfPlayEngine:
                 print(f"🎮 SELF-PLAY: Running MCTS with {self.mcts_sims} simulations")
             
             start_time = time.perf_counter()
-            mcts_stats = mcts.run(state)
+            mcts_result = mcts.run(state)
             search_time = time.perf_counter() - start_time
             
-            # Get the best move
-            move = mcts.pick_move(state, temperature=self.temperature, verbose=self.verbose)
+            # Get the best move from the result
+            move = mcts_result.move
             
             # Get root value (approximate from MCTS)
-            tree_data = mcts.get_tree_data(state)
+            tree_data = mcts_result.tree_data
             search_value = tree_data.get('root_value', 0.0)
             
             # Log MCTS statistics
@@ -190,7 +190,7 @@ class SelfPlayEngine:
                 cache_hit_rate = mcts.cache_hits / max(1, mcts.cache_hits + mcts.cache_misses)
                 print(
                     f"[Move {len(state.move_history)}] MCTS: sims={self.mcts_sims}, "
-                    f"inferences={mcts_stats.get('inferences', 0)}, "
+                    f"inferences={mcts_result.stats.get('total_simulations', 0)}, "
                     f"cache_hit_rate={cache_hit_rate:.1%}, "
                     f"time={search_time:.4f}s"
                 )

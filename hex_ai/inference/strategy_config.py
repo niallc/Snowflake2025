@@ -22,7 +22,7 @@ class StrategyConfig:
 
 
 def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]] = None, 
-                          search_widths: Optional[List[str]] = None) -> List[StrategyConfig]:
+                          search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -33,6 +33,7 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
         strategies: List of strategy names (e.g., ["policy", "mcts_100", "fixed_tree_13_8"])
         mcts_sims: Optional list of MCTS simulation counts to override strategy names
         search_widths: Optional list of search width strings (e.g., ["13,8", "20,10"])
+        batch_sizes: Optional list of batch sizes for MCTS strategies (e.g., [64, 128, 256])
     
     Returns:
         List of StrategyConfig objects
@@ -97,6 +98,19 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 widths = [int(w.strip()) for w in search_widths[tree_idx].split(",")]
                 config.config["search_widths"] = widths
                 tree_idx += 1
+    
+    if batch_sizes:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(batch_sizes) != len(mcts_configs):
+            raise ValueError(f"Number of batch sizes ({len(batch_sizes)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        batch_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["batch_size"] = batch_sizes[batch_idx]
+                # Update strategy name to include batch size for unique identification
+                config.name = f"{config.name}_b{batch_sizes[batch_idx]}"
+                batch_idx += 1
     
     return configs
 

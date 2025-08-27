@@ -26,6 +26,7 @@ class MoveSelectionConfig:
     mcts_c_puct: float = 1.5
     mcts_dirichlet_alpha: float = 0.3
     mcts_dirichlet_eps: float = 0.25
+    batch_size: Optional[int] = None  # Override default batch size for MCTS
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -99,6 +100,10 @@ class MCTSStrategy(MoveSelectionStrategy):
             early_termination_threshold=0.95  # Conservative early termination for quality
         )
         
+        # Override batch size if specified in config
+        if config.batch_size is not None:
+            mcts_config.batch_cap = config.batch_size
+        
         # Create required components
         engine = HexGameEngine()
         model_cache = get_model_cache()
@@ -106,14 +111,15 @@ class MCTSStrategy(MoveSelectionStrategy):
         
         # Run MCTS and select move
         mcts = BaselineMCTS(engine, model_wrapper, mcts_config)
-        mcts.run(state, verbose=0)  # Quiet mode for tournaments
-        return mcts.pick_move(state, temperature=config.temperature)
+        result = mcts.run(state, verbose=0)  # Quiet mode for tournaments
+        return result.move
     
     def get_name(self) -> str:
         return "mcts"
     
     def get_config_summary(self, config: MoveSelectionConfig) -> str:
-        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature})"
+        batch_info = f", batch={config.batch_size}" if config.batch_size is not None else ""
+        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info})"
 
 
 # Strategy registry
