@@ -11,13 +11,13 @@ Examples:
 1. Compare models using policy-based selection:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz,epoch2_mini26.pt.gz" \
+     --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz,epoch1_mini100.pt.gz" \
      --strategy=policy
 
 2. Compare models using MCTS with different simulation counts:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
      --strategy=mcts \
      --mcts-sims=100 \
      --mcts-c-puct=1.5
@@ -25,7 +25,7 @@ Examples:
 3. Compare models using fixed tree search:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
      --strategy=fixed_tree \
      --search-widths="20,10,5"
 
@@ -33,7 +33,7 @@ Examples:
    # Policy vs MCTS vs Fixed Tree
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=100 \
-     --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" \
+     --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
      --strategy=mcts \
      --mcts-sims=200 \
      --temperature=1.2
@@ -46,27 +46,21 @@ import argparse
 import os
 import sys
 from datetime import datetime
+from typing import List
 
-from hex_ai.inference.model_config import get_model_dir
+from hex_ai.inference.model_config import get_model_dir, get_model_path
 from hex_ai.inference.tournament import (
     TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
 )
 
-# Directory containing checkpoints
-CHKPT_BASE_DIR = "checkpoints/hyperparameter_tuning"
+# Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
 
-# Default list of checkpoints to compare
+# Default list of checkpoints to compare (epoch1 mini epochs 50, 75, 100)
 DEFAULT_CHECKPOINTS = [
-    "epoch1_mini1.pt.gz",
-    "epoch1_mini27.pt.gz",
-    "epoch1_mini30.pt.gz",
-    "epoch1_mini36.pt.gz",
-    "epoch2_mini4.pt.gz",
-    "epoch2_mini16.pt.gz",
-    "epoch2_mini18.pt.gz",
-    "epoch2_mini20.pt.gz",
-    "epoch2_mini26.pt.gz",
+    "epoch1_mini50.pt.gz",
+    "epoch1_mini75.pt.gz", 
+    "epoch1_mini100.pt.gz",
 ]
 
 def parse_args():
@@ -76,19 +70,19 @@ def parse_args():
         epilog="""
 Examples:
   # Compare models using policy-based selection
-  %(prog)s --num-games=50 --checkpoints="epoch1_mini1.pt.gz,epoch2_mini16.pt.gz" --strategy=policy
+  %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=policy
   
   # Compare models using MCTS
-  %(prog)s --num-games=50 --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" --strategy=mcts --mcts-sims=200
+  %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=mcts --mcts-sims=200
   
   # Compare models using fixed tree search
-  %(prog)s --num-games=50 --checkpoints="epoch2_mini4.pt.gz,epoch2_mini26.pt.gz" --strategy=fixed_tree --search-widths="20,10,5"
+  %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=fixed_tree --search-widths="20,10,5"
         """
     )
     parser.add_argument('--num-games', type=int, default=50, 
                        help='Number of games per pair (default: 50)')
     parser.add_argument('--checkpoints', type=str, 
-                       help='Comma-separated list of checkpoint filenames (e.g., "epoch1_mini1.pt.gz,epoch2_mini16.pt.gz")')
+                       help='Comma-separated list of checkpoint filenames (e.g., "epoch1_mini50.pt.gz,epoch1_mini75.pt.gz,epoch1_mini100.pt.gz")')
     parser.add_argument(
         '--checkpoint_dirs', type=str, 
         help=(
@@ -123,28 +117,25 @@ if __name__ == "__main__":
     
     # Determine which checkpoints to use
     if args.checkpoints:
-        # User provided specific checkpoint names - use old logic
+        # User provided specific checkpoint names
         checkpoint_names = [name.strip() for name in args.checkpoints.split(',')]
         
         # Build full paths for checkpoint directories
         if args.checkpoint_dirs:
             checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
         else:
+            # Use the current best model directory from model config
             checkpoint_dirs = [DEFAULT_CHKPT_DIR]
 
         # Build checkpoint paths
         if len(checkpoint_dirs) == 1:
             # Single directory for all checkpoints
             base_dir = checkpoint_dirs[0]
-            if not base_dir.startswith('checkpoints/'):
-                base_dir = os.path.join(CHKPT_BASE_DIR, base_dir)
             checkpoint_paths = [os.path.join(base_dir, fname) for fname in checkpoint_names]
         elif len(checkpoint_dirs) == len(checkpoint_names):
             # One directory per checkpoint
             checkpoint_paths = []
             for dir_name, fname in zip(checkpoint_dirs, checkpoint_names):
-                if not dir_name.startswith('checkpoints/'):
-                    dir_name = os.path.join(CHKPT_BASE_DIR, dir_name)
                 checkpoint_paths.append(os.path.join(dir_name, fname))
         else:
             print(f"ERROR: Number of checkpoint directories ({len(checkpoint_dirs)}) must be 1 or match the number of checkpoints ({len(checkpoint_names)})")
@@ -152,13 +143,8 @@ if __name__ == "__main__":
             print(f"  Provided checkpoint directories: {checkpoint_dirs}")
             sys.exit(1)
     else:
-        # Use model config for defaults
-        from hex_ai.inference.model_config import get_available_models, get_model_path
-        available_models = get_available_models()
-        if len(available_models) >= 2:
-            checkpoint_paths = [get_model_path(available_models[0]), get_model_path(available_models[1])]
-        else:
-            checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS[:2]]
+        # Use defaults from the current best model directory
+        checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS]
 
     # Check that all checkpoint paths exist before proceeding
     missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
@@ -167,8 +153,12 @@ if __name__ == "__main__":
         for p in missing_paths:
             print(f"  {p}")
         print("\nDebug info:")
-        print(f"  Provided checkpoint names: {checkpoint_names}")
-        print(f"  Provided checkpoint directories: {checkpoint_dirs}")
+        if args.checkpoints:
+            checkpoint_names = [name.strip() for name in args.checkpoints.split(',')]
+            print(f"  Provided checkpoint names: {checkpoint_names}")
+            if args.checkpoint_dirs:
+                checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
+                print(f"  Provided checkpoint directories: {checkpoint_dirs}")
         print(f"  Constructed checkpoint paths: {checkpoint_paths}")
         print("\nPlease check that the checkpoint files exist and the paths are correct.")
         sys.exit(1)
@@ -216,8 +206,11 @@ if __name__ == "__main__":
 
     print(f"Tournament Configuration:")
     print(f"  Checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
-    if args.checkpoints:
+    if args.checkpoints and args.checkpoint_dirs:
+        checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
         print(f"  Checkpoint directories: {checkpoint_dirs}")
+    else:
+        print(f"  Checkpoint directory: {DEFAULT_CHKPT_DIR}")
     print(f"  Number of games per pair: {args.num_games}")
     print(f"  Strategy: {play_config.strategy}")
     print(f"  Strategy config: {play_config.strategy_config}")
