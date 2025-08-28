@@ -178,6 +178,8 @@ def run_single_experiment(
     
     model = TwoHeadedResNet(**model_params).to(device)
     
+
+    
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -451,8 +453,38 @@ def run_hyperparameter_tuning_current_data(
     train_loader, val_loader = create_datasets(
         train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size, shuffle_shards=shuffle_shards, random_seed=random_seed)
     
+    # Estimate actual validation dataset size
+    def estimate_validation_size(val_files, max_validation_examples):
+        """Estimate the actual number of examples in the validation dataset."""
+        if not val_files:
+            return 0
+        
+        # Sample a few files to estimate average examples per file
+        sample_files = val_files[:min(5, len(val_files))]
+        total_examples = 0
+        for file_path in sample_files:
+            try:
+                import gzip
+                import pickle
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                    examples = data.get('examples', [])
+                    total_examples += len(examples)
+            except Exception as e:
+                logger.warning(f"Could not read {file_path}: {e}")
+                continue
+        
+        if sample_files:
+            avg_per_file = total_examples / len(sample_files)
+            estimated_total = avg_per_file * len(val_files)
+            actual_size = min(estimated_total, max_validation_examples) if max_validation_examples else estimated_total
+            return int(actual_size)
+        return 0
+    
+    actual_val_size = estimate_validation_size(val_files, max_validation_examples)
+    
     # Remove or guard len() usage for streaming datasets
-    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples.")
+    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples (actual: {actual_val_size:,}).")
     
     if train_loader is None:
         return {'error': 'Failed to create datasets'}

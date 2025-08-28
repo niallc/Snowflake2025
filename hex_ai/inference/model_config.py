@@ -13,22 +13,17 @@ from typing import List, Optional
 CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250805_162626/pipeline_sweep_exp0__99914b_20250805_162626"
-CURRENT_BEST_MODEL_FILE = "epoch4_mini32.pt.gz"
+CURRENT_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
+CURRENT_BEST_MODEL_FILE = "epoch1_mini71.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408"
-PREVIOUS_BEST_MODEL_FILE = "epoch2_mini16.pt.gz"
+PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
+PREVIOUS_BEST_MODEL_FILE = "epoch1_mini61.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)
-LEGACY_MODELS = {
-    "loss_weight_sweep_bs256": {
-        "dir": "hyperparameter_tuning/loss_weight_sweep_exp0_bs256_98f719_20250724_233408",
-        "file": "epoch2_mini16.pt.gz"
-    }
-}
+LEGACY_MODELS = {}
 
 def get_model_path(model_name: str = "current_best") -> str:
     """

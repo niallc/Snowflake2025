@@ -54,6 +54,63 @@ TRLETTERS = LETTERS[:BOARD_SIZE]
 # File Format Conversion Functions
 # ============================================================================
 
+def find_trmph_files(source_dirs: List[Path]) -> List[Tuple[Path, Path]]:
+    """
+    Find all .trmph files in the specified source directories.
+    
+    Args:
+        source_dirs: List of source directories to search for .trmph files
+        
+    Returns:
+        List of tuples: (source_dir, file_path)
+    """
+    all_files = []
+    
+    for source_dir in source_dirs:
+        if not source_dir.exists():
+            logger.warning(f"Source directory {source_dir} does not exist, skipping")
+            continue
+            
+        # Find all .trmph files recursively
+        trmph_files = list(source_dir.rglob("*.trmph"))
+        logger.info(f"Found {len(trmph_files)} .trmph files in {source_dir}")
+        
+        for file_path in trmph_files:
+            all_files.append((source_dir, file_path))
+    
+    logger.info(f"Total .trmph files found: {len(all_files)}")
+    return all_files
+
+
+def extract_games_from_file(file_path: Path) -> List[str]:
+    """Extract game lines from a TRMPH file, skipping headers."""
+    games = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            # Game lines start with #13, (board size + format)
+            # Header lines start with just # (metadata)
+            if line and line.startswith('#13,'):
+                # Remove any inline comments (everything after # that's not part of the game)
+                if ' # ' in line:
+                    line = line.split(' # ')[0].strip()
+                games.append(line)
+    return games
+
+
+def remove_duplicates(games: List[str]) -> List[str]:
+    """Remove duplicate games while preserving order."""
+    seen = set()
+    unique_games = []
+    
+    for game in games:
+        if game not in seen:
+            seen.add(game)
+            unique_games.append(game)
+    
+    logger.info(f"Removed {len(games) - len(unique_games)} duplicate games")
+    return unique_games
+
 def load_trmph_file(file_path: str) -> List[str]:
     """
     Load a single .trmph file.

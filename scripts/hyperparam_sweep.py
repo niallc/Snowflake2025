@@ -64,11 +64,11 @@ def calculate_mini_epoch_samples(
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "batch_size": [256],
-    "max_grad_norm": [5],
+    "max_grad_norm": [4],
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
-    "policy_weight": [0.2],
+    "policy_weight": [0.1],
     "learning_rate": [0.001],
     
     # Likely resolved:

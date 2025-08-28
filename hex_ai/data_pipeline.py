@@ -157,6 +157,9 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         Sequentially iterate over all examples in all shards, applying augmentation if enabled.
         Yields (board_tensor, policy_tensor, value_tensor) tuples.
         """
+        # Reset batch count for each new iteration
+        self.approx_batch_count = 0
+        
         total_yielded = 0
         total_shards_loaded = 0
         num_shards = len(self.data_files)

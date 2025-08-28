@@ -257,6 +257,7 @@ class Trainer:
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
             run_timestamp: Optional timestamp for the entire run to use in log filenames
+
         """
         if device is None:
             device = get_device()
@@ -268,6 +269,7 @@ class Trainer:
         self.max_grad_norm = max_grad_norm
         self.run_timestamp = run_timestamp
         self.shutdown_handler = shutdown_handler
+
         
         # Store hyperparameters for logging
         self.value_learning_rate_factor = value_learning_rate_factor
@@ -582,6 +584,7 @@ class Trainer:
         
         with torch.no_grad():
             for boards, policies, values in self.val_loader:
+                    
                 # Move to device
                 boards = boards.to(self.device)
                 policies = policies.to(self.device)
