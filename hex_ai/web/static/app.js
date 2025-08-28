@@ -225,8 +225,8 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
     COLORS.VERY_DARK_BLUE
   ));
+  
   // Red edges: pass through midpoints of the true outer edges
-
   function edgeMidpoint(vA, vB) {
     return { x: (vA.x + vB.x) / 2, y: (vA.y + vB.y) / 2 };
   }
