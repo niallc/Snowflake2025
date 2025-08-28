@@ -32,6 +32,7 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
+from hex_ai.value_utils import ValuePredictor
 
 # ---- MCTS Constants ----
 # Temperature comparison threshold for move selection
@@ -244,7 +245,8 @@ class EarlyTerminationChecker:
         if cached is None:
             raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
         _, value_logit = cached
-        nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
+        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
+        nn_win_prob = float(ValuePredictor.model_output_to_probability(value_logit))
         
         if root.to_play == Player.RED:
             return nn_win_prob
@@ -808,7 +810,8 @@ class BaselineMCTS:
         if cached is None:
             raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
         _, value_logit = cached
-        return float(torch.sigmoid(torch.tensor(value_logit)).item())
+        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
+        return float(ValuePredictor.model_output_to_probability(value_logit))
 
     def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], p_red: float):
         """Backpropagate value along a path from leaf to root."""

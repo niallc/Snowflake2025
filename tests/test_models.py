@@ -62,22 +62,25 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_creation(self):
         """Test that TwoHeadedResNet can be created."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         self.assertIsInstance(model, TwoHeadedResNet)
     
     def test_model_forward(self):
         """Test that model forward pass works."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         x = torch.randn(4, 3, BOARD_SIZE, BOARD_SIZE)
         policy_logits, value_logit = model(x)
         
         # Check output shapes
         self.assertEqual(policy_logits.shape, (4, POLICY_OUTPUT_SIZE))
         self.assertEqual(value_logit.shape, (4, VALUE_OUTPUT_SIZE))
+        
+        # Check that value outputs are in [-1, 1] range due to tanh
+        self.assertTrue(torch.all(value_logit >= -1) and torch.all(value_logit <= 1))
     
     def test_model_parameters(self):
         """Test that model has reasonable number of parameters."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         num_params = count_parameters(model)
         
         # ResNet-18 should have ~11M parameters
@@ -86,7 +89,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_summary(self):
         """Test that model summary works."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         summary = get_model_summary(model)
         
         # Check that summary contains expected information
@@ -97,7 +100,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_device_transfer(self):
         """Test that model can be moved to different devices."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         
         # Test CPU
         model_cpu = model.cpu()
@@ -116,7 +119,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_gradients(self):
         """Test that model can compute gradients."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
         policy_logits, value_logit = model(x)
         
@@ -129,7 +132,7 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_batch_sizes(self):
         """Test that model works with different batch sizes."""
-        model = TwoHeadedResNet()
+        model = TwoHeadedResNet(use_value_bottleneck=True)
         
         batch_sizes = [1, 4, 8, 16]
         for batch_size in batch_sizes:
@@ -138,6 +141,27 @@ class TestTwoHeadedResNet(unittest.TestCase):
             
             self.assertEqual(policy_logits.shape, (batch_size, POLICY_OUTPUT_SIZE))
             self.assertEqual(value_logit.shape, (batch_size, VALUE_OUTPUT_SIZE))
+    
+    def test_value_head_architecture(self):
+        """Test the enhanced value head architecture."""
+        # Test with bottleneck
+        model_with_bottleneck = TwoHeadedResNet(use_value_bottleneck=True)
+        x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE)
+        policy, value = model_with_bottleneck(x)
+        
+        # Check value range is [-1, 1] due to tanh
+        self.assertTrue(torch.all(value >= -1) and torch.all(value <= 1))
+        
+        # Test without bottleneck
+        model_no_bottleneck = TwoHeadedResNet(use_value_bottleneck=False)
+        policy2, value2 = model_no_bottleneck(x)
+        
+        # Check value range is [-1, 1] due to tanh
+        self.assertTrue(torch.all(value2 >= -1) and torch.all(value2 <= 1))
+        
+        # Both should have same shapes
+        self.assertEqual(value.shape, value2.shape)
+        self.assertEqual(policy.shape, policy2.shape)
 
 
 class TestModelFactory(unittest.TestCase):

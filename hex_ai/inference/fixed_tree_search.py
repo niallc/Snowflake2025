@@ -9,7 +9,7 @@ import time
 
 # Assume HexGameState and SimpleModelInference are imported from the appropriate modules
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, sample_moves_from_policy
+from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, sample_moves_from_policy, ValuePredictor
 from hex_ai.enums import Player
 
 # Set up logging for debugging
@@ -594,9 +594,9 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: Player
     Convert a raw model value logit to a minimax-friendly value from the root player's perspective.
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    The model outputs raw logits representing log(p/(1-p)) where p is the probability of Red winning.
+    The model outputs values in [-1, 1] range with tanh activation where positive values favor Red.
     This function:
-    1. Applies sigmoid to convert logit to probability: sigmoid(logit) = p
+    1. Converts from [-1, 1] range to [0, 1] probability: (value + 1) / 2
     2. Converts to root player's perspective for minimax search
     
     Args:
@@ -617,10 +617,8 @@ def convert_model_logit_to_minimax_value(value_logit: float, root_player: Player
         raise TypeError(f"root_player must be Player, got {type(root_player)}")
     root_player_enum = root_player
     
-    # Step 1: Convert logit to probability using sigmoid
-    # The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    # sigmoid(value_logit) gives the probability that Red wins.
-    prob_red_win = torch.sigmoid(torch.tensor(value_logit)).item()
+    # Step 1: Convert from [-1, 1] range to [0, 1] probability using centralized utility
+    prob_red_win = ValuePredictor.model_output_to_probability(value_logit)
     
     # Step 2: Convert to root player's perspective
     if root_player_enum == Player.BLUE:  # Root player is Blue
@@ -687,8 +685,8 @@ def evaluate_leaf_nodes(
         node.value = convert_model_logit_to_minimax_value(value, effective_root_player)
         
         # Debug logging with intermediate values for clarity
-        prob_red_win = torch.sigmoid(torch.tensor(value)).item()
-        logger.debug(f"Leaf node {node.path}: raw_logit={value:.4f}, prob_red={prob_red_win:.4f}, converted_value={node.value:.4f}")
+        prob_red_win = ValuePredictor.model_output_to_probability(value)
+        logger.debug(f"Leaf node {node.path}: raw_value={value:.4f}, prob_red={prob_red_win:.4f}, converted_value={node.value:.4f}")
 
 
 def minimax_backup(node: MinimaxSearchNode) -> float:

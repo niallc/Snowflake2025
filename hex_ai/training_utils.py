@@ -12,6 +12,7 @@ from typing import Tuple, List, Optional
 import logging
 
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from hex_ai.value_utils import ValuePredictor
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
@@ -163,7 +164,8 @@ def create_sample_data(batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor,
     
     # Create random value targets (single value per board)
     values = torch.randn(batch_size, VALUE_OUTPUT_SIZE)
-    values = torch.sigmoid(values)  # Convert to [0, 1] range
+    # TODO: Check here and elsewhere whether we're correctly using [-1, 1], vs. [0, 1].
+    values = torch.sigmoid(values)  # Convert to [0, 1] range (targets are still in [0,1])
     
     return boards, policies, values
 
@@ -321,7 +323,8 @@ class ValueHeadAnalyzer:
                 board = board.unsqueeze(0).to(self.device)
                 
                 policy_pred, value_pred = self.model(board)
-                value_prob = torch.sigmoid(value_pred).item()
+                # Convert from [-1, 1] to [0, 1] range using centralized utility
+                value_prob = ValuePredictor.model_output_to_probability(value_pred.item())
                 
                 predictions.append(value_prob)
                 targets.append(value.item())
@@ -372,7 +375,8 @@ class ValueHeadAnalyzer:
         with torch.no_grad():
             for name, board in test_positions.items():
                 policy_pred, value_pred = self.model(board)
-                value_prob = torch.sigmoid(value_pred).item()
+                # Convert from [-1, 1] to [0, 1] range using centralized utility
+                value_prob = ValuePredictor.model_output_to_probability(value_pred.item())
                 results[name] = value_prob
         
         return results

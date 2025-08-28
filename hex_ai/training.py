@@ -34,6 +34,7 @@ from hex_ai.training_utils import get_device
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
 from hex_ai.error_handling import get_board_state_error_tracker
+from hex_ai.value_utils import ValuePredictor
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +81,11 @@ class PolicyValueLoss(nn.Module):
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Value loss is computed on probabilities, not logits
-        # The value head predicts Red's win probability (target 1.0 = Red wins)
-        # This ensures the network is trained to output probabilities in [0,1]
-        value_loss = self.value_loss(torch.sigmoid(value_pred.squeeze()), value_target.squeeze())
+        # Value loss is computed on the raw value predictions
+        # The value head now outputs values in [-1, 1] range with tanh activation
+        # We need to convert to [0, 1] range for comparison with targets
+        value_prob = ValuePredictor.model_output_to_probability_tensor(value_pred.squeeze())
+        value_loss = self.value_loss(value_prob, value_target.squeeze())
         
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:

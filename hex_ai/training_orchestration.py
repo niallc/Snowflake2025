@@ -166,6 +166,11 @@ def run_single_experiment(
         model_params['resnet_depth'] = exp_config['hyperparameters']['resnet_depth']
     if 'dropout_prob' in exp_config['hyperparameters']:
         model_params['dropout_prob'] = exp_config['hyperparameters']['dropout_prob']
+    if 'use_value_bottleneck' in exp_config['hyperparameters']:
+        model_params['use_value_bottleneck'] = exp_config['hyperparameters']['use_value_bottleneck']
+    else:
+        # Default to True for the enhanced value head
+        model_params['use_value_bottleneck'] = True
     
     # Trainer parameters (everything else except batch_size which is used for DataLoader creation)
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 

@@ -187,7 +187,7 @@ class SimpleModelInference:
         Uses the same preprocessing pipeline as training to ensure consistency.
         Returns (policy_logits, value_logit):
             - policy_logits: np.ndarray, raw policy logits (before softmax)
-            - value_logit: float, raw value logit (before sigmoid)
+            - value_logit: float, raw value output (tanh activated, [-1, 1] range)
         """
         start_time = time.time()
         

@@ -124,10 +124,157 @@ def validate_trmph_winner(trmph_winner: str) -> None:
     elif trmph_winner == "2":  # Legacy TRMPH_RED_WIN
         raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected. Use new TRMPH_RED_WIN ('r') instead.")
 
-# --- Model output utilities ---
+# =============================
+# Value Prediction Utilities (New Enhanced Value Head)
+# =============================
+
+class ValuePredictor:
+    """
+    Centralized utility for handling value predictions from the enhanced value head.
+    
+    The new value head outputs values in [-1, 1] range with tanh activation.
+    This utility provides a clean interface for converting these values to various
+    probability formats needed by different parts of the codebase.
+    """
+    
+    @staticmethod
+    def model_output_to_probability(model_output: float) -> float:
+        """
+        Convert model output from [-1, 1] range to [0, 1] probability.
+        
+        Args:
+            model_output: Raw model output in [-1, 1] range (tanh activated)
+            
+        Returns:
+            Probability in [0, 1] range representing Red's win probability
+        """
+        return (model_output + 1) / 2
+    
+    @staticmethod
+    def model_output_to_probability_tensor(model_output: torch.Tensor) -> torch.Tensor:
+        """
+        Convert model output tensor from [-1, 1] range to [0, 1] probability.
+        
+        Args:
+            model_output: Raw model output tensor in [-1, 1] range (tanh activated)
+            
+        Returns:
+            Probability tensor in [0, 1] range representing Red's win probability
+        """
+        return (model_output + 1) / 2
+    
+    @staticmethod
+    def get_win_probability(model_output: float, player: Player) -> float:
+        """
+        Get win probability for a specific player from model output.
+        
+        Args:
+            model_output: Raw model output in [-1, 1] range (tanh activated)
+            player: Player to get win probability for
+            
+        Returns:
+            Win probability for the specified player in [0, 1] range
+        """
+        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        
+        if player == Player.RED:
+            return prob_red_win
+        elif player == Player.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid player: {player}")
+    
+    @staticmethod
+    def get_win_probability_tensor(model_output: torch.Tensor, player: Player) -> torch.Tensor:
+        """
+        Get win probability tensor for a specific player from model output.
+        
+        Args:
+            model_output: Raw model output tensor in [-1, 1] range (tanh activated)
+            player: Player to get win probability for
+            
+        Returns:
+            Win probability tensor for the specified player in [0, 1] range
+        """
+        prob_red_win = ValuePredictor.model_output_to_probability_tensor(model_output)
+        
+        if player == Player.RED:
+            return prob_red_win
+        elif player == Player.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid player: {player}")
+    
+    @staticmethod
+    def convert_to_minimax_value(model_output: float, root_player: Player) -> float:
+        """
+        Convert model output to minimax-friendly value from root player's perspective.
+        
+        Args:
+            model_output: Raw model output in [-1, 1] range (tanh activated)
+            root_player: Player whose perspective to use for minimax value
+            
+        Returns:
+            Minimax value in [-1, 1] range where positive = good for root player
+        """
+        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        
+        if root_player == Player.BLUE:
+            # For Blue: positive values = Blue wins (good), negative values = Red wins (bad)
+            # Convert from Red's win probability to Blue's perspective
+            return 1.0 - 2.0 * prob_red_win  # Maps [0,1] to [1,-1]
+        else:  # root_player == Player.RED
+            # For Red: negative values = Red wins (good), positive values = Blue wins (bad)
+            # Convert from Red's win probability to Red's perspective
+            return 2.0 * prob_red_win - 1.0  # Maps [0,1] to [-1,1]
+    
+    @staticmethod
+    def batch_convert_to_probabilities(model_outputs: torch.Tensor) -> torch.Tensor:
+        """
+        Convert batch of model outputs from [-1, 1] range to [0, 1] probabilities.
+        
+        Args:
+            model_outputs: Batch of raw model outputs in [-1, 1] range (tanh activated)
+            
+        Returns:
+            Batch of probabilities in [0, 1] range representing Red's win probabilities
+        """
+        return ValuePredictor.model_output_to_probability_tensor(model_outputs)
+    
+    @staticmethod
+    def validate_model_output(model_output: float) -> bool:
+        """
+        Validate that model output is in the expected [-1, 1] range.
+        
+        Args:
+            model_output: Raw model output to validate
+            
+        Returns:
+            True if output is in valid range, False otherwise
+        """
+        return -1.0 <= model_output <= 1.0
+    
+    @staticmethod
+    def validate_model_output_tensor(model_output: torch.Tensor) -> bool:
+        """
+        Validate that model output tensor is in the expected [-1, 1] range.
+        
+        Args:
+            model_output: Raw model output tensor to validate
+            
+        Returns:
+            True if all outputs are in valid range, False otherwise
+        """
+        return torch.all((model_output >= -1.0) & (model_output <= 1.0)).item()
+
+
+# Legacy compatibility functions (deprecated but kept for backward compatibility)
 def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
     """
     Convert model output (sigmoid(logit)) to probability for the given perspective.
+    
+    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
+    for the new tanh-based value head.
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     model_output is the probability that Red wins (after applying sigmoid to the raw logit).
@@ -145,6 +292,9 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     """
     Convert a probability for a given perspective to the model output convention.
     
+    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
+    for the new tanh-based value head.
+    
     The value head predicts Red's win probability, so the model output convention
     is the probability that Red wins.
     """
@@ -161,6 +311,9 @@ def get_win_prob_from_model_output(model_output: float, player) -> float:
     """
     Given the raw model output (logit) and a player (Winner or Player only),
     return the probability that player wins.
+    
+    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
+    for the new tanh-based value head.
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     """

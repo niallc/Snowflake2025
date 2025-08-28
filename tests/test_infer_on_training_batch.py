@@ -3,6 +3,7 @@ import pytest
 import torch
 import numpy as np
 from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.value_utils import ValuePredictor
 
 BATCH_FILE = "analysis/debugging/value_head_performance/batch0_epoch0_test.pkl"  # Update to a real file for actual test
 CHECKPOINT = "checkpoints/hyperparameter_tuning/loss_weight_sweep_exp2_do0_pw0.001_f537d4_20250722_211936/epoch1_mini15.pt"  # Update to a real file for actual test
@@ -17,7 +18,8 @@ def test_infer_on_training_batch_smoke():
     model = ModelWrapper(CHECKPOINT, device="cpu")
     with torch.no_grad():
         _, value_logits = model.batch_predict(boards)
-        value_probs = torch.sigmoid(value_logits).squeeze(-1).numpy()
+        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
+        value_probs = ValuePredictor.batch_convert_to_probabilities(value_logits).squeeze(-1).numpy()
         targets = values.squeeze(-1).numpy() if values.ndim > 1 else values.numpy()
     assert value_probs.shape == targets.shape
     mse = np.mean((value_probs - targets) ** 2)
