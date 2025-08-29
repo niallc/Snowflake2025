@@ -265,15 +265,18 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
 
   // --- Draw player edge indicators ---
   // Blue: top and bottom (across the topmost and bottommost hexes)
+  // Increase stroke width to extend the strips toward the board
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
     hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
-    COLORS.BLUE_EDGE_BORDER
+    COLORS.BLUE_EDGE_BORDER,
+    15  // Increased stroke width from 10 to 20 to extend down
   ));
   svg.appendChild(makeEdgeLine(
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
-    COLORS.BLUE_EDGE_BORDER
+    COLORS.BLUE_EDGE_BORDER,
+    15  // Increased stroke width from 10 to 20 to extend up
   ));
   
   // Red edges: pass through midpoints of the true outer edges
@@ -288,7 +291,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // left side uses edge between vertices 2 and 3
   const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
   const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
-  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 22));
 
   const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
                         hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
@@ -298,7 +301,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // right side uses edge between vertices 0 and 5
   const rightTopMid = edgeMidpoint(tr[0], tr[5]);
   const rightBotMid = edgeMidpoint(br[0], br[5]);
-  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 22));
 
 
   // Draw hexes
