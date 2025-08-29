@@ -351,10 +351,17 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
         - temperature < 1.0: More deterministic (sharper distribution)
         - temperature > 1.0: More random (flatter distribution)
         - temperature = 0.0: Greedy selection (argmax)
+        - temperature < 0.02: Uses deterministic selection to avoid numerical issues
     """
 
     if temperature <= 0:
         # Greedy selection: return one-hot vector for argmax
+        result = np.zeros_like(logits)
+        result[np.argmax(logits)] = 1.0
+        return result
+    
+    # For very low temperatures, use deterministic selection to avoid numerical issues
+    if temperature < 0.02:
         result = np.zeros_like(logits)
         result[np.argmax(logits)] = 1.0
         return result

@@ -32,11 +32,11 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
-from hex_ai.value_utils import ValuePredictor
+from hex_ai.value_utils import ValuePredictor, winner_to_color
 
 # ---- MCTS Constants ----
 # Temperature comparison threshold for move selection
-TEMPERATURE_COMPARISON_THRESHOLD = 1e-6
+TEMPERATURE_COMPARISON_THRESHOLD = 0.02  # Use deterministic selection for very low temperatures
 
 # Principal variation extraction limit
 PRINCIPAL_VARIATION_MAX_LENGTH = 10
@@ -56,8 +56,7 @@ DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 # Default depth discount factor
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.95
 
-# Default terminal win value boost
-DEFAULT_TERMINAL_WIN_VALUE_BOOST = 1.5
+
 
 # Default batch cap for neural network evaluation (imported from hex_ai.config)
 # DEFAULT_BATCH_CAP = 64
@@ -295,8 +294,7 @@ class BaselineMCTSConfig:
     # when the position is already won. Only applies during MCTS search, not during
     # early termination when using the policy network.
     
-    # Terminal move value boosting
-    terminal_win_value_boost: float = DEFAULT_TERMINAL_WIN_VALUE_BOOST  # Multiply terminal win values by this factor
+
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
     
@@ -332,8 +330,7 @@ class BaselineMCTSConfig:
             raise ValueError(f"early_termination_threshold must be between 0 and 1, got {self.early_termination_threshold}")
         if not 0 < self.depth_discount_factor <= 1:
             raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
-        if self.terminal_win_value_boost <= 0:
-            raise ValueError(f"terminal_win_value_boost must be positive, got {self.terminal_win_value_boost}")
+
         
         # Validate temperature step parameters if using step decay
         if self.temperature_decay_type == "step":
@@ -379,7 +376,7 @@ class MCTSNode:
         self.is_expanded: bool = False
         self.state_hash: int = board_key(state)
         self.is_terminal: bool = bool(state.game_over)
-        self.winner_str: Optional[str] = state.winner if self.is_terminal else None
+        self.winner_str: Optional[str] = winner_to_color(state.winner) if self.is_terminal else None
         self.terminal_moves: List[bool] = [False] * L # New attribute for terminal move detection
         self._terminal_moves_detected: bool = False  # Track if terminal moves have been detected
         self.depth: int = 0  # Track node depth in the tree
@@ -795,13 +792,7 @@ class BaselineMCTS:
             return 0.5  # Draw
         
         p_red = 1.0 if leaf.winner_str == "red" else 0.0
-        
-        # Apply terminal win value boost
-        if self.cfg.terminal_win_value_boost != 1.0:
-            if (leaf.winner_str == "red" and leaf.to_play == Player.RED) or \
-               (leaf.winner_str == "blue" and leaf.to_play == Player.BLUE):
-                p_red = min(1.0, p_red * self.cfg.terminal_win_value_boost)
-        
+    
         return p_red
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
@@ -887,13 +878,22 @@ class BaselineMCTS:
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
         
         if temp <= TEMPERATURE_COMPARISON_THRESHOLD:
+            # Use deterministic selection for very low temperatures to avoid numerical issues
             a_idx = int(np.argmax(counts))
         else:
-            pi = np.power(counts, 1.0 / temp)
-            if not np.isfinite(pi).all() or np.sum(pi) <= 0:
-                raise ValueError(f"Invalid temperature scaling result: pi={pi}, counts={counts}, temp={temp}")
-            pi /= np.sum(pi)
-            a_idx = int(np.random.choice(len(pi), p=pi))
+            # Apply temperature scaling with validation
+            try:
+                pi = np.power(counts, 1.0 / temp)
+                if not np.isfinite(pi).all():
+                    raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={counts}, temp={temp}")
+                if np.sum(pi) <= 0:
+                    raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={counts}, temp={temp}")
+                pi /= np.sum(pi)
+                a_idx = int(np.random.choice(len(pi), p=pi))
+            except (OverflowError, ValueError) as e:
+                # Fall back to deterministic selection if temperature scaling fails
+                print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
+                a_idx = int(np.argmax(counts))
         return root.legal_moves[a_idx]
 
     def _compute_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
@@ -1279,8 +1279,7 @@ def create_mcts_config(
         # Depth-based discounting to encourage shorter wins
         "enable_depth_discounting": True,
         "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
-        # Terminal win value boosting
-        "terminal_win_value_boost": DEFAULT_TERMINAL_WIN_VALUE_BOOST,
+
     })
     
     return BaselineMCTSConfig(**config_params)

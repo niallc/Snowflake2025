@@ -385,13 +385,13 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
         if (lastMove && lastMove[0] === row && lastMove[1] === col) {
           labelColor = '#004499'; // Much darker blue for last move
         } else {
-          labelColor = '#00cccc'; // Substantially lighter blue for regular blue pieces
+          labelColor = '#00eeee'; // trmph label color, blue
         }
       } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
         if (lastMove && lastMove[0] === row && lastMove[1] === col) {
           labelColor = '#992200'; // Much darker red for last move
         } else {
-          labelColor = '#ddaa00'; // Slightly lighter red for regular red pieces
+          labelColor = '#ddcc00'; // trmph label color, red
         }
       }
       

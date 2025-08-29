@@ -501,6 +501,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
             temperature_end = temperature / 10
         
+        # Warn about very low temperatures that will use deterministic selection
+        if temperature < 0.02:
+            app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
+        
         mcts_config = BaselineMCTSConfig(
             sims=num_simulations,
             c_puct=exploration_constant,
