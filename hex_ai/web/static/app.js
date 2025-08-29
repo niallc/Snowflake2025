@@ -143,6 +143,40 @@ function rowcolToTrmph(row, col) {
   return String.fromCharCode(97 + col) + (row + 1);
 }
 
+// --- Custom Tooltip Functions ---
+let tooltip = null;
+
+function showTooltip(event, text) {
+  // Remove existing tooltip
+  hideTooltip();
+  
+  // Create tooltip element
+  tooltip = document.createElement('div');
+  tooltip.textContent = text;
+  tooltip.style.cssText = `
+    position: fixed;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+    pointer-events: none;
+    z-index: 1000;
+    left: ${event.clientX + 10}px;
+    top: ${event.clientY - 30}px;
+  `;
+  
+  document.body.appendChild(tooltip);
+}
+
+function hideTooltip() {
+  if (tooltip) {
+    tooltip.remove();
+    tooltip = null;
+  }
+}
+
 // --- API Calls ---
 async function fetchConstants() {
   const resp = await fetch('/api/constants', {
@@ -356,6 +390,26 @@ function makeHex(cx, cy, r, fill, highlight) {
   hex.setAttribute('stroke', COLORS.HEX_GRID_COLOR);
   hex.setAttribute('stroke-width', 2);
   if (highlight) hex.style.cursor = 'pointer';
+  
+  // Add tooltip functionality
+  hex.addEventListener('mouseenter', function(e) {
+    console.log('Mouse enter event triggered!');
+    const row = parseInt(this.getAttribute('data-row'));
+    const col = parseInt(this.getAttribute('data-col'));
+    console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
+    if (!isNaN(row) && !isNaN(col)) {
+      const trmph = rowcolToTrmph(row, col);
+      console.log('TRMPH format:', trmph);
+      showTooltip(e, trmph);
+    } else {
+      console.log('Invalid row/col values - row:', row, 'col:', col);
+    }
+  });
+  
+  hex.addEventListener('mouseleave', function(e) {
+    hideTooltip();
+  });
+  
   return hex;
 }
 
