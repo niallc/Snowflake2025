@@ -310,7 +310,9 @@ def create_train_val_split(data_files: List[Path],
                           train_ratio: float = 0.8,
                           random_seed: Optional[int] = None,
                           max_files_per_split: Optional[int] = None,
-                          shuffle_shards: bool = True) -> Tuple[List[Path], List[Path]]:
+                          shuffle_shards: bool = True,
+                          data_source_info: Optional[List[Dict]] = None,
+                          max_validation_examples: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
     """
     Create train/validation split of data files.
     
@@ -320,6 +322,7 @@ def create_train_val_split(data_files: List[Path],
         random_seed: Random seed for reproducible splits
         max_files_per_split: Maximum number of files per split (for efficiency)
         shuffle_shards: Whether to shuffle the data shards before splitting (default: True)
+        data_source_info: Optional information about data sources for stratified sampling
         
     Returns:
         Tuple of (train_files, val_files)
@@ -327,6 +330,154 @@ def create_train_val_split(data_files: List[Path],
     if random_seed is not None:
         random.seed(random_seed)
     
+    # If we have data source information, use stratified sampling for better representation
+    if data_source_info and len(data_source_info) > 1:
+        logger.info("Using stratified sampling to ensure validation data represents all data sources")
+        return _create_stratified_train_val_split(
+            data_files, train_ratio, random_seed, max_files_per_split, 
+            shuffle_shards, data_source_info, max_validation_examples
+        )
+    else:
+        # Fall back to simple random split
+        return _create_simple_train_val_split(
+            data_files, train_ratio, random_seed, max_files_per_split, shuffle_shards
+        )
+
+
+def _create_stratified_train_val_split(data_files: List[Path], 
+                                      train_ratio: float,
+                                      random_seed: Optional[int],
+                                      max_files_per_split: Optional[int],
+                                      shuffle_shards: bool,
+                                      data_source_info: List[Dict],
+                                      max_validation_examples: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
+    """
+    Create stratified train/validation split ensuring representation from all data sources.
+    Optimized to select only the minimum number of validation files needed.
+    """
+    train_files = []
+    val_files = []
+    
+    # Group files by their source directory
+    files_by_source = {}
+    current_file_idx = 0
+    
+    for source_info in data_source_info:
+        directory = source_info['directory']
+        files_count = source_info['files_count']
+        
+        # Get files for this source
+        source_files = data_files[current_file_idx:current_file_idx + files_count]
+        current_file_idx += files_count
+        
+        if source_files:
+            files_by_source[directory] = source_files
+    
+    # Estimate examples per file for validation size optimization
+    examples_per_file = None
+    if max_validation_examples is not None:
+        examples_per_file = _estimate_examples_per_file(data_files[:min(3, len(data_files))])
+        logger.info(f"Estimated {examples_per_file:,} examples per file for validation optimization")
+    
+    # Calculate target validation files per source
+    target_val_files_per_source = {}
+    if examples_per_file and max_validation_examples:
+        total_val_files_needed = max(1, max_validation_examples // examples_per_file)
+        logger.info(f"Target validation files needed: ~{total_val_files_needed} (for {max_validation_examples:,} examples)")
+        
+        # Distribute validation files proportionally across sources
+        total_files = sum(len(files) for files in files_by_source.values())
+        for directory, source_files in files_by_source.items():
+            source_ratio = len(source_files) / total_files
+            target_val_files = max(1, int(total_val_files_needed * source_ratio))
+            target_val_files_per_source[directory] = min(target_val_files, len(source_files))
+    else:
+        # Fall back to proportional split without size optimization
+        for directory, source_files in files_by_source.items():
+            target_val_files_per_source[directory] = max(1, int(len(source_files) * (1 - train_ratio)))
+    
+    # Create stratified split for each source
+    for directory, source_files in files_by_source.items():
+        if shuffle_shards:
+            shuffled_source_files = shuffle_data_files(source_files, True, random_seed)
+        else:
+            shuffled_source_files = source_files
+        
+        target_val_files = target_val_files_per_source[directory]
+        
+        # Split files for this source
+        if target_val_files < len(shuffled_source_files):
+            # Optimized split: only take the minimum validation files needed
+            source_train = shuffled_source_files[target_val_files:]
+            source_val = shuffled_source_files[:target_val_files]
+        else:
+            # Fall back to proportional split
+            split_idx = int(len(shuffled_source_files) * train_ratio)
+            source_train = shuffled_source_files[:split_idx]
+            source_val = shuffled_source_files[split_idx:]
+        
+        train_files.extend(source_train)
+        val_files.extend(source_val)
+        
+        logger.info(f"Stratified split for {directory}: {len(source_train)} train, {len(source_val)} validation files (target: {target_val_files})")
+    
+    # Apply max_files_per_split limit if specified
+    if max_files_per_split is not None:
+        train_files = train_files[:max_files_per_split]
+        val_files = val_files[:max_files_per_split]
+        logger.info(f"Limited to {max_files_per_split} files per split for efficiency")
+    
+    logger.info(f"Stratified split complete: {len(train_files)} train, {len(val_files)} validation files")
+    
+    return train_files, val_files
+
+
+def _estimate_examples_per_file(sample_files: List[Path]) -> int:
+    """
+    Estimate the number of examples per file by sampling a few files.
+    
+    Args:
+        sample_files: List of files to sample for estimation
+        
+    Returns:
+        Estimated examples per file
+    """
+    if not sample_files:
+        return 10000  # Default estimate
+    
+    total_examples = 0
+    files_checked = 0
+    
+    for file_path in sample_files:
+        try:
+            import gzip
+            import pickle
+            with gzip.open(file_path, 'rb') as f:
+                data = pickle.load(f)
+                examples = data.get('examples', [])
+                total_examples += len(examples)
+                files_checked += 1
+        except Exception as e:
+            logger.warning(f"Could not read {file_path} for estimation: {e}")
+            continue
+    
+    if files_checked == 0:
+        return 10000  # Default estimate
+    
+    avg_examples = total_examples // files_checked
+    logger.info(f"Estimated {avg_examples:,} examples per file from {files_checked} sample files")
+    
+    return avg_examples
+
+
+def _create_simple_train_val_split(data_files: List[Path], 
+                                  train_ratio: float,
+                                  random_seed: Optional[int],
+                                  max_files_per_split: Optional[int],
+                                  shuffle_shards: bool) -> Tuple[List[Path], List[Path]]:
+    """
+    Create simple random train/validation split (original method).
+    """
     # Optionally shuffle files for random split
     shuffled_files = shuffle_data_files(data_files, shuffle_shards, random_seed)
     if shuffle_shards:
@@ -345,7 +496,7 @@ def create_train_val_split(data_files: List[Path],
         val_files = val_files[:max_files_per_split]
         logger.info(f"Limited to {max_files_per_split} files per split for efficiency")
     
-    logger.info(f"Split {len(data_files)} files: {len(train_files)} train, {len(val_files)} validation")
+    logger.info(f"Simple split {len(data_files)} files: {len(train_files)} train, {len(val_files)} validation")
     
     return train_files, val_files
 

@@ -17,9 +17,9 @@ Examples:
 2. Compare models using MCTS with different simulation counts:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
-     --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
+     --checkpoints="epoch1_mini201.pt.gz,epoch1_mini75.pt.gz" \
      --strategy=mcts \
-     --mcts-sims=100 \
+     --mcts-sims=150 \
      --mcts-c-puct=1.5
 
 3. Compare models using fixed tree search:

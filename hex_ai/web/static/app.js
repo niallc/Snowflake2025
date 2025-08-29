@@ -238,7 +238,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // left side uses edge between vertices 2 and 3
   const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
   const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
-  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.VERY_DARK_RED));
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.VERY_DARK_RED, 17));
 
   const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
                         hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
@@ -248,7 +248,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // right side uses edge between vertices 0 and 5
   const rightTopMid = edgeMidpoint(tr[0], tr[5]);
   const rightBotMid = edgeMidpoint(br[0], br[5]);
-  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.VERY_DARK_RED));
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.VERY_DARK_RED, 17));
 
 
   // Draw hexes
@@ -316,14 +316,14 @@ function hexVertices(cx, cy, r) {
   return pts;
 }
 
-function makeEdgeLine(x1, y1, x2, y2, color) {
+function makeEdgeLine(x1, y1, x2, y2, color, strokeWidth = 10) {
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   line.setAttribute('x1', x1);
   line.setAttribute('y1', y1);
   line.setAttribute('x2', x2);
   line.setAttribute('y2', y2);
   line.setAttribute('stroke', color);
-  line.setAttribute('stroke-width', 10);
+  line.setAttribute('stroke-width', strokeWidth);
   line.setAttribute('stroke-linecap', 'round');
   line.setAttribute('opacity', 0.25);
   return line;

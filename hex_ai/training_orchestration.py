@@ -311,10 +311,11 @@ def discover_and_split_multiple_data(
     if not all_data_files:
         raise ValueError("No data files found in any of the specified directories")
     
-    # Create train/val split across all files
+    # Create train/val split across all files with stratified sampling
     train_files, val_files = create_train_val_split(
         all_data_files, train_ratio, random_seed, max_files_per_split=None, 
-        shuffle_shards=shuffle_shards
+        shuffle_shards=shuffle_shards, data_source_info=data_source_info,
+        max_validation_examples=max_validation_examples
     )
     
     logger.info(f"Final split: {len(train_files)} train files, {len(val_files)} validation files")
