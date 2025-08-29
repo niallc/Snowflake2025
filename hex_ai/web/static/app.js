@@ -1,19 +1,79 @@
 // --- Color palette inspired by Taerim's nimbus ---
-const COLORS = {
+// 
+// 🎨 COLOR CUSTOMIZATION GUIDE:
+// 
+// This color system has three levels:
+// 1. BASE_COLORS: Named color constants (MEDIUM_BLUE, DARK_RED, etc.) - change hex values here
+// 2. COLORS: Semantic board regions that reference base colors (BLUE_EDGE_BORDER, HEX_GRID_COLOR, etc.) - change which base color they use
+// 3. APPLICATION: Where colors are actually used in the code
+//
+// To customize colors:
+// - For base colors: Change the hex values in the BASE_COLORS section
+// - For semantic regions: Change which base color they reference in the COLORS section
+//
+// Examples:
+// - To make grid lines darker: Change BASE_COLORS.MEDIUM_BLUE: '#bbeeee' to '#999999'
+// - To use a different blue for pieces: Change COLORS.BLUE_PIECE_COLOR: BASE_COLORS.DARK_BLUE to BASE_COLORS.VERY_DARK_BLUE
+// - To make empty hexes light blue: Change COLORS.EMPTY_HEX_COLOR: BASE_COLORS.WHITE to BASE_COLORS.LIGHT_BLUE
+//
+// Key semantic colors you might want to change:
+// - HEX_GRID_COLOR: ⭐ Controls the light cyan lines between hexagons
+// - EMPTY_HEX_COLOR: ⭐ Controls the fill color of empty hexagons
+// - BOARD_BACKGROUND: Background color behind the game board
+// - BLUE_EDGE_BORDER: Blue edge borders (top/bottom)
+// - RED_EDGE_BORDER: Red edge borders (left/right)
+// - BLUE_PIECE_COLOR: Colors of blue pieces
+// - RED_PIECE_COLOR: Colors of red pieces
+// - BLUE_LAST_MOVE: Colors of blue's last move
+// - RED_LAST_MOVE: Colors of red's last move
+// - BLUE_WINNING_PIECE: Colors of blue pieces when blue wins
+// - RED_WINNING_PIECE: Colors of red pieces when red wins
+//
+// ===== BASE COLOR PALETTE =====
+// These are the fundamental colors - change hex values here
+const BASE_COLORS = {
+  WHITE: '#fff',
+  LIGHT_GRAY: '#f8f8fa',
+  MEDIUM_GRAY: '#bbb',
+  DARK_GRAY: '#222',
+  
+  // Blue palette
   LIGHT_BLUE: '#e7fcfc',
-  MEDIUM_BLUE: '#bbeeee',
-  DARK_BLUE: '#8bd6d6',
-  VERY_DARK_BLUE: '#0099ff', // more vivid blue for edge
-  DARKER_BLUE: '#0066cc', // even darker blue for last move
+  MEDIUM_BLUE: '#bbeeee',         // ⭐ LIGHT CYAN - used for grid lines
+  DARK_BLUE: '#8bd6d6',           // ⭐ MEDIUM CYAN - used for blue pieces
+  VERY_DARK_BLUE: '#0099ff',      // ⭐ VIVID BLUE - used for edges and winning pieces
+  DARKER_BLUE: '#0066cc',         // ⭐ DARK BLUE - used for last moves
+  
+  // Red palette
   LIGHT_RED: '#fff4ea',
   MEDIUM_RED: '#ffe1c8',
-  DARK_RED: '#ffcea5',
-  VERY_DARK_RED: '#ff6600', // more vivid orange-red for edge
-  DARKER_RED: '#cc3300', // even darker red for last move
-  LIGHT_GRAY: '#cccccc',
-  BOARD_BG: '#f8f8fa',
-  GRID: '#bbb',
-  LAST_MOVE: '#222', // Keep for backward compatibility but won't use
+  DARK_RED: '#ffcea5',            // ⭐ MEDIUM ORANGE - used for red pieces
+  VERY_DARK_RED: '#ff6600',       // ⭐ VIVID ORANGE-RED - used for edges and winning pieces
+  DARKER_RED: '#cc3300',          // ⭐ DARK RED - used for last moves
+};
+
+const COLORS = {
+  // ===== SEMANTIC BOARD REGIONS =====
+  // These reference the base colors above - change which base color they use
+  BOARD_BACKGROUND: BASE_COLORS.LIGHT_GRAY,
+  EMPTY_HEX_COLOR: BASE_COLORS.WHITE,
+  HEX_GRID_COLOR: BASE_COLORS.MEDIUM_BLUE,      // ⭐ LIGHT CYAN LINES BETWEEN HEXAGONS
+  
+  // Edge borders
+  BLUE_EDGE_BORDER: BASE_COLORS.VERY_DARK_BLUE,
+  RED_EDGE_BORDER: BASE_COLORS.VERY_DARK_RED,
+  
+  // Piece colors
+  BLUE_PIECE_COLOR: BASE_COLORS.DARK_BLUE,
+  RED_PIECE_COLOR: BASE_COLORS.DARK_RED,
+  
+  // Last move colors
+  BLUE_LAST_MOVE: BASE_COLORS.DARKER_BLUE,
+  RED_LAST_MOVE: BASE_COLORS.DARKER_RED,
+  
+  // Winning piece colors
+  BLUE_WINNING_PIECE: BASE_COLORS.VERY_DARK_BLUE,
+  RED_WINNING_PIECE: BASE_COLORS.VERY_DARK_RED,
 };
 
 // --- State ---
@@ -211,19 +271,19 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   svg.setAttribute('width', svgWidth);
   svg.setAttribute('height', svgHeight);
   svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
-  svg.style.background = COLORS.BOARD_BG;
+  svg.style.background = COLORS.BOARD_BACKGROUND;
 
   // --- Draw player edge indicators ---
   // Blue: top and bottom (across the topmost and bottommost hexes)
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
     hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
-    COLORS.VERY_DARK_BLUE
+    COLORS.BLUE_EDGE_BORDER
   ));
   svg.appendChild(makeEdgeLine(
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
-    COLORS.VERY_DARK_BLUE
+    COLORS.BLUE_EDGE_BORDER
   ));
   
   // Red edges: pass through midpoints of the true outer edges
@@ -238,7 +298,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // left side uses edge between vertices 2 and 3
   const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
   const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
-  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.VERY_DARK_RED, 17));
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 17));
 
   const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
                         hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
@@ -248,7 +308,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // right side uses edge between vertices 0 and 5
   const rightTopMid = edgeMidpoint(tr[0], tr[5]);
   const rightBotMid = edgeMidpoint(br[0], br[5]);
-  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.VERY_DARK_RED, 17));
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 17));
 
 
   // Draw hexes
@@ -256,21 +316,22 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     for (let col = 0; col < GAME_CONSTANTS.BOARD_SIZE; col++) {
       const { x, y } = hexCenter(row, col);
       const cell = board[row]?.[col] || GAME_CONSTANTS.PIECE_VALUES.EMPTY;
-      let fill = '#fff';
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.DARK_BLUE;
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.DARK_RED;
+      // ⭐ EMPTY HEX COLOR - uses COLORS.EMPTY_HEX_COLOR for empty hexagons
+      let fill = COLORS.EMPTY_HEX_COLOR;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_PIECE_COLOR;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_PIECE_COLOR;
       
       // Highlight last move with darker color based on player
       if (lastMove && lastMove[0] === row && lastMove[1] === col) {
         if (lastMovePlayer === 'blue') {
-          fill = COLORS.DARKER_BLUE;
+          fill = COLORS.BLUE_LAST_MOVE;
         } else if (lastMovePlayer === 'red') {
-          fill = COLORS.DARKER_RED;
+          fill = COLORS.RED_LAST_MOVE;
         }
       }
       
-      if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.VERY_DARK_BLUE;
-      if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.VERY_DARK_RED;
+      if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_WINNING_PIECE;
+      if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_WINNING_PIECE;
       const isLegal = legalMoves.includes(rowcolToTrmph(row, col));
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
@@ -298,7 +359,8 @@ function makeHex(cx, cy, r, fill, highlight) {
   const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
   hex.setAttribute('fill', fill);
-  hex.setAttribute('stroke', highlight ? COLORS.MEDIUM_BLUE : COLORS.GRID);
+  // Grid lines between hexagons - uses COLORS.HEX_GRID_COLOR for legal moves, COLORS.GRID for non-legal hexes
+  hex.setAttribute('stroke', highlight ? COLORS.HEX_GRID_COLOR : COLORS.GRID);
   hex.setAttribute('stroke-width', highlight ? 4 : 2);
   if (highlight) hex.style.cursor = 'pointer';
   return hex;
@@ -346,13 +408,13 @@ function updateUI() {
   const status = document.getElementById('status-line');
   if (state.winner) {
     status.textContent = `Game over: ${state.winner} wins!`;
-    status.style.color = state.winner === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.winner === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   } else if (state.auto_step_active) {
     status.textContent = `Auto-stepping: ${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
-    status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.player === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   } else {
     status.textContent = `${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
-    status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.player === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   }
   
   // TRMPH
