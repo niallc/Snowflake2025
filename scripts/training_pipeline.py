@@ -34,7 +34,7 @@ from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 
 # Script imports (moved to top level)
-from scripts.preprocess_selfplay_data import combine_and_clean_files
+from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
 from scripts.shuffle_processed_data import DataShuffler
 
 
@@ -57,7 +57,7 @@ class PipelineConfig:
     
     # Data directories
     base_data_dir: str = "data"
-    data_sources: List[str] = field(default_factory=lambda: ["data/processed/shuffled"])
+    data_sources: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])
     skip_files: List[int] = field(default_factory=lambda: [0])
     selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
@@ -72,6 +72,7 @@ class PipelineConfig:
     results_dir: str = "checkpoints/hyperparameter_tuning"
     
     # Pipeline control
+    run_game_collection: bool = False  # New: Collect games from multiple sources
     run_selfplay: bool = True
     run_preprocessing: bool = True
     run_trmph_processing: bool = True
@@ -110,6 +111,38 @@ class PipelineConfig:
             for data_dir in self.data_sources:
                 if not os.path.exists(data_dir):
                     raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+
+class GameCollectionStep:
+    """Handles collection of games from multiple sources."""
+    
+    def __init__(self, config: PipelineConfig):
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+    
+    def run(self) -> str:
+        """Run game collection and return the output directory."""
+        self.logger.info("=" * 60)
+        self.logger.info("STEP 0: GAME COLLECTION FROM MULTIPLE SOURCES")
+        self.logger.info("=" * 60)
+        
+        # Use default source directories from config
+        source_dirs = [Path(d) for d in self.config.data_sources]
+        output_dir = Path(self.config.selfplay_dir)
+        
+        self.logger.info(f"Source directories: {[str(d) for d in source_dirs]}")
+        self.logger.info(f"Output directory: {output_dir}")
+        
+        # Run game collection
+        stats = collect_and_organize_data(source_dirs, output_dir, self.config.chunk_size)
+        
+        if "error" in stats:
+            raise RuntimeError(f"Game collection failed: {stats['error']}")
+        
+        self.logger.info(f"Game collection completed successfully!")
+        self.logger.info(f"Collected {stats['unique_games']} unique games from {stats['total_files']} files")
+        
+        return str(output_dir)
 
 
 class SelfPlayStep:
@@ -468,6 +501,7 @@ class TrainingPipeline:
         self.shutdown_handler = GracefulShutdown()
         
         # Initialize steps
+        self.game_collection_step = GameCollectionStep(config)
         self.selfplay_step = SelfPlayStep(config)
         self.preprocessing_step = PreprocessingStep(config)
         self.trmph_step = TRMPHProcessingStep(config)
@@ -496,6 +530,17 @@ class TrainingPipeline:
         start_time = time.time()
         
         try:
+            # Step 0: Game collection (optional)
+            if self.config.run_game_collection:
+                self.current_step = 0
+                self.logger.info(f"\nStarting step {self.current_step}: Game collection")
+                collected_dir = self.game_collection_step.run()
+                self.step_results['game_collection'] = collected_dir
+                # Use collected data as selfplay input
+                selfplay_dir = collected_dir
+            else:
+                selfplay_dir = None
+            
             # Step 1: Self-play (optional)
             if self.config.run_selfplay:
                 self.current_step = 1
@@ -639,6 +684,9 @@ Examples:
   # Run complete pipeline with default settings
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz
   
+  # Run with game collection from multiple sources
+  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --run-game-collection --no-selfplay
+  
   # Run only self-play and preprocessing
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --no-training --no-shuffling --no-trmph-processing
   
@@ -651,8 +699,8 @@ Examples:
   # Use existing raw self-play data
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --selfplay-dir data/sf25/aug_04 --no-selfplay
   
-  # Use only new data (no existing data)
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --data-sources
+  # Complete pipeline with game collection and training
+  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --run-game-collection --no-selfplay --no-preprocessing
         """
     )
     
@@ -686,6 +734,7 @@ Examples:
     parser.add_argument("--results-dir", default="checkpoints/hyperparameter_tuning", help="Results directory")
     
     # Pipeline control
+    parser.add_argument("--run-game-collection", action="store_true", help="Run game collection from multiple sources")
     parser.add_argument("--no-selfplay", action="store_true", help="Skip self-play step")
     parser.add_argument("--no-preprocessing", action="store_true", help="Skip preprocessing step")
     parser.add_argument("--no-trmph-processing", action="store_true", help="Skip TRMPH processing step")
@@ -731,6 +780,7 @@ def main():
             num_buckets_shuffle=args.num_buckets_shuffle,
             max_samples=args.max_samples,
             results_dir=args.results_dir,
+            run_game_collection=args.run_game_collection,
             run_selfplay=not args.no_selfplay and args.selfplay_dir is None,
             run_preprocessing=not args.no_preprocessing,
             run_trmph_processing=not args.no_trmph_processing,

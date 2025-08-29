@@ -32,7 +32,8 @@ python scripts/validate_environment.py
     red_is_winning = "#13,a2g7f6e8d7c9b8b10h8i6j7k5l6l4", and for BLUE:
     blue_is_winning = a2g7i6j4h5i3g4h2f3g1e2j7h8g10i9h11j10i12k11j13l12
  You can convert these sequences to other formats using the functions in hex_ai/utils/format_conversion.py
- 
+ - Invalid states and any similar issues: Do not 'handle' these in the sense of falling back to some default value -- CRASH. Crashing helps me find bugs and avoid silent failures. Ths code is under rapid development and my priority is to find issues and make it correct (and clear and maintainable), not to build some loong running server that never goes down.
+ - Do *not* focus on backward compatibility. If things change we'll update upstream and downstream code to have one clean modern approach. We don't want adapters and logic to handle old methods -- the code becomes hard to maintan then. Right now it's not a problem to just update other parts of the code. If it's too much to do at once, leave some TODO statements or similar to track what subsequent updates are needed to use the new approach. 
 
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions

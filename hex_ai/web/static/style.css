@@ -17,24 +17,26 @@
 
 body {
   font-family: 'Segoe UI', Arial, sans-serif;
-  background: #f8f8fa;
+  background: #f8f8fa; /* 🎨 OUTERMOST BACKGROUND - Light gray that extends to all edges */
   margin: 0;
   padding: 0;
 }
 
 #app-container {
   max-width: 900px;
-  margin: 30px auto;
-  background: #fff;
+  margin: 20px auto; /* Reduced from 30px */
+  background: #fff; /* 🎨 MAIN CONTENT BOX - White rounded container that holds everything */
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-  padding: 24px 24px 32px 24px;
+  padding: 20px 24px 28px 24px; /* Reduced top and bottom padding */
 }
 
 #board-section {
-  margin-bottom: 32px;
-  padding-bottom: 16px;
+  margin-bottom: 24px; /* Reduced from 32px */
+  padding-bottom: 12px; /* Reduced from 16px */
   border-bottom: 2px solid #e0e0e0;
+  /* background: #f8f8fa; */ /* 🎨 ORIGINAL: No background color */
+  /* 🎨 BOARD SECTION - Contains the entire board area (title, board, controls) - currently no background */
 }
 
 #config-section {
@@ -44,7 +46,9 @@ body {
 h1 {
   text-align: center;
   margin-top: 0;
+  margin-bottom: 8px; /* Reduced from default */
   color: #2a3a4a;
+  font-size: 1.8em; /* Reduced from default */
 }
 
 h3 {
@@ -56,17 +60,23 @@ h3 {
 #status-line {
   text-align: center;
   font-size: 1.2em;
-  margin-bottom: 18px;
+  margin-bottom: 8px; /* Reduced from 18px */
   min-height: 1.5em;
 }
 
 /* Control Panels */
 .control-panel {
-  background: #f8f8fa;
+  background: #f8f8fa; /* 🎨 CONTROL PANEL BACKGROUND - Light gray background for: Model Selection, Computer Move Settings, Debug & Diagnostics, Apply TRMPH Sequence */
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
+}
+
+/* Remove border between TRMPH sequence and next section */
+#trmph-sequence-section {
+  border-bottom: none;
+  margin-bottom: 8px; /* Reduced spacing */
 }
 
 .model-row, .computer-move-row, .search-width-row, .temperature-row, .auto-step-row, .search-method-row, .mcts-row {
@@ -131,7 +141,9 @@ small {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-bottom: 18px;
+  margin-bottom: 12px; /* Reduced from 18px */
+  /* background: #f0f0f0; */ /* 🎨 ORIGINAL: No background color */
+  /* 🎨 BOARD CONTAINER - Controls the area around the game board (side panels) */
 }
 
 #controls {
@@ -139,6 +151,27 @@ small {
   justify-content: center;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+#controls label {
+  margin: 0;
+  font-weight: 500;
+  color: #2a3a4a;
+}
+
+#controls input[type="checkbox"] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
+#trmph-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 button {
@@ -165,7 +198,7 @@ button:hover {
 
 /* Debug Panel Styles */
 .debug-panel {
-  background: #f8f8fa;
+  background: #f8f8fa; /* 🎨 DEBUG PANEL BACKGROUND - Light gray background for "Debug Information" section (different from .control-panel) */
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   padding: 16px;
@@ -439,20 +472,32 @@ button:hover {
   white-space: nowrap;
 }
 
-/* TRMPH Sequence Section */
+/* TRMPH Sequence Section - More compact */
 #trmph-sequence-section {
-  margin-top: 16px;
+  margin-top: 12px; /* Reduced from 16px */
+}
+
+/* New inline header row for TRMPH section */
+.trmph-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px; /* Reduced from 12px */
+}
+
+.trmph-header-row h3 {
+  margin: 0;
 }
 
 .trmph-input-row {
-  margin-bottom: 12px;
+  margin-bottom: 8px; /* Reduced from 12px */
 }
 
 .trmph-input-row label {
   display: block;
   font-weight: 500;
   color: #2a3a4a;
-  margin-bottom: 6px;
+  margin-bottom: 4px; /* Reduced from 6px */
 }
 
 .trmph-input-row textarea {
@@ -474,14 +519,14 @@ button:hover {
 .trmph-button-row {
   display: flex;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 0; /* Reduced from 8px since buttons are now inline */
 }
 
 .status-message {
   font-size: 0.9em;
   padding: 6px 8px;
   border-radius: 4px;
-  margin-top: 8px;
+  margin-top: 6px; /* Reduced from 8px */
 }
 
 .status-message.success {

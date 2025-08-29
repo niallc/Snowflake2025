@@ -159,9 +159,13 @@ class ModelWrapper:
         sync_start = time.perf_counter()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
+            sync_ms = (time.perf_counter() - sync_start) * 1000.0
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            torch.mps.synchronize()
-        sync_ms = (time.perf_counter() - sync_start) * 1000.0
+            # Simple host read approach - no MPS events for now
+            _ = (policy_logits.sum() + value_logits.sum()).item()
+            sync_ms = 0.0  # No separate sync needed
+        else:
+            sync_ms = (time.perf_counter() - sync_start) * 1000.0
         
         # Total forward time (including sync)
         forward_ms = pure_forward_ms + sync_ms

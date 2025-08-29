@@ -71,18 +71,21 @@ class TwoHeadedResNet(nn.Module):
     - Value head: Predicts Red's win probability (1 output)
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    The output is a raw logit that should be passed through sigmoid to get the probability.
+    The output is a value in [-1, 1] range with tanh activation that should be converted to [0, 1] probability.
     
     The architecture follows modern best practices with:
     - Global average pooling after the ResNet body
     - Separate linear layers for policy and value heads
     - Batch normalization and proper initialization
     - Mixed precision support
+    - Enhanced value head with hidden layer and optional bottleneck
     """
     
-    def __init__(self, resnet_depth: int = RESNET_DEPTH, dropout_prob: float = 0.1):
+    def __init__(self, resnet_depth: int = RESNET_DEPTH, dropout_prob: float = 0.1, 
+                 use_value_bottleneck: bool = True):
         super().__init__()
         self.resnet_depth = resnet_depth
+        self.use_value_bottleneck = use_value_bottleneck
         
         # Input layer: Convert board representation to initial features
         # Input shape: (batch_size, 3, 13, 13) for two players + player-to-move channel
@@ -109,8 +112,29 @@ class TwoHeadedResNet(nn.Module):
         # Policy head: Predict move probabilities
         self.policy_head = nn.Linear(CHANNEL_PROGRESSION[3], POLICY_OUTPUT_SIZE)
         
-        # Value head: Predict win probability
-        self.value_head = nn.Linear(CHANNEL_PROGRESSION[3], VALUE_OUTPUT_SIZE)
+        # Enhanced value head with hidden layer and optional bottleneck
+        if use_value_bottleneck:
+            # 1x1 bottleneck convolution to reduce channels before pooling
+            self.value_pre = nn.Sequential(
+                nn.Conv2d(CHANNEL_PROGRESSION[3], 32, kernel_size=1, bias=False),
+                nn.BatchNorm2d(32),
+                nn.ReLU(inplace=True)
+            )
+            # Value head with hidden layer
+            self.value_head = nn.Sequential(
+                nn.Linear(32, 256),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.1),  # Light regularization
+                nn.Linear(256, 1)
+            )
+        else:
+            # Value head with hidden layer (no bottleneck)
+            self.value_head = nn.Sequential(
+                nn.Linear(CHANNEL_PROGRESSION[3], 256),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.1),  # Light regularization
+                nn.Linear(256, 1)
+            )
         
         # Initialize weights using modern best practices
         self._initialize_weights()
@@ -151,9 +175,6 @@ class TwoHeadedResNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.dropout(x)
         return x
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -168,32 +189,58 @@ class TwoHeadedResNet(nn.Module):
             - policy_logits: Shape (batch_size, 169)
             - value_logit: Shape (batch_size, 1) - Raw logit for Red's win probability
         """
-        x = self.forward_shared(x)
-        # Policy head
-        policy_logits = self.policy_head(x)  # (batch_size, 169)
-        # Value head
-        value_logit = self.value_head(x)  # (batch_size, 1)
+        # Shared trunk
+        features = self.forward_shared(x)
+        
+        # Policy head path
+        policy_features = self.global_pool(features)
+        policy_features = policy_features.view(policy_features.size(0), -1)
+        policy_features = self.dropout(policy_features)
+        policy_logits = self.policy_head(policy_features)  # (batch_size, 169)
+        
+        # Value head path
+        if self.use_value_bottleneck:
+            # Apply 1x1 bottleneck convolution
+            value_features = self.value_pre(features)
+            # Global average pooling
+            value_features = value_features.mean(dim=(2, 3))  # GAP
+        else:
+            # Standard global average pooling
+            value_features = self.global_pool(features)
+            value_features = value_features.view(value_features.size(0), -1)
+        
+        value_logit = torch.tanh(self.value_head(value_features))  # (batch_size, 1)
+        
         return policy_logits, value_logit
 
     @torch.no_grad()
     def forward_value_only(self, x: torch.Tensor) -> torch.Tensor:
         """Value-only inference path for faster leaf evaluation."""
-        x = self.forward_shared(x)
-        return self.value_head(x)
+        features = self.forward_shared(x)
+        
+        if self.use_value_bottleneck:
+            value_features = self.value_pre(features)
+            value_features = value_features.mean(dim=(2, 3))  # GAP
+        else:
+            value_features = self.global_pool(features)
+            value_features = value_features.view(value_features.size(0), -1)
+        
+        return torch.tanh(self.value_head(value_features))
 
 
-def create_model(model_type: str = "resnet18") -> TwoHeadedResNet:
+def create_model(model_type: str = "resnet18", use_value_bottleneck: bool = True) -> TwoHeadedResNet:
     """
     Factory function to create a model instance.
     
     Args:
         model_type: Type of model to create (currently only "resnet18")
+        use_value_bottleneck: Whether to use 1x1 bottleneck in value head
         
     Returns:
         Initialized model instance
     """
     if model_type == "resnet18":
-        return TwoHeadedResNet(resnet_depth=18)
+        return TwoHeadedResNet(resnet_depth=18, use_value_bottleneck=use_value_bottleneck)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -223,6 +270,10 @@ def get_model_summary(model: nn.Module) -> str:
     """
     total_params = count_parameters(model)
     
+    # Check if model has the new value head structure
+    has_bottleneck = hasattr(model, 'use_value_bottleneck') and model.use_value_bottleneck
+    value_head_desc = "Enhanced (bottleneck + hidden layer)" if has_bottleneck else "Enhanced (hidden layer only)"
+    
     summary = f"""
 Model Summary:
 ==============
@@ -234,10 +285,10 @@ Architecture:
 - ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels
 - Global Average Pooling
 - Policy Head: {POLICY_OUTPUT_SIZE} outputs
-- Value Head: {VALUE_OUTPUT_SIZE} outputs
+- Value Head: {value_head_desc} ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
 - Policy Logits: (batch_size, 169)
-- Value Logit: (batch_size, 1)
+- Value Logit: (batch_size, 1) with tanh activation
 """
     return summary 

@@ -11,11 +11,11 @@ library(rlang)
 # Configuration
 root_dir <- "~/Documents/programming/Snowflake2025"
 bookkeeping_dir <- file.path(root_dir, "checkpoints/bookkeeping/")
-plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_06")
-run_tag <- "aug2nd_sweep_2025_08_06"
+plots_dir <- file.path(root_dir, "analysis/training_performance/hyperparam_sweep_2025_08_28")
+run_tag <- "aug28th_extraValueLayer_sweep_2025_08_28"
 
 # Look for all training metrics files from the recent sweep
-METRICS_FILES <- list.files(bookkeeping_dir, pattern = "training_metrics_20250805_162626\\.csv$", full.names = TRUE)
+METRICS_FILES <- list.files(bookkeeping_dir, pattern = "training_metrics_20250828_18\\.csv$", full.names = TRUE)
 # 
 
 

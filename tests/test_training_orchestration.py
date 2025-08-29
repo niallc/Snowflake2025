@@ -65,7 +65,7 @@ class TestMetadataSaving:
             
             data_source_info = [
                 {
-                    'directory': 'data/processed/shuffled',
+                    'directory': 'data/processed/sf18_shuffled',
                     'files_count': 2,
                     'total_examples': 1000000,
                     'skip_files': 0
@@ -126,7 +126,7 @@ class TestMetadataSaving:
             
             data_source_info = [
                 {
-                    'directory': 'data/processed/shuffled',
+                    'directory': 'data/processed/sf18_shuffled',
                     'weight': 0.7,
                     'examples_estimated': 1000000
                 }
@@ -142,7 +142,7 @@ class TestMetadataSaving:
             
             assert 'data_sources' in saved_results
             assert len(saved_results['data_sources']) == 1
-            assert saved_results['data_sources'][0]['directory'] == 'data/processed/shuffled'
+            assert saved_results['data_sources'][0]['directory'] == 'data/processed/sf18_shuffled'
     
     def test_save_overall_results_without_data_sources(self):
         """Test that overall results work without data source information."""

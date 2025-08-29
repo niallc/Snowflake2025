@@ -48,10 +48,6 @@ scripts/example_pipeline_usage.py
 write_ups/pipeline_code_review.md
 scripts/deprecated/example_pipeline_usage.py
 scripts/deprecated/test_pipeline.py
-write_ups/redundant/mcts_test_analysis.md
-write_ups/redundant/pipeline_code_review.md
-write_ups/redundant/tmp_hyperparam_sweep_improvements_guide.md
-write_ups/redundant/training_instability_analysis_summary.md
 hex_ai/web/README.md
 hex_ai/web/mcts_explorer.html
 scripts/run_mcts_explorer.py
@@ -63,13 +59,13 @@ scripts/deprecated/test_enhanced_inference.py
 write_ups/code_review_concerns.md
 write_ups/tree_search_batching_bug_analysis.md
 write_ups/mcts_timing_analysis.md
-write_ups/redundant/enum_usage_guidelines.md
 tests/test_winner_to_color_failfast.py
 write_ups/mcts_performance_fix.md
 write_ups/strategy_tournament_implementation_summary.md
 docs/terminal_move_detection.md
 docs/mcts_early_termination.md
-
+write_ups/performance_tracking_recommendations.md
+write_ups/validation_improvements_summary.md
 # VSCode
 .vscode/
 

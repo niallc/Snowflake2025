@@ -521,7 +521,15 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Time the actual MCTS run
         mcts_start_time = time.time()
-        move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+        app.logger.info("About to call run_mcts_move...")
+        try:
+            move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+            app.logger.info("run_mcts_move completed successfully")
+        except Exception as e:
+            app.logger.error(f"run_mcts_move failed with exception: {e}")
+            import traceback
+            app.logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
         mcts_search_time = time.time() - mcts_start_time
         
         # Time the rest of the processing
@@ -669,6 +677,13 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "median_select_ms": stats.get("median_select_ms", 0),
                 "median_cache_hit_ms": stats.get("median_cache_hit_ms", 0),
                 "median_cache_miss_ms": stats.get("median_cache_miss_ms", 0),
+                # New MCTS performance metrics
+                "unique_evals_total": stats.get("unique_evals_total", 0),
+                "effective_sims_total": stats.get("effective_sims_total", 0),
+                "unique_evals_per_sec": stats.get("unique_evals_per_sec", 0),
+                "effective_sims_per_sec": stats.get("effective_sims_per_sec", 0),
+                "deduplication_ratio": stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)),
+                "efficiency_gain_percent": (1.0 - (stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)))) * 100,
             },
         }
         
@@ -703,7 +718,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                               'batch_count', 'cache_hits', 'cache_misses', 'root_value', 'best_child_value', 
                               'win_probability', 'best_child_win_probability', 'pv_length', 'search_efficiency',
                               'mcts_probability', 'direct_probability', 'difference', 'total_visits', 'total_nodes', 
-                              'max_depth', 'inferences']:
+                              'max_depth', 'inferences', 'unique_evals_total', 'effective_sims_total', 
+                              'unique_evals_per_sec', 'effective_sims_per_sec', 'deduplication_ratio', 
+                              'efficiency_gain_percent']:
                         if value is None:
                             app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
                             obj[key] = 0.0
@@ -1392,4 +1409,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.DEBUG)
-    app.run(debug=True, host=args.host, port=args.port) 
+    app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port) 

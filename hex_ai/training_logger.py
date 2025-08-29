@@ -62,6 +62,12 @@ class TrainingLogger:
             'lr_mean', 'lr_min', 'lr_max', 'lr_std',
             'loss_spikes_count',
             
+            # Enhanced performance tracking (based on recommendations)
+            'policy_loss_ma', 'value_loss_ma', 'total_loss_ma',  # Moving averages
+            'policy_loss_es', 'value_loss_es', 'total_loss_es',  # Exponential smoothing
+            'composite_score', 'trend_slope', 'trend_direction',  # Composite metrics
+            'performance_alert', 'alert_message',  # Performance alerts
+            
             # Additional info
             'notes'
         ]
@@ -69,7 +75,44 @@ class TrainingLogger:
         # Initialize CSV file if it doesn't exist
         self._initialize_csv()
         
+        # Initialize performance tracking
+        self._init_performance_tracking()
+        
         logger.info(f"Training logger initialized: {self.log_file}")
+    
+    def _init_performance_tracking(self):
+        """Initialize performance tracking variables."""
+        # Performance tracking parameters
+        self.ma_window_size = 20  # Moving average window
+        self.es_alpha = 0.3  # Exponential smoothing alpha
+        self.alert_threshold = 0.05  # 5% change threshold for alerts
+        
+        # Storage for performance tracking
+        self.policy_losses = []
+        self.value_losses = []
+        self.total_losses = []
+        self.val_policy_losses = []
+        self.val_value_losses = []
+        self.val_total_losses = []
+        
+        # Smoothed metrics
+        self.policy_loss_ma = []
+        self.value_loss_ma = []
+        self.total_loss_ma = []
+        self.policy_loss_es = []
+        self.value_loss_es = []
+        self.total_loss_es = []
+        
+        # Trend analysis
+        self.trend_slope = None
+        self.trend_direction = 'stable'
+        
+        # Composite score
+        self.composite_scores = []
+        
+        # Performance alerts
+        self.performance_alerts = []
+        self.alert_messages = []
     
     def _initialize_csv(self):
         """Initialize the CSV file with headers if it doesn't exist."""
@@ -225,6 +268,24 @@ class TrainingLogger:
             'notes': notes
         }
         
+        # Update performance tracking
+        self._update_performance_tracking(train_metrics, val_metrics)
+        
+        # Add enhanced performance metrics to row
+        row.update({
+            'policy_loss_ma': self.policy_loss_ma[-1] if self.policy_loss_ma else '',
+            'value_loss_ma': self.value_loss_ma[-1] if self.value_loss_ma else '',
+            'total_loss_ma': self.total_loss_ma[-1] if self.total_loss_ma else '',
+            'policy_loss_es': self.policy_loss_es[-1] if self.policy_loss_es else '',
+            'value_loss_es': self.value_loss_es[-1] if self.value_loss_es else '',
+            'total_loss_es': self.total_loss_es[-1] if self.total_loss_es else '',
+            'composite_score': self.composite_scores[-1] if self.composite_scores else '',
+            'trend_slope': self.trend_slope if self.trend_slope is not None else '',
+            'trend_direction': self.trend_direction,
+            'performance_alert': self.performance_alerts[-1] if self.performance_alerts else False,
+            'alert_message': self.alert_messages[-1] if self.alert_messages else ''
+        })
+        
         # Write to CSV
         with open(self.log_file, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.headers)
@@ -234,6 +295,171 @@ class TrainingLogger:
             writer.writerow(row)
         
         logger.debug(f"Logged epoch {epoch} metrics")
+    
+    def _update_performance_tracking(self, train_metrics: Dict[str, float], val_metrics: Optional[Dict[str, float]] = None):
+        """Update performance tracking with new metrics."""
+        # Store raw metrics
+        self.policy_losses.append(train_metrics.get('policy_loss', 0.0))
+        self.value_losses.append(train_metrics.get('value_loss', 0.0))
+        self.total_losses.append(train_metrics.get('total_loss', 0.0))
+        
+        if val_metrics:
+            self.val_policy_losses.append(val_metrics.get('policy_loss', 0.0))
+            self.val_value_losses.append(val_metrics.get('value_loss', 0.0))
+            self.val_total_losses.append(val_metrics.get('total_loss', 0.0))
+        else:
+            self.val_policy_losses.append(0.0)
+            self.val_value_losses.append(0.0)
+            self.val_total_losses.append(0.0)
+        
+        # Update moving averages
+        self._update_moving_averages()
+        
+        # Update exponential smoothing
+        self._update_exponential_smoothing()
+        
+        # Update trend analysis
+        self._update_trend_analysis()
+        
+        # Update composite score
+        self._update_composite_score()
+        
+        # Check for alerts
+        self._check_performance_alerts()
+    
+    def _update_moving_averages(self):
+        """Update moving averages for all loss types."""
+        if len(self.policy_losses) >= self.ma_window_size:
+            # Policy loss moving average
+            recent_policy = self.policy_losses[-self.ma_window_size:]
+            self.policy_loss_ma.append(sum(recent_policy) / len(recent_policy))
+            
+            # Value loss moving average
+            recent_value = self.value_losses[-self.ma_window_size:]
+            self.value_loss_ma.append(sum(recent_value) / len(recent_value))
+            
+            # Total loss moving average
+            recent_total = self.total_losses[-self.ma_window_size:]
+            self.total_loss_ma.append(sum(recent_total) / len(recent_total))
+        else:
+            # Not enough data yet, use current values
+            self.policy_loss_ma.append(self.policy_losses[-1])
+            self.value_loss_ma.append(self.value_losses[-1])
+            self.total_loss_ma.append(self.total_losses[-1])
+    
+    def _update_exponential_smoothing(self):
+        """Update exponential smoothing for all loss types."""
+        if len(self.policy_loss_es) == 0:
+            # First update, use current values
+            self.policy_loss_es.append(self.policy_losses[-1])
+            self.value_loss_es.append(self.value_losses[-1])
+            self.total_loss_es.append(self.total_losses[-1])
+        else:
+            # Apply exponential smoothing
+            self.policy_loss_es.append(
+                self.es_alpha * self.policy_losses[-1] + 
+                (1 - self.es_alpha) * self.policy_loss_es[-1]
+            )
+            self.value_loss_es.append(
+                self.es_alpha * self.value_losses[-1] + 
+                (1 - self.es_alpha) * self.value_loss_es[-1]
+            )
+            self.total_loss_es.append(
+                self.es_alpha * self.total_losses[-1] + 
+                (1 - self.es_alpha) * self.total_loss_es[-1]
+            )
+    
+    def _update_trend_analysis(self):
+        """Update linear trend analysis."""
+        if len(self.policy_losses) < 10:  # Need at least 10 points for trend
+            return
+        
+        # Use moving average for trend analysis if available
+        if len(self.policy_loss_ma) >= 10:
+            trend_data = self.policy_loss_ma[-10:]
+        else:
+            trend_data = self.policy_losses[-10:]
+        
+        # Simple linear trend calculation
+        n = len(trend_data)
+        x_sum = sum(range(n))
+        y_sum = sum(trend_data)
+        xy_sum = sum(i * val for i, val in enumerate(trend_data))
+        x2_sum = sum(i * i for i in range(n))
+        
+        # Calculate slope
+        denominator = n * x2_sum - x_sum * x_sum
+        if denominator != 0:
+            self.trend_slope = (n * xy_sum - x_sum * y_sum) / denominator
+            
+            # Determine trend direction
+            if self.trend_slope < -0.001:
+                self.trend_direction = 'improving'
+            elif self.trend_slope > 0.001:
+                self.trend_direction = 'degrading'
+            else:
+                self.trend_direction = 'stable'
+    
+    def _update_composite_score(self):
+        """Calculate composite performance score."""
+        if len(self.policy_losses) < 2:
+            self.composite_scores.append(0.5)  # Neutral score
+            return
+        
+        # Normalize losses to 0-1 scale
+        policy_norm = self._normalize_to_0_1(self.policy_losses)
+        value_norm = self._normalize_to_0_1(self.value_losses)
+        
+        # Use moving averages for stability if available
+        if len(self.policy_loss_ma) > 0:
+            policy_ma_norm = self._normalize_to_0_1(self.policy_loss_ma)
+            value_ma_norm = self._normalize_to_0_1(self.value_loss_ma)
+        else:
+            policy_ma_norm = policy_norm
+            value_ma_norm = value_norm
+        
+        # Composite score (higher is better)
+        # Weight policy loss more heavily (60%) as it's typically more important
+        score = 1 - (0.6 * policy_ma_norm + 0.4 * value_ma_norm)
+        self.composite_scores.append(score)
+    
+    def _normalize_to_0_1(self, values: list) -> float:
+        """Normalize a value to 0-1 scale based on min/max of the series."""
+        if len(values) < 2:
+            return 0.5
+        
+        min_val = min(values)
+        max_val = max(values)
+        
+        if max_val == min_val:
+            return 0.5
+        
+        return (values[-1] - min_val) / (max_val - min_val)
+    
+    def _check_performance_alerts(self):
+        """Check for performance alerts."""
+        if len(self.policy_loss_ma) < 2:
+            self.performance_alerts.append(False)
+            self.alert_messages.append('')
+            return
+        
+        # Check for performance degradation (5% increase in moving average)
+        current_ma = self.policy_loss_ma[-1]
+        previous_ma = self.policy_loss_ma[-2]
+        
+        if current_ma > previous_ma * (1 + self.alert_threshold):
+            self.performance_alerts.append(True)
+            self.alert_messages.append(
+                f"Performance degradation: MA increased by {((current_ma/previous_ma - 1) * 100):.1f}%"
+            )
+        elif current_ma < previous_ma * (1 - self.alert_threshold):
+            self.performance_alerts.append(True)
+            self.alert_messages.append(
+                f"Performance improvement: MA decreased by {((1 - current_ma/previous_ma) * 100):.1f}%"
+            )
+        else:
+            self.performance_alerts.append(False)
+            self.alert_messages.append('')
     
     def log_mini_epoch(self, 
                   epoch: str,
@@ -307,6 +533,20 @@ class TrainingLogger:
             'lr_max': lr_stats.get('max', '') if lr_stats else '',
             'lr_std': lr_stats.get('std', '') if lr_stats else '',
             'loss_spikes_count': loss_spikes_count,
+            
+            # Enhanced performance tracking
+            'policy_loss_ma': '',
+            'value_loss_ma': '',
+            'total_loss_ma': '',
+            'policy_loss_es': '',
+            'value_loss_es': '',
+            'total_loss_es': '',
+            'composite_score': '',
+            'trend_slope': '',
+            'trend_direction': '',
+            'performance_alert': '',
+            'alert_message': '',
+            
             # Additional info
             'notes': notes
         }

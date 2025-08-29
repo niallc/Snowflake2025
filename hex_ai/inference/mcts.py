@@ -1,6 +1,14 @@
 # baseline_mcts.py
 # Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
 # Compatible with flat-file or package imports via shims.
+#
+# TODO: Future improvements to consider:
+# - Add memory pooling for large tree structures to reduce allocation overhead
+# - Implement cleanup of old cached evaluations to prevent memory leaks
+# - Add support for parallel MCTS with proper synchronization
+# - Create extensible early termination strategy framework
+# - Add tree visualization utilities for debugging
+# - Implement different tree policies (UCB1, etc.) as pluggable components
 
 from __future__ import annotations
 
@@ -10,7 +18,8 @@ import random
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
+from collections import OrderedDict
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
@@ -18,9 +27,60 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
-from hex_ai.utils.format_conversion import rowcol_to_tensor as move_to_index, tensor_to_rowcol as index_to_move
+from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index, tensor_to_rowcol as index_to_move
 from hex_ai.utils.temperature import calculate_temperature_decay
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
+from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
+from hex_ai.utils.timing import MCTSTimingTracker
+from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
+from hex_ai.value_utils import ValuePredictor
+
+# ---- MCTS Constants ----
+# Temperature comparison threshold for move selection
+TEMPERATURE_COMPARISON_THRESHOLD = 1e-6
+
+# Principal variation extraction limit
+PRINCIPAL_VARIATION_MAX_LENGTH = 10
+
+# PUCT calculation threshold for avoiding division by zero
+PUCT_CALCULATION_THRESHOLD = 1e-9
+
+# Default early termination threshold
+DEFAULT_EARLY_TERMINATION_THRESHOLD = 0.9
+
+# Default terminal move boost factor
+DEFAULT_TERMINAL_MOVE_BOOST = 10.0
+
+# Default virtual loss for non-terminal moves
+DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
+
+# Default depth discount factor
+DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.95
+
+# Default terminal win value boost
+DEFAULT_TERMINAL_WIN_VALUE_BOOST = 1.5
+
+# Default batch cap for neural network evaluation (imported from hex_ai.config)
+# DEFAULT_BATCH_CAP = 64
+
+# Default PUCT exploration constant (imported from hex_ai.config)
+# DEFAULT_C_PUCT = 1.5
+
+# Default cache size for LRU eviction
+DEFAULT_CACHE_SIZE = 100000  # 100k entries
+
+# Default Dirichlet noise parameters
+DEFAULT_DIRICHLET_ALPHA = 0.3
+DEFAULT_DIRICHLET_EPS = 0.25
+
+# Default temperature parameters
+DEFAULT_TEMPERATURE_START = 1.0
+DEFAULT_TEMPERATURE_END = 0.1
+DEFAULT_TEMPERATURE_DECAY_TYPE = "exponential"
+DEFAULT_TEMPERATURE_DECAY_MOVES = 50
+
+# Default terminal detection parameters
+DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
+DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 3  # Multiplier for board size
 
 
 # ------------------ Terminal Move Detector ------------------
@@ -37,7 +97,7 @@ class TerminalMoveDetector:
             return False
         
         # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * 3
+        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION
         if len(node.state.move_history) < min_move_count:
             return False
         
@@ -86,7 +146,7 @@ class EarlyTerminationInfo:
     win_prob: float  # Win probability
 
 # ------------------ MCTS Result ------------------
-@dataclass
+@dataclass(frozen=True)
 class MCTSResult:
     """Complete result of an MCTS search."""
     move: Tuple[int, int]  # The selected move
@@ -179,10 +239,14 @@ class EarlyTerminationChecker:
         
         return None  # Continue with MCTS
     
-    def _get_root_win_probability(self, root: MCTSNode, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> float:
+    def _get_root_win_probability(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
         """Get win probability for current player from neural network."""
-        _, value_logit = eval_cache[root.state_hash]
-        nn_win_prob = float(torch.sigmoid(torch.tensor(value_logit)).item())
+        cached = eval_cache.get(root.state_hash)
+        if cached is None:
+            raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
+        _, value_logit = cached
+        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
+        nn_win_prob = float(ValuePredictor.model_output_to_probability(value_logit))
         
         if root.to_play == Player.RED:
             return nn_win_prob
@@ -198,52 +262,87 @@ class EarlyTerminationChecker:
 @dataclass
 class BaselineMCTSConfig:
     sims: int = 200
-    batch_cap: int = 64
-    c_puct: float = 1.5
-    dirichlet_alpha: float = 0.3
-    dirichlet_eps: float = 0.25
+    batch_cap: int = DEFAULT_BATCH_CAP
+    c_puct: float = DEFAULT_C_PUCT
+    cache_size: int = DEFAULT_CACHE_SIZE
+    dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
+    dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
     add_root_noise: bool = False
     # Temperature scaling parameters (always used)
-    temperature_start: float = 1.0  # Starting temperature
-    temperature_end: float = 0.1  # Final temperature (minimum)
-    temperature_decay_type: str = "exponential"  # "linear", "exponential", "step", "game_progress"
-    temperature_decay_moves: int = 50  # Number of moves for decay (for linear/exponential)
+    temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
+    temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
+    temperature_decay_type: str = DEFAULT_TEMPERATURE_DECAY_TYPE  # "linear", "exponential", "step", "game_progress"
+    temperature_decay_moves: int = DEFAULT_TEMPERATURE_DECAY_MOVES  # Number of moves for decay (for linear/exponential)
     temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
     temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
     # Terminal move detection parameters
     enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
-    terminal_move_boost: float = 10.0  # Boost factor for terminal moves in PUCT calculation
-    virtual_loss_for_non_terminal: float = 0.01  # Small penalty for non-terminal moves
-    terminal_detection_max_depth: int = 3  # Maximum depth for terminal move detection
+    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
+    virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
+    terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
     # Removed seed parameter - randomness should be controlled externally
 
     # Early termination parameters
     enable_early_termination: bool = False
-    early_termination_threshold: float = 0.9
+    early_termination_threshold: float = DEFAULT_EARLY_TERMINATION_THRESHOLD
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
-    depth_discount_factor: float = 0.95  # Discount wins by this factor per depth level
+    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR  # Discount wins by this factor per depth level
     # When enabled, wins found deeper in the search tree are discounted to encourage
     # the algorithm to prefer shorter winning sequences. This helps avoid meandering
     # when the position is already won. Only applies during MCTS search, not during
     # early termination when using the policy network.
     
     # Terminal move value boosting
-    terminal_win_value_boost: float = 1.5  # Multiply terminal win values by this factor
+    terminal_win_value_boost: float = DEFAULT_TERMINAL_WIN_VALUE_BOOST  # Multiply terminal win values by this factor
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
-
-# ------------------ Helpers ------------------
-
-def state_hash_from(state: HexGameState) -> int:
-    """Hash only immutable, CPU-native parts (no tensor bytes)."""
-    # Use move history and current player enum value.
-    # Ensure stable, bounded integer (mask to 63 bits to avoid Python hash randomization effects).
-    key = (tuple(state.move_history), int(state.current_player_enum.value))
-    h = hash(key) & ((1 << 63) - 1)
-    return h
+    
+    def __post_init__(self):
+        """Validate configuration parameters after initialization."""
+        if self.sims <= 0:
+            raise ValueError(f"sims must be positive, got {self.sims}")
+        if self.batch_cap <= 0:
+            raise ValueError(f"batch_cap must be positive, got {self.batch_cap}")
+        if self.c_puct <= 0:
+            raise ValueError(f"c_puct must be positive, got {self.c_puct}")
+        if self.cache_size <= 0:
+            raise ValueError(f"cache_size must be positive, got {self.cache_size}")
+        if self.dirichlet_alpha <= 0:
+            raise ValueError(f"dirichlet_alpha must be positive, got {self.dirichlet_alpha}")
+        if not 0 <= self.dirichlet_eps <= 1:
+            raise ValueError(f"dirichlet_eps must be between 0 and 1, got {self.dirichlet_eps}")
+        if self.temperature_start <= 0:
+            raise ValueError(f"temperature_start must be positive, got {self.temperature_start}")
+        if self.temperature_end <= 0:
+            raise ValueError(f"temperature_end must be positive, got {self.temperature_end}")
+        if self.temperature_start < self.temperature_end:
+            raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
+        if self.temperature_decay_moves <= 0:
+            raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
+        if self.terminal_move_boost < 0:
+            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
+        if self.virtual_loss_for_non_terminal < 0:
+            raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
+        if self.terminal_detection_max_depth < 0:
+            raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
+        if not 0 <= self.early_termination_threshold <= 1:
+            raise ValueError(f"early_termination_threshold must be between 0 and 1, got {self.early_termination_threshold}")
+        if not 0 < self.depth_discount_factor <= 1:
+            raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
+        if self.terminal_win_value_boost <= 0:
+            raise ValueError(f"terminal_win_value_boost must be positive, got {self.terminal_win_value_boost}")
+        
+        # Validate temperature step parameters if using step decay
+        if self.temperature_decay_type == "step":
+            if len(self.temperature_step_thresholds) != len(self.temperature_step_values):
+                raise ValueError("temperature_step_thresholds and temperature_step_values must have the same length")
+            if not all(t >= 0 for t in self.temperature_step_thresholds):
+                raise ValueError("All temperature_step_thresholds must be non-negative")
+            if not all(0 < v <= 1 for v in self.temperature_step_values):
+                raise ValueError("All temperature_step_values must be between 0 and 1")
 
 # ------------------ Data structures ------------------
 
@@ -255,10 +354,20 @@ class MCTSNode:
         "_terminal_moves_detected", "depth"
     )
     def __init__(self, state: HexGameState, board_size: int):
+        if state is None:
+            raise ValueError("State cannot be None")
+        if board_size <= 0:
+            raise ValueError(f"Board size must be positive, got {board_size}")
+        
         self.state: HexGameState = state
         self.to_play: Player = state.current_player_enum
         # Legal moves
         self.legal_moves: List[Tuple[int,int]] = state.get_legal_moves()
+        
+        # Validate legal moves
+        for row, col in self.legal_moves:
+            validate_move_coordinates(row, col, board_size)
+        
         self.legal_indices: List[int] = [move_to_index(r, c, board_size) for (r,c) in self.legal_moves]
         L = len(self.legal_moves)
         # Stats (aligned to legal_moves order)
@@ -268,7 +377,7 @@ class MCTSNode:
         self.Q = np.zeros(L, dtype=np.float64) # mean value per action
         self.P = np.zeros(L, dtype=np.float64) # prior probability per action (set on expand)
         self.is_expanded: bool = False
-        self.state_hash: int = state_hash_from(state)
+        self.state_hash: int = board_key(state)
         self.is_terminal: bool = bool(state.game_over)
         self.winner_str: Optional[str] = state.winner if self.is_terminal else None
         self.terminal_moves: List[bool] = [False] * L # New attribute for terminal move detection
@@ -279,19 +388,28 @@ class MCTSNode:
 
 class BaselineMCTS:
     def __init__(self, engine: HexGameEngine, model: ModelWrapper, cfg: BaselineMCTSConfig):
+        if engine is None:
+            raise ValueError("Engine cannot be None")
+        if model is None:
+            raise ValueError("Model cannot be None")
+        if cfg is None:
+            raise ValueError("Configuration cannot be None")
+        
         self.engine = engine
         self.model = model
         self.cfg = cfg
         # Always use global RNG state - randomness should be controlled externally
         # This ensures MCTS instances don't interfere with each other's randomness
 
-        # Cache: state_hash -> (policy_logits_np [A], value_logit_float)
-        self.eval_cache: Dict[int, Tuple[np.ndarray, float]] = {}
+        # LRU Cache: board_key -> (policy_logits_np [A], value_logit_float)
+        # Uses OrderedDict for O(1) LRU eviction
+        self.eval_cache: OrderedDict[int, Tuple[np.ndarray, float]] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
+        # Metrics
+        self._unique_evals_total = 0     # post-dedup, network calls actually done
+        self._effective_sims_total = 0   # counts every backprop (incl. duplicates)
 
-
-        
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
             max_detection_depth=cfg.terminal_detection_max_depth
@@ -312,7 +430,17 @@ class BaselineMCTS:
         Args:
             root_state: The game state to search from
             verbose: Verbosity level for logging (0=quiet, 1=basic, 2=detailed)
+            
+        Raises:
+            ValueError: If root_state is None or invalid
+            RuntimeError: If the game state is terminal
         """
+        if root_state is None:
+            raise ValueError("root_state cannot be None")
+        if root_state.game_over:
+            raise RuntimeError("Cannot run MCTS on a terminal game state")
+        if verbose < 0:
+            raise ValueError(f"verbose must be non-negative, got {verbose}")
         # Prepare root node
         root = self._prepare_root_node(root_state, verbose)
         
@@ -324,9 +452,17 @@ class BaselineMCTS:
             tree_data = self._compute_tree_data(root)
             win_probability = early_info.win_prob
             
+            # Attach metrics for early termination cases too
+            stats = self._get_stats_builder().create_early_termination_stats(early_info)
+            total_time = 0.0  # Early termination has minimal time
+            stats["unique_evals_total"] = int(self._unique_evals_total)
+            stats["effective_sims_total"] = int(self._effective_sims_total)
+            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for early termination
+            stats["effective_sims_per_sec"] = 0.0
+            
             return MCTSResult(
                 move=move,
-                stats=self._get_stats_builder().create_early_termination_stats(early_info),
+                stats=stats,
                 tree_data=tree_data,
                 root_node=root,
                 early_termination_info=early_info,
@@ -335,6 +471,12 @@ class BaselineMCTS:
         
         # Run main simulation loop
         timing_stats = self._run_simulation_loop(root, verbose)
+        # Attach metrics (don't rely on TimingTracker internals)
+        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
+        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
+        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
+        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
+        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
         
         # Compute results directly
         move = self._compute_move(root, root_state, verbose)
@@ -373,7 +515,7 @@ class BaselineMCTS:
         action_size = board_size * board_size
         
         # Try cache first
-        cached = self.eval_cache.get(root.state_hash, None)
+        cached = self._get_from_cache(root.state_hash)
         if cached is not None:
             self.cache_hits += 1
             policy_np, value_logit = cached
@@ -389,7 +531,7 @@ class BaselineMCTS:
             value_logit = float(value_cpu[0].item())
             
             # Cache results
-            self.eval_cache[root.state_hash] = (policy_np, value_logit)
+            self._put_in_cache(root.state_hash, policy_np, value_logit)
             self._expand_node_from_policy(root, policy_np, board_size, action_size)
 
     def _check_early_termination(self, root: MCTSNode, verbose: int) -> Optional[EarlyTerminationInfo]:
@@ -425,25 +567,42 @@ class BaselineMCTS:
             # Process leaves (expand and backpropagate)
             batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker)
             sims_remaining -= batch_simulations
+            self._effective_sims_total += batch_simulations
         
         return timing_tracker.get_final_stats()
 
-    def _select_leaves_batch(self, root: MCTSNode, sims_remaining: int, 
-                           timing_tracker: MCTSTimingTracker) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
-        """Select a batch of leaves for expansion."""
+    def _select_leaves_batch(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        timing_tracker: MCTSTimingTracker
+    ) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
+        """Select a batch of leaves for expansion with early flush triggers."""
         timing_tracker.start_timing("select")
-        
+
         leaves: List[MCTSNode] = []
         paths: List[List[Tuple[MCTSNode, int]]] = []
+
         board_size = int(root.state.get_board_tensor().shape[-1])
-        
         select_budget = min(self.cfg.batch_cap, sims_remaining)
-        
-        while len(leaves) < select_budget:
+
+        # Distinct-leaf target: ~50% of budget, clamped to [16, budget]
+        distinct_target = max(16, int(round(select_budget * 0.5)))
+        distinct_target = min(distinct_target, select_budget)
+
+        # Track distinct (uncached+unexpanded) leaf hashes this batch
+        distinct_hashes: Set[int] = set()
+
+        # Cheap guardrail on selection work
+        max_selection_descents = 4 * select_budget
+        descents = 0
+
+        while len(leaves) < select_budget and descents < max_selection_descents:
+            descents += 1
+
             node = root
             path: List[Tuple[MCTSNode, int]] = []
-            
-            # Descend until reaching a leaf or terminal
+
             while True:
                 if node.is_terminal:
                     leaves.append(node)
@@ -452,32 +611,44 @@ class BaselineMCTS:
                 if not node.is_expanded:
                     leaves.append(node)
                     paths.append(path)
+
+                    # Only count toward distinct if this state actually needs eval
+                    if node.state_hash not in self.eval_cache and not node.is_terminal:
+                        distinct_hashes.add(node.state_hash)
+
+                    # Flush triggers
+                    U = len(distinct_hashes)
+                    T = len(leaves)
+                    if U >= distinct_target:
+                        timing_tracker.end_timing("select")
+                        return leaves, paths
+                    if T >= 16 and U / max(1, T) < 0.5:
+                        timing_tracker.end_timing("select")
+                        return leaves, paths
                     break
-                
-                # Select child via PUCT
+
+                # PUCT descent
                 child_idx = self._select_child_puct(node)
                 path.append((node, child_idx))
                 child = node.children[child_idx]
-                
+
                 if child is None:
-                    # Materialize child state on demand
                     timing_tracker.start_timing("state_creation")
                     (r, c) = node.legal_moves[child_idx]
-                    
                     timing_tracker.start_timing("make_move")
                     child_state = node.state.make_move(r, c)
                     timing_tracker.end_timing("make_move")
-                    
                     child = MCTSNode(child_state, board_size)
                     child.depth = node.depth + 1
                     timing_tracker.end_timing("state_creation")
                     node.children[child_idx] = child
-                
+
                 node = child
-                
+
+                # Outer budget guard (kept from original)
                 if len(leaves) >= select_budget:
                     break
-        
+
         timing_tracker.end_timing("select")
         return leaves, paths
 
@@ -502,38 +673,56 @@ class BaselineMCTS:
         
         return simulations_completed
 
-    def _prepare_leaf_evaluations(self, leaves: List[MCTSNode], 
-                                timing_tracker: MCTSTimingTracker) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
-        """Prepare leaf evaluations, separating cached from uncached."""
+    def _prepare_leaf_evaluations(
+        self,
+        leaves: List[MCTSNode],
+        timing_tracker: MCTSTimingTracker
+    ) -> Tuple[List[torch.Tensor], List[int], List[Tuple[int, np.ndarray, float]]]:
+        """
+        Prepare encodings for NN; separate cached from uncached; de-duplicate uncached by board_key.
+        Returns:
+          encodings          – tensors for unique, uncached leaves (order aligned with need_eval_idxs)
+          need_eval_idxs     – indices into `leaves` for those unique encodings
+          cached_expansions  – (leaf_idx, policy_np, value_logit) for cache hits
+        """
         encodings: List[torch.Tensor] = []
         need_eval_idxs: List[int] = []
         cached_expansions: List[Tuple[int, np.ndarray, float]] = []
-        
+
         timing_tracker.start_timing("stack")
         timing_tracker.start_timing("encode")
-        
+
+        seen_uncached: Set[int] = set()
+
         for i, leaf in enumerate(leaves):
+            # Skip leaves that don't need eval
             if leaf.is_terminal or leaf.is_expanded:
                 continue
-            
-            # Check cache
+
+            # Cached?
             timing_tracker.start_timing("cache_lookup")
-            cached = self.eval_cache.get(leaf.state_hash, None)
+            cached = self._get_from_cache(leaf.state_hash)
             timing_tracker.end_timing("cache_lookup")
-            
+
             if cached is not None:
                 self.cache_hits += 1
-                cached_expansions.append((i, cached[0], cached[1]))
-            else:
-                self.cache_misses += 1
-                # Prepare encoding for neural network
-                enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
-                encodings.append(enc)
-                need_eval_idxs.append(i)
-        
+                policy_np, value_logit = cached
+                cached_expansions.append((i, policy_np, value_logit))
+                continue
+
+            # Uncached → only encode the first occurrence of this state in the batch
+            if leaf.state_hash in seen_uncached:
+                # Another copy will piggy-back on the first result via eval_cache.
+                continue
+            seen_uncached.add(leaf.state_hash)
+
+            self.cache_misses += 1
+            enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
+            encodings.append(enc)
+            need_eval_idxs.append(i)
+
         timing_tracker.end_timing("encode")
         timing_tracker.end_timing("stack")
-        
         return encodings, need_eval_idxs, cached_expansions
 
     def _run_neural_network_batch(self, encodings: List[torch.Tensor], need_eval_idxs: List[int], 
@@ -547,6 +736,7 @@ class BaselineMCTS:
         action_size = board_size * board_size
         
         policy_cpu, value_cpu, tm = self.model.infer_timed(batch_tensor)
+        self._unique_evals_total += int(tm.get("batch_size", len(encodings)))
         
         # Record performance metrics
         self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
@@ -559,7 +749,7 @@ class BaselineMCTS:
             val_logit = float(value_cpu[j].item())
             
             # Cache CPU-native results
-            self.eval_cache[leaf.state_hash] = (pol, val_logit)
+            self._put_in_cache(leaf.state_hash, pol, val_logit)
             self._expand_node_from_policy(leaf, pol, board_size, action_size)
 
     def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
@@ -616,8 +806,12 @@ class BaselineMCTS:
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
         """Get value for a non-terminal leaf from neural network."""
-        _, value_logit = self.eval_cache[leaf.state_hash]
-        return float(torch.sigmoid(torch.tensor(value_logit)).item())
+        cached = self._get_from_cache(leaf.state_hash)
+        if cached is None:
+            raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
+        _, value_logit = cached
+        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
+        return float(ValuePredictor.model_output_to_probability(value_logit))
 
     def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], p_red: float):
         """Backpropagate value along a path from leaf to root."""
@@ -631,6 +825,7 @@ class BaselineMCTS:
             
             node.N[a_idx] += 1
             node.W[a_idx] += v_node
+            # TODO: The max(1, node.N[a_idx]) looks redundant, surely node.N[a_idx] >= 1 from above.
             node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
 
     # ---------- New Result Computation Methods ----------
@@ -691,7 +886,7 @@ class BaselineMCTS:
         if verbose >= 4:
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
         
-        if temp <= 1e-6:
+        if temp <= TEMPERATURE_COMPARISON_THRESHOLD:
             a_idx = int(np.argmax(counts))
         else:
             pi = np.power(counts, 1.0 / temp)
@@ -703,6 +898,7 @@ class BaselineMCTS:
 
     def _compute_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
         """Compute tree data for analysis."""
+        # TODO: Consider caching this computation if called multiple times
         if root.is_terminal:
             return {
                 "visit_counts": {},
@@ -750,7 +946,7 @@ class BaselineMCTS:
         total_nodes, max_depth = self._calculate_tree_statistics(root)
 
         # Get principal variation
-        principal_variation = self._extract_principal_variation(root, max_length=10)
+        principal_variation = self._extract_principal_variation(root, max_length=PRINCIPAL_VARIATION_MAX_LENGTH)
 
         return {
             "visit_counts": visit_counts,
@@ -780,6 +976,11 @@ class BaselineMCTS:
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
         """Extract the principal variation (best move sequence) from the MCTS tree."""
+        if root is None:
+            raise ValueError("Root node cannot be None")
+        if max_length <= 0:
+            raise ValueError(f"max_length must be positive, got {max_length}")
+        
         if root.is_terminal:
             return []
 
@@ -806,102 +1007,35 @@ class BaselineMCTS:
             
         return pv
 
-
-class MCTSTimingTracker:
-    """Tracks timing information for MCTS operations."""
-    
-    def __init__(self):
-        self.timings = {}
-        self.batch_count = 0
-        self.batch_sizes = []
-        self.forward_ms_list = []
-        self.select_times = []
-        self.cache_hit_times = []
-        self.cache_miss_times = []
-        self.puct_calc_times = []
-        self.make_move_times = []
+    def _calculate_tree_statistics(self, root: MCTSNode) -> Tuple[int, int]:
+        """
+        Calculate tree traversal statistics.
         
-        # Cumulative totals
-        self.h2d_ms_total = 0.0
-        self.forward_ms_total = 0.0
-        self.pure_forward_ms_total = 0.0
-        self.sync_ms_total = 0.0
-        self.d2h_ms_total = 0.0
+        Args:
+            root: Root node of the tree
+            
+        Returns:
+            Tuple of (total_nodes, max_depth)
+        """
+        if root is None:
+            return 0, 0
         
-        # Current timing
-        self.current_timing = None
-        self.current_timing_start = None
-    
-    def start_timing(self, operation: str):
-        """Start timing an operation."""
-        self.current_timing = operation
-        self.current_timing_start = time.perf_counter()
-    
-    def end_timing(self, operation: str):
-        """End timing an operation."""
-        if self.current_timing == operation and self.current_timing_start is not None:
-            duration_ms = (time.perf_counter() - self.current_timing_start) * 1000.0
-            if operation not in self.timings:
-                self.timings[operation] = 0.0
-            self.timings[operation] += duration_ms
-            self.current_timing = None
-            self.current_timing_start = None
-    
-    def record_batch_metrics(self, tm: Dict[str, Any]):
-        """Record metrics from a neural network batch."""
-        self.batch_count += 1
-        self.batch_sizes.append(int(tm["batch_size"]))
-        self.forward_ms_list.append(float(tm["forward_ms"]))
-        self.h2d_ms_total += float(tm["h2d_ms"])
-        self.forward_ms_total += float(tm["forward_ms"])
-        self.pure_forward_ms_total += float(tm.get("pure_forward_ms", tm["forward_ms"]))
-        self.sync_ms_total += float(tm.get("sync_ms", 0.0))
-        self.d2h_ms_total += float(tm["d2h_ms"])
-    
-    def get_final_stats(self) -> Dict[str, Any]:
-        """Get final timing statistics."""
-        total_search_time = (
-            self.timings.get("encode", 0.0) + self.timings.get("stack", 0.0) + 
-            self.h2d_ms_total + self.forward_ms_total + self.d2h_ms_total + 
-            self.timings.get("expand", 0.0) + self.timings.get("backprop", 0.0) + 
-            self.timings.get("select", 0.0) + self.timings.get("cache_lookup", 0.0) + 
-            self.timings.get("state_creation", 0.0)
-        ) / 1000.0
+        def count_nodes_and_depth(node: MCTSNode, current_depth: int) -> Tuple[int, int]:
+            if node is None:
+                return 0, current_depth - 1
+            
+            total_nodes = 1
+            max_depth = current_depth
+            
+            for child in node.children:
+                if child is not None:
+                    child_nodes, child_depth = count_nodes_and_depth(child, current_depth + 1)
+                    total_nodes += child_nodes
+                    max_depth = max(max_depth, child_depth)
+            
+            return total_nodes, max_depth
         
-        return {
-            "encode_ms": self.timings.get("encode", 0.0),
-            "stack_ms": self.timings.get("stack", 0.0),
-            "h2d_ms": self.h2d_ms_total,
-            "forward_ms": self.forward_ms_total,
-            "pure_forward_ms": self.pure_forward_ms_total,
-            "sync_ms": self.sync_ms_total,
-            "d2h_ms": self.d2h_ms_total,
-            "expand_ms": self.timings.get("expand", 0.0),
-            "backprop_ms": self.timings.get("backprop", 0.0),
-            "select_ms": self.timings.get("select", 0.0),
-            "cache_lookup_ms": self.timings.get("cache_lookup", 0.0),
-            "state_creation_ms": self.timings.get("state_creation", 0.0),
-            "puct_calc_ms": self.timings.get("puct_calc", 0.0),
-            "make_move_ms": self.timings.get("make_move", 0.0),
-            "batch_count": self.batch_count,
-            "batch_sizes": self.batch_sizes,
-            "forward_ms_list": self.forward_ms_list,
-            "select_times": self.select_times,
-            "cache_hit_times": self.cache_hit_times,
-            "cache_miss_times": self.cache_miss_times,
-            "puct_calc_times": self.puct_calc_times,
-            "make_move_times": self.make_move_times,
-            "median_forward_ms_ex_warm": _median_excluding_first(self.forward_ms_list),
-            "p90_forward_ms_ex_warm": _p90_excluding_first(self.forward_ms_list),
-            "median_select_ms": _median_excluding_first(self.select_times) if self.select_times else 0.0,
-            "median_cache_hit_ms": _median_excluding_first(self.cache_hit_times) if self.cache_hit_times else 0.0,
-            "median_cache_miss_ms": _median_excluding_first(self.cache_miss_times) if self.cache_miss_times else 0.0,
-            "median_puct_calc_ms": _median_excluding_first(self.puct_calc_times) if self.puct_calc_times else 0.0,
-            "median_make_move_ms": _median_excluding_first(self.make_move_times) if self.make_move_times else 0.0,
-            "total_search_time": total_search_time,
-        }
-
-    
+        return count_nodes_and_depth(root, 0)
 
 
     # ---------- Internal ----------
@@ -963,7 +1097,7 @@ class MCTSTimingTracker:
         t_puct_start = time.perf_counter()
         
         N_sum = np.sum(node.N, dtype=np.float64)
-        if N_sum <= 1e-9:
+        if N_sum <= PUCT_CALCULATION_THRESHOLD:
             # All U terms reduce to c*P; just pick argmax P
             # But prioritize terminal moves
             if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
@@ -997,11 +1131,79 @@ class MCTSTimingTracker:
         
         return result
 
+    def clear_cache(self) -> None:
+        """
+        Clear the evaluation cache to free memory.
+        
+        This method can be called periodically to prevent memory leaks
+        in long-running processes.
+        """
+        self.eval_cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+        # Reset metrics when clearing cache
+        self._unique_evals_total = 0
+        self._effective_sims_total = 0
+
+    def _get_from_cache(self, board_key: int) -> Optional[Tuple[np.ndarray, float]]:
+        """
+        Get a value from the LRU cache, updating access order.
+        
+        Args:
+            board_key: The board state key to look up
+            
+        Returns:
+            The cached (policy, value) tuple if found, None otherwise
+        """
+        if board_key in self.eval_cache:
+            # Move to end (most recently used)
+            value = self.eval_cache.pop(board_key)
+            self.eval_cache[board_key] = value
+            return value
+        return None
+
+    def _put_in_cache(self, board_key: int, policy: np.ndarray, value: float) -> None:
+        """
+        Put a value in the LRU cache, evicting least recently used if needed.
+        
+        Args:
+            board_key: The board state key
+            policy: The policy logits
+            value: The value logit
+        """
+        # If key already exists, remove it first (will be re-added at end)
+        if board_key in self.eval_cache:
+            self.eval_cache.pop(board_key)
+        
+        # If cache is full, evict least recently used (first item)
+        if len(self.eval_cache) >= self.cfg.cache_size:
+            self.eval_cache.popitem(last=False)  # Remove first (least recently used)
+        
+        # Add new item at end (most recently used)
+        self.eval_cache[board_key] = (policy, value)
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics for monitoring.
+        
+        Returns:
+            Dictionary with cache statistics
+        """
+        return {
+            "cache_size": len(self.eval_cache),
+            "max_cache_size": self.cfg.cache_size,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "cache_hit_rate": self.cache_hits / max(1, self.cache_hits + self.cache_misses),
+            "cache_utilization": len(self.eval_cache) / self.cfg.cache_size
+        }
+
 
 def create_mcts_config(
     config_type: str = "tournament",
     sims: Optional[int] = None,
     early_termination_threshold: Optional[float] = None,
+    cache_size: Optional[int] = None,
     **kwargs
 ) -> BaselineMCTSConfig:
     """
@@ -1011,6 +1213,7 @@ def create_mcts_config(
         config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
         sims: Number of simulations (overrides preset default)
         early_termination_threshold: Win probability threshold for early termination (overrides preset default)
+        cache_size: Cache size for MCTS evaluation cache (overrides preset default)
         **kwargs: Additional parameters to override in the configuration
         
     Returns:
@@ -1052,30 +1255,32 @@ def create_mcts_config(
         config_params["sims"] = sims
     if early_termination_threshold is not None:
         config_params["early_termination_threshold"] = early_termination_threshold
+    if cache_size is not None:
+        config_params["cache_size"] = cache_size
     
     # Override with any additional kwargs
     config_params.update(kwargs)
     
     # Add common parameters that are the same across all presets
     config_params.update({
-        "batch_cap": 64,
-        "c_puct": 1.5,
-        "dirichlet_alpha": 0.3,
-        "dirichlet_eps": 0.25,
-        "temperature_decay_type": "exponential",
-        "temperature_decay_moves": 50,
+        "batch_cap": DEFAULT_BATCH_CAP,
+        "c_puct": DEFAULT_C_PUCT,
+        "dirichlet_alpha": DEFAULT_DIRICHLET_ALPHA,
+        "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
+        "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
+        "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
         # Terminal move detection (always enabled)
         "enable_terminal_move_detection": True,
-        "terminal_move_boost": 10.0,
-        "virtual_loss_for_non_terminal": 0.01,
-        "terminal_detection_max_depth": 3,
+        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
+        "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
+        "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
         # Early termination (always enabled)
         "enable_early_termination": True,
         # Depth-based discounting to encourage shorter wins
         "enable_depth_discounting": True,
-        "depth_discount_factor": 0.95,
+        "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
         # Terminal win value boosting
-        "terminal_win_value_boost": 1.5,
+        "terminal_win_value_boost": DEFAULT_TERMINAL_WIN_VALUE_BOOST,
     })
     
     return BaselineMCTSConfig(**config_params)
@@ -1090,24 +1295,3 @@ def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameStat
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
     return result.move, result.stats, result.tree_data
-
-
-# --------- Stats helpers ---------
-
-def _median_excluding_first(xs: List[float]) -> float:
-    if not xs:
-        return 0.0
-    if len(xs) == 1:
-        return xs[0]
-    arr = np.array(xs[1:], dtype=np.float64)
-    return float(np.median(arr))
-
-def _p90_excluding_first(xs: List[float]) -> float:
-    if not xs:
-        return 0.0
-    if len(xs) == 1:
-        return xs[0]
-    arr = np.array(xs[1:], dtype=np.float64)
-    k = max(0, int(math.ceil(0.9 * len(arr)) - 1))
-    arr.sort()
-    return float(arr[k])

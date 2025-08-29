@@ -166,12 +166,19 @@ def run_single_experiment(
         model_params['resnet_depth'] = exp_config['hyperparameters']['resnet_depth']
     if 'dropout_prob' in exp_config['hyperparameters']:
         model_params['dropout_prob'] = exp_config['hyperparameters']['dropout_prob']
+    if 'use_value_bottleneck' in exp_config['hyperparameters']:
+        model_params['use_value_bottleneck'] = exp_config['hyperparameters']['use_value_bottleneck']
+    else:
+        # Default to True for the enhanced value head
+        model_params['use_value_bottleneck'] = True
     
     # Trainer parameters (everything else except batch_size which is used for DataLoader creation)
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
                      if k not in model_params and k != 'batch_size'}
     
     model = TwoHeadedResNet(**model_params).to(device)
+    
+
     
     trainer = Trainer(
         model=model,
@@ -304,10 +311,11 @@ def discover_and_split_multiple_data(
     if not all_data_files:
         raise ValueError("No data files found in any of the specified directories")
     
-    # Create train/val split across all files
+    # Create train/val split across all files with stratified sampling
     train_files, val_files = create_train_val_split(
         all_data_files, train_ratio, random_seed, max_files_per_split=None, 
-        shuffle_shards=shuffle_shards
+        shuffle_shards=shuffle_shards, data_source_info=data_source_info,
+        max_validation_examples=max_validation_examples
     )
     
     logger.info(f"Final split: {len(train_files)} train files, {len(val_files)} validation files")
@@ -446,8 +454,38 @@ def run_hyperparameter_tuning_current_data(
     train_loader, val_loader = create_datasets(
         train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size, shuffle_shards=shuffle_shards, random_seed=random_seed)
     
+    # Estimate actual validation dataset size
+    def estimate_validation_size(val_files, max_validation_examples):
+        """Estimate the actual number of examples in the validation dataset."""
+        if not val_files:
+            return 0
+        
+        # Sample a few files to estimate average examples per file
+        sample_files = val_files[:min(5, len(val_files))]
+        total_examples = 0
+        for file_path in sample_files:
+            try:
+                import gzip
+                import pickle
+                with gzip.open(file_path, 'rb') as f:
+                    data = pickle.load(f)
+                    examples = data.get('examples', [])
+                    total_examples += len(examples)
+            except Exception as e:
+                logger.warning(f"Could not read {file_path}: {e}")
+                continue
+        
+        if sample_files:
+            avg_per_file = total_examples / len(sample_files)
+            estimated_total = avg_per_file * len(val_files)
+            actual_size = min(estimated_total, max_validation_examples) if max_validation_examples else estimated_total
+            return int(actual_size)
+        return 0
+    
+    actual_val_size = estimate_validation_size(val_files, max_validation_examples)
+    
     # Remove or guard len() usage for streaming datasets
-    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples.")
+    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples (actual: {actual_val_size:,}).")
     
     if train_loader is None:
         return {'error': 'Failed to create datasets'}

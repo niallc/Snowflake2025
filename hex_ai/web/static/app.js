@@ -1,19 +1,83 @@
 // --- Color palette inspired by Taerim's nimbus ---
-const COLORS = {
+// 
+// 🎨 COLOR CUSTOMIZATION GUIDE:
+// 
+// This color system has three levels:
+// 1. BASE_COLORS: Named color constants (MEDIUM_BLUE, DARK_RED, etc.) - change hex values here
+// 2. COLORS: Semantic board regions that reference base colors (BLUE_EDGE_BORDER, HEX_GRID_COLOR, etc.) - change which base color they use
+// 3. APPLICATION: Where colors are actually used in the code
+//
+// To customize colors:
+// - For base colors: Change the hex values in the BASE_COLORS section
+// - For semantic regions: Change which base color they reference in the COLORS section
+//
+// Examples:
+// - To make grid lines darker: Change BASE_COLORS.MEDIUM_BLUE: '#bbeeee' to '#999999'
+// - To use a different blue for pieces: Change COLORS.BLUE_PIECE_COLOR: BASE_COLORS.DARK_BLUE to BASE_COLORS.VERY_DARK_BLUE
+// - To make empty hexes light blue: Change COLORS.EMPTY_HEX_COLOR: BASE_COLORS.WHITE to BASE_COLORS.LIGHT_BLUE
+//
+// Key semantic colors you might want to change:
+// - HEX_GRID_COLOR: ⭐ Controls the light cyan lines between hexagons
+// - EMPTY_HEX_COLOR: ⭐ Controls the fill color of empty hexagons
+// - BOARD_BACKGROUND: Background color behind the game board
+// - BLUE_EDGE_BORDER: Blue edge borders (top/bottom)
+// - RED_EDGE_BORDER: Red edge borders (left/right)
+// - BLUE_PIECE_COLOR: Colors of blue pieces
+// - RED_PIECE_COLOR: Colors of red pieces
+// - BLUE_LAST_MOVE: Colors of blue's last move
+// - RED_LAST_MOVE: Colors of red's last move
+// - BLUE_WINNING_PIECE: Colors of blue pieces when blue wins
+// - RED_WINNING_PIECE: Colors of red pieces when red wins
+//
+// ===== BASE COLOR PALETTE =====
+// These are the fundamental colors - change hex values here
+const BASE_COLORS = {
+  WHITE: '#fff',
+  LIGHT_GRAY: '#f8f8fa',
+  MEDIUM_GRAY: '#bbb',
+  DARK_GRAY: '#222',
+  
+  // New minimalist colors
+  EMPTY_HEX_GRAY: '#f0f0f0',      // ⭐ LIGHT GRAY for empty hexagons
+  GRID_WHITE: '#ffffff',           // ⭐ WHITE for grid lines between hexagons
+  
+  // Blue palette
   LIGHT_BLUE: '#e7fcfc',
-  MEDIUM_BLUE: '#bbeeee',
-  DARK_BLUE: '#8bd6d6',
-  VERY_DARK_BLUE: '#0099ff', // more vivid blue for edge
-  DARKER_BLUE: '#0066cc', // even darker blue for last move
+  MEDIUM_BLUE: '#bbeeee',         // ⭐ LIGHT CYAN - used for grid lines
+  DARK_BLUE: '#8bd6d6',           // ⭐ MEDIUM CYAN - used for blue pieces
+  VERY_DARK_BLUE: '#0099ff',      // ⭐ VIVID BLUE - used for edges and winning pieces
+  DARKER_BLUE: '#0066cc',         // ⭐ DARK BLUE - used for last moves
+  
+  // Red palette
   LIGHT_RED: '#fff4ea',
   MEDIUM_RED: '#ffe1c8',
-  DARK_RED: '#ffcea5',
-  VERY_DARK_RED: '#ff6600', // more vivid orange-red for edge
-  DARKER_RED: '#cc3300', // even darker red for last move
-  LIGHT_GRAY: '#cccccc',
-  BOARD_BG: '#f8f8fa',
-  GRID: '#bbb',
-  LAST_MOVE: '#222', // Keep for backward compatibility but won't use
+  DARK_RED: '#ffcea5',            // ⭐ MEDIUM ORANGE - used for red pieces
+  VERY_DARK_RED: '#ff6600',       // ⭐ VIVID ORANGE-RED - used for edges and winning pieces
+  DARKER_RED: '#cc3300',          // ⭐ DARK RED - used for last moves
+};
+
+const COLORS = {
+  // ===== SEMANTIC BOARD REGIONS =====
+  // These reference the base colors above - change which base color they use
+  BOARD_BACKGROUND: BASE_COLORS.LIGHT_GRAY,
+  EMPTY_HEX_COLOR: BASE_COLORS.EMPTY_HEX_GRAY,  // ⭐ LIGHT GRAY for empty hexagons
+  HEX_GRID_COLOR: BASE_COLORS.GRID_WHITE,       // ⭐ WHITE LINES BETWEEN HEXAGONS
+  
+  // Edge borders
+  BLUE_EDGE_BORDER: BASE_COLORS.VERY_DARK_BLUE,
+  RED_EDGE_BORDER: BASE_COLORS.VERY_DARK_RED,
+  
+  // Piece colors
+  BLUE_PIECE_COLOR: BASE_COLORS.DARK_BLUE,
+  RED_PIECE_COLOR: BASE_COLORS.DARK_RED,
+  
+  // Last move colors
+  BLUE_LAST_MOVE: BASE_COLORS.DARKER_BLUE,
+  RED_LAST_MOVE: BASE_COLORS.DARKER_RED,
+  
+  // Winning piece colors
+  BLUE_WINNING_PIECE: BASE_COLORS.VERY_DARK_BLUE,
+  RED_WINNING_PIECE: BASE_COLORS.VERY_DARK_RED,
 };
 
 // --- State ---
@@ -27,13 +91,9 @@ let state = {
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
   red_model_id: 'model1',
-  blue_search_widths: [],
-  red_search_widths: [],
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_use_mcts: true,
-  red_use_mcts: true,
   blue_num_simulations: 2005,
   red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
@@ -57,25 +117,21 @@ let GAME_CONSTANTS = {
   }
 };
 
-const HEX_RADIUS = 16; // px, radius of each hex
+const HEX_RADIUS = 22; // px, radius of each hex (increased from 16 for 1.4x larger board)
 
 // --- Utility: Get per-player settings ---
 function getCurrentPlayerSettings() {
   if (state.player === 'blue') {
     return {
       model_id: state.blue_model_id,
-      search_widths: state.blue_search_widths,
       temperature: state.blue_temperature,
-      use_mcts: state.blue_use_mcts,
       num_simulations: state.blue_num_simulations,
       exploration_constant: state.blue_exploration_constant
     };
   } else {
     return {
       model_id: state.red_model_id,
-      search_widths: state.red_search_widths,
       temperature: state.red_temperature,
-      use_mcts: state.red_use_mcts,
       num_simulations: state.red_num_simulations,
       exploration_constant: state.red_exploration_constant
     };
@@ -116,11 +172,11 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
-                       blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
-                       red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
-                       blue_use_mcts = true, blue_num_simulations = 200, blue_exploration_constant = 1.4,
-                       red_use_mcts = true, red_num_simulations = 200, red_exploration_constant = 1.4,
+async function fetchMove(trmph, move, model_id = 'model1', temperature = 1.0, 
+                       blue_model_id = 'model1', blue_temperature = 1.0,
+                       red_model_id = 'model2', red_temperature = 1.0,
+                       blue_num_simulations = 200, blue_exploration_constant = 1.4,
+                       red_num_simulations = 200, red_exploration_constant = 1.4,
                        verbose = 1) {
   console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
@@ -130,18 +186,13 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
       trmph, 
       move, 
       model_id, 
-      search_widths, 
       temperature,
       blue_model_id,
-      blue_search_widths,
       blue_temperature,
-      blue_use_mcts,
       blue_num_simulations,
       blue_exploration_constant,
       red_model_id,
-      red_search_widths,
       red_temperature,
-      red_use_mcts,
       red_num_simulations,
       red_exploration_constant,
       verbose
@@ -161,36 +212,25 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0,
-                               use_mcts = true, num_simulations = 200, exploration_constant = 1.4) {
-  console.log(`makeComputerMove called with model_id: ${model_id}, use_mcts: ${use_mcts}`);
+async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
+                               num_simulations = 200, exploration_constant = 1.4) {
+  console.log(`makeComputerMove called with model_id: ${model_id}`);
   
-  if (use_mcts) {
-    // Use MCTS endpoint
-    const resp = await fetch('/api/mcts_move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        trmph, 
-        model_id, 
-        num_simulations, 
-        exploration_constant, 
-        temperature, 
-        verbose 
-      }),
-    });
-    if (!resp.ok) throw new Error('API error');
-    return await resp.json();
-  } else {
-    // Use fixed-tree search endpoint
-    const resp = await fetch('/api/computer_move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
-    });
-    if (!resp.ok) throw new Error('API error');
-    return await resp.json();
-  }
+  // Always use MCTS endpoint
+  const resp = await fetch('/api/mcts_move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      trmph, 
+      model_id, 
+      num_simulations, 
+      exploration_constant, 
+      temperature, 
+      verbose 
+    }),
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
 }
 
 // --- Board Rendering ---
@@ -204,60 +244,84 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // Math for flat-topped hex grid, blue at top/bottom
   const w = HEX_RADIUS * Math.sqrt(3);
   const h = HEX_RADIUS * 1.5;
-  // Make the SVG area wider and taller for full edge visibility
-  const svgWidth = 1.5 * (w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS);
-  const svgHeight = 1.2 * (h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS);
+  // Calculate SVG dimensions with balanced padding
+  // Account for full board size including edge borders (which extend beyond hex centers)
+  const boardWidth = w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS;
+  const boardHeight = h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS;
+  const edgeBorderWidth = 17; // 🎨 EDGE BORDER WIDTH - Account for thick red edge borders
+  const padding = HEX_RADIUS * 0.5; // 🎨 BALANCED PADDING - Equal padding on all sides
+  
+  // 🎨 DIAMOND SHAPE COMPENSATION - Account for hex board's diagonal offset
+  // The bottom edge extends further right than the top edge due to the diamond shape
+  const diagonalOffset = w * (GAME_CONSTANTS.BOARD_SIZE - 1) * 0.45; // Slightly reduced from 0.5 to balance left/right padding
+  
+  const svgWidth = boardWidth + 2 * padding + edgeBorderWidth + diagonalOffset;
+  const svgHeight = boardHeight + 2 * padding + edgeBorderWidth;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', svgWidth);
   svg.setAttribute('height', svgHeight);
   svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
-  svg.style.background = COLORS.BOARD_BG;
+  svg.style.background = COLORS.BOARD_BACKGROUND; /* 🎨 CENTRAL PLAY AREA BACKGROUND - Light gray area containing the actual game board */
 
   // --- Draw player edge indicators ---
   // Blue: top and bottom (across the topmost and bottommost hexes)
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
     hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
-    COLORS.VERY_DARK_BLUE
+    COLORS.BLUE_EDGE_BORDER
   ));
   svg.appendChild(makeEdgeLine(
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
-    COLORS.VERY_DARK_BLUE
+    COLORS.BLUE_EDGE_BORDER
   ));
-  // Red: left and right (use pi/4 for offset)
-  const redAngle = Math.PI / 4;
-  svg.appendChild(makeEdgeLine(
-    hexCenter(0, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(0, 0).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x - HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y - HEX_RADIUS * Math.sin(redAngle),
-    COLORS.VERY_DARK_RED
-  ));
-  svg.appendChild(makeEdgeLine(
-    hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS * Math.sin(redAngle),
-    hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x + HEX_RADIUS * Math.cos(redAngle), hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS * Math.sin(redAngle),
-    COLORS.VERY_DARK_RED
-  ));
+  
+  // Red edges: pass through midpoints of the true outer edges
+  function edgeMidpoint(vA, vB) {
+    return { x: (vA.x + vB.x) / 2, y: (vA.y + vB.y) / 2 };
+  }
+
+  const tl = hexVertices(hexCenter(0, 0).x, hexCenter(0, 0).y, HEX_RADIUS);
+  const bl = hexVertices(hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x,
+                        hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y, HEX_RADIUS);
+
+  // left side uses edge between vertices 2 and 3
+  const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
+  const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+
+  const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
+                        hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
+  const br = hexVertices(hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x,
+                        hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
+
+  // right side uses edge between vertices 0 and 5
+  const rightTopMid = edgeMidpoint(tr[0], tr[5]);
+  const rightBotMid = edgeMidpoint(br[0], br[5]);
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+
 
   // Draw hexes
   for (let row = 0; row < GAME_CONSTANTS.BOARD_SIZE; row++) {
     for (let col = 0; col < GAME_CONSTANTS.BOARD_SIZE; col++) {
       const { x, y } = hexCenter(row, col);
       const cell = board[row]?.[col] || GAME_CONSTANTS.PIECE_VALUES.EMPTY;
-      let fill = '#fff';
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.DARK_BLUE;
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.DARK_RED;
+      // ⭐ EMPTY HEX COLOR - uses COLORS.EMPTY_HEX_COLOR for empty hexagons
+      let fill = COLORS.EMPTY_HEX_COLOR;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_PIECE_COLOR;
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_PIECE_COLOR;
       
       // Highlight last move with darker color based on player
       if (lastMove && lastMove[0] === row && lastMove[1] === col) {
         if (lastMovePlayer === 'blue') {
-          fill = COLORS.DARKER_BLUE;
+          fill = COLORS.BLUE_LAST_MOVE;
         } else if (lastMovePlayer === 'red') {
-          fill = COLORS.DARKER_RED;
+          fill = COLORS.RED_LAST_MOVE;
         }
       }
       
-      if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.VERY_DARK_BLUE;
-      if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.VERY_DARK_RED;
+      if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_WINNING_PIECE;
+      if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_WINNING_PIECE;
       const isLegal = legalMoves.includes(rowcolToTrmph(row, col));
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
@@ -285,20 +349,33 @@ function makeHex(cx, cy, r, fill, highlight) {
   const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
   hex.setAttribute('fill', fill);
-  hex.setAttribute('stroke', highlight ? COLORS.MEDIUM_BLUE : COLORS.GRID);
-  hex.setAttribute('stroke-width', highlight ? 4 : 2);
+  // Grid lines between hexagons - use consistent stroke color and width for all hexagons
+  hex.setAttribute('stroke', COLORS.HEX_GRID_COLOR);
+  hex.setAttribute('stroke-width', 2);
   if (highlight) hex.style.cursor = 'pointer';
   return hex;
 }
 
-function makeEdgeLine(x1, y1, x2, y2, color) {
+function hexVertices(cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 3 * i + Math.PI / 6; // same orientation as makeHex
+    pts.push({ 
+      x: cx + r * Math.cos(angle), 
+      y: cy + r * Math.sin(angle) 
+    });
+  }
+  return pts;
+}
+
+function makeEdgeLine(x1, y1, x2, y2, color, strokeWidth = 10) {
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   line.setAttribute('x1', x1);
   line.setAttribute('y1', y1);
   line.setAttribute('x2', x2);
   line.setAttribute('y2', y2);
   line.setAttribute('stroke', color);
-  line.setAttribute('stroke-width', 10);
+  line.setAttribute('stroke-width', strokeWidth);
   line.setAttribute('stroke-linecap', 'round');
   line.setAttribute('opacity', 0.25);
   return line;
@@ -307,8 +384,11 @@ function makeEdgeLine(x1, y1, x2, y2, color) {
 function hexCenter(row, col) {
   // Flat-topped, blue at top/bottom: x = HEX_RADIUS * sqrt(3) * (col + row/2) + HEX_RADIUS
   // y = HEX_RADIUS * 1.5 * row + HEX_RADIUS
-  const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + HEX_RADIUS * 0.25; // add margin
-  const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + HEX_RADIUS * 0.25; // add margin
+  const padding = HEX_RADIUS * 0.5; // 🎨 BALANCED PADDING - Same as SVG padding
+  const extraTopPadding = HEX_RADIUS * 0.5; // 🎨 EXTRA TOP PADDING - Additional space at top
+  const extraLeftPadding = HEX_RADIUS * 0.5; // 🎨 EXTRA LEFT PADDING - Reduced to balance right side (was 0.3)
+  const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + padding + extraLeftPadding; // centered with extra left padding
+  const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + padding + extraTopPadding; // centered with extra top padding
   return { x, y };
 }
 
@@ -321,13 +401,13 @@ function updateUI() {
   const status = document.getElementById('status-line');
   if (state.winner) {
     status.textContent = `Game over: ${state.winner} wins!`;
-    status.style.color = state.winner === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.winner === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   } else if (state.auto_step_active) {
     status.textContent = `Auto-stepping: ${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
-    status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.player === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   } else {
     status.textContent = `${state.player[0].toUpperCase() + state.player.slice(1)}'s turn`;
-    status.style.color = state.player === 'blue' ? COLORS.VERY_DARK_BLUE : COLORS.VERY_DARK_RED;
+    status.style.color = state.player === 'blue' ? COLORS.BLUE_EDGE_BORDER : COLORS.RED_EDGE_BORDER;
   }
   
   // TRMPH
@@ -349,17 +429,13 @@ function updateUI() {
   if (computerToggle) computerToggle.textContent = state.computer_enabled ? 'ON' : 'OFF';
 
   // Update MCTS controls
-  const blueUseMcts = document.getElementById('blue-use-mcts');
   const blueNumSimulations = document.getElementById('blue-num-simulations');
   const blueExplorationConstant = document.getElementById('blue-exploration-constant');
-  const redUseMcts = document.getElementById('red-use-mcts');
   const redNumSimulations = document.getElementById('red-num-simulations');
   const redExplorationConstant = document.getElementById('red-exploration-constant');
   
-  if (blueUseMcts) blueUseMcts.checked = state.blue_use_mcts;
   if (blueNumSimulations) blueNumSimulations.value = state.blue_num_simulations;
   if (blueExplorationConstant) blueExplorationConstant.value = state.blue_exploration_constant;
-  if (redUseMcts) redUseMcts.checked = state.red_use_mcts;
   if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
   if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
@@ -413,20 +489,16 @@ async function onCellClick(e) {
       
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerSearchWidths, computerTemperature, computerUseMcts, computerNumSimulations, computerExplorationConstant;
+      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
-        computerSearchWidths = state.blue_search_widths;
         computerTemperature = state.blue_temperature;
-        computerUseMcts = state.blue_use_mcts;
         computerNumSimulations = state.blue_num_simulations;
         computerExplorationConstant = state.blue_exploration_constant;
       } else {
         computerModelId = state.red_model_id;
-        computerSearchWidths = state.red_search_widths;
         computerTemperature = state.red_temperature;
-        computerUseMcts = state.red_use_mcts;
         computerNumSimulations = state.red_num_simulations;
         computerExplorationConstant = state.red_exploration_constant;
       }
@@ -435,10 +507,8 @@ async function onCellClick(e) {
       const computerResult = await makeComputerMove(
         state.trmph, 
         computerModelId, 
-        computerSearchWidths, 
         computerTemperature,
         state.verbose_level,
-        computerUseMcts,
         computerNumSimulations,
         computerExplorationConstant
       );
@@ -479,7 +549,7 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, search_widths, temperature, use_mcts, num_simulations, exploration_constant } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Save state for undo functionality before computer move
@@ -489,10 +559,8 @@ async function stepComputerMove() {
     const result = await makeComputerMove(
       state.trmph, 
       model_id, 
-      search_widths, 
       temperature, 
       state.verbose_level,
-      use_mcts,
       num_simulations,
       exploration_constant
     );
@@ -611,24 +679,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.red_model_id = e.target.value;
   });
 
-  // Blue search widths
-  document.getElementById('blue-search-widths').addEventListener('input', (e) => {
-    const value = e.target.value.trim();
-    if (value) {
-      state.blue_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-    } else {
-      state.blue_search_widths = [];
-    }
-  });
-  // Red search widths
-  document.getElementById('red-search-widths').addEventListener('input', (e) => {
-    const value = e.target.value.trim();
-    if (value) {
-      state.red_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-    } else {
-      state.red_search_widths = [];
-    }
-  });
+
   // Blue temperature
   document.getElementById('blue-temperature').addEventListener('input', (e) => {
     state.blue_temperature = parseFloat(e.target.value);
@@ -639,10 +690,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // MCTS controls
-  // Blue MCTS settings
-  document.getElementById('blue-use-mcts').addEventListener('change', (e) => {
-    state.blue_use_mcts = e.target.checked;
-  });
+
   document.getElementById('blue-num-simulations').addEventListener('input', (e) => {
     state.blue_num_simulations = parseInt(e.target.value);
   });
@@ -650,10 +698,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.blue_exploration_constant = parseFloat(e.target.value);
   });
 
-  // Red MCTS settings
-  document.getElementById('red-use-mcts').addEventListener('change', (e) => {
-    state.red_use_mcts = e.target.checked;
-  });
+
   document.getElementById('red-num-simulations').addEventListener('input', (e) => {
     state.red_num_simulations = parseInt(e.target.value);
   });
@@ -721,18 +766,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  document.getElementById('clear-btn').addEventListener('click', async () => {
-    state.trmph = '#13,';
-    state.move_history = [];
-    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
-    state.board = result.board;
-    state.player = result.player;
-    state.legal_moves = result.legal_moves;
-    state.winner = result.winner;
-    state.last_move = null;
-    state.last_move_player = null;
-    updateUI();
-  });
+
 });
 
 // --- Debug Output Functions ---
