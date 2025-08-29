@@ -268,14 +268,24 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // Math for flat-topped hex grid, blue at top/bottom
   const w = HEX_RADIUS * Math.sqrt(3);
   const h = HEX_RADIUS * 1.5;
-  // Make the SVG area wider and taller for full edge visibility
-  const svgWidth = 1.5 * (w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS);
-  const svgHeight = 1.2 * (h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS);
+  // Calculate SVG dimensions with balanced padding
+  // Account for full board size including edge borders (which extend beyond hex centers)
+  const boardWidth = w * (GAME_CONSTANTS.BOARD_SIZE - 1 + 0.5) + 2 * HEX_RADIUS;
+  const boardHeight = h * (GAME_CONSTANTS.BOARD_SIZE - 1) + 2 * HEX_RADIUS;
+  const edgeBorderWidth = 17; // 🎨 EDGE BORDER WIDTH - Account for thick red edge borders
+  const padding = HEX_RADIUS * 0.5; // 🎨 BALANCED PADDING - Equal padding on all sides
+  
+  // 🎨 DIAMOND SHAPE COMPENSATION - Account for hex board's diagonal offset
+  // The bottom edge extends further right than the top edge due to the diamond shape
+  const diagonalOffset = w * (GAME_CONSTANTS.BOARD_SIZE - 1) * 0.45; // Slightly reduced from 0.5 to balance left/right padding
+  
+  const svgWidth = boardWidth + 2 * padding + edgeBorderWidth + diagonalOffset;
+  const svgHeight = boardHeight + 2 * padding + edgeBorderWidth;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', svgWidth);
   svg.setAttribute('height', svgHeight);
   svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
-  svg.style.background = COLORS.BOARD_BACKGROUND;
+  svg.style.background = COLORS.BOARD_BACKGROUND; /* 🎨 CENTRAL PLAY AREA BACKGROUND - Light gray area containing the actual game board */
 
   // --- Draw player edge indicators ---
   // Blue: top and bottom (across the topmost and bottommost hexes)
@@ -398,8 +408,11 @@ function makeEdgeLine(x1, y1, x2, y2, color, strokeWidth = 10) {
 function hexCenter(row, col) {
   // Flat-topped, blue at top/bottom: x = HEX_RADIUS * sqrt(3) * (col + row/2) + HEX_RADIUS
   // y = HEX_RADIUS * 1.5 * row + HEX_RADIUS
-  const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + HEX_RADIUS * 0.25; // add margin
-  const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + HEX_RADIUS * 0.25; // add margin
+  const padding = HEX_RADIUS * 0.5; // 🎨 BALANCED PADDING - Same as SVG padding
+  const extraTopPadding = HEX_RADIUS * 0.3; // 🎨 EXTRA TOP PADDING - Additional space at top
+  const extraLeftPadding = HEX_RADIUS * 0.5; // 🎨 EXTRA LEFT PADDING - Reduced to balance right side (was 0.3)
+  const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + padding + extraLeftPadding; // centered with extra left padding
+  const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + padding + extraTopPadding; // centered with extra top padding
   return { x, y };
 }
 
