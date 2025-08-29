@@ -496,6 +496,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             }
         
         # Create MCTS configuration
+        # Ensure temperature_end is <= temperature_start
+        if temperature_end > temperature:
+            app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
+            temperature_end = temperature / 10
+        
         mcts_config = BaselineMCTSConfig(
             sims=num_simulations,
             c_puct=exploration_constant,
