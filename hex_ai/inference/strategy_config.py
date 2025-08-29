@@ -22,7 +22,8 @@ class StrategyConfig:
 
 
 def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]] = None, 
-                          search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None) -> List[StrategyConfig]:
+                          search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
+                          c_pucts: Optional[List[float]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -34,6 +35,7 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
         mcts_sims: Optional list of MCTS simulation counts to override strategy names
         search_widths: Optional list of search width strings (e.g., ["13,8", "20,10"])
         batch_sizes: Optional list of batch sizes for MCTS strategies (e.g., [64, 128, 256])
+        c_pucts: Optional list of PUCT exploration constants for MCTS strategies (e.g., [1.2, 1.5, 2.0])
     
     Returns:
         List of StrategyConfig objects
@@ -111,6 +113,19 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 # Update strategy name to include batch size for unique identification
                 config.name = f"{config.name}_b{batch_sizes[batch_idx]}"
                 batch_idx += 1
+    
+    if c_pucts:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(c_pucts) != len(mcts_configs):
+            raise ValueError(f"Number of c_puct values ({len(c_pucts)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        c_puct_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["mcts_c_puct"] = c_pucts[c_puct_idx]
+                # Update strategy name to include c_puct for unique identification
+                config.name = f"{config.name}_cp{c_pucts[c_puct_idx]}"
+                c_puct_idx += 1
     
     return configs
 

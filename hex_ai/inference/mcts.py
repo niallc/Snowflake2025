@@ -31,7 +31,7 @@ from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE
+from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.value_utils import ValuePredictor
 
 # ---- MCTS Constants ----
@@ -59,11 +59,11 @@ DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.95
 # Default terminal win value boost
 DEFAULT_TERMINAL_WIN_VALUE_BOOST = 1.5
 
-# Default batch cap for neural network evaluation
-DEFAULT_BATCH_CAP = 64
+# Default batch cap for neural network evaluation (imported from hex_ai.config)
+# DEFAULT_BATCH_CAP = 64
 
-# Default PUCT exploration constant
-DEFAULT_C_PUCT = 1.5
+# Default PUCT exploration constant (imported from hex_ai.config)
+# DEFAULT_C_PUCT = 1.5
 
 # Default cache size for LRU eviction
 DEFAULT_CACHE_SIZE = 100000  # 100k entries

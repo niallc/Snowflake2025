@@ -55,6 +55,7 @@ from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs
 from hex_ai.inference.tournament import TournamentResult
+from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
@@ -64,7 +65,7 @@ from hex_ai.utils.tournament_logging import append_trmph_winner_line
 logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_OPENING_LENGTH = 7
+DEFAULT_OPENING_LENGTH = 5
 DEFAULT_NUM_OPENINGS = 100
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_SEED = 42
@@ -543,6 +544,61 @@ def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
             writer.writerow(row)
 
 
+def calculate_strategy_pair_stats(
+    strategy_a_name: str,
+    strategy_b_name: str,
+    game_results: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Calculate statistics for games between two strategies.
+    
+    Args:
+        strategy_a_name: Name of strategy A
+        strategy_b_name: Name of strategy B  
+        game_results: List of game result dictionaries from play_deterministic_game
+    
+    Returns:
+        Dictionary with calculated statistics
+    """
+    total_games = len(game_results)
+    strategy_a_wins = 0
+    strategy_b_wins = 0
+    
+    for result in game_results:
+        winner = result['winner_strategy']
+        if winner == strategy_a_name:
+            strategy_a_wins += 1
+        elif winner == strategy_b_name:
+            strategy_b_wins += 1
+        else:
+            raise ValueError(f"Unknown winner strategy: {winner}")
+    
+    strategy_a_win_rate = strategy_a_wins / total_games if total_games > 0 else 0.0
+    strategy_b_win_rate = strategy_b_wins / total_games if total_games > 0 else 0.0
+    
+    return {
+        'total_games': total_games,
+        'strategy_a_wins': strategy_a_wins,
+        'strategy_b_wins': strategy_b_wins,
+        'strategy_a_win_rate': strategy_a_win_rate,
+        'strategy_b_win_rate': strategy_b_win_rate,
+        'strategy_a_name': strategy_a_name,
+        'strategy_b_name': strategy_b_name
+    }
+
+
+def print_strategy_pair_stats(stats: Dict[str, Any]) -> None:
+    """
+    Print formatted statistics for a strategy pair.
+    
+    Args:
+        stats: Statistics dictionary from calculate_strategy_pair_stats
+    """
+    print(f"\n{stats['strategy_a_name']} vs {stats['strategy_b_name']} Results:")
+    print(f"  {stats['strategy_a_name']}: {stats['strategy_a_wins']}/{stats['total_games']} wins ({stats['strategy_a_win_rate']*100:.1f}%)")
+    print(f"  {stats['strategy_b_name']}: {stats['strategy_b_wins']}/{stats['total_games']} wins ({stats['strategy_b_win_rate']*100:.1f}%)")
+
+
 def run_deterministic_tournament(
     model_path: str,
     strategy_configs: List[StrategyConfig],
@@ -602,6 +658,7 @@ def run_deterministic_tournament(
         csv_file = os.path.join(output_dir, f"{pair_name}.csv")
         
         # Play games from each opening position
+        game_results = []
         for opening_idx, opening in enumerate(openings):
             if verbose >= 1:
                 print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
@@ -611,12 +668,14 @@ def run_deterministic_tournament(
             result_1 = play_deterministic_game(
                 model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
             )
+            game_results.append(result_1)
             
             # Game 2: Strategy B (Blue) vs Strategy A (Red)
             logger.debug(f"Playing game 2: {strategy_b.name} (Blue) vs {strategy_a.name} (Red) from opening {opening_idx + 1}")
             result_2 = play_deterministic_game(
                 model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
             )
+            game_results.append(result_2)
             
             # Check for duplicate games
             game_1_key = f"{result_1['trmph_str']}_{result_1['winner_char']}"
@@ -698,6 +757,10 @@ def run_deterministic_tournament(
         
         if verbose >= 1:
             print()  # New line after games
+        
+        # Calculate and print statistics for the current strategy pair
+        stats = calculate_strategy_pair_stats(strategy_a.name, strategy_b.name, game_results)
+        print_strategy_pair_stats(stats)
     
     logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
     return result
@@ -720,6 +783,9 @@ Examples:
   
   # Compare different batch sizes for MCTS
   %(prog)s --model=current_best --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
+  
+  # Compare different PUCT exploration constants
+  %(prog)s --model=current_best --strategies=mcts_100,mcts_100,mcts_100 --c-puct=1.2,1.5,2.0 --num-openings=50
         """
     )
     
@@ -742,7 +808,9 @@ Examples:
     parser.add_argument('--search-widths', type=str,
                        help='Semicolon-separated search width sets (e.g., "13,8;20,10")')
     parser.add_argument('--batch-sizes', type=str,
-                       help='Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256")')
+                       help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
+    parser.add_argument('--c-puct', type=str,
+                       help=f'Comma-separated PUCT exploration constants for MCTS strategies (e.g., "1.2,1.5,2.0", default: {DEFAULT_C_PUCT})')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
@@ -786,9 +854,13 @@ def main():
     if args.batch_sizes:
         batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
     
+    c_pucts = None
+    if args.c_puct:
+        c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
+    
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes)
+        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes, c_pucts)
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -829,6 +901,10 @@ def main():
     print(f"  Number of openings: {len(openings)}")
     print(f"  Opening length: {args.opening_length} moves")
     print(f"  Temperature: {args.temperature}")
+    if args.batch_sizes:
+        print(f"  Batch sizes: {args.batch_sizes}")
+    if args.c_puct:
+        print(f"  C_PUCT values: {args.c_puct}")
     print(f"  Random seed: {args.seed}")
     print()
     
