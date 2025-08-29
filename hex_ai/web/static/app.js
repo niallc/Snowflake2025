@@ -121,7 +121,7 @@ let GAME_CONSTANTS = {
   }
 };
 
-const HEX_RADIUS = 16; // px, radius of each hex
+const HEX_RADIUS = 22; // px, radius of each hex (increased from 16 for 1.4x larger board)
 
 // --- Utility: Get per-player settings ---
 function getCurrentPlayerSettings() {
