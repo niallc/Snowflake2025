@@ -409,7 +409,7 @@ function hexCenter(row, col) {
   // Flat-topped, blue at top/bottom: x = HEX_RADIUS * sqrt(3) * (col + row/2) + HEX_RADIUS
   // y = HEX_RADIUS * 1.5 * row + HEX_RADIUS
   const padding = HEX_RADIUS * 0.5; // 🎨 BALANCED PADDING - Same as SVG padding
-  const extraTopPadding = HEX_RADIUS * 0.3; // 🎨 EXTRA TOP PADDING - Additional space at top
+  const extraTopPadding = HEX_RADIUS * 0.5; // 🎨 EXTRA TOP PADDING - Additional space at top
   const extraLeftPadding = HEX_RADIUS * 0.5; // 🎨 EXTRA LEFT PADDING - Reduced to balance right side (was 0.3)
   const x = HEX_RADIUS * Math.sqrt(3) * (col + row / 2) + HEX_RADIUS + padding + extraLeftPadding; // centered with extra left padding
   const y = HEX_RADIUS * 1.5 * row + HEX_RADIUS + padding + extraTopPadding; // centered with extra top padding
