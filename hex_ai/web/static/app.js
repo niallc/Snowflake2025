@@ -373,9 +373,9 @@ function makeHex(cx, cy, r, fill, highlight) {
   const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
   hex.setAttribute('fill', fill);
-  // Grid lines between hexagons - uses COLORS.HEX_GRID_COLOR for legal moves, COLORS.GRID for non-legal hexes
-  hex.setAttribute('stroke', highlight ? COLORS.HEX_GRID_COLOR : COLORS.GRID);
-  hex.setAttribute('stroke-width', highlight ? 4 : 2);
+  // Grid lines between hexagons - use consistent stroke color and width for all hexagons
+  hex.setAttribute('stroke', COLORS.HEX_GRID_COLOR);
+  hex.setAttribute('stroke-width', 2);
   if (highlight) hex.style.cursor = 'pointer';
   return hex;
 }
