@@ -56,11 +56,11 @@ from hex_ai.inference.tournament import (
 # Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
 
-# Default list of checkpoints to compare (epoch1 mini epochs 50, 75, 100)
+# Default list of checkpoints to compare (epoch1 mini epochs 100, 120, 155)
 DEFAULT_CHECKPOINTS = [
-    "epoch1_mini50.pt.gz",
-    "epoch1_mini75.pt.gz", 
-    "epoch1_mini100.pt.gz",
+    "epoch1_mini100.pt.gz", 
+    "epoch1_mini120.pt.gz",
+    "epoch1_mini155.pt.gz",
 ]
 
 def parse_args():

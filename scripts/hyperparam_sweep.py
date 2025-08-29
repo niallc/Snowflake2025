@@ -68,7 +68,7 @@ SWEEP = {
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
-    "policy_weight": [0.1],
+    "policy_weight": [0.15],
     "learning_rate": [0.001],
     
     # Likely resolved:
