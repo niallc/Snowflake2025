@@ -17,7 +17,7 @@
 
 body {
   font-family: 'Segoe UI', Arial, sans-serif;
-  background: #f8f8fa;
+  background: #f8f8fa; /* 🎨 OUTERMOST BACKGROUND - Light gray that extends to all edges */
   margin: 0;
   padding: 0;
 }
@@ -25,16 +25,18 @@ body {
 #app-container {
   max-width: 900px;
   margin: 30px auto;
-  background: #fff;
+  background: #fff; /* 🎨 MAIN CONTENT BOX - White rounded container that holds everything */
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
   padding: 24px 24px 32px 24px;
+  /* padding: 32px 24px 24px 24px; */
 }
 
 #board-section {
   margin-bottom: 32px;
   padding-bottom: 16px;
   border-bottom: 2px solid #e0e0e0;
+  /* background: #f8f8fa; */ /* 🎨 ORIGINAL: No background color */
 }
 
 #config-section {
@@ -132,6 +134,8 @@ small {
   justify-content: center;
   align-items: center;
   margin-bottom: 18px;
+  background: #ff00ff; /* 🔴 MAGENTA - Board container debug */
+  /* background: #f0f0f0; */ /* 🎨 ORIGINAL: No background color */
 }
 
 #controls {

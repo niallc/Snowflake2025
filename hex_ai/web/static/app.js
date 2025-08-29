@@ -37,6 +37,10 @@ const BASE_COLORS = {
   MEDIUM_GRAY: '#bbb',
   DARK_GRAY: '#222',
   
+  // New minimalist colors
+  EMPTY_HEX_GRAY: '#f0f0f0',      // ⭐ LIGHT GRAY for empty hexagons
+  GRID_WHITE: '#ffffff',           // ⭐ WHITE for grid lines between hexagons
+  
   // Blue palette
   LIGHT_BLUE: '#e7fcfc',
   MEDIUM_BLUE: '#bbeeee',         // ⭐ LIGHT CYAN - used for grid lines
@@ -56,8 +60,8 @@ const COLORS = {
   // ===== SEMANTIC BOARD REGIONS =====
   // These reference the base colors above - change which base color they use
   BOARD_BACKGROUND: BASE_COLORS.LIGHT_GRAY,
-  EMPTY_HEX_COLOR: BASE_COLORS.WHITE,
-  HEX_GRID_COLOR: BASE_COLORS.MEDIUM_BLUE,      // ⭐ LIGHT CYAN LINES BETWEEN HEXAGONS
+  EMPTY_HEX_COLOR: BASE_COLORS.EMPTY_HEX_GRAY,  // ⭐ LIGHT GRAY for empty hexagons
+  HEX_GRID_COLOR: BASE_COLORS.GRID_WHITE,       // ⭐ WHITE LINES BETWEEN HEXAGONS
   
   // Edge borders
   BLUE_EDGE_BORDER: BASE_COLORS.VERY_DARK_BLUE,
