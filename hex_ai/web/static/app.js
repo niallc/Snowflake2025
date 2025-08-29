@@ -377,8 +377,25 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       trmphLabel.setAttribute('dominant-baseline', 'middle');
       trmphLabel.setAttribute('font-size', '10px');
       trmphLabel.setAttribute('font-family', 'monospace');
-      trmphLabel.setAttribute('fill', '#e0e0e0'); // Even lighter grey color
       trmphLabel.setAttribute('pointer-events', 'none'); // Make text non-interactive
+      
+      // Set label color based on piece type
+      let labelColor = '#e0e0e0'; // Default light grey for empty hexes
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) {
+        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+          labelColor = '#004499'; // Much darker blue for last move
+        } else {
+          labelColor = '#00cccc'; // Substantially lighter blue for regular blue pieces
+        }
+      } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
+        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+          labelColor = '#992200'; // Much darker red for last move
+        } else {
+          labelColor = '#ddaa00'; // Slightly lighter red for regular red pieces
+        }
+      }
+      
+      trmphLabel.setAttribute('fill', labelColor);
       trmphLabel.textContent = rowcolToTrmph(row, col);
       svg.appendChild(trmphLabel);
     }
