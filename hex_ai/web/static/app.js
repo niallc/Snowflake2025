@@ -304,13 +304,13 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
     hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
     COLORS.BLUE_EDGE_BORDER,
-    15  // Increased stroke width from 10 to 20 to extend down
+    18  // Increased stroke width from 10 to 20 to extend down
   ));
   svg.appendChild(makeEdgeLine(
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
     COLORS.BLUE_EDGE_BORDER,
-    15  // Increased stroke width from 10 to 20 to extend up
+    18  // Increased stroke width from 10 to 20 to extend up
   ));
   
   // Red edges: pass through midpoints of the true outer edges
@@ -368,6 +368,19 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
         hex.addEventListener('click', onCellClick);
       }
       svg.appendChild(hex);
+      
+      // Add TRMPH label in center of hex
+      const trmphLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      trmphLabel.setAttribute('x', x);
+      trmphLabel.setAttribute('y', y + 4); // Slight vertical adjustment for centering
+      trmphLabel.setAttribute('text-anchor', 'middle');
+      trmphLabel.setAttribute('dominant-baseline', 'middle');
+      trmphLabel.setAttribute('font-size', '10px');
+      trmphLabel.setAttribute('font-family', 'monospace');
+      trmphLabel.setAttribute('fill', '#e0e0e0'); // Even lighter grey color
+      trmphLabel.setAttribute('pointer-events', 'none'); // Make text non-interactive
+      trmphLabel.textContent = rowcolToTrmph(row, col);
+      svg.appendChild(trmphLabel);
     }
   }
   container.appendChild(svg);
