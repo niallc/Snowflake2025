@@ -146,6 +146,22 @@ if __name__ == "__main__":
         # Use defaults from the current best model directory
         checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS]
 
+    # Validate that there are no duplicate checkpoints
+    unique_paths = list(dict.fromkeys(checkpoint_paths))
+    if len(unique_paths) != len(checkpoint_paths):
+        print("ERROR: Duplicate checkpoints detected in tournament configuration.")
+        print("  This will cause tournament recording errors and is not supported.")
+        print(f"  Provided checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
+        print(f"  Unique checkpoints: {[os.path.basename(p) for p in unique_paths]}")
+        print("  Please remove duplicates from your checkpoint list.")
+        sys.exit(1)
+
+    # Validate that we have at least 2 checkpoints for a meaningful tournament
+    if len(checkpoint_paths) < 2:
+        print("ERROR: Need at least 2 unique checkpoints for a tournament.")
+        print(f"  Provided checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
+        sys.exit(1)
+
     # Check that all checkpoint paths exist before proceeding
     missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
     if missing_paths:

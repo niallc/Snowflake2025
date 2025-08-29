@@ -91,13 +91,9 @@ let state = {
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
   red_model_id: 'model1',
-  blue_search_widths: [],
-  red_search_widths: [],
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_use_mcts: true,
-  red_use_mcts: true,
   blue_num_simulations: 2005,
   red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
@@ -128,18 +124,14 @@ function getCurrentPlayerSettings() {
   if (state.player === 'blue') {
     return {
       model_id: state.blue_model_id,
-      search_widths: state.blue_search_widths,
       temperature: state.blue_temperature,
-      use_mcts: state.blue_use_mcts,
       num_simulations: state.blue_num_simulations,
       exploration_constant: state.blue_exploration_constant
     };
   } else {
     return {
       model_id: state.red_model_id,
-      search_widths: state.red_search_widths,
       temperature: state.red_temperature,
-      use_mcts: state.red_use_mcts,
       num_simulations: state.red_num_simulations,
       exploration_constant: state.red_exploration_constant
     };
@@ -180,11 +172,11 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], temperature = 1.0, 
-                       blue_model_id = 'model1', blue_search_widths = [], blue_temperature = 1.0,
-                       red_model_id = 'model2', red_search_widths = [], red_temperature = 1.0,
-                       blue_use_mcts = true, blue_num_simulations = 200, blue_exploration_constant = 1.4,
-                       red_use_mcts = true, red_num_simulations = 200, red_exploration_constant = 1.4,
+async function fetchMove(trmph, move, model_id = 'model1', temperature = 1.0, 
+                       blue_model_id = 'model1', blue_temperature = 1.0,
+                       red_model_id = 'model2', red_temperature = 1.0,
+                       blue_num_simulations = 200, blue_exploration_constant = 1.4,
+                       red_num_simulations = 200, red_exploration_constant = 1.4,
                        verbose = 1) {
   console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
   const resp = await fetch('/api/move', {
@@ -194,18 +186,13 @@ async function fetchMove(trmph, move, model_id = 'model1', search_widths = [], t
       trmph, 
       move, 
       model_id, 
-      search_widths, 
       temperature,
       blue_model_id,
-      blue_search_widths,
       blue_temperature,
-      blue_use_mcts,
       blue_num_simulations,
       blue_exploration_constant,
       red_model_id,
-      red_search_widths,
       red_temperature,
-      red_use_mcts,
       red_num_simulations,
       red_exploration_constant,
       verbose
@@ -225,36 +212,25 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, search_widths = [], temperature = 1.0, verbose = 0,
-                               use_mcts = true, num_simulations = 200, exploration_constant = 1.4) {
-  console.log(`makeComputerMove called with model_id: ${model_id}, use_mcts: ${use_mcts}`);
+async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
+                               num_simulations = 200, exploration_constant = 1.4) {
+  console.log(`makeComputerMove called with model_id: ${model_id}`);
   
-  if (use_mcts) {
-    // Use MCTS endpoint
-    const resp = await fetch('/api/mcts_move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        trmph, 
-        model_id, 
-        num_simulations, 
-        exploration_constant, 
-        temperature, 
-        verbose 
-      }),
-    });
-    if (!resp.ok) throw new Error('API error');
-    return await resp.json();
-  } else {
-    // Use fixed-tree search endpoint
-    const resp = await fetch('/api/computer_move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trmph, model_id, search_widths, temperature, verbose }),
-    });
-    if (!resp.ok) throw new Error('API error');
-    return await resp.json();
-  }
+  // Always use MCTS endpoint
+  const resp = await fetch('/api/mcts_move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      trmph, 
+      model_id, 
+      num_simulations, 
+      exploration_constant, 
+      temperature, 
+      verbose 
+    }),
+  });
+  if (!resp.ok) throw new Error('API error');
+  return await resp.json();
 }
 
 // --- Board Rendering ---
@@ -453,17 +429,13 @@ function updateUI() {
   if (computerToggle) computerToggle.textContent = state.computer_enabled ? 'ON' : 'OFF';
 
   // Update MCTS controls
-  const blueUseMcts = document.getElementById('blue-use-mcts');
   const blueNumSimulations = document.getElementById('blue-num-simulations');
   const blueExplorationConstant = document.getElementById('blue-exploration-constant');
-  const redUseMcts = document.getElementById('red-use-mcts');
   const redNumSimulations = document.getElementById('red-num-simulations');
   const redExplorationConstant = document.getElementById('red-exploration-constant');
   
-  if (blueUseMcts) blueUseMcts.checked = state.blue_use_mcts;
   if (blueNumSimulations) blueNumSimulations.value = state.blue_num_simulations;
   if (blueExplorationConstant) blueExplorationConstant.value = state.blue_exploration_constant;
-  if (redUseMcts) redUseMcts.checked = state.red_use_mcts;
   if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
   if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
@@ -517,20 +489,16 @@ async function onCellClick(e) {
       
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerSearchWidths, computerTemperature, computerUseMcts, computerNumSimulations, computerExplorationConstant;
+      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
-        computerSearchWidths = state.blue_search_widths;
         computerTemperature = state.blue_temperature;
-        computerUseMcts = state.blue_use_mcts;
         computerNumSimulations = state.blue_num_simulations;
         computerExplorationConstant = state.blue_exploration_constant;
       } else {
         computerModelId = state.red_model_id;
-        computerSearchWidths = state.red_search_widths;
         computerTemperature = state.red_temperature;
-        computerUseMcts = state.red_use_mcts;
         computerNumSimulations = state.red_num_simulations;
         computerExplorationConstant = state.red_exploration_constant;
       }
@@ -539,10 +507,8 @@ async function onCellClick(e) {
       const computerResult = await makeComputerMove(
         state.trmph, 
         computerModelId, 
-        computerSearchWidths, 
         computerTemperature,
         state.verbose_level,
-        computerUseMcts,
         computerNumSimulations,
         computerExplorationConstant
       );
@@ -583,7 +549,7 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, search_widths, temperature, use_mcts, num_simulations, exploration_constant } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Save state for undo functionality before computer move
@@ -593,10 +559,8 @@ async function stepComputerMove() {
     const result = await makeComputerMove(
       state.trmph, 
       model_id, 
-      search_widths, 
       temperature, 
       state.verbose_level,
-      use_mcts,
       num_simulations,
       exploration_constant
     );
@@ -715,24 +679,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.red_model_id = e.target.value;
   });
 
-  // Blue search widths
-  document.getElementById('blue-search-widths').addEventListener('input', (e) => {
-    const value = e.target.value.trim();
-    if (value) {
-      state.blue_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-    } else {
-      state.blue_search_widths = [];
-    }
-  });
-  // Red search widths
-  document.getElementById('red-search-widths').addEventListener('input', (e) => {
-    const value = e.target.value.trim();
-    if (value) {
-      state.red_search_widths = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-    } else {
-      state.red_search_widths = [];
-    }
-  });
+
   // Blue temperature
   document.getElementById('blue-temperature').addEventListener('input', (e) => {
     state.blue_temperature = parseFloat(e.target.value);
@@ -743,10 +690,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // MCTS controls
-  // Blue MCTS settings
-  document.getElementById('blue-use-mcts').addEventListener('change', (e) => {
-    state.blue_use_mcts = e.target.checked;
-  });
+
   document.getElementById('blue-num-simulations').addEventListener('input', (e) => {
     state.blue_num_simulations = parseInt(e.target.value);
   });
@@ -754,10 +698,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.blue_exploration_constant = parseFloat(e.target.value);
   });
 
-  // Red MCTS settings
-  document.getElementById('red-use-mcts').addEventListener('change', (e) => {
-    state.red_use_mcts = e.target.checked;
-  });
+
   document.getElementById('red-num-simulations').addEventListener('input', (e) => {
     state.red_num_simulations = parseInt(e.target.value);
   });
@@ -825,18 +766,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  document.getElementById('clear-btn').addEventListener('click', async () => {
-    state.trmph = '#13,';
-    state.move_history = [];
-    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
-    state.board = result.board;
-    state.player = result.player;
-    state.legal_moves = result.legal_moves;
-    state.winner = result.winner;
-    state.last_move = null;
-    state.last_move_player = null;
-    updateUI();
-  });
+
 });
 
 // --- Debug Output Functions ---
