@@ -15,12 +15,12 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
 CURRENT_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-CURRENT_BEST_MODEL_FILE = "epoch2_mini110.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch2_mini201.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
 PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-PREVIOUS_BEST_MODEL_FILE = "epoch1_mini201.pt.gz"
+PREVIOUS_BEST_MODEL_FILE = "epoch1_mini110.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)

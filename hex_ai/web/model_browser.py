@@ -17,6 +17,7 @@ from hex_ai.file_utils import (
     load_recent_models,
     add_recent_model
 )
+from hex_ai.inference.model_config import get_all_model_info, get_model_path, is_valid_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ class ModelBrowser:
         """
         Get all available models, with caching.
         
+        This integrates with the centralized model configuration to ensure
+        consistency with other parts of the system.
+        
         Args:
             force_refresh: Force refresh of cached data
             
@@ -66,8 +70,36 @@ class ModelBrowser:
             return self._cached_models
         
         try:
-            self._cached_models = scan_checkpoint_directory(self.checkpoints_dir)
-            return self._cached_models
+            # First get models from centralized configuration
+            centralized_models = get_all_model_info()
+            
+            # Convert centralized models to relative paths for browser compatibility
+            centralized_models_relative = []
+            for model in centralized_models:
+                # Convert absolute path to relative path for browser compatibility
+                if model['path'].startswith('checkpoints/'):
+                    relative_path = model['path'][len('checkpoints/'):]
+                    model_copy = model.copy()
+                    model_copy['path'] = relative_path
+                    model_copy['relative_path'] = relative_path
+                    centralized_models_relative.append(model_copy)
+                else:
+                    centralized_models_relative.append(model)
+            
+            # Then scan for additional models in checkpoints directory
+            scanned_models = scan_checkpoint_directory(self.checkpoints_dir)
+            
+            # Combine and deduplicate based on relative paths
+            all_models = centralized_models_relative.copy()
+            centralized_relative_paths = {model['relative_path'] for model in centralized_models_relative}
+            
+            # Add scanned models that aren't already in centralized config
+            for scanned_model in scanned_models:
+                if scanned_model['relative_path'] not in centralized_relative_paths:
+                    all_models.append(scanned_model)
+            
+            self._cached_models = all_models
+            return all_models
         except Exception as e:
             logger.error(f"Error getting all models: {e}")
             return []

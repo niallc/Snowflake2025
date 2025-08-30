@@ -109,6 +109,8 @@ def get_model(model_id="model1"):
     if is_valid_model_id(model_id):
         model_path = get_model_path(model_id)
         app.logger.debug(f"Found model {model_id} -> {model_path}")
+        
+        # Centralized config provides absolute paths, so use directly
         return MODEL_CACHE.get_simple_model(model_path)
     
     # If model_id is a direct path, try to load it
@@ -131,16 +133,25 @@ def get_available_models():
     # Get all models from central registry
     all_models = get_all_model_info()
     
+    # Filter to only show the main model IDs (model1, model2) to avoid duplicates
+    # since current_best/previous_best point to the same files
+    main_models = [model for model in all_models if model['id'] in ['model1', 'model2']]
+    
+    # Add 'name' field that the frontend expects
+    for model in main_models:
+        # Create a user-friendly name from the filename
+        model["name"] = f"Model {model['id']} ({model['filename']})"
+    
     # Add dynamic models
     for model_id, model_path in DYNAMIC_MODELS.items():
         filename = os.path.basename(model_path)
-        all_models.append({
+        main_models.append({
             "id": model_id,
             "name": f"Dynamic ({filename})",
             "path": model_path
         })
     
-    return all_models
+    return main_models
 
 def get_cached_model_wrapper(model_id: str):
     """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
