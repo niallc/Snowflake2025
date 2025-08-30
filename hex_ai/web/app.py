@@ -29,6 +29,7 @@ from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_default_model_paths
+from hex_ai.inference.model_cache import get_model_cache
 
 # Model checkpoint defaults from central configuration
 DEFAULT_MODEL_PATHS = get_default_model_paths()
@@ -56,7 +57,7 @@ CORS(app)
 # Common patterns: TRMPH parsing/validation, player color conversion, model inference, response construction
 
 # TODO: Additional refactoring opportunities:
-# 1. Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py)
+# 1. ✅ Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py) - FIXED
 # 2. Consolidate temperature scaling logic (duplicated in batched_mcts.py, mcts.py, value_utils.py)
 # 3. Create centralized move selection utility (duplicated in batched_mcts.py, mcts.py, web/app.py)
 # 4. Create base MCTS node class (duplicated between BatchedMCTSNode and MCTSNode)
@@ -76,8 +77,7 @@ def log_response_info(response):
         app.logger.info(f"HTTP Request/Response cycle: {request.method} {request.path} took {request_time:.3f}s")
     return response
 
-# Global model instances
-MODELS = {}
+# Model paths configuration
 MODEL_PATHS = {
     "model1": os.environ.get("HEX_MODEL_PATH1", DEFAULT_CHKPT_PATH1),
     "model2": os.environ.get("HEX_MODEL_PATH2", DEFAULT_CHKPT_PATH2),
@@ -89,77 +89,43 @@ MODEL_BROWSER = create_model_browser()
 # Dynamic model registry for user-selected models
 DYNAMIC_MODELS = {}
 
-# Global ModelWrapper cache to avoid recreating expensive ModelWrapper instances
-MODEL_WRAPPERS = {}
+# Get centralized model cache
+MODEL_CACHE = get_model_cache()
 
 # --- Model Management ---
 def get_model(model_id="model1"):
-    """Get or create a model instance for the given model_id."""
-    global MODELS, DYNAMIC_MODELS
-    
+    """Get or create a model instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
-    app.logger.debug(f"Available dynamic models: {list(DYNAMIC_MODELS.keys())}")
-    app.logger.debug(f"Available predefined models: {list(MODEL_PATHS.keys())}")
-    app.logger.debug(f"Currently loaded models: {list(MODELS.keys())}")
     
     # Check if it's a dynamic model (user-selected)
     if model_id in DYNAMIC_MODELS:
         model_path = DYNAMIC_MODELS[model_id]
         app.logger.debug(f"Found dynamic model {model_id} -> {model_path}")
         
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading dynamic model {model_id} from {model_path}")
-                
-                # Handle relative paths by prepending checkpoints directory
-                if not os.path.isabs(model_path):
-                    full_model_path = os.path.join("checkpoints", model_path)
-                    app.logger.debug(f"Converted relative path to: {full_model_path}")
-                else:
-                    full_model_path = model_path
-                
-                # Check if file exists before loading
-                if not os.path.exists(full_model_path):
-                    raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
-                
-                app.logger.debug(f"File exists, attempting to load with SimpleModelInference")
-                MODELS[model_id] = SimpleModelInference(full_model_path)
-                app.logger.info(f"Successfully loaded dynamic model {model_id} from {full_model_path}")
-            except Exception as e:
-                app.logger.error(f"Failed to load dynamic model {model_id} from {full_model_path}: {e}")
-                app.logger.error(f"Exception type: {type(e).__name__}")
-                import traceback
-                app.logger.error(f"Traceback: {traceback.format_exc()}")
-                raise
+        # Handle relative paths by prepending checkpoints directory
+        if not os.path.isabs(model_path):
+            full_model_path = os.path.join("checkpoints", model_path)
+            app.logger.debug(f"Converted relative path to: {full_model_path}")
         else:
-            app.logger.debug(f"Model {model_id} already loaded")
-        return MODELS[model_id]
+            full_model_path = model_path
+        
+        # Check if file exists before loading
+        if not os.path.exists(full_model_path):
+            raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
+        
+        app.logger.debug(f"Loading dynamic model {model_id} from {full_model_path}")
+        return MODEL_CACHE.get_simple_model(full_model_path)
     
     # Check if it's a predefined model
     if model_id in MODEL_PATHS:
-        app.logger.debug(f"Found predefined model {model_id} -> {MODEL_PATHS[model_id]}")
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading predefined model {model_id} from {MODEL_PATHS[model_id]}")
-                MODELS[model_id] = SimpleModelInference(MODEL_PATHS[model_id])
-                app.logger.info(f"Successfully loaded model {model_id} from {MODEL_PATHS[model_id]}")
-            except Exception as e:
-                app.logger.error(f"Failed to load model {model_id}: {e}")
-                raise
-        return MODELS[model_id]
+        model_path = MODEL_PATHS[model_id]
+        app.logger.debug(f"Found predefined model {model_id} -> {model_path}")
+        return MODEL_CACHE.get_simple_model(model_path)
     
     # If model_id is a direct path, try to load it
     if os.path.exists(model_id):
         app.logger.debug(f"Model_id appears to be a direct path: {model_id}")
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading model from direct path {model_id}")
-                MODELS[model_id] = SimpleModelInference(model_id)
-                app.logger.info(f"Successfully loaded model from path {model_id}")
-            except Exception as e:
-                app.logger.error(f"Failed to load model from path {model_id}: {e}")
-                raise
-        return MODELS[model_id]
+        return MODEL_CACHE.get_simple_model(model_id)
     
     app.logger.error(f"Unknown model_id: {model_id}")
     app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, predefined={list(MODEL_PATHS.keys())}")
@@ -183,35 +149,29 @@ def get_available_models():
     ]
 
 def get_cached_model_wrapper(model_id: str):
-    """Get or create a cached ModelWrapper instance for the given model_id."""
-    global MODEL_WRAPPERS, MODELS
+    """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
+    app.logger.debug(f"get_cached_model_wrapper called with model_id: {model_id}")
     
-    if model_id not in MODEL_WRAPPERS:
-        app.logger.info(f"Creating new ModelWrapper for {model_id} (this may take several seconds)...")
-        wrapper_start_time = time.time()
-        
-        # Get the model instance first
-        model = get_model(model_id)
-        
-        # Create ModelWrapper
-        model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
-        
-        wrapper_creation_time = time.time() - wrapper_start_time
-        app.logger.info(f"ModelWrapper creation took {wrapper_creation_time:.3f}s for {model_id}")
-        
-        MODEL_WRAPPERS[model_id] = model_wrapper
+    # Get the model path for this model_id
+    if model_id in DYNAMIC_MODELS:
+        model_path = DYNAMIC_MODELS[model_id]
+        if not os.path.isabs(model_path):
+            model_path = os.path.join("checkpoints", model_path)
+    elif model_id in MODEL_PATHS:
+        model_path = MODEL_PATHS[model_id]
+    elif os.path.exists(model_id):
+        model_path = model_id
     else:
-        app.logger.debug(f"Using cached ModelWrapper for {model_id}")
+        raise ValueError(f"Unknown model_id: {model_id}")
     
-    return MODEL_WRAPPERS[model_id]
+    app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
+    return MODEL_CACHE.get_wrapper_model(model_path)
 
 def clear_model_wrapper_cache():
-    """Clear the ModelWrapper cache to free memory."""
-    global MODEL_WRAPPERS
-    cache_size = len(MODEL_WRAPPERS)
-    MODEL_WRAPPERS.clear()
-    app.logger.info(f"Cleared ModelWrapper cache ({cache_size} instances)")
-    return cache_size
+    """Clear the model cache to free memory."""
+    MODEL_CACHE.clear_cache()
+    app.logger.info("Model cache cleared")
+    return 0  # Return 0 since we don't track individual cache sizes anymore
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
                        temperature, verbose, model_move=None, model_id=None):
@@ -306,85 +266,6 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
-
-# --- Computer move functionality ---
-def make_computer_move(trmph, model_id, temperature=1.0, verbose=0):
-    """Make one computer move using MCTS and return the new state."""
-    try:
-        app.logger.debug(f"make_computer_move called with model_id: {model_id}")
-        app.logger.debug(f"Current dynamic models: {DYNAMIC_MODELS}")
-        
-        state = HexGameState.from_trmph(trmph)
-        app.logger.debug(f"Game state created, game_over: {state.game_over}")
-        
-        # If game is over, return current state
-        if state.game_over:
-            app.logger.debug("Game is over, returning current state")
-            return {
-                "success": True,
-                "new_trmph": trmph,
-                "board": state.board.tolist(),
-                "player": winner_to_color(state.current_player),
-                "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": winner_to_color(state.winner) if state.winner is not None else None,
-                "move_made": None,
-                "game_over": True
-            }
-        
-        app.logger.debug(f"Attempting to get model with model_id: {model_id}")
-        try:
-            model = get_model(model_id)
-            app.logger.debug(f"Successfully got model: {type(model)}")
-        except Exception as e:
-            app.logger.error(f"Failed to get model {model_id}: {e}")
-            return {
-                "success": False,
-                "error": f"Model loading failed: {e}"
-            }
-        
-        # Use MCTS for move selection
-        try:
-            app.logger.debug("Using MCTS for move selection")
-            mcts_result = make_mcts_move(
-                trmph, 
-                model_id, 
-                num_simulations=200,  # Default simulations
-                exploration_constant=1.4,  # Default exploration
-                temperature=temperature,
-                temperature_end=temperature/10,  # Default temperature decay
-                verbose=verbose
-            )
-            
-            if mcts_result["success"]:
-                best_move_trmph = mcts_result["move_made"]
-                debug_info = mcts_result.get("mcts_debug_info", {})
-            else:
-                app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                
-        except Exception as e:
-            app.logger.error(f"MCTS failed: {e}")
-            raise RuntimeError(f"MCTS failed: {e}")
-        
-        # Apply the move using centralized utility
-        state = apply_move_to_state_trmph(state, best_move_trmph)
-        
-        return {
-            "success": True,
-            "new_trmph": state.to_trmph(),
-            "board": state.board.tolist(),
-            "player": winner_to_color(state.current_player),
-            "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": winner_to_color(state.winner) if state.winner is not None else None,
-            "move_made": best_move_trmph,
-            "game_over": state.game_over,
-            "mcts_debug_info": debug_info if verbose >= 1 else None
-        }
-        
-    except Exception as e:
-        app.logger.error(f"Computer move failed: {e}")
-        return {"success": False, "error": str(e)}
-
 
 # TODO: Remove this function
 def _build_orchestration_from_dict(cfg: dict | None) -> None:
@@ -838,9 +719,13 @@ def api_clear_cache():
 def api_cache_status():
     """Get cache status."""
     try:
+        # Get cache statistics from the centralized cache
+        # Note: The centralized cache doesn't expose individual model keys,
+        # so we return basic cache information
         return jsonify({
-            "cached_models": list(MODEL_WRAPPERS.keys()),
-            "cache_size": len(MODEL_WRAPPERS)
+            "cache_type": "centralized_model_cache",
+            "cache_status": "active",
+            "note": "Using centralized ModelCache - individual model tracking not available"
         })
     except Exception as e:
         app.logger.error(f"Error getting cache status: {e}")
@@ -1121,163 +1006,6 @@ def api_apply_trmph_sequence():
         "game_over": state.game_over,
     })
 
-@app.route("/api/move", methods=["POST"])
-def api_move():
-    data = request.get_json()
-    trmph = data.get("trmph")
-    move = data.get("move")
-    model_id = data.get("model_id", "model1")
-    temperature = data.get("temperature", 0.15)  # Default temperature
-    temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
-    verbose = data.get("verbose", 1)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
-    
-    # MCTS parameters
-    num_simulations = data.get("num_simulations", 200)
-    exploration_constant = data.get("exploration_constant", 1.4)
-    
-    try:
-        state = HexGameState.from_trmph(trmph)
-    except Exception as e:
-        return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
-    
-    try:
-        state = apply_move_to_state_trmph(state, move)
-    except Exception as e:
-        return jsonify({"error": f"Invalid move: {e}"}), 400
-
-    new_trmph = state.to_trmph()
-    board = state.board.tolist()
-    player_enum = state.current_player_enum  # Use enum directly
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
-
-    model_move = None
-    debug_info = {}
-    
-    # If game not over and it's model's turn, have model pick a move
-    app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={player_enum}")
-    if not state.game_over:
-        try:
-            # Determine which player's settings to use for the computer move
-            # The current player after the human move determines whose settings to use
-            current_player_enum = state.current_player_enum
-            current_player_color = winner_to_color(current_player_enum)
-            
-            if current_player_color == 'blue':
-                # Use blue's settings for blue's computer move
-                computer_model_id = data.get("blue_model_id", model_id)
-                computer_temperature = data.get("blue_temperature", temperature)
-                computer_temperature_end = data.get("blue_temperature_end", temperature_end)
-                computer_num_simulations = data.get("blue_num_simulations", num_simulations)
-                computer_exploration_constant = data.get("blue_exploration_constant", exploration_constant)
-            else:  # current_player_color == 'red'
-                # Use red's settings for red's computer move
-                computer_model_id = data.get("red_model_id", model_id)
-                computer_temperature = data.get("red_temperature", temperature)
-                computer_temperature_end = data.get("red_temperature_end", temperature_end)
-                computer_num_simulations = data.get("red_num_simulations", num_simulations)
-                computer_exploration_constant = data.get("red_exploration_constant", exploration_constant)
-            
-            model = get_model(computer_model_id)
-            
-            # Capture the state before the computer move for debug info
-            state_before_computer_move = state
-            trmph_before_computer_move = new_trmph
-            
-            # Use MCTS for move selection
-            mcts_debug_info = {}
-            
-            try:
-                app.logger.debug(f"Using MCTS with {computer_num_simulations} simulations")
-                mcts_result = make_mcts_move(
-                    trmph_before_computer_move, 
-                    computer_model_id, 
-                    computer_num_simulations, 
-                    computer_exploration_constant, 
-                    computer_temperature,
-                    computer_temperature_end,
-                    verbose
-                )
-                
-                if mcts_result["success"]:
-                    best_move_trmph = mcts_result["move_made"]
-                    mcts_debug_info = mcts_result.get("mcts_debug_info", {})
-                    # Convert TRMPH move back to coordinates for consistency
-                    best_move = fc.trmph_move_to_rowcol(best_move_trmph)
-                else:
-                    app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                    raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                    
-            except Exception as e:
-                app.logger.error(f"MCTS failed: {e}")
-                raise RuntimeError(f"MCTS failed: {e}")
-            
-            # Apply model move using centralized utility
-            state = apply_move_to_state_trmph(state, best_move_trmph)
-            model_move = best_move_trmph
-            new_trmph = state.to_trmph()
-            board = state.board.tolist()
-            legal_moves = moves_to_trmph(state.get_legal_moves())
-            winner = state.winner
-            
-            # Generate debug information after the move is made (when all data is available)
-            if verbose >= 1:
-                # Get policy and value for the state BEFORE the computer move (the state the computer was thinking about)
-                policy_logits, value_logit = model.simple_infer(trmph_before_computer_move)
-                policy_probs = policy_logits_to_probs(policy_logits, computer_temperature)
-                
-                # Use MCTS debug info
-                debug_info = mcts_debug_info
-            
-        except Exception as e:
-            app.logger.error(f"Model move failed: {e}")
-            # Continue without model move if there's an error
-    
-    # Use enum-based color conversion - much safer
-    player_color = winner_to_color(player_enum)
-    winner_color = winner_to_color(winner) if winner is not None else None
-
-    # Recompute policy/value for final state using centralized utilities
-    model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
-    # Apply temperature scaling to policy using centralized utility
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
-
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-
-    response = {
-        "new_trmph": new_trmph,
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,
-        "player_index": player_index,
-        "legal_moves": legal_moves,
-        "winner": winner_color,
-        "model_move": model_move,
-        "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
-        "win_prob": win_prob,
-    }
-    
-    if verbose >= 1:
-        response["mcts_debug_info"] = debug_info
-    
-    return jsonify(response)
-
-@app.route("/api/computer_move", methods=["POST"])
-def api_computer_move():
-    data = request.get_json()
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")
-    temperature = data.get("temperature", 1.0)
-    verbose = data.get("verbose", 0)
-    
-    result = make_computer_move(trmph, model_id, temperature, verbose)
-    return jsonify(result)
 
 
 @app.route("/api/mcts_move", methods=["POST"])

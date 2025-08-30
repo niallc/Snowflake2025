@@ -9,6 +9,11 @@
 # - Create extensible early termination strategy framework
 # - Add tree visualization utilities for debugging
 # - Implement different tree policies (UCB1, etc.) as pluggable components
+#
+# TODO: Code Duplication Cleanup Opportunities (identified 2025-01-27):
+# - Move selection logic may be duplicated across mcts.py, move_selection.py, web/app.py
+# - Consider creating centralized utilities for these common patterns
+# - Current mcts.py file is clean - no internal duplicates found
 
 from __future__ import annotations
 
@@ -211,12 +216,19 @@ class AlgorithmTerminationChecker:
         self.cfg = cfg
         self.terminal_detector = terminal_detector
     
-    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> Optional[AlgorithmTerminationInfo]:
+    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]], root_is_expanded: bool = False) -> Optional[AlgorithmTerminationInfo]:
         """
         Check if we should terminate early. Returns None if we should continue with MCTS.
         Returns EarlyTerminationInfo if we should terminate.
+        
+        Args:
+            root: The root node to check
+            board_size: Board size for terminal move detection
+            verbose: Verbosity level
+            eval_cache: Evaluation cache for neural network confidence
+            root_is_expanded: Whether the root node has been expanded (affects confidence checking)
         """
-        # 1. Check for terminal moves (highest priority)
+        # 1. Check for terminal moves (highest priority) - works regardless of expansion
         if self.cfg.enable_terminal_move_detection:
             if self.terminal_detector.detect_terminal_moves(root, board_size):
                 terminal_move = self.terminal_detector.get_terminal_move(root)
@@ -229,7 +241,7 @@ class AlgorithmTerminationChecker:
                 )
         
         # 2. Check neural network confidence (requires root expansion)
-        if self.cfg.enable_confidence_termination and root.is_expanded and not root.is_terminal:
+        if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
             win_prob = self._get_root_win_probability(root, eval_cache)
             if self._is_position_clearly_decided(win_prob):
                 if verbose >= 2:
@@ -539,22 +551,12 @@ class BaselineMCTS:
         """Check if MCTS should terminate early."""
         board_size = int(root.state.get_board_tensor().shape[-1])
         
-        # Check before root expansion
+        # Single call with root_is_expanded flag - handles both terminal moves and confidence checking
         termination_info = self.algorithm_termination_checker.should_terminate_early(
-            root, board_size, verbose, self.eval_cache
+            root, board_size, verbose, self.eval_cache, root_is_expanded=root.is_expanded
         )
-        if termination_info:
-            return termination_info
         
-        # Check after root expansion (for neural network confidence)
-        if self.cfg.enable_confidence_termination and root.is_expanded and not root.is_terminal:
-            termination_info = self.algorithm_termination_checker.should_terminate_early(
-                root, board_size, verbose, self.eval_cache
-            )
-            if termination_info:
-                return termination_info
-        
-        return None
+        return termination_info
 
     def _run_simulation_loop(self, root: MCTSNode, verbose: int) -> Dict[str, Any]:
         """Run the main MCTS simulation loop with batching."""

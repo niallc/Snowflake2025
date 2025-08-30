@@ -206,36 +206,6 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', temperature = 1.0, 
-                       blue_model_id = 'model1', blue_temperature = 1.0,
-                       red_model_id = 'model2', red_temperature = 1.0,
-                       blue_num_simulations = 200, blue_exploration_constant = 1.4,
-                       red_num_simulations = 200, red_exploration_constant = 1.4,
-                       verbose = 1) {
-  console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
-  const resp = await fetch('/api/move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      trmph, 
-      move, 
-      model_id, 
-      temperature,
-      blue_model_id,
-      blue_temperature,
-      blue_num_simulations,
-      blue_exploration_constant,
-      red_model_id,
-      red_temperature,
-      red_num_simulations,
-      red_exploration_constant,
-      verbose
-    }),
-  });
-  if (!resp.ok) throw new Error('API error');
-  return await resp.json();
-}
-
 async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.0) {
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
