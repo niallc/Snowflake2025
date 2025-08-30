@@ -56,6 +56,7 @@ from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs
 from hex_ai.inference.tournament import TournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
+from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis, calculate_head_to_head_stats, print_head_to_head_stats
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
@@ -544,60 +545,6 @@ def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
             writer.writerow(row)
 
 
-def calculate_strategy_pair_stats(
-    strategy_a_name: str,
-    strategy_b_name: str,
-    game_results: List[Dict[str, Any]]
-) -> Dict[str, Any]:
-    """
-    Calculate statistics for games between two strategies.
-    
-    Args:
-        strategy_a_name: Name of strategy A
-        strategy_b_name: Name of strategy B  
-        game_results: List of game result dictionaries from play_deterministic_game
-    
-    Returns:
-        Dictionary with calculated statistics
-    """
-    total_games = len(game_results)
-    strategy_a_wins = 0
-    strategy_b_wins = 0
-    
-    for result in game_results:
-        winner = result['winner_strategy']
-        if winner == strategy_a_name:
-            strategy_a_wins += 1
-        elif winner == strategy_b_name:
-            strategy_b_wins += 1
-        else:
-            raise ValueError(f"Unknown winner strategy: {winner}")
-    
-    strategy_a_win_rate = strategy_a_wins / total_games if total_games > 0 else 0.0
-    strategy_b_win_rate = strategy_b_wins / total_games if total_games > 0 else 0.0
-    
-    return {
-        'total_games': total_games,
-        'strategy_a_wins': strategy_a_wins,
-        'strategy_b_wins': strategy_b_wins,
-        'strategy_a_win_rate': strategy_a_win_rate,
-        'strategy_b_win_rate': strategy_b_win_rate,
-        'strategy_a_name': strategy_a_name,
-        'strategy_b_name': strategy_b_name
-    }
-
-
-def print_strategy_pair_stats(stats: Dict[str, Any]) -> None:
-    """
-    Print formatted statistics for a strategy pair.
-    
-    Args:
-        stats: Statistics dictionary from calculate_strategy_pair_stats
-    """
-    print(f"\n{stats['strategy_a_name']} vs {stats['strategy_b_name']} Results:")
-    print(f"  {stats['strategy_a_name']}: {stats['strategy_a_wins']}/{stats['total_games']} wins ({stats['strategy_a_win_rate']*100:.1f}%)")
-    print(f"  {stats['strategy_b_name']}: {stats['strategy_b_wins']}/{stats['total_games']} wins ({stats['strategy_b_win_rate']*100:.1f}%)")
-
 
 def run_deterministic_tournament(
     model_path: str,
@@ -758,9 +705,15 @@ def run_deterministic_tournament(
         if verbose >= 1:
             print()  # New line after games
         
-        # Calculate and print statistics for the current strategy pair
-        stats = calculate_strategy_pair_stats(strategy_a.name, strategy_b.name, game_results)
-        print_strategy_pair_stats(stats)
+        # Print statistics for the current strategy pair using shared utility
+        # Extract head-to-head results for this specific pair
+        strategy_a_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_a.name)
+        strategy_b_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_b.name)
+        total_games = len(game_results)
+        
+        if total_games > 0:
+            stats = calculate_head_to_head_stats(strategy_a.name, strategy_b.name, strategy_a_wins, strategy_b_wins, total_games)
+            print_head_to_head_stats(stats)
     
     logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
     return result
@@ -919,7 +872,7 @@ def main():
     
     # Print results
     print("\nDeterministic Tournament Complete!")
-    result.print_detailed_analysis()
+    print_comprehensive_tournament_analysis(result)
     
     # Print output location
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')

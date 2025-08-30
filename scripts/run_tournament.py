@@ -52,6 +52,7 @@ from hex_ai.inference.model_config import get_model_dir, get_model_path
 from hex_ai.inference.tournament import (
     TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
 )
+from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
 
 # Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
@@ -244,4 +245,4 @@ if __name__ == "__main__":
         play_config=play_config
     )
     print("\nTournament complete!")
-    result.print_detailed_analysis() 
+    print_comprehensive_tournament_analysis(result) 

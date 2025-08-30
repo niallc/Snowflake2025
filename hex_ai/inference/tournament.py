@@ -87,12 +87,6 @@ class TournamentResult:
             win_rates[name] = wins / games if games > 0 else 0.0
         return win_rates
 
-    def print_summary(self):
-        print("\nTournament Results:")
-        for name in self.participants:
-            print(f"{name}: {self.win_rates()[name]*100:.1f}% win rate ({sum(self.results[name][op]['wins'] for op in self.results[name])} wins / {sum(self.results[name][op]['games'] for op in self.results[name])} games)")
-        print()
-
     # Optional: Elo calculation (simple version)
     def elo_ratings(self, k=32, base=1500) -> Dict[str, float]:
         """
@@ -133,47 +127,7 @@ class TournamentResult:
         
         return ratings
 
-    def print_elo(self):
-        elos = self.elo_ratings()
-        print("Elo Ratings:")
-        for name, elo in sorted(elos.items(), key=lambda x: -x[1]):
-            print(f"  {name}: {elo:.1f}")
-        print()
-    
-    def print_detailed_analysis(self):
-        """Print detailed tournament analysis including both win rates and ELO ratings."""
-        print("\n" + "="*60)
-        print("TOURNAMENT ANALYSIS")
-        print("="*60)
-        
-        # Win rates
-        win_rates = self.win_rates()
-        print("\nWin Rates:")
-        for name, rate in sorted(win_rates.items(), key=lambda x: -x[1]):
-            games_played = sum(self.results[name][op]['games'] for op in self.results[name])
-            wins = sum(self.results[name][op]['wins'] for op in self.results[name])
-            print(f"  {name}: {rate*100:.1f}% ({wins}/{games_played} games)")
-        
-        # ELO ratings
-        elos = self.elo_ratings()
-        print("\nElo Ratings (order-independent calculation):")
-        for name, elo in sorted(elos.items(), key=lambda x: -x[1]):
-            print(f"  {name}: {elo:.1f}")
-        
-        # Head-to-head results
-        print("\nHead-to-Head Results:")
-        for name in sorted(self.participants):
-            print(f"\n  {name} vs:")
-            for op in sorted(self.participants):
-                if op != name:
-                    wins = self.results[name][op]['wins']
-                    losses = self.results[name][op]['losses']
-                    games = self.results[name][op]['games']
-                    if games > 0:
-                        win_rate = wins / games * 100
-                        print(f"    {op}: {wins}-{losses} ({win_rate:.1f}%)")
-        
-        print("\n" + "="*60)
+
 
 class TournamentPlayConfig:
     """
