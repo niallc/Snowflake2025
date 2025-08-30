@@ -279,7 +279,9 @@ def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> 
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     model_output is the probability that Red wins (after applying sigmoid to the raw logit).
     """
-    if perspective == ValuePerspective.TRAINING_TARGET:
+    if perspective is None:
+        raise ValueError("perspective cannot be None")
+    elif perspective == ValuePerspective.TRAINING_TARGET:
         return model_output
     elif perspective == ValuePerspective.BLUE_WIN_PROB:
         return 1.0 - model_output
@@ -298,7 +300,9 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     The value head predicts Red's win probability, so the model output convention
     is the probability that Red wins.
     """
-    if perspective == ValuePerspective.TRAINING_TARGET:
+    if perspective is None:
+        raise ValueError("perspective cannot be None")
+    elif perspective == ValuePerspective.TRAINING_TARGET:
         return prob
     elif perspective == ValuePerspective.BLUE_WIN_PROB:
         return 1.0 - prob

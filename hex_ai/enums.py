@@ -9,32 +9,44 @@ Enums rather than duplicating constants.
 from enum import Enum
 
 
-class Winner(Enum):
+class StrictEnum(Enum):
+    """Base class for enums that prevent cross-type comparisons."""
+    def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            raise TypeError(f"Cannot compare {self.__class__.__name__} with {type(other).__name__}")
+        return super().__eq__(other)
+    
+    def __hash__(self):
+        """Make enums hashable so they can be used as dictionary keys."""
+        return hash(self.value)
+
+
+class Winner(StrictEnum):
     BLUE = 0
     RED = 1
 
 
-class Player(Enum):
+class Player(StrictEnum):
     """Player constants for game logic and player-to-move channel."""
     BLUE = 0
     RED = 1
 
 
-class Piece(Enum):
+class Piece(StrictEnum):
     """Piece constants for N×N board representation (character encoding)."""
     EMPTY = "e"
     BLUE = "b"
     RED = "r"
 
 
-class Channel(Enum):
+class Channel(StrictEnum):
     """Channel indices for one-hot encoded board formats."""
     BLUE = 0
     RED = 1
     PLAYER_TO_MOVE = 2
 
 
-class ValuePerspective(Enum):
+class ValuePerspective(StrictEnum):
     TRAINING_TARGET = 0   # 0.0 = Blue win, 1.0 = Red win
     BLUE_WIN_PROB = 1     # Probability Blue wins
     RED_WIN_PROB = 2      # Probability Red wins

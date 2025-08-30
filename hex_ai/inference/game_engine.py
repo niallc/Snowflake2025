@@ -84,7 +84,7 @@ class HexGameState:
     Represents the state of a Hex game using N×N character format.
     """
     board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1'))
-    _current_player: Player = field(default=Player.BLUE, repr=False)
+    _current_player: Player = field(default_factory=lambda: Player.BLUE, repr=False)
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
     _winner: Optional[WinnerEnum] = field(default=None, repr=False)

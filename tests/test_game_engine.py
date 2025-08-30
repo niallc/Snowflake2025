@@ -1,8 +1,7 @@
 import pytest
 import numpy as np
 from hex_ai.inference.game_engine import HexGameState
-from hex_ai.enums import Piece
-from hex_ai.enums import Player
+from hex_ai.enums import Piece, Player, Winner
 
 @pytest.fixture
 def empty_state():
@@ -36,7 +35,7 @@ def test_blue_win_detection():
         if row < 12:
             state = state.make_move(row, 1)  # Red plays elsewhere
     assert state.game_over
-    assert state.winner == 'blue'
+    assert state.winner == Winner.BLUE
 
 def test_trmph_serialization_and_deserialization():
     # Play a few moves, serialize to trmph, then restore
@@ -65,13 +64,13 @@ def test_blue_final_win():
     blueFinal = "#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7"
     state = HexGameState.from_trmph(blueFinal)
     assert state.game_over
-    assert state.winner == 'blue'
+    assert state.winner == Winner.BLUE
 
 def test_red_final_win():
     redFinal = "#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2g7"
     state = HexGameState.from_trmph(redFinal)
     assert state.game_over
-    assert state.winner == 'red'
+    assert state.winner == Winner.RED
 
 def test_blue_win_one_move_left():
     blueWin = "#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7"
@@ -81,7 +80,7 @@ def test_blue_win_one_move_left():
     # Blue plays g7 to win
     state2 = state.make_move(6, 6)  # g7 is (6,6)
     assert state2.game_over
-    assert state2.winner == 'blue'
+    assert state2.winner == Winner.BLUE
 
 def test_red_win_one_move_left():
     redWin = "#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7a2"
@@ -91,4 +90,4 @@ def test_red_win_one_move_left():
     # Red plays g7 to win
     state2 = state.make_move(6, 6)  # g7 is (6,6)
     assert state2.game_over
-    assert state2.winner == 'red' 
+    assert state2.winner == Winner.RED 
