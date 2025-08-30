@@ -873,6 +873,15 @@ function displayAlgorithmInfo(debugInfo) {
     
     if (algo.early_termination) {
       output += `Early Termination: YES (${algo.early_termination_reason})\n`;
+      
+      // Add specific information for terminal move detection
+      if (algo.early_termination_reason === 'terminal_move' && algo.early_termination_details) {
+        const details = algo.early_termination_details;
+        if (details.move) {
+          output += `Terminal Move: ${details.move[0]},${details.move[1]} (${String.fromCharCode(97 + details.move[1])}${details.move[0] + 1})\n`;
+        }
+        output += `Win Probability: ${(details.win_probability * 100).toFixed(1)}%\n`;
+      }
     } else {
       output += `Early Termination: NO\n`;
     }
@@ -904,6 +913,7 @@ function shouldShowMCTSStats(mctsDebugInfo) {
   const algorithmUsed = mctsDebugInfo.algorithm_info.algorithm;
   const earlyTerminated = mctsDebugInfo.algorithm_info.early_termination;
   
+  // Don't show MCTS stats for early termination cases
   return algorithmUsed === "MCTS" && !earlyTerminated;
 }
 

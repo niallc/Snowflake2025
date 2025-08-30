@@ -13,7 +13,7 @@ from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_EARLY_TERMINATION_THRESHOLD
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.enums import Player
@@ -469,7 +469,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         mcts_start_time = time.time()
         app.logger.info("About to call run_mcts_move...")
         try:
-            move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+            move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
             app.logger.info("run_mcts_move completed successfully")
         except Exception as e:
             app.logger.error(f"run_mcts_move failed with exception: {e}")
@@ -555,11 +555,27 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"Move applied. New state game_over: {state.game_over}")
         
         # Generate MCTS diagnostic info
+        # Determine algorithm type based on algorithm termination info
+        if algorithm_termination_info:
+            if algorithm_termination_info.reason == "terminal_move":
+                algorithm = "Terminal Move Detection"
+            elif algorithm_termination_info.reason == "neural_network_confidence":
+                algorithm = "Confidence-Based Termination"
+            else:
+                algorithm = "MCTS (Algorithm Termination)"
+        else:
+            algorithm = "MCTS"
+        
         mcts_debug_info = {
             "algorithm_info": {
-                "algorithm": "MCTS",
-                "early_termination": stats.get("early_termination_occurred", False),
-                "early_termination_reason": stats.get("early_termination_reason", "none"),
+                "algorithm": algorithm,
+                "early_termination": algorithm_termination_info is not None,
+                "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+                "early_termination_details": {
+                    "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+                    "win_probability": algorithm_termination_info.win_prob if algorithm_termination_info else None,
+                    "move": algorithm_termination_info.move if algorithm_termination_info else None
+                },
                 "parameters": {
                     "simulations": num_simulations,
                     "exploration_constant": exploration_constant,
@@ -568,18 +584,20 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 }
             },
             "search_stats": {
-                "num_simulations": num_simulations,
+                "num_simulations": num_simulations if not algorithm_termination_info else 0,
                 "search_time": mcts_search_time,
                 "exploration_constant": exploration_constant,
                 "temperature": temperature,
                 "mcts_stats": stats,
-                "inferences": tree_data.get("inferences", 0)
+                "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
+                "algorithm_used": algorithm
             },
             "tree_statistics": {
-                "total_visits": tree_data.get("total_visits", 0),
-                "total_nodes": tree_data.get("total_nodes", 0),
-                "max_depth": tree_data.get("max_depth", 0),
-                "inferences": tree_data.get("inferences", 0)
+                "total_visits": tree_data.get("total_visits", 0) if not algorithm_termination_info else 0,
+                "total_nodes": tree_data.get("total_nodes", 0) if not algorithm_termination_info else 0,
+                "max_depth": tree_data.get("max_depth", 0) if not algorithm_termination_info else 0,
+                "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
+                "algorithm_note": "No tree search performed" if algorithm_termination_info else "Full MCTS tree search"
             },
             "move_selection": {
                 "selected_move": selected_move_trmph,
@@ -608,8 +626,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
                 "top_mcts_move": max(tree_data.get("mcts_probabilities", {}).items(), key=lambda x: x[1])[0] if tree_data.get("mcts_probabilities") else None,
                 "total_legal_moves": original_legal_moves_count,
-                "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}",
-                "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1))
+                "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
+                "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1)) if not algorithm_termination_info else 0.0,
+                "algorithm_summary": algorithm
             },
                     "profiling_summary": {
             "total_compute_ms": int(mcts_search_time * 1000.0),
@@ -680,6 +699,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                               'efficiency_gain_percent']:
                         if value is None:
                             app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
+                            obj[key] = 0.0
+                        elif isinstance(value, str):
+                            app.logger.warning(f"Found string value '{value}' in numeric field {current_path}, replacing with 0.0")
                             obj[key] = 0.0
                     validate_numeric_fields(value, current_path)
             elif isinstance(obj, list):

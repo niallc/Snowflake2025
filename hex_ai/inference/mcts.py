@@ -45,11 +45,11 @@ PRINCIPAL_VARIATION_MAX_LENGTH = 10
 # PUCT calculation threshold for avoiding division by zero
 PUCT_CALCULATION_THRESHOLD = 1e-9
 
-# Default early termination threshold
-DEFAULT_EARLY_TERMINATION_THRESHOLD = 0.9
+# Default confidence-based termination threshold
+DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 
-# Tournament-specific early termination threshold (higher confidence for tournament play)
-TOURNAMENT_EARLY_TERMINATION_THRESHOLD = 0.95
+# Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
+TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
 DEFAULT_TERMINAL_MOVE_BOOST = 4.0
@@ -140,10 +140,10 @@ class TerminalMoveDetector:
                 return node.legal_moves[i]
         return None
 
-# ------------------ Early Termination Info ------------------
+# ------------------ Algorithm Termination Info ------------------
 @dataclass
-class EarlyTerminationInfo:
-    """Simple info about early termination."""
+class AlgorithmTerminationInfo:
+    """Simple info about algorithm termination."""
     reason: str  # "terminal_move" or "neural_network_confidence"
     move: Optional[Tuple[int, int]]  # The move to play (None for NN confidence)
     win_prob: float  # Win probability
@@ -156,7 +156,7 @@ class MCTSResult:
     stats: Dict[str, Any]  # Performance statistics
     tree_data: Dict[str, Any]  # Tree information for analysis
     root_node: MCTSNode  # The search tree root (for advanced use cases)
-    early_termination_info: Optional[EarlyTerminationInfo]  # Early termination details
+    algorithm_termination_info: Optional[AlgorithmTerminationInfo]  # Algorithm termination details
     win_probability: float  # Win probability for current player
 
 # ------------------ Stats Builder ------------------
@@ -180,13 +180,13 @@ class MCTSStatsBuilder:
             "cache_hits": self.cache_hits, "cache_misses": self.cache_misses,
         }
     
-    def create_early_termination_stats(self, early_info: Optional[EarlyTerminationInfo] = None) -> Dict[str, Any]:
-        """Create stats for early termination cases."""
+    def create_algorithm_termination_stats(self, termination_info: Optional[AlgorithmTerminationInfo] = None) -> Dict[str, Any]:
+        """Create stats for algorithm termination cases."""
         stats = self.create_base_stats()
         stats.update({
             "total_simulations": 0, "simulations_per_second": 0.0,
-            "early_termination_occurred": True,
-            "early_termination_reason": early_info.reason if early_info else "unknown"
+            "algorithm_termination_occurred": True,
+            "algorithm_termination_reason": termination_info.reason if termination_info else "unknown"
         })
         return stats
     
@@ -198,20 +198,20 @@ class MCTSStatsBuilder:
         stats.update({
             "total_simulations": total_simulations,
             "simulations_per_second": total_simulations / total_search_time if total_search_time > 0 else 0.0,
-            "early_termination_occurred": False,
-            "early_termination_reason": "none"
+            "algorithm_termination_occurred": False,
+            "algorithm_termination_reason": "none"
         })
         return stats
 
-# ------------------ Early Termination Checker ------------------
-class EarlyTerminationChecker:
-    """Centralized early termination checking with simple priority order."""
+# ------------------ Algorithm Termination Checker ------------------
+class AlgorithmTerminationChecker:
+    """Centralized algorithm termination checking with simple priority order."""
     
     def __init__(self, cfg: BaselineMCTSConfig, terminal_detector: TerminalMoveDetector):
         self.cfg = cfg
         self.terminal_detector = terminal_detector
     
-    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> Optional[EarlyTerminationInfo]:
+    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]]) -> Optional[AlgorithmTerminationInfo]:
         """
         Check if we should terminate early. Returns None if we should continue with MCTS.
         Returns EarlyTerminationInfo if we should terminate.
@@ -222,19 +222,19 @@ class EarlyTerminationChecker:
                 terminal_move = self.terminal_detector.get_terminal_move(root)
                 if verbose >= 2:
                     print(f"🎮 MCTS: Found terminal move: {terminal_move}")
-                return EarlyTerminationInfo(
+                return AlgorithmTerminationInfo(
                     reason="terminal_move",
                     move=terminal_move,
                     win_prob=1.0  # Guaranteed win
                 )
         
         # 2. Check neural network confidence (requires root expansion)
-        if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
+        if self.cfg.enable_confidence_termination and root.is_expanded and not root.is_terminal:
             win_prob = self._get_root_win_probability(root, eval_cache)
             if self._is_position_clearly_decided(win_prob):
                 if verbose >= 2:
-                    print(f"🎮 MCTS: Early termination (win prob: {win_prob:.3f})")
-                return EarlyTerminationInfo(
+                    print(f"🎮 MCTS: Confidence-based termination (win prob: {win_prob:.3f})")
+                return AlgorithmTerminationInfo(
                     reason="neural_network_confidence",
                     move=None,  # Will use top policy move
                     win_prob=win_prob
@@ -258,8 +258,8 @@ class EarlyTerminationChecker:
     
     def _is_position_clearly_decided(self, win_prob: float) -> bool:
         """Check if position is clearly won or lost."""
-        return (win_prob >= self.cfg.early_termination_threshold or 
-                win_prob <= (1.0 - self.cfg.early_termination_threshold))
+        return (win_prob >= self.cfg.confidence_termination_threshold or 
+                win_prob <= (1.0 - self.cfg.confidence_termination_threshold))
 
 # ------------------ Config ------------------
 @dataclass
@@ -286,9 +286,9 @@ class BaselineMCTSConfig:
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
     # Removed seed parameter - randomness should be controlled externally
 
-    # Early termination parameters
-    enable_early_termination: bool = False
-    early_termination_threshold: float = DEFAULT_EARLY_TERMINATION_THRESHOLD
+    # Confidence-based termination parameters
+    enable_confidence_termination: bool = False
+    confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
@@ -330,8 +330,8 @@ class BaselineMCTSConfig:
             raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
         if self.terminal_detection_max_depth < 0:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
-        if not 0 <= self.early_termination_threshold <= 1:
-            raise ValueError(f"early_termination_threshold must be between 0 and 1, got {self.early_termination_threshold}")
+        if not 0 <= self.confidence_termination_threshold <= 1:
+            raise ValueError(f"confidence_termination_threshold must be between 0 and 1, got {self.confidence_termination_threshold}")
         if not 0 < self.depth_discount_factor <= 1:
             raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
 
@@ -416,8 +416,8 @@ class BaselineMCTS:
             max_detection_depth=cfg.terminal_detection_max_depth
         )
         
-        # Early termination checker
-        self.early_termination_checker = EarlyTerminationChecker(cfg, self.terminal_detector)
+        # Algorithm termination checker
+        self.algorithm_termination_checker = AlgorithmTerminationChecker(cfg, self.terminal_detector)
         
         # Stats builder (will be updated with current cache counts when needed)
         self.stats_builder = None
@@ -445,20 +445,20 @@ class BaselineMCTS:
         # Prepare root node
         root = self._prepare_root_node(root_state, verbose)
         
-        # Check for early termination opportunities
-        early_info = self._check_early_termination(root, verbose)
-        if early_info:
-            # Handle early termination
-            move = self._get_early_termination_move(root, early_info, verbose)
+        # Check for algorithm termination opportunities
+        termination_info = self._check_algorithm_termination(root, verbose)
+        if termination_info:
+            # Handle algorithm termination
+            move = self._get_algorithm_termination_move(root, termination_info, verbose)
             tree_data = self._compute_tree_data(root)
-            win_probability = early_info.win_prob
+            win_probability = termination_info.win_prob
             
-            # Attach metrics for early termination cases too
-            stats = self._get_stats_builder().create_early_termination_stats(early_info)
-            total_time = 0.0  # Early termination has minimal time
+            # Attach metrics for algorithm termination cases too
+            stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
+            total_time = 0.0  # Algorithm termination has minimal time
             stats["unique_evals_total"] = int(self._unique_evals_total)
             stats["effective_sims_total"] = int(self._effective_sims_total)
-            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for early termination
+            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for algorithm termination
             stats["effective_sims_per_sec"] = 0.0
             
             return MCTSResult(
@@ -466,7 +466,7 @@ class BaselineMCTS:
                 stats=stats,
                 tree_data=tree_data,
                 root_node=root,
-                early_termination_info=early_info,
+                algorithm_termination_info=termination_info,
                 win_probability=win_probability
             )
         
@@ -491,7 +491,7 @@ class BaselineMCTS:
             ),
             tree_data=tree_data,
             root_node=root,
-            early_termination_info=None,
+            algorithm_termination_info=None,
             win_probability=win_probability
         )
 
@@ -535,24 +535,24 @@ class BaselineMCTS:
             self._put_in_cache(root.state_hash, policy_np, value_logit)
             self._expand_node_from_policy(root, policy_np, board_size, action_size)
 
-    def _check_early_termination(self, root: MCTSNode, verbose: int) -> Optional[EarlyTerminationInfo]:
+    def _check_algorithm_termination(self, root: MCTSNode, verbose: int) -> Optional[AlgorithmTerminationInfo]:
         """Check if MCTS should terminate early."""
         board_size = int(root.state.get_board_tensor().shape[-1])
         
         # Check before root expansion
-        early_info = self.early_termination_checker.should_terminate_early(
+        termination_info = self.algorithm_termination_checker.should_terminate_early(
             root, board_size, verbose, self.eval_cache
         )
-        if early_info:
-            return early_info
+        if termination_info:
+            return termination_info
         
         # Check after root expansion (for neural network confidence)
-        if self.cfg.enable_early_termination and root.is_expanded and not root.is_terminal:
-            early_info = self.early_termination_checker.should_terminate_early(
+        if self.cfg.enable_confidence_termination and root.is_expanded and not root.is_terminal:
+            termination_info = self.algorithm_termination_checker.should_terminate_early(
                 root, board_size, verbose, self.eval_cache
             )
-            if early_info:
-                return early_info
+            if termination_info:
+                return termination_info
         
         return None
 
@@ -825,19 +825,19 @@ class BaselineMCTS:
 
     # ---------- New Result Computation Methods ----------
     
-    def _get_early_termination_move(self, root: MCTSNode, early_info: EarlyTerminationInfo, verbose: int) -> Tuple[int, int]:
-        """Get the move for early termination cases."""
-        if early_info.reason == "terminal_move":
-            return early_info.move
-        elif early_info.reason == "neural_network_confidence":
+    def _get_algorithm_termination_move(self, root: MCTSNode, termination_info: AlgorithmTerminationInfo, verbose: int) -> Tuple[int, int]:
+        """Get the move for algorithm termination cases."""
+        if termination_info.reason == "terminal_move":
+            return termination_info.move
+        elif termination_info.reason == "neural_network_confidence":
             # Use top policy move
             best_move_idx = int(np.argmax(root.P))
             best_move = root.legal_moves[best_move_idx]
             if verbose >= 2:
-                print(f"🎮 MCTS: Using top policy move (early termination, win prob: {early_info.win_prob:.3f}): {best_move}")
+                print(f"🎮 MCTS: Using top policy move (confidence-based termination, win prob: {termination_info.win_prob:.3f}): {best_move}")
             return best_move
         else:
-            raise ValueError(f"Unknown early termination reason: {early_info.reason}")
+            raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
 
     def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[int, int]:
         """Compute the selected move from the root node."""
@@ -1206,7 +1206,7 @@ class BaselineMCTS:
 def create_mcts_config(
     config_type: str = "tournament",
     sims: Optional[int] = None,
-    early_termination_threshold: Optional[float] = None,
+    confidence_termination_threshold: Optional[float] = None,
     cache_size: Optional[int] = None,
     **kwargs
 ) -> BaselineMCTSConfig:
@@ -1227,21 +1227,21 @@ def create_mcts_config(
     presets = {
         "tournament": {
             "sims": 200,
-            "early_termination_threshold": TOURNAMENT_EARLY_TERMINATION_THRESHOLD,
+            "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
             "temperature_start": 1.0,
             "temperature_end": 0.1,
             "add_root_noise": False,
         },
         "selfplay": {
             "sims": 500,
-            "early_termination_threshold": 0.85,
+            "confidence_termination_threshold": 0.85,
             "temperature_start": 0.5,
             "temperature_end": 0.01,
             "add_root_noise": False,  # Disable for self-play consistency
         },
         "fast_selfplay": {
             "sims": 200,
-            "early_termination_threshold": 0.8,
+            "confidence_termination_threshold": 0.8,
             "temperature_start": 0.5,
             "temperature_end": 0.01,
             "add_root_noise": False,
@@ -1257,8 +1257,8 @@ def create_mcts_config(
     # Override with provided parameters
     if sims is not None:
         config_params["sims"] = sims
-    if early_termination_threshold is not None:
-        config_params["early_termination_threshold"] = early_termination_threshold
+    if confidence_termination_threshold is not None:
+        config_params["confidence_termination_threshold"] = confidence_termination_threshold
     if cache_size is not None:
         config_params["cache_size"] = cache_size
     
@@ -1278,8 +1278,8 @@ def create_mcts_config(
         "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
         "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
         "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
-        # Early termination (always enabled)
-        "enable_early_termination": True,
+        # Confidence-based termination (always enabled)
+        "enable_confidence_termination": True,
         # Depth-based discounting to encourage shorter wins
         "enable_depth_discounting": True,
         "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
@@ -1291,10 +1291,10 @@ def create_mcts_config(
 
 
 
-def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any]]:
-    """Run MCTS for one move and return (row,col), stats, tree_data."""
+def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
+    """Run MCTS for one move and return (row,col), stats, tree_data, algorithm_termination_info."""
     if cfg is None:
         cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
-    return result.move, result.stats, result.tree_data
+    return result.move, result.stats, result.tree_data, result.algorithm_termination_info
