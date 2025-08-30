@@ -47,6 +47,9 @@ PUCT_CALCULATION_THRESHOLD = 1e-9
 # Default early termination threshold
 DEFAULT_EARLY_TERMINATION_THRESHOLD = 0.9
 
+# Tournament-specific early termination threshold (higher confidence for tournament play)
+TOURNAMENT_EARLY_TERMINATION_THRESHOLD = 0.95
+
 # Default terminal move boost factor
 DEFAULT_TERMINAL_MOVE_BOOST = 4.0
 
@@ -1223,7 +1226,7 @@ def create_mcts_config(
     presets = {
         "tournament": {
             "sims": 200,
-            "early_termination_threshold": 0.95,
+            "early_termination_threshold": TOURNAMENT_EARLY_TERMINATION_THRESHOLD,
             "temperature_start": 1.0,
             "temperature_end": 0.1,
             "add_root_noise": False,

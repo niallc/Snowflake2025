@@ -13,7 +13,7 @@ from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_EARLY_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
 from hex_ai.enums import Player
@@ -505,7 +505,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         if temperature < 0.02:
             app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
         
-        mcts_config = BaselineMCTSConfig(
+        mcts_config = create_mcts_config(
+            config_type="tournament",
             sims=num_simulations,
             c_puct=exploration_constant,
             temperature_start=temperature,
