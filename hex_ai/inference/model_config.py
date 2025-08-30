@@ -14,7 +14,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
 CURRENT_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-CURRENT_BEST_MODEL_FILE = "epoch2_mini100.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch2_mini110.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)

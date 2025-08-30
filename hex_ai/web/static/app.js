@@ -857,6 +857,56 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- Debug Output Functions ---
+function displayAlgorithmInfo(debugInfo) {
+  if (!debugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // Algorithm identification (always show at top)
+  if (debugInfo.algorithm_info) {
+    const algo = debugInfo.algorithm_info;
+    output += '=== ALGORITHM USED ===\n';
+    output += `Algorithm: ${algo.algorithm}\n`;
+    
+    if (algo.early_termination) {
+      output += `Early Termination: YES (${algo.early_termination_reason})\n`;
+    } else {
+      output += `Early Termination: NO\n`;
+    }
+    
+    // Display algorithm-specific parameters
+    if (algo.parameters) {
+      output += `Parameters: `;
+      const paramStrings = [];
+      for (const [key, value] of Object.entries(algo.parameters)) {
+        if (Array.isArray(value)) {
+          paramStrings.push(`${key}=[${value.join(',')}]`);
+        } else {
+          paramStrings.push(`${key}=${value}`);
+        }
+      }
+      output += paramStrings.join(', ');
+      output += '\n';
+    }
+    output += '\n';
+  }
+  
+  return output;
+}
+
+function shouldShowMCTSStats(mctsDebugInfo) {
+  // Determine if MCTS-specific statistics should be displayed.
+  if (!mctsDebugInfo || !mctsDebugInfo.algorithm_info) return false;
+  
+  const algorithmUsed = mctsDebugInfo.algorithm_info.algorithm;
+  const earlyTerminated = mctsDebugInfo.algorithm_info.early_termination;
+  
+  return algorithmUsed === "MCTS" && !earlyTerminated;
+}
+
 function displayMCTSDebugInfo(mctsDebugInfo) {
   if (!mctsDebugInfo || state.verbose_level === 0) return;
   
@@ -865,8 +915,14 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   
   let output = '';
   
-  // MCTS Search Statistics (condensed)
-  if (mctsDebugInfo.search_stats) {
+  // Display algorithm information first
+  output += displayAlgorithmInfo(mctsDebugInfo);
+  
+  // Determine once whether to show MCTS-specific stats
+  const showMCTSStats = shouldShowMCTSStats(mctsDebugInfo);
+  
+  // MCTS Search Statistics (condensed) - only show if MCTS was used
+  if (mctsDebugInfo.search_stats && showMCTSStats) {
     output += '=== MCTS SEARCH STATISTICS ===\n';
     output += `Simulations: ${mctsDebugInfo.search_stats.num_simulations} | `;
     output += `Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s | `;
@@ -881,8 +937,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     output += `Selected: ${mctsDebugInfo.move_selection.selected_move} (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
   }
   
-  // Tree Statistics (condensed)
-  if (mctsDebugInfo.tree_statistics) {
+  // Tree Statistics (condensed) - only show if MCTS was used
+  if (mctsDebugInfo.tree_statistics && showMCTSStats) {
     output += '=== TREE STATISTICS ===\n';
     output += `Nodes: ${mctsDebugInfo.tree_statistics.total_nodes} | `;
     output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth} | `;
@@ -893,8 +949,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   if (mctsDebugInfo.move_probabilities) {
     output += '=== MOVE PROBABILITIES ===\n';
     
-    // MCTS visit counts (top moves only)
-    if (mctsDebugInfo.move_probabilities.mcts_visits) {
+    // MCTS visit counts (top moves only) - only show if MCTS was used
+    if (mctsDebugInfo.move_probabilities.mcts_visits && showMCTSStats) {
       output += 'MCTS Visit Counts:\n';
       const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
         .sort(([,a], [,b]) => b - a);
@@ -935,8 +991,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     }
   }
   
-  // Comparison (top differences only)
-  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct) {
+  // Comparison (top differences only) - only show if MCTS was used
+  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct && showMCTSStats) {
     output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
     const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
       .sort(([,a], [,b]) => Math.abs(b.difference) - Math.abs(a.difference))
@@ -1003,6 +1059,9 @@ function displayDebugInfo(debugInfo) {
   if (!debugContent) return;
   
   let output = '';
+  
+  // Display algorithm information first
+  output += displayAlgorithmInfo(debugInfo);
   
   // Model information
   if (debugInfo.model_info) {

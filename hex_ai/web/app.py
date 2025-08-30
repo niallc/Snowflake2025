@@ -218,6 +218,27 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
     
+    # Add algorithm identification
+    if search_widths and len(search_widths) > 0:
+        debug_info["algorithm_info"] = {
+            "algorithm": "Fixed-Tree Search",
+            "early_termination": search_tree.get("early_termination", False) if search_tree else False,
+            "early_termination_reason": search_tree.get("early_termination_reason", "none") if search_tree else "none",
+            "parameters": {
+                "search_widths": search_widths,
+                "temperature": temperature
+            }
+        }
+    else:
+        debug_info["algorithm_info"] = {
+            "algorithm": "Policy-Only",
+            "early_termination": False,
+            "early_termination_reason": "none",
+            "parameters": {
+                "temperature": temperature
+            }
+        }
+    
     # Level 1: Basic policy and value analysis
     if verbose >= 1:
         # Add defensive programming to catch any issues
@@ -620,6 +641,17 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         
         # Generate MCTS diagnostic info
         mcts_debug_info = {
+            "algorithm_info": {
+                "algorithm": "MCTS",
+                "early_termination": stats.get("early_termination_occurred", False),
+                "early_termination_reason": stats.get("early_termination_reason", "none"),
+                "parameters": {
+                    "simulations": num_simulations,
+                    "exploration_constant": exploration_constant,
+                    "temperature": temperature,
+                    "temperature_end": temperature_end
+                }
+            },
             "search_stats": {
                 "num_simulations": num_simulations,
                 "search_time": mcts_search_time,
@@ -1186,6 +1218,8 @@ def api_move():
 
     model_move = None
     debug_info = {}
+    computer_use_mcts = use_mcts  # Initialize to the default MCTS setting
+    
     # If game not over and it's model's turn, have model pick a move
     app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={player_enum}")
     if not state.game_over:
