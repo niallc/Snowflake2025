@@ -23,6 +23,7 @@ from collections import OrderedDict
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
+from hex_ai.value_utils import player_to_winner
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
@@ -51,7 +52,7 @@ DEFAULT_EARLY_TERMINATION_THRESHOLD = 0.9
 TOURNAMENT_EARLY_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
-DEFAULT_TERMINAL_MOVE_BOOST = 4.0
+DEFAULT_TERMINAL_MOVE_BOOST = 10.0
 
 # Default virtual loss for non-terminal moves
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
@@ -121,7 +122,7 @@ class TerminalMoveDetector:
         for i, (row, col) in enumerate(node.legal_moves):
             try:
                 new_state = node.state.make_move(row, col)
-                if new_state.game_over and new_state.winner == node.to_play:
+                if new_state.game_over and new_state.winner == player_to_winner(node.to_play):
                     node.terminal_moves[i] = True
             except Exception:
                 pass
