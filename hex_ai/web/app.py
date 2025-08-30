@@ -28,13 +28,8 @@ from hex_ai.enums import Piece
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
-from hex_ai.inference.model_config import get_default_model_paths
+from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
-
-# Model checkpoint defaults from central configuration
-DEFAULT_MODEL_PATHS = get_default_model_paths()
-DEFAULT_CHKPT_PATH1 = DEFAULT_MODEL_PATHS["model1"]
-DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -77,16 +72,10 @@ def log_response_info(response):
         app.logger.info(f"HTTP Request/Response cycle: {request.method} {request.path} took {request_time:.3f}s")
     return response
 
-# Model paths configuration
-MODEL_PATHS = {
-    "model1": os.environ.get("HEX_MODEL_PATH1", DEFAULT_CHKPT_PATH1),
-    "model2": os.environ.get("HEX_MODEL_PATH2", DEFAULT_CHKPT_PATH2),
-}
-
 # Global model browser instance
 MODEL_BROWSER = create_model_browser()
 
-# Dynamic model registry for user-selected models
+# Dynamic model registry for user-selected models (these override the central registry)
 DYNAMIC_MODELS = {}
 
 # Get centralized model cache
@@ -97,7 +86,7 @@ def get_model(model_id="model1"):
     """Get or create a model instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
     
-    # Check if it's a dynamic model (user-selected)
+    # Check if it's a dynamic model (user-selected) - these override the central registry
     if model_id in DYNAMIC_MODELS:
         model_path = DYNAMIC_MODELS[model_id]
         app.logger.debug(f"Found dynamic model {model_id} -> {model_path}")
@@ -116,10 +105,10 @@ def get_model(model_id="model1"):
         app.logger.debug(f"Loading dynamic model {model_id} from {full_model_path}")
         return MODEL_CACHE.get_simple_model(full_model_path)
     
-    # Check if it's a predefined model
-    if model_id in MODEL_PATHS:
-        model_path = MODEL_PATHS[model_id]
-        app.logger.debug(f"Found predefined model {model_id} -> {model_path}")
+    # Use centralized model configuration
+    if is_valid_model_id(model_id):
+        model_path = get_model_path(model_id)
+        app.logger.debug(f"Found model {model_id} -> {model_path}")
         return MODEL_CACHE.get_simple_model(model_path)
     
     # If model_id is a direct path, try to load it
@@ -128,7 +117,7 @@ def get_model(model_id="model1"):
         return MODEL_CACHE.get_simple_model(model_id)
     
     app.logger.error(f"Unknown model_id: {model_id}")
-    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, predefined={list(MODEL_PATHS.keys())}")
+    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, registered={get_all_model_info()}")
     raise ValueError(f"Unknown model_id: {model_id}")
 
 def register_dynamic_model(model_id: str, model_path: str):
@@ -139,14 +128,19 @@ def register_dynamic_model(model_id: str, model_path: str):
 
 def get_available_models():
     """Return list of available model configurations."""
-    # Extract filenames from paths for display
-    model1_filename = os.path.basename(MODEL_PATHS["model1"])
-    model2_filename = os.path.basename(MODEL_PATHS["model2"])
+    # Get all models from central registry
+    all_models = get_all_model_info()
     
-    return [
-        {"id": "model1", "name": f"Model 1 ({model1_filename})", "path": MODEL_PATHS["model1"]},
-        {"id": "model2", "name": f"Model 2 ({model2_filename})", "path": MODEL_PATHS["model2"]},
-    ]
+    # Add dynamic models
+    for model_id, model_path in DYNAMIC_MODELS.items():
+        filename = os.path.basename(model_path)
+        all_models.append({
+            "id": model_id,
+            "name": f"Dynamic ({filename})",
+            "path": model_path
+        })
+    
+    return all_models
 
 def get_cached_model_wrapper(model_id: str):
     """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
@@ -157,8 +151,8 @@ def get_cached_model_wrapper(model_id: str):
         model_path = DYNAMIC_MODELS[model_id]
         if not os.path.isabs(model_path):
             model_path = os.path.join("checkpoints", model_path)
-    elif model_id in MODEL_PATHS:
-        model_path = MODEL_PATHS[model_id]
+    elif is_valid_model_id(model_id):
+        model_path = get_model_path(model_id)
     elif os.path.exists(model_id):
         model_path = model_id
     else:
@@ -216,7 +210,7 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             debug_info["model_info"] = {
                 "model_id": model_id,
                 "model_type": type(model).__name__,
-                "model_path": DYNAMIC_MODELS.get(model_id, MODEL_PATHS.get(model_id, "unknown"))
+                "model_path": DYNAMIC_MODELS.get(model_id, get_model_path(model_id))
             }
         
         # Use existing utilities to get policy analysis

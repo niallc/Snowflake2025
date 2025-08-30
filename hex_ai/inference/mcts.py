@@ -88,7 +88,7 @@ DEFAULT_TEMPERATURE_DECAY_MOVES = 50
 
 # Default terminal detection parameters
 DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
-DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 3  # Multiplier for board size
+DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
 
 
 # ------------------ Terminal Move Detector ------------------
@@ -105,7 +105,7 @@ class TerminalMoveDetector:
             return False
         
         # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION
+        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 1
         if len(node.state.move_history) < min_move_count:
             return False
         
