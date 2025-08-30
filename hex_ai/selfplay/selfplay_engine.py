@@ -69,10 +69,10 @@ class SelfPlayEngine:
         self.game_engine = HexGameEngine()
         # Create ModelWrapper for MCTS
         self.model_wrapper = ModelWrapper(model_path, device=get_device())
-        # Create MCTS configuration optimized for self-play with early termination
+        # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
-            early_termination_threshold=0.85,  # Aggressive early termination for speed
+            confidence_termination_threshold=0.85,  # Aggressive confidence termination for speed
             cache_size=self.cache_size  # Use same cache size as SimpleModelInference
         )
         

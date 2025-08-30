@@ -97,7 +97,7 @@ class MCTSStrategy(MoveSelectionStrategy):
         # Create MCTS configuration optimized for tournament play
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
-            early_termination_threshold=0.95  # Conservative early termination for quality
+            confidence_termination_threshold=0.95  # Conservative confidence termination for quality
         )
         
         # Override batch size if specified in config

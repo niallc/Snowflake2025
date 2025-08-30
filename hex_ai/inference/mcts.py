@@ -1218,7 +1218,7 @@ def create_mcts_config(
     Args:
         config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
         sims: Number of simulations (overrides preset default)
-        early_termination_threshold: Win probability threshold for early termination (overrides preset default)
+        confidence_termination_threshold: Win probability threshold for confidence termination (overrides preset default)
         cache_size: Cache size for MCTS evaluation cache (overrides preset default)
         **kwargs: Additional parameters to override in the configuration
         
