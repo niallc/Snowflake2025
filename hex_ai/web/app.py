@@ -12,7 +12,7 @@ import time # Added for time.time()
 from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_EARLY_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
@@ -214,30 +214,19 @@ def clear_model_wrapper_cache():
     return cache_size
 
 def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                       search_widths, temperature, verbose, model_move=None, search_tree=None, model_id=None):
+                       temperature, verbose, model_move=None, model_id=None):
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
     
     # Add algorithm identification
-    if search_widths and len(search_widths) > 0:
-        debug_info["algorithm_info"] = {
-            "algorithm": "Fixed-Tree Search",
-            "early_termination": search_tree.get("early_termination", False) if search_tree else False,
-            "early_termination_reason": search_tree.get("early_termination_reason", "none") if search_tree else "none",
-            "parameters": {
-                "search_widths": search_widths,
-                "temperature": temperature
-            }
+    debug_info["algorithm_info"] = {
+        "algorithm": "Policy-Only",
+        "early_termination": False,
+        "early_termination_reason": "none",
+        "parameters": {
+            "temperature": temperature
         }
-    else:
-        debug_info["algorithm_info"] = {
-            "algorithm": "Policy-Only",
-            "early_termination": False,
-            "early_termination_reason": "none",
-            "parameters": {
-                "temperature": temperature
-            }
-        }
+    }
     
     # Level 1: Basic policy and value analysis
     if verbose >= 1:
@@ -259,7 +248,6 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "value_logit": float(value_logit),
             "win_probability": float(win_prob),
             "temperature": temperature,
-            "search_widths": search_widths,
             "model_move": model_move
         }
         
@@ -301,73 +289,27 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "total_legal_moves": len(legal_moves)
         }
     
-    # Level 2: Detailed analysis including tree search
-    if verbose >= 2 and search_tree is not None:
-        try:
-            # Use the actual search tree from the main flow
-            debug_info["tree_search"] = {
-                "search_widths": search_widths,
-                "tree_depth": len(search_widths),
-                "final_value": float(search_tree.value) if search_tree.value is not None else None,
-                "best_move": fc.rowcol_to_trmph(*search_tree.best_move) if search_tree.best_move else None,
-                "tree_size": count_tree_nodes(search_tree)
-            }
-            
-            # Add terminal node analysis
-            if verbose >= 3:
-                debug_info["tree_search"]["terminal_nodes"] = collect_terminal_nodes(search_tree)
-                
-        except Exception as e:
-            debug_info["tree_search"] = {"error": str(e)}
+    # Level 2: Detailed analysis (removed tree search since we only use MCTS now)
+    if verbose >= 2:
+        # No tree search analysis needed since we only use MCTS
+        pass
     
-    # Level 3: Full analysis including policy-value conflicts
+    # Level 3: Full analysis (removed policy-value comparison since we only use MCTS now)
     if verbose >= 3:
-        # Compare policy top move vs tree search best move
-        if debug_info.get("policy_analysis") and debug_info.get("tree_search"):
-            policy_top_move = debug_info["policy_analysis"]["top_moves"][0]["move"]
-            tree_best_move = debug_info["tree_search"]["best_move"]
-            
-            debug_info["policy_value_comparison"] = {
-                "policy_top_move": policy_top_move,
-                "tree_best_move": tree_best_move,
-                "moves_match": policy_top_move == tree_best_move,
-                "policy_top_prob": debug_info["policy_analysis"]["top_moves"][0]["probability"]
-            }
+        # No policy-value comparison needed since we only use MCTS
+        pass
     
     return debug_info
 
-def count_tree_nodes(node):
-    """Count total nodes in search tree."""
-    count = 1
-    for child in node.children.values():
-        count += count_tree_nodes(child)
-    return count
 
-def collect_terminal_nodes(root):
-    """Collect all terminal nodes with their values."""
-    terminals = []
-    
-    def collect_terminals(node):
-        if not node.children:  # Terminal node
-            terminals.append({
-                "path": [fc.rowcol_to_trmph(*move) for move in node.path],
-                "value": float(node.value) if node.value is not None else None,
-                "depth": node.depth
-            })
-        else:
-            for child in node.children.values():
-                collect_terminals(child)
-    
-    collect_terminals(root)
-    return terminals
 
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 # --- Computer move functionality ---
-def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, verbose=0):
-    """Make one computer move and return the new state."""
+def make_computer_move(trmph, model_id, temperature=1.0, verbose=0):
+    """Make one computer move using MCTS and return the new state."""
     try:
         app.logger.debug(f"make_computer_move called with model_id: {model_id}")
         app.logger.debug(f"Current dynamic models: {DYNAMIC_MODELS}")
@@ -400,56 +342,29 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
                 "error": f"Model loading failed: {e}"
             }
         
-        debug_info = {}
-        
-        # Use tree search if search_widths provided, otherwise use simple policy
-        search_tree = None
-        if search_widths and len(search_widths) > 0:
-            try:
-                # Capture debug information during the actual search
-                if verbose >= 1:
-                    # Get policy and value for the current state before search
-                    policy_logits, value_logit = model.simple_infer(trmph)
-                    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-                    
-                    # Generate basic debug info from the original state
-                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, None, model_id)  # No search tree yet
-                
-                best_move, _, search_tree = minimax_policy_value_search(
-                    state, model, search_widths, batch_size=1000, temperature=temperature,
-                    return_tree=(verbose >= 2)  # Only return tree if we need debug info
-                )
-                if best_move is not None:
-                    best_move_trmph = fc.rowcol_to_trmph(*best_move)
-                else:
-                    app.logger.error("Tree search returned None for best_move")
-                    raise RuntimeError("Tree search returned None for best_move")
-                    
-                # Update debug info with search tree if available
-                if verbose >= 2 and search_tree is not None:
-                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, search_tree, model_id)
-            except Exception as e:
-                app.logger.error(f"Tree search failed: {e}")
-                raise RuntimeError(f"Tree search failed: {e}")
-        else:
-            # Simple policy-based move using centralized utilities
-            if verbose >= 1:
-                # Get policy and value for the current state before move selection
-                policy_logits, value_logit = model.simple_infer(trmph)
-                policy_probs = policy_logits_to_probs(policy_logits, temperature)
-                
-                # Generate basic debug info from the original state
-                debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                              search_widths, temperature, verbose, None, None, model_id)
+        # Use MCTS for move selection
+        try:
+            app.logger.debug("Using MCTS for move selection")
+            mcts_result = make_mcts_move(
+                trmph, 
+                model_id, 
+                num_simulations=200,  # Default simulations
+                exploration_constant=1.4,  # Default exploration
+                temperature=temperature,
+                temperature_end=temperature/10,  # Default temperature decay
+                verbose=verbose
+            )
             
-            best_move = select_policy_move(state, model, temperature)
-            best_move_trmph = fc.rowcol_to_trmph(*best_move)
-        
-        # Update debug info with the actual move made
-        if verbose >= 1 and debug_info:
-            debug_info["basic"]["model_move"] = best_move_trmph
+            if mcts_result["success"]:
+                best_move_trmph = mcts_result["move_made"]
+                debug_info = mcts_result.get("mcts_debug_info", {})
+            else:
+                app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
+                raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            app.logger.error(f"MCTS failed: {e}")
+            raise RuntimeError(f"MCTS failed: {e}")
         
         # Apply the move using centralized utility
         state = apply_move_to_state_trmph(state, best_move_trmph)
@@ -463,7 +378,7 @@ def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, ver
             "winner": winner_to_color(state.winner) if state.winner is not None else None,
             "move_made": best_move_trmph,
             "game_over": state.game_over,
-            "debug_info": debug_info if verbose >= 1 else None
+            "mcts_debug_info": debug_info if verbose >= 1 else None
         }
         
     except Exception as e:
@@ -1190,13 +1105,11 @@ def api_move():
     trmph = data.get("trmph")
     move = data.get("move")
     model_id = data.get("model_id", "model1")
-    search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 0.15)  # Default temperature
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 1)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
     
     # MCTS parameters
-    use_mcts = data.get("use_mcts", True)
     num_simulations = data.get("num_simulations", 200)
     exploration_constant = data.get("exploration_constant", 1.4)
     
@@ -1218,7 +1131,6 @@ def api_move():
 
     model_move = None
     debug_info = {}
-    computer_use_mcts = use_mcts  # Initialize to the default MCTS setting
     
     # If game not over and it's model's turn, have model pick a move
     app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={player_enum}")
@@ -1232,19 +1144,15 @@ def api_move():
             if current_player_color == 'blue':
                 # Use blue's settings for blue's computer move
                 computer_model_id = data.get("blue_model_id", model_id)
-                computer_search_widths = data.get("blue_search_widths", search_widths)
                 computer_temperature = data.get("blue_temperature", temperature)
                 computer_temperature_end = data.get("blue_temperature_end", temperature_end)
-                computer_use_mcts = data.get("blue_use_mcts", use_mcts)
                 computer_num_simulations = data.get("blue_num_simulations", num_simulations)
                 computer_exploration_constant = data.get("blue_exploration_constant", exploration_constant)
             else:  # current_player_color == 'red'
                 # Use red's settings for red's computer move
                 computer_model_id = data.get("red_model_id", model_id)
-                computer_search_widths = data.get("red_search_widths", search_widths)
                 computer_temperature = data.get("red_temperature", temperature)
                 computer_temperature_end = data.get("red_temperature_end", temperature_end)
-                computer_use_mcts = data.get("red_use_mcts", use_mcts)
                 computer_num_simulations = data.get("red_num_simulations", num_simulations)
                 computer_exploration_constant = data.get("red_exploration_constant", exploration_constant)
             
@@ -1254,56 +1162,33 @@ def api_move():
             state_before_computer_move = state
             trmph_before_computer_move = new_trmph
             
-            # Choose between MCTS and fixed-tree search
-            search_tree = None
+            # Use MCTS for move selection
             mcts_debug_info = {}
             
-            if computer_use_mcts:
-                # Use MCTS for move selection
-                try:
-                    app.logger.debug(f"Using MCTS with {computer_num_simulations} simulations")
-                    mcts_result = make_mcts_move(
-                        trmph_before_computer_move, 
-                        computer_model_id, 
-                        computer_num_simulations, 
-                        computer_exploration_constant, 
-                        computer_temperature,
-                        computer_temperature_end,
-                        verbose
-                    )
+            try:
+                app.logger.debug(f"Using MCTS with {computer_num_simulations} simulations")
+                mcts_result = make_mcts_move(
+                    trmph_before_computer_move, 
+                    computer_model_id, 
+                    computer_num_simulations, 
+                    computer_exploration_constant, 
+                    computer_temperature,
+                    computer_temperature_end,
+                    verbose
+                )
+                
+                if mcts_result["success"]:
+                    best_move_trmph = mcts_result["move_made"]
+                    mcts_debug_info = mcts_result.get("mcts_debug_info", {})
+                    # Convert TRMPH move back to coordinates for consistency
+                    best_move = fc.trmph_move_to_rowcol(best_move_trmph)
+                else:
+                    app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
+                    raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
                     
-                    if mcts_result["success"]:
-                        best_move_trmph = mcts_result["move_made"]
-                        mcts_debug_info = mcts_result.get("mcts_debug_info", {})
-                        # Convert TRMPH move back to coordinates for consistency
-                        best_move = fc.trmph_move_to_rowcol(best_move_trmph)
-                    else:
-                        app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                        raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                        
-                except Exception as e:
-                    app.logger.error(f"MCTS failed: {e}")
-                    raise RuntimeError(f"MCTS failed: {e}")
-                    
-            elif computer_search_widths and len(computer_search_widths) > 0:
-                # Use fixed-tree search if search_widths provided
-                try:
-                    best_move, _, search_tree = minimax_policy_value_search(
-                        state, model, computer_search_widths, batch_size=1000, temperature=computer_temperature,
-                        return_tree=(verbose >= 2)  # Only return tree if we need debug info
-                    )
-                    if best_move is not None:
-                        best_move_trmph = fc.rowcol_to_trmph(*best_move)
-                    else:
-                        app.logger.error("Tree search returned None for best_move")
-                        raise RuntimeError("Tree search returned None for best_move")
-                except Exception as e:
-                    app.logger.error(f"Tree search failed: {e}")
-                    raise RuntimeError(f"Tree search failed: {e}")
-            else:
-                # Simple policy-based move using centralized utilities
-                best_move = select_policy_move(state, model, computer_temperature)
-                best_move_trmph = fc.rowcol_to_trmph(*best_move)
+            except Exception as e:
+                app.logger.error(f"MCTS failed: {e}")
+                raise RuntimeError(f"MCTS failed: {e}")
             
             # Apply model move using centralized utility
             state = apply_move_to_state_trmph(state, best_move_trmph)
@@ -1319,13 +1204,8 @@ def api_move():
                 policy_logits, value_logit = model.simple_infer(trmph_before_computer_move)
                 policy_probs = policy_logits_to_probs(policy_logits, computer_temperature)
                 
-                if computer_use_mcts:
-                    # Use MCTS debug info
-                    debug_info = mcts_debug_info
-                else:
-                    # Generate debug info using the actual search tree from the move selection
-                    debug_info = generate_debug_info(state_before_computer_move, model, policy_logits, value_logit, policy_probs, 
-                                                  computer_search_widths, computer_temperature, verbose, model_move, search_tree, computer_model_id)
+                # Use MCTS debug info
+                debug_info = mcts_debug_info
             
         except Exception as e:
             app.logger.error(f"Model move failed: {e}")
@@ -1362,10 +1242,7 @@ def api_move():
     }
     
     if verbose >= 1:
-        if computer_use_mcts:
-            response["mcts_debug_info"] = debug_info
-        else:
-            response["debug_info"] = debug_info
+        response["mcts_debug_info"] = debug_info
     
     return jsonify(response)
 
@@ -1374,11 +1251,10 @@ def api_computer_move():
     data = request.get_json()
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
-    search_widths = data.get("search_widths", None)
     temperature = data.get("temperature", 1.0)
     verbose = data.get("verbose", 0)
     
-    result = make_computer_move(trmph, model_id, search_widths, temperature, verbose)
+    result = make_computer_move(trmph, model_id, temperature, verbose)
     return jsonify(result)
 
 
