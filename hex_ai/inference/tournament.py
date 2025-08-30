@@ -441,6 +441,8 @@ def run_round_robin_tournament(
     result = TournamentResult(config.checkpoint_paths)
     
     for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
+        print(f"\nPlaying {config.num_games} games: {os.path.basename(model_a_path)} vs {os.path.basename(model_b_path)}")
+        
         for game_idx in range(config.num_games):
             # Play both games (each model goes first once)
             game_results = play_games_with_each_first(
@@ -476,8 +478,26 @@ def run_round_robin_tournament(
                 print(f"Search widths: {config.search_widths}")  # Legacy
             if verbose >= 1:
                 print(f"{game_idx+1},", end="", flush=True)
+        
+        # Print match results after all games between this pair are complete
+        if verbose >= 1:
+            print()  # New line after game numbers
+            
+            # Calculate head-to-head stats for this match
+            model_a_name = os.path.basename(model_a_path)
+            model_b_name = os.path.basename(model_b_path)
+            
+            # Get results for this specific pair
+            model_a_wins = result.results[model_a_path][model_b_path]['wins']
+            model_b_wins = result.results[model_b_path][model_a_path]['wins']
+            total_games = model_a_wins + model_b_wins
+            
+            if total_games > 0:
+                from hex_ai.utils.tournament_stats import calculate_head_to_head_stats, print_head_to_head_stats
+                stats = calculate_head_to_head_stats(model_a_name, model_b_name, model_a_wins, model_b_wins, total_games)
+                print_head_to_head_stats(stats)
     
-    print("Done.")
+    print("\nDone.")
     return result
 
 # Example usage (to be moved to CLI or script):
