@@ -30,6 +30,7 @@ from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -1062,6 +1063,89 @@ def api_mcts_move():
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
     
     return jsonify(result)
+
+@app.route("/api/save_game", methods=["POST"])
+def api_save_game():
+    """Save a game to the web_games directory in TRMPH format."""
+    data = request.get_json()
+    app.logger.info(f"=== SAVE GAME API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
+    trmph = data.get("trmph")
+    winner = data.get("winner")  # "blue", "red", or None if game not finished
+    model_id = data.get("model_id", "model1")
+    mcts_params = data.get("mcts_params", {})
+    
+    if not trmph:
+        return jsonify({"success": False, "error": "TRMPH sequence is required"}), 400
+    
+    try:
+        # Create web_games directory if it doesn't exist
+        web_games_dir = os.path.join("data", "web_games")
+        os.makedirs(web_games_dir, exist_ok=True)
+        
+        # Determine winner for TRMPH format
+        trmph_winner = None
+        if winner:
+            if winner.lower() == "blue":
+                trmph_winner = TRMPH_BLUE_WIN
+            elif winner.lower() == "red":
+                trmph_winner = TRMPH_RED_WIN
+            else:
+                return jsonify({"success": False, "error": f"Invalid winner: {winner}"}), 400
+        else:
+            # Game not finished, need user input
+            return jsonify({
+                "success": False, 
+                "needs_winner_input": True,
+                "message": "Game is not finished. Please specify the winner."
+            }), 400
+        
+        # Save to TRMPH file
+        trmph_file = os.path.join(web_games_dir, "web_games.trmph")
+        with open(trmph_file, 'a') as f:
+            f.write(f"{trmph} {trmph_winner}\n")
+        
+        # Save metadata to log file
+        log_file = os.path.join(web_games_dir, "web_games.log")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get model info
+        model_info = {}
+        if model_id in DYNAMIC_MODELS:
+            model_info["path"] = DYNAMIC_MODELS[model_id]
+        elif is_valid_model_id(model_id):
+            model_info["path"] = get_model_path(model_id)
+        else:
+            model_info["path"] = "unknown"
+        
+        log_entry = {
+            "timestamp": timestamp,
+            "trmph": trmph,
+            "winner": winner,
+            "model_id": model_id,
+            "model_path": model_info["path"],
+            "mcts_params": mcts_params
+        }
+        
+        with open(log_file, 'a') as f:
+            f.write(f"{log_entry}\n")
+        
+        app.logger.info(f"Game saved successfully to {trmph_file}")
+        app.logger.info(f"Metadata logged to {log_file}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Game saved successfully. Winner: {winner}",
+            "trmph_file": trmph_file,
+            "log_file": log_file
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error saving game: {e}")
+        import traceback
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": f"Failed to save game: {e}"}), 500
 
 @app.route("/favicon.ico")
 def favicon():

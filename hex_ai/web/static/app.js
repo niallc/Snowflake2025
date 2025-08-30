@@ -1505,6 +1505,110 @@ function showTrmphStatus(message, type) {
   statusElement.className = `status-message ${type}`;
 }
 
+// Save game functionality
+async function saveGame() {
+  try {
+    // Get current MCTS parameters
+    const mctsParams = {
+      blue: {
+        num_simulations: state.blue_num_simulations,
+        exploration_constant: state.blue_exploration_constant,
+        temperature: state.blue_temperature
+      },
+      red: {
+        num_simulations: state.red_num_simulations,
+        exploration_constant: state.red_exploration_constant,
+        temperature: state.red_temperature
+      }
+    };
+    
+    // Determine which model to use (use blue's model for now)
+    const modelId = state.blue_model_id;
+    
+    const response = await fetch('/api/save_game', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        winner: state.winner,
+        model_id: modelId,
+        mcts_params: mctsParams
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      alert(`Game saved successfully!\n\nWinner: ${state.winner}\nSaved to: ${result.trmph_file}`);
+    } else if (result.needs_winner_input) {
+      // Show winner selection modal
+      showWinnerModal();
+    } else {
+      alert(`Error saving game: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error saving game:', error);
+    alert(`Error saving game: ${error.message}`);
+  }
+}
+
+function showWinnerModal() {
+  document.getElementById('winner-modal').style.display = 'block';
+}
+
+function closeWinnerModal() {
+  document.getElementById('winner-modal').style.display = 'none';
+}
+
+async function selectWinner(winner) {
+  closeWinnerModal();
+  
+  try {
+    // Get current MCTS parameters
+    const mctsParams = {
+      blue: {
+        num_simulations: state.blue_num_simulations,
+        exploration_constant: state.blue_exploration_constant,
+        temperature: state.blue_temperature
+      },
+      red: {
+        num_simulations: state.red_num_simulations,
+        exploration_constant: state.red_exploration_constant,
+        temperature: state.red_temperature
+      }
+    };
+    
+    // Determine which model to use (use blue's model for now)
+    const modelId = state.blue_model_id;
+    
+    const response = await fetch('/api/save_game', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        winner: winner,
+        model_id: modelId,
+        mcts_params: mctsParams
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      alert(`Game saved successfully!\n\nWinner: ${winner}\nSaved to: ${result.trmph_file}`);
+    } else {
+      alert(`Error saving game: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error saving game:', error);
+    alert(`Error saving game: ${error.message}`);
+  }
+}
+
 // Event listeners for model browser
 document.addEventListener('DOMContentLoaded', function() {
   // Browse buttons
@@ -1568,4 +1672,22 @@ document.addEventListener('DOMContentLoaded', function() {
   // TRMPH sequence functionality
   document.getElementById('apply-trmph-sequence').addEventListener('click', applyTrmphSequence);
   document.getElementById('clear-trmph-sequence').addEventListener('click', clearTrmphSequence);
+  
+  // Save game functionality
+  document.getElementById('save-game-btn').addEventListener('click', saveGame);
+  
+  // Winner selection modal
+  document.getElementById('winner-blue-btn').addEventListener('click', () => selectWinner('blue'));
+  document.getElementById('winner-red-btn').addEventListener('click', () => selectWinner('red'));
+  document.getElementById('winner-cancel-btn').addEventListener('click', closeWinnerModal);
+  
+  // Close winner modal when clicking outside
+  document.getElementById('winner-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'winner-modal') {
+      closeWinnerModal();
+    }
+  });
+  
+  // Close winner modal with X button
+  document.querySelector('#winner-modal .close').addEventListener('click', closeWinnerModal);
 }); 

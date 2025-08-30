@@ -19,6 +19,7 @@
         <button id="step-btn" class="btn-primary">Step (Computer Move)</button>
         <label for="auto-step-checkbox">Auto-step:</label>
         <input id="auto-step-checkbox" type="checkbox">
+        <button id="save-game-btn" class="btn-primary">Save Game</button>
       </div>
       <div id="trmph-display">
         <span>TRMPH: <input id="trmph-string" type="text" readonly size="40"></span>
@@ -146,6 +147,24 @@
           <div class="modal-footer">
             <button id="select-model-btn" class="btn-primary" disabled>Select Model</button>
             <button id="cancel-model-btn" class="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Winner Selection Modal -->
+    <div id="winner-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Game Not Finished</h3>
+          <span class="close">&times;</span>
+        </div>
+        <div class="modal-body">
+          <p>The game is not finished yet. Who won this game?</p>
+          <div class="winner-buttons">
+            <button id="winner-blue-btn" class="btn-primary">Blue Won</button>
+            <button id="winner-red-btn" class="btn-primary">Red Won</button>
+            <button id="winner-cancel-btn" class="btn-secondary">Cancel</button>
           </div>
         </div>
       </div>

@@ -545,4 +545,38 @@ button:hover {
   background: #d1ecf1;
   color: #0c5460;
   border: 1px solid #bee5eb;
+}
+
+/* Winner selection modal styles */
+.winner-buttons {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.winner-buttons button {
+  padding: 10px 20px;
+  font-size: 16px;
+  min-width: 100px;
+}
+
+#winner-blue-btn {
+  background-color: #007bff;
+  color: white;
+  border: none;
+}
+
+#winner-blue-btn:hover {
+  background-color: #0056b3;
+}
+
+#winner-red-btn {
+  background-color: #dc3545;
+  color: white;
+  border: none;
+}
+
+#winner-red-btn:hover {
+  background-color: #c82333;
 } 
