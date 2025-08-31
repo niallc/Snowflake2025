@@ -63,6 +63,7 @@ from hex_ai.utils.format_conversion import (
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line
 from hex_ai.utils.perf import PERF
+from hex_ai.utils.random_utils import set_deterministic_seeds
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -888,8 +889,7 @@ def main():
     args = parse_args()
     
     # Set random seed for reproducible opening generation
-    random.seed(args.seed)
-    np.random.seed(args.seed)
+    set_deterministic_seeds(args.seed)
     
     # Validate model path
     try:

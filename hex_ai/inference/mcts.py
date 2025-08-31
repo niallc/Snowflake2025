@@ -361,7 +361,7 @@ class BaselineMCTSConfig:
     cache_size: int = DEFAULT_CACHE_SIZE
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
-    add_root_noise: bool = False
+    add_root_noise: bool = True
     # Temperature scaling parameters (always used)
     temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
     temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
@@ -1615,21 +1615,21 @@ def create_mcts_config(
             "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
             "temperature_start": 1.0,
             "temperature_end": 0.1,
-            "add_root_noise": False,
+            "add_root_noise": True,
         },
         "selfplay": {
             "sims": 500,
             "confidence_termination_threshold": 0.85,
             "temperature_start": 0.5,
             "temperature_end": 0.01,
-            "add_root_noise": False,  # Disable for self-play consistency
+            "add_root_noise": True,  # Enable for exploration in self-play
         },
         "fast_selfplay": {
             "sims": 200,
             "confidence_termination_threshold": 0.8,
             "temperature_start": 0.5,
             "temperature_end": 0.01,
-            "add_root_noise": False,
+            "add_root_noise": True,
         }
     }
     
