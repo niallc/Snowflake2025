@@ -38,9 +38,8 @@ class MCTSTimingTracker:
         self.sync_ms_total = 0.0
         self.d2h_ms_total = 0.0
         
-        # Current timing
-        self.current_timing = None
-        self.current_timing_start = None
+        # Current timing (support for nested operations)
+        self.timing_stack = []  # Stack of (operation, start_time) tuples
     
     def start_timing(self, operation: str) -> None:
         """
@@ -49,8 +48,7 @@ class MCTSTimingTracker:
         Args:
             operation: Name of the operation to time
         """
-        self.current_timing = operation
-        self.current_timing_start = time.perf_counter()
+        self.timing_stack.append((operation, time.perf_counter()))
     
     def end_timing(self, operation: str) -> None:
         """
@@ -59,13 +57,12 @@ class MCTSTimingTracker:
         Args:
             operation: Name of the operation to end timing for
         """
-        if self.current_timing == operation and self.current_timing_start is not None:
-            duration_ms = (time.perf_counter() - self.current_timing_start) * 1000.0
+        if self.timing_stack and self.timing_stack[-1][0] == operation:
+            start_operation, start_time = self.timing_stack.pop()
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
             if operation not in self.timings:
                 self.timings[operation] = 0.0
             self.timings[operation] += duration_ms
-            self.current_timing = None
-            self.current_timing_start = None
     
     def record_batch_metrics(self, tm: Dict[str, Any]) -> None:
         """
@@ -95,7 +92,8 @@ class MCTSTimingTracker:
             self.h2d_ms_total + self.forward_ms_total + self.d2h_ms_total + 
             self.timings.get("expand", 0.0) + self.timings.get("backprop", 0.0) + 
             self.timings.get("select", 0.0) + self.timings.get("cache_lookup", 0.0) + 
-            self.timings.get("state_creation", 0.0)
+            self.timings.get("state_creation", 0.0) + 
+            self.timings.get("gumbel_selection", 0.0)
         ) / 1000.0
         
         return {
@@ -113,6 +111,16 @@ class MCTSTimingTracker:
             "state_creation_ms": self.timings.get("state_creation", 0.0),
             "puct_calc_ms": self.timings.get("puct_calc", 0.0),
             "make_move_ms": self.timings.get("make_move", 0.0),
+            # Gumbel timing metrics
+            "gumbel_selection_ms": self.timings.get("gumbel_selection", 0.0),
+            "gumbel_policy_retrieval_ms": self.timings.get("gumbel_policy_retrieval", 0.0),
+            "gumbel_algorithm_ms": self.timings.get("gumbel_algorithm", 0.0),
+            "gumbel_final_conversion_ms": self.timings.get("gumbel_final_conversion", 0.0),
+            "gumbel_single_sim_ms": self.timings.get("gumbel_single_sim", 0.0),
+            "gumbel_child_creation_ms": self.timings.get("gumbel_child_creation", 0.0),
+            "gumbel_terminal_backprop_ms": self.timings.get("gumbel_terminal_backprop", 0.0),
+            "gumbel_batch_processing_ms": self.timings.get("gumbel_batch_processing", 0.0),
+            "gumbel_backprop_ms": self.timings.get("gumbel_backprop", 0.0),
             "batch_count": self.batch_count,
             "batch_sizes": self.batch_sizes,
             "forward_ms_list": self.forward_ms_list,

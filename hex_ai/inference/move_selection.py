@@ -27,6 +27,12 @@ class MoveSelectionConfig:
     mcts_dirichlet_alpha: float = 0.3
     mcts_dirichlet_eps: float = 0.25
     batch_size: Optional[int] = None  # Override default batch size for MCTS
+    # For Gumbel AlphaZero root selection
+    enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
+    gumbel_sim_threshold: int = 200  # Use Gumbel selection when sims <= this threshold
+    gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
+    gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
+    gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -104,6 +110,14 @@ class MCTSStrategy(MoveSelectionStrategy):
         if config.batch_size is not None:
             mcts_config.batch_cap = config.batch_size
         
+        # Configure Gumbel AlphaZero parameters if enabled
+        if config.enable_gumbel_root_selection:
+            mcts_config.enable_gumbel_root_selection = True
+            mcts_config.gumbel_sim_threshold = config.gumbel_sim_threshold
+            mcts_config.gumbel_c_visit = config.gumbel_c_visit
+            mcts_config.gumbel_c_scale = config.gumbel_c_scale
+            mcts_config.gumbel_m_candidates = config.gumbel_m_candidates
+        
         # Create required components
         engine = HexGameEngine()
         model_cache = get_model_cache()
@@ -119,7 +133,10 @@ class MCTSStrategy(MoveSelectionStrategy):
     
     def get_config_summary(self, config: MoveSelectionConfig) -> str:
         batch_info = f", batch={config.batch_size}" if config.batch_size is not None else ""
-        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info})"
+        gumbel_info = ""
+        if config.enable_gumbel_root_selection:
+            gumbel_info = f", gumbel(c_visit={config.gumbel_c_visit}, c_scale={config.gumbel_c_scale}, m={config.gumbel_m_candidates})"
+        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info}{gumbel_info})"
 
 
 # Strategy registry

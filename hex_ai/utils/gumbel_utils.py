@@ -98,6 +98,7 @@ def gumbel_alpha_zero_root_select(
         m = min(len(legal_actions), total_sims)
     
     top_scores = g + logits
+    
     # Get indices of top-m actions (unordered)
     top_idx = np.argpartition(-top_scores, range(m))[:m]
     
@@ -111,7 +112,9 @@ def gumbel_alpha_zero_root_select(
         # σ(q) = (c_visit + max_b N(b))^c_scale * q
         maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
         sigma = (c_visit + maxN) ** c_scale
-        return g[a] + logits[a] + sigma * q_of_child(a)
+        q_val = q_of_child(a)
+        score_val = g[a] + logits[a] + sigma * q_val
+        return score_val
     
     for r in range(R):
         if not cand:
