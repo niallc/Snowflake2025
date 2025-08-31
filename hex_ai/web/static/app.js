@@ -98,6 +98,11 @@ let state = {
   red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
   red_exploration_constant: 1.4,
+  // Gumbel settings
+  blue_enable_gumbel: true,
+  red_enable_gumbel: true,
+  blue_gumbel_max_sims: 500,
+  red_gumbel_max_sims: 500,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
@@ -126,14 +131,18 @@ function getCurrentPlayerSettings() {
       model_id: state.blue_model_id,
       temperature: state.blue_temperature,
       num_simulations: state.blue_num_simulations,
-      exploration_constant: state.blue_exploration_constant
+      exploration_constant: state.blue_exploration_constant,
+      enable_gumbel: state.blue_enable_gumbel,
+      gumbel_max_sims: state.blue_gumbel_max_sims
     };
   } else {
     return {
       model_id: state.red_model_id,
       temperature: state.red_temperature,
       num_simulations: state.red_num_simulations,
-      exploration_constant: state.red_exploration_constant
+      exploration_constant: state.red_exploration_constant,
+      enable_gumbel: state.red_enable_gumbel,
+      gumbel_max_sims: state.red_gumbel_max_sims
     };
   }
 }
@@ -217,7 +226,8 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 }
 
 async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
-                               num_simulations = 200, exploration_constant = 1.4) {
+                               num_simulations = 200, exploration_constant = 1.4,
+                               enable_gumbel = true, gumbel_max_sims = 500) {
   console.log(`makeComputerMove called with model_id: ${model_id}`);
   
   // Always use MCTS endpoint
@@ -230,7 +240,9 @@ async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
       num_simulations, 
       exploration_constant, 
       temperature, 
-      verbose 
+      verbose,
+      enable_gumbel,
+      gumbel_max_sims
     }),
   });
   if (!resp.ok) throw new Error('API error');
@@ -496,6 +508,17 @@ function updateUI() {
   if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
   if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
+  // Update Gumbel controls
+  const blueEnableGumbel = document.getElementById('blue-enable-gumbel');
+  const blueGumbelMaxSims = document.getElementById('blue-gumbel-max-sims');
+  const redEnableGumbel = document.getElementById('red-enable-gumbel');
+  const redGumbelMaxSims = document.getElementById('red-gumbel-max-sims');
+  
+  if (blueEnableGumbel) blueEnableGumbel.checked = state.blue_enable_gumbel;
+  if (blueGumbelMaxSims) blueGumbelMaxSims.value = state.blue_gumbel_max_sims;
+  if (redEnableGumbel) redEnableGumbel.checked = state.red_enable_gumbel;
+  if (redGumbelMaxSims) redGumbelMaxSims.value = state.red_gumbel_max_sims;
+  
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
   if (debugOutput) {
@@ -546,18 +569,22 @@ async function onCellClick(e) {
       
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant;
+      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant, computerEnableGumbel, computerGumbelMaxSims;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
         computerTemperature = state.blue_temperature;
         computerNumSimulations = state.blue_num_simulations;
         computerExplorationConstant = state.blue_exploration_constant;
+        computerEnableGumbel = state.blue_enable_gumbel;
+        computerGumbelMaxSims = state.blue_gumbel_max_sims;
       } else {
         computerModelId = state.red_model_id;
         computerTemperature = state.red_temperature;
         computerNumSimulations = state.red_num_simulations;
         computerExplorationConstant = state.red_exploration_constant;
+        computerEnableGumbel = state.red_enable_gumbel;
+        computerGumbelMaxSims = state.red_gumbel_max_sims;
       }
       
       // Make computer move with verbose output
@@ -567,7 +594,9 @@ async function onCellClick(e) {
         computerTemperature,
         state.verbose_level,
         computerNumSimulations,
-        computerExplorationConstant
+        computerExplorationConstant,
+        computerEnableGumbel,
+        computerGumbelMaxSims
       );
       
       if (computerResult.success) {
@@ -606,7 +635,7 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, temperature, num_simulations, exploration_constant } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Save state for undo functionality before computer move
@@ -619,7 +648,9 @@ async function stepComputerMove() {
       temperature, 
       state.verbose_level,
       num_simulations,
-      exploration_constant
+      exploration_constant,
+      enable_gumbel,
+      gumbel_max_sims
     );
     
     if (result.success) {
@@ -780,6 +811,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('red-exploration-constant').addEventListener('input', (e) => {
     state.red_exploration_constant = parseFloat(e.target.value);
+  });
+
+  // Gumbel controls
+  document.getElementById('blue-enable-gumbel').addEventListener('change', (e) => {
+    state.blue_enable_gumbel = e.target.checked;
+  });
+  document.getElementById('blue-gumbel-max-sims').addEventListener('input', (e) => {
+    state.blue_gumbel_max_sims = parseInt(e.target.value);
+  });
+  document.getElementById('red-enable-gumbel').addEventListener('change', (e) => {
+    state.red_enable_gumbel = e.target.checked;
+  });
+  document.getElementById('red-gumbel-max-sims').addEventListener('input', (e) => {
+    state.red_gumbel_max_sims = parseInt(e.target.value);
   });
 
   // Step button handler

@@ -280,11 +280,12 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
 
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
-                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None):
+                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
+                   enable_gumbel=True, gumbel_max_sims=500):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
+        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
         state = HexGameState.from_trmph(trmph)
@@ -333,7 +334,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             sims=num_simulations,
             c_puct=exploration_constant,
             temperature_start=temperature,
-            temperature_end=temperature_end
+            temperature_end=temperature_end,
+            enable_gumbel_root_selection=enable_gumbel,
+            gumbel_sim_threshold=gumbel_max_sims
         )
         app.logger.info(f"MCTS config created: {mcts_config}")
         
@@ -1028,8 +1031,10 @@ def api_mcts_move():
     temperature = data.get("temperature", 1.0)
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
+    enable_gumbel = data.get("enable_gumbel", True)
+    gumbel_max_sims = data.get("gumbel_max_sims", 500)
     
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     
     # Optional orchestration overrides from request
     orchestration_cfg = data.get("orchestration", None)
@@ -1044,6 +1049,8 @@ def api_mcts_move():
         temperature_end,
         verbose,
         orchestration_overrides=orchestration,
+        enable_gumbel=enable_gumbel,
+        gumbel_max_sims=gumbel_max_sims
     )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
