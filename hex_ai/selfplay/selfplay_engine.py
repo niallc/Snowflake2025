@@ -194,7 +194,7 @@ class SelfPlayEngine:
             
             # Get root value (approximate from MCTS)
             tree_data = mcts_result.tree_data
-            search_value = tree_data.get('root_value', 0.0)
+            search_value = tree_data.get('v_curr_signed_root', 0.0)
             
             # Log MCTS statistics
             if self.verbose >= 2:
