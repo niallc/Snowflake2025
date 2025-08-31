@@ -138,7 +138,6 @@ def safe_puct_denominator(n_sum: float) -> bool:
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
 
-
 # Default batch cap for neural network evaluation (imported from hex_ai.config)
 # DEFAULT_BATCH_CAP = 64
 
@@ -157,6 +156,14 @@ DEFAULT_TEMPERATURE_START = 1.0
 DEFAULT_TEMPERATURE_END = 0.1
 DEFAULT_TEMPERATURE_DECAY_TYPE = "exponential"
 DEFAULT_TEMPERATURE_DECAY_MOVES = 50
+
+# Default terminal detection parameters
+DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
+DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
+
+# Default Gumbel temperature control parameters
+DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
+DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
 
 # Default terminal detection parameters
 DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
@@ -388,6 +395,10 @@ class BaselineMCTSConfig:
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
+    
+    # Gumbel temperature control parameters
+    gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
+    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Shared cutoff for both paths
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -434,6 +445,10 @@ class BaselineMCTSConfig:
             raise ValueError(f"gumbel_c_scale must be positive, got {self.gumbel_c_scale}")
         if self.gumbel_m_candidates is not None and self.gumbel_m_candidates <= 0:
             raise ValueError(f"gumbel_m_candidates must be positive, got {self.gumbel_m_candidates}")
+        
+        # Validate Gumbel temperature control parameters
+        if self.temperature_deterministic_cutoff <= 0:
+            raise ValueError(f"temperature_deterministic_cutoff must be positive, got {self.temperature_deterministic_cutoff}")
         
         # Validate temperature step parameters if using step decay
         if self.temperature_decay_type == "step":
@@ -631,8 +646,8 @@ class BaselineMCTS:
         if not root.is_terminal and not root.is_expanded:
             self._expand_root_node(root, board_size)
         
-        # Apply root noise if configured (only on first move for consistency)
-        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded and len(root_state.move_history) == 0:
+        # Apply root noise if configured (every move for standard AlphaZero behavior)
+        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
             self._apply_root_noise(root)
         
         return root
@@ -733,6 +748,31 @@ class BaselineMCTS:
         # Time the Gumbel algorithm execution
         timing_tracker.start_timing("gumbel_algorithm")
         
+        # Compute shared values once using helper methods
+        move_idx = len(root.state.move_history)
+        tau = self._root_temperature(move_idx) if self.cfg.gumbel_temperature_enabled else 1.0
+        
+        # Create legal mask for full action space
+        board_size = int(root.state.get_board_tensor().shape[-1])
+        action_size = board_size * board_size
+        legal_mask = np.zeros(action_size, dtype=bool)
+        legal_mask[root.legal_indices] = True
+        
+        # Get priors with optional Dirichlet noise using helper method
+        # For self-play, apply Dirichlet noise; for evaluation, don't
+        is_self_play = self.cfg.add_root_noise  # Use add_root_noise as proxy for self-play
+        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=is_self_play)
+        
+        # Deterministic cutoff (same as non-Gumbel)
+        if tau <= self.cfg.temperature_deterministic_cutoff:
+            # Pick argmax over priors among legal actions
+            selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
+            selected_action = root.legal_indices.index(selected_tensor_action)
+            self._gumbel_selected_action = selected_action
+            if verbose >= 4:
+                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}, deterministic")
+            return timing_tracker.get_final_stats()
+        
         # Create helper functions for Q and N value access
         def q_of_child(action: int) -> float:
             """Get normalized Q-value for child action (action is tensor index)."""
@@ -753,18 +793,22 @@ class BaselineMCTS:
         # Get legal action indices (these are tensor indices, not legal move indices)
         legal_actions = root.legal_indices.copy()
         
-        # Run batched Gumbel-AlphaZero selection
+        # Pass log-priors and temperature to Gumbel
+        logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
+        
+        # Run batched Gumbel-AlphaZero selection with temperature
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
-            policy_logits=policy_logits_full,
+            policy_logits=logits_for_gumbel,
             total_sims=total_sims,
             legal_actions=legal_actions,
             q_of_child=q_of_child,
             n_of_child=n_of_child,
             m=self.cfg.gumbel_m_candidates,
             c_visit=self.cfg.gumbel_c_visit,
-            c_scale=self.cfg.gumbel_c_scale
+            c_scale=self.cfg.gumbel_c_scale,
+            temperature=tau
         )
         
         # Record Gumbel performance metrics
@@ -776,6 +820,10 @@ class BaselineMCTS:
         self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
         # Record detailed timing breakdown
         self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
+        
+        # Optional verbose logging
+        if verbose >= 4:
+            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}")
         
         timing_tracker.end_timing("gumbel_algorithm")
         
@@ -797,6 +845,59 @@ class BaselineMCTS:
         
         return timing_tracker.get_final_stats()
 
+    def _root_temperature(self, move_idx: int) -> float:
+        """
+        Compute temperature for root node based on move index and configuration.
+        
+        Args:
+            move_idx: Current move index (0-based)
+            
+        Returns:
+            Temperature value for this move
+        """
+        return calculate_temperature_decay(
+            temperature_start=self.cfg.temperature_start,
+            temperature_end=self.cfg.temperature_end,
+            temperature_decay_type=self.cfg.temperature_decay_type,
+            temperature_decay_moves=self.cfg.temperature_decay_moves,
+            temperature_step_thresholds=self.cfg.temperature_step_thresholds,
+            temperature_step_values=self.cfg.temperature_step_values,
+            move_count=move_idx,
+        )
+
+    def _root_priors_from_logits(
+        self,
+        policy_logits_full: np.ndarray,
+        legal_mask: np.ndarray,
+        apply_dirichlet: bool,
+    ) -> np.ndarray:
+        """
+        Get root priors from logits with optional Dirichlet noise.
+        
+        Args:
+            policy_logits_full: Full policy logits [K] (illegal actions should be -inf)
+            legal_mask: Boolean mask over full action space
+            apply_dirichlet: Whether to apply Dirichlet noise (True for self-play)
+            
+        Returns:
+            Prior probabilities [K] with optional Dirichlet noise
+        """
+        # 1) Mask logits -> probabilities
+        # Apply softmax to masked logits
+        masked_logits = np.where(legal_mask, policy_logits_full, -np.inf)
+        probs = softmax_np(masked_logits)
+        
+        # 2) Optional Dirichlet mix (standard AlphaZero)
+        if apply_dirichlet and self.cfg.add_root_noise:
+            L = int(legal_mask.sum())
+            noise = np.random.dirichlet([self.cfg.dirichlet_alpha] * L)
+            probs_legal = probs[legal_mask]
+            probs_legal = (1.0 - self.cfg.dirichlet_eps) * probs_legal + self.cfg.dirichlet_eps * noise
+            # Replace the legal slice with mixed probabilities
+            probs = probs.copy()
+            probs[legal_mask] = probs_legal
+        
+        return probs
 
 
     def _select_leaves_batch(
@@ -1149,25 +1250,15 @@ class BaselineMCTS:
         if counts.sum() <= 0:
             raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
-        # Calculate temperature with decay
+        # Calculate temperature with decay using helper method
         move_count = len(root_state.move_history)
-        start_temp = self.cfg.temperature_start
-        temp = calculate_temperature_decay(
-            temperature_start=self.cfg.temperature_start,
-            temperature_end=self.cfg.temperature_end,
-            temperature_decay_type=self.cfg.temperature_decay_type,
-            temperature_decay_moves=self.cfg.temperature_decay_moves,
-            temperature_step_thresholds=self.cfg.temperature_step_thresholds,
-            temperature_step_values=self.cfg.temperature_step_values,
-            move_count=move_count,
-            start_temp_override=start_temp
-        )
+        temp = self._root_temperature(move_count)
         
         # Log effective temperature if verbose
         if verbose >= 4:
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
         
-        if temp <= TEMPERATURE_COMPARISON_THRESHOLD:
+        if temp <= self.cfg.temperature_deterministic_cutoff:
             # Use deterministic selection for very low temperatures to avoid numerical issues
             a_idx = int(np.argmax(counts))
         else:
@@ -1577,6 +1668,9 @@ def create_mcts_config(
         # Depth-based discounting to encourage shorter wins
         "enable_depth_discounting": True,
         "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
+        # Gumbel temperature control (always enabled)
+        "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
+        "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
 
     })
     

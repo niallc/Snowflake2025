@@ -183,6 +183,7 @@ def gumbel_alpha_zero_root_batched(
     m: Optional[int] = None,
     c_visit: float = 50.0,
     c_scale: float = 1.0,
+    temperature: float = 1.0,  # Temperature for Gumbel sampling
     rng=np.random,
 ):
     """
@@ -202,6 +203,7 @@ def gumbel_alpha_zero_root_batched(
         m: Number of actions to consider via Top-m (None for auto)
         c_visit: Gumbel-AlphaZero parameter (default: 50.0)
         c_scale: Gumbel-AlphaZero parameter (default: 1.0)
+        temperature: Temperature for Gumbel sampling (default: 1.0)
         rng: Random number generator (uses numpy.random if None)
         
     Returns:
@@ -233,6 +235,9 @@ def gumbel_alpha_zero_root_batched(
     if total_sims <= 0:
         raise ValueError(f"total_sims must be positive, got {total_sims}")
     
+    if temperature <= 0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+    
     K = policy_logits.shape[0]
     
     # Setup phase timing
@@ -257,7 +262,8 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    g = sample_gumbel(K, rng=rng)
+    # Apply temperature scaling to Gumbel samples
+    g = sample_gumbel(K, rng=rng) * temperature
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
