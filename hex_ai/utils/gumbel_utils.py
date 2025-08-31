@@ -168,3 +168,122 @@ def normalize_q_values(q_values: np.ndarray, min_val: float = -1.0, max_val: flo
     
     # Normalize to [0,1]
     return (q_clipped - min_val) / (max_val - min_val)
+
+
+def gumbel_alpha_zero_root_batched(
+    *,
+    mcts,                    # your BaselineMCTS instance
+    root,                    # root node
+    policy_logits,           # np.array [K], BEFORE softmax; illegal set to -inf
+    total_sims: int,         # 50..500
+    legal_actions: List[int],
+    q_of_child: Callable[[int], float],  # returns Q in [0,1]
+    n_of_child: Callable[[int], int],
+    m: Optional[int] = None,
+    c_visit: float = 50.0,
+    c_scale: float = 1.0,
+    rng=np.random,
+):
+    """
+    Batched Gumbel-AlphaZero root selection that reuses existing MCTS batching infrastructure.
+    
+    This function replaces the per-sim loop with batched forced action execution,
+    making it much more efficient by leveraging the existing neural network batching.
+    
+    Args:
+        mcts: BaselineMCTS instance with run_forced_root_actions method
+        root: Root MCTS node
+        policy_logits: Policy logits [K] BEFORE softmax; illegal actions should be -inf
+        total_sims: Total number of simulations to allocate
+        legal_actions: List of legal action indices at root
+        q_of_child: Function that returns current empirical mean value for root child a in [0,1]
+        n_of_child: Function that returns current visit count for root child a
+        m: Number of actions to consider via Top-m (None for auto)
+        c_visit: Gumbel-AlphaZero parameter (default: 50.0)
+        c_scale: Gumbel-AlphaZero parameter (default: 1.0)
+        rng: Random number generator (uses numpy.random if None)
+        
+    Returns:
+        Selected action index
+        
+    Raises:
+        ValueError: If parameters are invalid
+        RuntimeError: If no legal actions available
+    """
+    if rng is None:
+        rng = np.random
+    
+    if not legal_actions:
+        raise RuntimeError("No legal actions available")
+    
+    if total_sims <= 0:
+        raise ValueError(f"total_sims must be positive, got {total_sims}")
+    
+    K = policy_logits.shape[0]
+    
+    # Create mask for illegal actions
+    mask = np.full(K, -np.inf)
+    mask[legal_actions] = 0.0
+    
+    # Apply mask to logits
+    logits = policy_logits + mask
+    
+    # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
+    g = sample_gumbel(K, rng=rng)
+    
+    # Choose candidate set via Gumbel Top-m on (g + logits)
+    if m is None:
+        # Safe default: don't consider more actions than sims
+        m = min(len(legal_actions), total_sims)
+    
+    top_scores = g + logits
+    
+    # Get indices of top-m actions (unordered)
+    top_idx = np.argpartition(-top_scores, range(m))[:m]
+    
+    # Sequential Halving over the candidate set
+    cand = list(top_idx)
+    R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
+    sims_used = 0
+    
+    def rank_key(a):
+        """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
+        # σ(q) = (c_visit + max_b N(b))^c_scale * q
+        maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
+        sigma = (c_visit + maxN) ** c_scale
+        q_val = q_of_child(a)
+        score_val = g[a] + logits[a] + sigma * q_val
+        return score_val
+    
+    for r in range(R):
+        if not cand or sims_used >= total_sims:
+            break
+        rounds_left = R - r
+        arms = len(cand)
+        
+        # Allocate evenly across remaining arms and rounds
+        per_arm = max(1, (total_sims - sims_used) // max(1, arms * rounds_left))
+        
+        # Build the forced-action list for THIS ROUND and run in batches
+        # Keep order mixed to avoid pathological ordering effects
+        actions_this_round = []
+        for a in cand:
+            actions_this_round.extend([a] * per_arm)
+        rng.shuffle(actions_this_round)
+        
+        if actions_this_round:
+            mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+            sims_used += len(actions_this_round)
+        
+        if arms <= 1 or sims_used >= total_sims:
+            break
+        
+        # Halve: keep the top half by the current score
+        cand.sort(key=rank_key, reverse=True)
+        keep = max(1, (arms + 1) // 2)
+        cand = cand[:keep]
+    
+    # Final pick
+    if len(cand) > 1:
+        cand.sort(key=rank_key, reverse=True)
+    return cand[0]

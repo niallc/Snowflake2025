@@ -38,7 +38,7 @@ import numpy as np
 import torch
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Set
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
@@ -51,7 +51,7 @@ from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
-from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_select, normalize_q_values
+from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
@@ -679,8 +679,8 @@ class BaselineMCTS:
         """
         Run Gumbel-AlphaZero root selection for small simulation budgets.
         
-        This method uses the same batching infrastructure as standard MCTS
-        but forces specific root actions for each simulation.
+        This method uses the batched Gumbel implementation that reuses the existing
+        MCTS batching infrastructure for maximum efficiency.
         """
         timing_tracker.start_timing("gumbel_selection")
         
@@ -708,13 +708,7 @@ class BaselineMCTS:
         # Time the Gumbel algorithm execution
         timing_tracker.start_timing("gumbel_algorithm")
         
-        # Create functions for Gumbel selection that use the unified batching infrastructure
-        def run_one_sim(forced_action: int) -> None:
-            """Run one simulation with forced root action using batched infrastructure."""
-            # Map tensor index back to legal move index for MCTS
-            legal_move_idx = root.legal_indices.index(forced_action)
-            self._run_single_gumbel_simulation(root, legal_move_idx, timing_tracker)
-        
+        # Create helper functions for Q and N value access
         def q_of_child(action: int) -> float:
             """Get normalized Q-value for child action (action is tensor index)."""
             # Map tensor index to legal move index
@@ -734,14 +728,15 @@ class BaselineMCTS:
         # Get legal action indices (these are tensor indices, not legal move indices)
         legal_actions = root.legal_indices.copy()
         
-        # Run Gumbel-AlphaZero selection
-        selected_tensor_action = gumbel_alpha_zero_root_select(
+        # Run batched Gumbel-AlphaZero selection
+        selected_tensor_action = gumbel_alpha_zero_root_batched(
+            mcts=self,
+            root=root,
             policy_logits=policy_logits_full,
             total_sims=total_sims,
-            run_one_sim=run_one_sim,
+            legal_actions=legal_actions,
             q_of_child=q_of_child,
             n_of_child=n_of_child,
-            legal_actions=legal_actions,
             m=self.cfg.gumbel_m_candidates,
             c_visit=self.cfg.gumbel_c_visit,
             c_scale=self.cfg.gumbel_c_scale
@@ -767,71 +762,14 @@ class BaselineMCTS:
         
         return timing_tracker.get_final_stats()
 
-    def _run_single_gumbel_simulation(self, root: MCTSNode, forced_action: int, 
-                                    timing_tracker: MCTSTimingTracker) -> None:
-        """
-        Run a single Gumbel simulation with forced root action.
-        
-        This method creates a minimal batch of one leaf and uses the standard
-        MCTS batching infrastructure to ensure efficiency.
-        """
-        timing_tracker.start_timing("gumbel_single_sim")
-        
-        # Time child node creation if needed
-        timing_tracker.start_timing("gumbel_child_creation")
-        
-        # Create child node if it doesn't exist
-        if root.children[forced_action] is None:
-            # Create child state
-            row, col = root.legal_moves[forced_action]
-            child_state = root.state.make_move(row, col)
-            
-            # Create child node
-            board_size = int(child_state.get_board_tensor().shape[-1])
-            child = MCTSNode(child_state, board_size)
-            child.depth = root.depth + 1
-            root.children[forced_action] = child
-        
-        # Get the child node
-        child = root.children[forced_action]
-        
-        timing_tracker.end_timing("gumbel_child_creation")
-        
-        # If child is terminal, backpropagate immediately
-        if child.is_terminal:
-            timing_tracker.start_timing("gumbel_terminal_backprop")
-            v_red_signed = self._get_terminal_value(child)
-            self._backpropagate_path([(root, forced_action)], v_red_signed, child.depth)
-            timing_tracker.end_timing("gumbel_terminal_backprop")
-            self._effective_sims_total += 1
-            timing_tracker.end_timing("gumbel_single_sim")
-            return
-        
-        # If child is not expanded, use the standard MCTS batching infrastructure
-        if not child.is_expanded:
-            timing_tracker.start_timing("gumbel_batch_processing")
-            # Create a minimal batch with just this one leaf
-            leaves = [child]
-            paths = [[(root, forced_action)]]
-            
-            # Use the exact same batching infrastructure as standard MCTS
-            self._process_leaves_batch(leaves, paths, timing_tracker)
-            timing_tracker.end_timing("gumbel_batch_processing")
-        
-        # Backpropagate the value
-        timing_tracker.start_timing("gumbel_backprop")
-        v_red_signed = self._get_neural_network_value(child)
-        self._backpropagate_path([(root, forced_action)], v_red_signed, child.depth)
-        timing_tracker.end_timing("gumbel_backprop")
-        self._effective_sims_total += 1
-        
-        timing_tracker.end_timing("gumbel_single_sim")
+
 
     def _select_leaves_batch(
         self,
         root: MCTSNode,
         sims_remaining: int,
-        timing_tracker: MCTSTimingTracker
+        timing_tracker: MCTSTimingTracker,
+        forced_root_actions: Optional[List[int]] = None
     ) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
         """Select a batch of leaves for expansion with early flush triggers."""
         timing_tracker.start_timing("select")
@@ -840,7 +778,14 @@ class BaselineMCTS:
         paths: List[List[Tuple[MCTSNode, int]]] = []
 
         board_size = int(root.state.get_board_tensor().shape[-1])
-        select_budget = min(self.cfg.batch_cap, sims_remaining)
+
+        # If caller supplies forced actions, we must collect exactly that many leaves for this batch
+        if forced_root_actions is not None:
+            force_q = deque(forced_root_actions)
+            select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
+        else:
+            force_q = deque()
+            select_budget = min(self.cfg.batch_cap, sims_remaining)
 
         # Distinct-leaf target: ~50% of budget, clamped to [16, budget]
         distinct_target = max(16, int(round(select_budget * 0.5)))
@@ -858,6 +803,9 @@ class BaselineMCTS:
 
             node = root
             path: List[Tuple[MCTSNode, int]] = []
+
+            # Pop the forced action for THIS descent (if any)
+            forced_a_full = force_q.popleft() if force_q else None
 
             while True:
                 if node.is_terminal:
@@ -883,21 +831,33 @@ class BaselineMCTS:
                         return leaves, paths
                     break
 
-                # PUCT descent
-                child_idx = self._select_child_puct(node)
-                path.append((node, child_idx))
-                child = node.children[child_idx]
+                # Choose child
+                if node is root and forced_a_full is not None:
+                    # Map full action index -> local child idx
+                    # (legal_indices aligns with stats arrays)
+                    try:
+                        # Fast path: vectorized search
+                        li = np.asarray(node.legal_indices)
+                        loc_idx = int(np.where(li == forced_a_full)[0][0])
+                    except Exception:
+                        # Fallback if forced action is illegal: normal PUCT
+                        loc_idx = self._select_child_puct(node)
+                else:
+                    loc_idx = self._select_child_puct(node)
+
+                path.append((node, loc_idx))
+                child = node.children[loc_idx]
 
                 if child is None:
                     timing_tracker.start_timing("state_creation")
-                    (r, c) = node.legal_moves[child_idx]
+                    (r, c) = node.legal_moves[loc_idx]
                     timing_tracker.start_timing("make_move")
                     child_state = node.state.make_move(r, c)
                     timing_tracker.end_timing("make_move")
                     child = MCTSNode(child_state, board_size)
                     child.depth = node.depth + 1
                     timing_tracker.end_timing("state_creation")
-                    node.children[child_idx] = child
+                    node.children[loc_idx] = child
 
                 node = child
 
@@ -907,6 +867,24 @@ class BaselineMCTS:
 
         timing_tracker.end_timing("select")
         return leaves, paths
+
+    def _run_forced_root_batch(self, root: MCTSNode, actions: List[int], timing_tracker: MCTSTimingTracker) -> int:
+        """Run exactly len(actions) simulations, forcing each root action once, using the batched pipeline."""
+        leaves, paths = self._select_leaves_batch(root, sims_remaining=len(actions),
+                                                  timing_tracker=timing_tracker,
+                                                  forced_root_actions=actions)
+        return self._process_leaves_batch(leaves, paths, timing_tracker)
+
+    def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
+        """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
+        timing_tracker = MCTSTimingTracker()
+        i = 0
+        while i < len(actions):
+            j = min(i + self.cfg.batch_cap, len(actions))
+            sims_done = self._run_forced_root_batch(root, actions[i:j], timing_tracker)
+            self._effective_sims_total += sims_done
+            i = j
+        return timing_tracker.get_final_stats()
 
     def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
                             timing_tracker: MCTSTimingTracker) -> int:
