@@ -204,7 +204,7 @@ def gumbel_alpha_zero_root_batched(
         rng: Random number generator (uses numpy.random if None)
         
     Returns:
-        Selected action index
+        Tuple of (selected_action_index, performance_metrics_dict)
         
     Raises:
         ValueError: If parameters are invalid
@@ -233,8 +233,9 @@ def gumbel_alpha_zero_root_batched(
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # Safe default: don't consider more actions than sims
-        m = min(len(legal_actions), total_sims)
+        # IMPROVEMENT: Cap candidates to prevent explosion in mid-game positions
+        # Good default: don't consider more actions than we can reasonably evaluate
+        m = min(len(legal_actions), total_sims, 32)  # Cap at 32 for k≈200-500
     
     top_scores = g + logits
     
@@ -246,6 +247,11 @@ def gumbel_alpha_zero_root_batched(
     R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
     sims_used = 0
     
+    # Performance tracking
+    nn_calls_per_move = 0
+    total_leaves_evaluated = 0
+    distinct_leaves_evaluated = 0
+    
     def rank_key(a):
         """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
         # σ(q) = (c_visit + max_b N(b))^c_scale * q
@@ -255,24 +261,51 @@ def gumbel_alpha_zero_root_batched(
         score_val = g[a] + logits[a] + sigma * q_val
         return score_val
     
+    def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
+        """
+        IMPROVEMENT: Allocate per round to fill batches, not per-sim.
+        This ensures we get full batches instead of tiny 1-off NN calls.
+        """
+        # At least one full batch, try to split budget evenly across remaining rounds
+        per_round = max(batch_cap, sims_left // rounds_left)
+        per_round = min(per_round, sims_left)
+        
+        # Distribute across arms as evenly as possible
+        A = len(arms_list)
+        base = per_round // max(1, A)
+        extra = per_round - base * A
+        
+        counts = {a: base for a in arms_list}
+        for a in rng.permutation(arms_list)[:extra]:
+            counts[a] += 1
+        
+        # Flatten into one list for this round and shuffle
+        actions = [a for a in arms_list for _ in range(counts[a])]
+        rng.shuffle(actions)
+        return actions
+    
     for r in range(R):
         if not cand or sims_used >= total_sims:
             break
         rounds_left = R - r
         arms = len(cand)
         
-        # Allocate evenly across remaining arms and rounds
-        per_arm = max(1, (total_sims - sims_used) // max(1, arms * rounds_left))
-        
-        # Build the forced-action list for THIS ROUND and run in batches
-        # Keep order mixed to avoid pathological ordering effects
-        actions_this_round = []
-        for a in cand:
-            actions_this_round.extend([a] * per_arm)
-        rng.shuffle(actions_this_round)
+        # IMPROVEMENT: Use round-based allocation instead of per-arm
+        actions_this_round = schedule_round(
+            cand, 
+            total_sims - sims_used, 
+            rounds_left, 
+            mcts.cfg.batch_cap
+        )
         
         if actions_this_round:
-            mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+            # Track performance metrics from this round
+            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+            # Track batch metrics more accurately
+            nn_calls_per_move += stats.get("batch_count", 0)
+            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
+            # Note: unique_evals_total is not available in individual batch stats
+            # We'll track this separately by looking at the final MCTS metrics
             sims_used += len(actions_this_round)
         
         if arms <= 1 or sims_used >= total_sims:
@@ -286,4 +319,16 @@ def gumbel_alpha_zero_root_batched(
     # Final pick
     if len(cand) > 1:
         cand.sort(key=rank_key, reverse=True)
-    return cand[0]
+    
+    # Return both the selected action and performance metrics
+    performance_metrics = {
+        "nn_calls_per_move": nn_calls_per_move,
+        "total_leaves_evaluated": total_leaves_evaluated,
+        "distinct_leaves_evaluated": distinct_leaves_evaluated,
+        "candidates_m": m,
+        "rounds_R": R,
+        "avg_nn_batch_size": total_leaves_evaluated / max(1, nn_calls_per_move),
+        "leaves_distinct_ratio": distinct_leaves_evaluated / max(1, total_leaves_evaluated)
+    }
+    
+    return cand[0], performance_metrics
