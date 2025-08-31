@@ -110,6 +110,15 @@ class MCTSStrategy(MoveSelectionStrategy):
         if config.batch_size is not None:
             mcts_config.batch_cap = config.batch_size
         
+        # Set temperature from tournament configuration
+        # For deterministic tournaments, we want to use the same temperature for all moves
+        # rather than temperature decay, so set both start and end to the same value
+        mcts_config.temperature_start = config.temperature
+        mcts_config.temperature_end = config.temperature
+        
+        # Disable Dirichlet noise for deterministic tournaments
+        mcts_config.add_root_noise = False
+        
         # Configure Gumbel AlphaZero parameters if enabled
         if config.enable_gumbel_root_selection:
             mcts_config.enable_gumbel_root_selection = True
