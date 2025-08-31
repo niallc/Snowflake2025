@@ -2,6 +2,18 @@
 # Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
 # Compatible with flat-file or package imports via shims.
 #
+# WINNER PERSPECTIVE HANDLING:
+# This MCTS implementation uses a consistent approach to handle winner perspectives:
+# 1. Neural network outputs values in Red's perspective: +1 = Red win, -1 = Blue win
+# 2. Terminal nodes return values in Red's perspective: +1 = Red win, -1 = Blue win  
+# 3. During backpropagation, values are flipped to player-to-move perspective using signed_for_player_to_move()
+# 4. Final output is converted to probability using to_prob() for external API
+# 
+# Key variable naming convention:
+# - v_red_signed: Always in Red's perspective (+1 = Red win, -1 = Blue win)
+# - v_player_to_move_signed: In player-to-move perspective (+1 = current player wins, -1 = current player loses)
+# - value_signed: From neural network cache, in Red's perspective
+#
 # TODO: Future improvements to consider:
 # - Add memory pooling for large tree structures to reduce allocation overhead
 # - Implement cleanup of old cached evaluations to prevent memory leaks
@@ -261,10 +273,12 @@ class AlgorithmTerminationChecker:
             raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
         _, value_signed = cached
         # Convert signed value to probability only at the edge (for confidence termination)
-        # value_signed is the tanh-activated output in [-1,1] range
+        # value_signed is the tanh-activated output in [-1,1] range in Red's perspective
         v_red_signed = float(value_signed)
-        v_player_signed = signed_for_player_to_move(v_red_signed, root.to_play)
-        return to_prob(v_player_signed)
+        # Flip to player-to-move perspective: if RED to move keep v_red_signed, if BLUE to move flip to -v_red_signed
+        v_player_to_move_signed = signed_for_player_to_move(v_red_signed, root.to_play)
+        # Convert to probability for confidence checking
+        return to_prob(v_player_to_move_signed)
     
     def _is_position_clearly_decided(self, win_prob: float) -> bool:
         """Check if position is clearly won or lost."""
@@ -414,7 +428,7 @@ class BaselineMCTS:
 
         # LRU Cache: board_key -> (policy_logits_np [A], value_signed_float)
         # Uses OrderedDict for O(1) LRU eviction
-        # Note: value_signed is the tanh-activated output in [-1,1] range (not a logit)
+        # Note: value_signed is the tanh-activated output in [-1,1] range in Red's perspective (not a logit)
         self.eval_cache: OrderedDict[int, Tuple[np.ndarray, float]] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
@@ -778,13 +792,13 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
-            # Determine signed value for this leaf
+            # Determine signed value for this leaf (always in Red's perspective: +1 = Red win, -1 = Blue win)
             if leaf.is_terminal:
                 v_red_signed = self._get_terminal_value(leaf)
             else:
                 v_red_signed = self._get_neural_network_value(leaf)
             
-            # Backpropagate signed value along path
+            # Backpropagate Red's signed value along path (will be flipped to player-to-move perspective during backprop)
             self._backpropagate_path(path, v_red_signed)
             simulations_completed += 1
         
@@ -792,7 +806,7 @@ class BaselineMCTS:
         return simulations_completed
 
     def _get_terminal_value(self, leaf: MCTSNode) -> float:
-        """Get signed value for a terminal leaf in [-1,1] range."""
+        """Get signed value for a terminal leaf in Red's perspective: +1 = Red win, -1 = Blue win."""
         if leaf.winner_str == "red":
             return 1.0  # +1 = certain Red win
         elif leaf.winner_str == "blue":
@@ -801,28 +815,35 @@ class BaselineMCTS:
             raise ValueError(f"Invalid winner_str for terminal Hex node: {leaf.winner_str!r} (draws are not possible in Hex)")
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
-        """Get signed value for a non-terminal leaf from neural network in [-1,1] range."""
+        """Get signed value for a non-terminal leaf from neural network in Red's perspective: +1 = Red win, -1 = Blue win."""
         cached = self._get_from_cache(leaf.state_hash)
         if cached is None:
             raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
         _, value_signed = cached
-        # Return signed value directly - tanh activation gives values in [-1,1] range
+        # Return signed value directly - tanh activation gives values in [-1,1] range in Red's perspective
         return float(value_signed)
 
     def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], v_red_signed: float):
-        """Backpropagate signed value along a path from leaf to root."""
+        """
+        Backpropagate signed value along a path from leaf to root.
+        
+        Args:
+            path: List of (node, action_index) pairs from root to leaf
+            v_red_signed: Signed value in Red's perspective (+1 = Red win, -1 = Blue win)
+        """
         for (node, a_idx) in reversed(path):
             # Convert Red's signed value to player-to-move perspective
-            v_node = signed_for_player_to_move(v_red_signed, node.to_play)
+            # If RED to move: keep v_red_signed; if BLUE to move: flip to -v_red_signed
+            v_player_to_move_signed = signed_for_player_to_move(v_red_signed, node.to_play)
             
             # Apply depth discounting in signed space (shrink toward 0)
             if self.cfg.enable_depth_discounting and node.depth > 0:
                 # TODO(step: tune): consider using distance_to_leaf instead of absolute depth
                 # TODO(step: tune): retune depth_discount_factor for signed space
-                v_node = apply_depth_discount_signed(v_node, self.cfg.depth_discount_factor, node.depth)
+                v_player_to_move_signed = apply_depth_discount_signed(v_player_to_move_signed, self.cfg.depth_discount_factor, node.depth)
             
             node.N[a_idx] += 1
-            node.W[a_idx] += v_node
+            node.W[a_idx] += v_player_to_move_signed
             # TODO: The max(1, node.N[a_idx]) looks redundant, surely node.N[a_idx] >= 1 from above.
             node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
 
@@ -973,7 +994,8 @@ class BaselineMCTS:
         root_value = tree_data["root_value"]
         
         # Convert signed value to probability only at the edge (for external API)
-        # Root value is now signed from player-to-move perspective in [-1,1]
+        # Root value is already in player-to-move perspective from backpropagation
+        # +1 = current player wins, -1 = current player loses, 0 = neutral
         return to_prob(root_value)
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
@@ -1172,7 +1194,7 @@ class BaselineMCTS:
         Args:
             board_key: The board state key
             policy: The policy logits
-            value: The signed value (tanh-activated output in [-1,1] range)
+            value: The signed value in Red's perspective (tanh-activated output in [-1,1] range)
         """
         # If key already exists, remove it first (will be re-added at end)
         if board_key in self.eval_cache:
