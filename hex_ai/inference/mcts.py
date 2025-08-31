@@ -6,13 +6,15 @@
 # This MCTS implementation uses a consistent approach to handle winner perspectives:
 # 1. Neural network outputs values in Red's perspective: +1 = Red win, -1 = Blue win
 # 2. Terminal nodes return values in Red's perspective: +1 = Red win, -1 = Blue win  
-# 3. During backpropagation, values are flipped to player-to-move perspective using signed_for_player_to_move()
-# 4. Final output is converted to probability using to_prob() for external API
+# 3. During backpropagation, values are flipped to player-to-move perspective using red_signed_to_curr_signed()
+# 4. Final output is converted to probability using signed_to_prob() for external API
 # 
 # Key variable naming convention:
 # - v_red_signed: Always in Red's perspective (+1 = Red win, -1 = Blue win)
-# - v_player_to_move_signed: In player-to-move perspective (+1 = current player wins, -1 = current player loses)
+# - v_curr_signed: In player-to-move perspective (+1 = current player wins, -1 = current player loses)
 # - value_signed: From neural network cache, in Red's perspective
+# - p_red: Red win probability in [0,1] range
+# - p_curr: Current player win probability in [0,1] range
 #
 # TODO: Future improvements to consider:
 # - Add memory pooling for large tree structures to reduce allocation overhead
@@ -40,7 +42,7 @@ from collections import OrderedDict
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
-from hex_ai.value_utils import player_to_winner, prob_for_player_to_move, apply_depth_discount_toward_neutral_prob, signed_for_player_to_move, apply_depth_discount_signed, distance_to_leaf, to_prob
+from hex_ai.value_utils import player_to_winner, red_prob_to_curr_prob, apply_depth_discount_toward_neutral_prob, red_signed_to_curr_signed, apply_depth_discount_signed, distance_to_leaf, signed_to_prob
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
@@ -276,9 +278,9 @@ class AlgorithmTerminationChecker:
         # value_signed is the tanh-activated output in [-1,1] range in Red's perspective
         v_red_signed = float(value_signed)
         # Flip to player-to-move perspective: if RED to move keep v_red_signed, if BLUE to move flip to -v_red_signed
-        v_player_to_move_signed = signed_for_player_to_move(v_red_signed, root.to_play)
+        v_curr_signed = red_signed_to_curr_signed(v_red_signed, root.to_play)
         # Convert to probability for confidence checking
-        return to_prob(v_player_to_move_signed)
+        return signed_to_prob(v_curr_signed)
     
     def _is_position_clearly_decided(self, win_prob: float) -> bool:
         """Check if position is clearly won or lost."""
@@ -834,16 +836,16 @@ class BaselineMCTS:
         for (node, a_idx) in reversed(path):
             # Convert Red's signed value to player-to-move perspective
             # If RED to move: keep v_red_signed; if BLUE to move: flip to -v_red_signed
-            v_player_to_move_signed = signed_for_player_to_move(v_red_signed, node.to_play)
+            v_curr_signed = red_signed_to_curr_signed(v_red_signed, node.to_play)
             
             # Apply depth discounting in signed space (shrink toward 0)
             if self.cfg.enable_depth_discounting and node.depth > 0:
                 # TODO(step: tune): consider using distance_to_leaf instead of absolute depth
                 # TODO(step: tune): retune depth_discount_factor for signed space
-                v_player_to_move_signed = apply_depth_discount_signed(v_player_to_move_signed, self.cfg.depth_discount_factor, node.depth)
+                v_curr_signed = apply_depth_discount_signed(v_curr_signed, self.cfg.depth_discount_factor, node.depth)
             
             node.N[a_idx] += 1
-            node.W[a_idx] += v_player_to_move_signed
+            node.W[a_idx] += v_curr_signed
             # TODO: The max(1, node.N[a_idx]) looks redundant, surely node.N[a_idx] >= 1 from above.
             node.Q[a_idx] = node.W[a_idx] / max(1, node.N[a_idx])
 
@@ -996,7 +998,7 @@ class BaselineMCTS:
         # Convert signed value to probability only at the edge (for external API)
         # Root value is already in player-to-move perspective from backpropagation
         # +1 = current player wins, -1 = current player loses, 0 = neutral
-        return to_prob(root_value)
+        return signed_to_prob(root_value)
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
         """Extract the principal variation (best move sequence) from the MCTS tree."""

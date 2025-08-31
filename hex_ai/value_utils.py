@@ -644,7 +644,7 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
 # Value-Semantics Abstraction (Step 1: Contract Establishment)
 # =============================
 
-def to_prob(v_signed: float) -> float:
+def signed_to_prob(v_signed: float) -> float:
     """
     Map a signed value v ∈ [-1,1] to probability p ∈ [0,1], with 0.5 == neutral.
     
@@ -656,7 +656,7 @@ def to_prob(v_signed: float) -> float:
     """
     return 0.5 * (v_signed + 1.0)
 
-def to_signed(p_prob: float) -> float:
+def prob_to_signed(p_prob: float) -> float:
     """
     Map probability p ∈ [0,1] to signed value v ∈ [-1,1], with 0 == neutral.
     
@@ -668,7 +668,7 @@ def to_signed(p_prob: float) -> float:
     """
     return 2.0 * p_prob - 1.0
 
-def signed_for_player_to_move(v_red_signed: float, player) -> float:
+def red_signed_to_curr_signed(v_red_signed: float, player) -> float:
     """
     Given Red's signed value v_red ∈ [-1,1], return value from 'player-to-move' perspective.
     If RED to move: return v_red; if BLUE to move: return -v_red.
@@ -682,7 +682,7 @@ def signed_for_player_to_move(v_red_signed: float, player) -> float:
     """
     return v_red_signed if player == Player.RED else -v_red_signed
 
-def prob_for_player_to_move(p_red: float, player) -> float:
+def red_prob_to_curr_prob(p_red: float, player) -> float:
     """
     Given Red's win probability p_red ∈ [0,1], return probability from 'player-to-move' perspective.
     If RED to move: p_red; else: 1 - p_red.
@@ -756,7 +756,7 @@ def backprop_value_current_behavior(p_red_leaf: float, player_to_move, gamma: fl
         Value for backpropagation (current probability-space behavior)
     """
     # Current code uses probability space for v_node:
-    v_node_prob = prob_for_player_to_move(p_red_leaf, player_to_move)
+    v_node_prob = red_prob_to_curr_prob(p_red_leaf, player_to_move)
     # If discounting is enabled, keep current behavior or switch to neutral-centered variant later:
     #   - If the existing code multiplies by gamma^depth directly on probabilities, mirror that here.
     #   - Otherwise, prefer the neutral-centered version below (to be enabled in a later step).
