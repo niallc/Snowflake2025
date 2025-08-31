@@ -185,9 +185,9 @@ class TwoHeadedResNet(nn.Module):
             x: Input tensor of shape (batch_size, 3, 13, 13)
             
         Returns:
-            Tuple of (policy_logits, value_logit):
+            Tuple of (policy_logits, value_signed):
             - policy_logits: Shape (batch_size, 169)
-            - value_logit: Shape (batch_size, 1) - Raw logit for Red's win probability
+            - value_signed: Shape (batch_size, 1) - Signed value in [-1,1] range (tanh-activated)
         """
         # Shared trunk
         features = self.forward_shared(x)
@@ -209,9 +209,9 @@ class TwoHeadedResNet(nn.Module):
             value_features = self.global_pool(features)
             value_features = value_features.view(value_features.size(0), -1)
         
-        value_logit = torch.tanh(self.value_head(value_features))  # (batch_size, 1)
+        value_signed = torch.tanh(self.value_head(value_features))  # (batch_size, 1)
         
-        return policy_logits, value_logit
+        return policy_logits, value_signed
 
     @torch.no_grad()
     def forward_value_only(self, x: torch.Tensor) -> torch.Tensor:
@@ -289,6 +289,6 @@ Architecture:
 
 Output:
 - Policy Logits: (batch_size, 169)
-- Value Logit: (batch_size, 1) with tanh activation
+- Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 """
     return summary 

@@ -608,7 +608,7 @@ def run_deterministic_tournament(
         game_results = []
         for opening_idx, opening in enumerate(openings):
             if verbose >= 1:
-                if opening_idx == 1:
+                if opening_idx == 0:
                     print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
                 else:
                     print(",", opening_idx + 1, end="", flush=True)

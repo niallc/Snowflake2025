@@ -28,7 +28,7 @@ from collections import OrderedDict
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
-from hex_ai.value_utils import player_to_winner
+from hex_ai.value_utils import player_to_winner, prob_for_player_to_move, apply_depth_discount_toward_neutral_prob, signed_for_player_to_move, apply_depth_discount_signed, distance_to_leaf, to_prob
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
@@ -255,18 +255,16 @@ class AlgorithmTerminationChecker:
         return None  # Continue with MCTS
     
     def _get_root_win_probability(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
-        """Get win probability for current player from neural network."""
+        """Get win probability for current player from neural network (edge conversion)."""
         cached = eval_cache.get(root.state_hash)
         if cached is None:
             raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
-        _, value_logit = cached
-        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
-        nn_win_prob = float(ValuePredictor.model_output_to_probability(value_logit))
-        
-        if root.to_play == Player.RED:
-            return nn_win_prob
-        else:
-            return 1.0 - nn_win_prob
+        _, value_signed = cached
+        # Convert signed value to probability only at the edge (for confidence termination)
+        # value_signed is the tanh-activated output in [-1,1] range
+        v_red_signed = float(value_signed)
+        v_player_signed = signed_for_player_to_move(v_red_signed, root.to_play)
+        return to_prob(v_player_signed)
     
     def _is_position_clearly_decided(self, win_prob: float) -> bool:
         """Check if position is clearly won or lost."""
@@ -414,8 +412,9 @@ class BaselineMCTS:
         # Always use global RNG state - randomness should be controlled externally
         # This ensures MCTS instances don't interfere with each other's randomness
 
-        # LRU Cache: board_key -> (policy_logits_np [A], value_logit_float)
+        # LRU Cache: board_key -> (policy_logits_np [A], value_signed_float)
         # Uses OrderedDict for O(1) LRU eviction
+        # Note: value_signed is the tanh-activated output in [-1,1] range (not a logit)
         self.eval_cache: OrderedDict[int, Tuple[np.ndarray, float]] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
@@ -531,7 +530,7 @@ class BaselineMCTS:
         cached = self._get_from_cache(root.state_hash)
         if cached is not None:
             self.cache_hits += 1
-            policy_np, value_logit = cached
+            policy_np, value_signed = cached
             self._expand_node_from_policy(root, policy_np, board_size, action_size)
         else:
             self.cache_misses += 1
@@ -541,10 +540,10 @@ class BaselineMCTS:
             
             policy_cpu, value_cpu, _ = self.model.infer_timed(batch)
             policy_np = policy_cpu[0].numpy()
-            value_logit = float(value_cpu[0].item())
+            value_signed = float(value_cpu[0].item())  # tanh-activated output in [-1,1] range
             
             # Cache results
-            self._put_in_cache(root.state_hash, policy_np, value_logit)
+            self._put_in_cache(root.state_hash, policy_np, value_signed)
             self._expand_node_from_policy(root, policy_np, board_size, action_size)
 
     def _check_algorithm_termination(self, root: MCTSNode, verbose: int) -> Optional[AlgorithmTerminationInfo]:
@@ -686,7 +685,7 @@ class BaselineMCTS:
         Returns:
           encodings          – tensors for unique, uncached leaves (order aligned with need_eval_idxs)
           need_eval_idxs     – indices into `leaves` for those unique encodings
-          cached_expansions  – (leaf_idx, policy_np, value_logit) for cache hits
+          cached_expansions  – (leaf_idx, policy_np, value_signed) for cache hits
         """
         encodings: List[torch.Tensor] = []
         need_eval_idxs: List[int] = []
@@ -709,8 +708,8 @@ class BaselineMCTS:
 
             if cached is not None:
                 self.cache_hits += 1
-                policy_np, value_logit = cached
-                cached_expansions.append((i, policy_np, value_logit))
+                policy_np, value_signed = cached
+                cached_expansions.append((i, policy_np, value_signed))
                 continue
 
             # Uncached → only encode the first occurrence of this state in the batch
@@ -749,10 +748,10 @@ class BaselineMCTS:
         for j, leaf_idx in enumerate(need_eval_idxs):
             leaf = leaves[leaf_idx]
             pol = policy_cpu[j].numpy()
-            val_logit = float(value_cpu[j].item())
+            val_signed = float(value_cpu[j].item())  # tanh-activated output in [-1,1] range
             
             # Cache CPU-native results
-            self._put_in_cache(leaf.state_hash, pol, val_logit)
+            self._put_in_cache(leaf.state_hash, pol, val_signed)
             self._expand_node_from_policy(leaf, pol, board_size, action_size)
 
     def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
@@ -765,7 +764,7 @@ class BaselineMCTS:
         board_size = int(leaves[0].state.get_board_tensor().shape[-1])
         action_size = board_size * board_size
         
-        for (leaf_idx, policy_np, value_logit) in cached_expansions:
+        for (leaf_idx, policy_np, _) in cached_expansions:
             leaf = leaves[leaf_idx]
             if not leaf.is_expanded and not leaf.is_terminal:
                 self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
@@ -779,46 +778,48 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
-            # Determine value for this leaf
+            # Determine signed value for this leaf
             if leaf.is_terminal:
-                p_red = self._get_terminal_value(leaf)
+                v_red_signed = self._get_terminal_value(leaf)
             else:
-                p_red = self._get_neural_network_value(leaf)
+                v_red_signed = self._get_neural_network_value(leaf)
             
-            # Backpropagate along path
-            self._backpropagate_path(path, p_red)
+            # Backpropagate signed value along path
+            self._backpropagate_path(path, v_red_signed)
             simulations_completed += 1
         
         timing_tracker.end_timing("backprop")
         return simulations_completed
 
     def _get_terminal_value(self, leaf: MCTSNode) -> float:
-        """Get value for a terminal leaf."""
-        if leaf.winner_str is None:
-            return 0.5  # Draw
-        
-        p_red = 1.0 if leaf.winner_str == "red" else 0.0
-    
-        return p_red
+        """Get signed value for a terminal leaf in [-1,1] range."""
+        if leaf.winner_str == "red":
+            return 1.0  # +1 = certain Red win
+        elif leaf.winner_str == "blue":
+            return -1.0  # -1 = certain Blue win
+        else:
+            raise ValueError(f"Invalid winner_str for terminal Hex node: {leaf.winner_str!r} (draws are not possible in Hex)")
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
-        """Get value for a non-terminal leaf from neural network."""
+        """Get signed value for a non-terminal leaf from neural network in [-1,1] range."""
         cached = self._get_from_cache(leaf.state_hash)
         if cached is None:
             raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
-        _, value_logit = cached
-        # Convert from [-1, 1] range to [0, 1] probability using centralized utility
-        return float(ValuePredictor.model_output_to_probability(value_logit))
+        _, value_signed = cached
+        # Return signed value directly - tanh activation gives values in [-1,1] range
+        return float(value_signed)
 
-    def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], p_red: float):
-        """Backpropagate value along a path from leaf to root."""
+    def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], v_red_signed: float):
+        """Backpropagate signed value along a path from leaf to root."""
         for (node, a_idx) in reversed(path):
-            v_node = p_red if node.to_play == Player.RED else (1.0 - p_red)
+            # Convert Red's signed value to player-to-move perspective
+            v_node = signed_for_player_to_move(v_red_signed, node.to_play)
             
-            # Apply depth discounting
+            # Apply depth discounting in signed space (shrink toward 0)
             if self.cfg.enable_depth_discounting and node.depth > 0:
-                discount = self.cfg.depth_discount_factor ** node.depth
-                v_node *= discount
+                # TODO(step: tune): consider using distance_to_leaf instead of absolute depth
+                # TODO(step: tune): retune depth_discount_factor for signed space
+                v_node = apply_depth_discount_signed(v_node, self.cfg.depth_discount_factor, node.depth)
             
             node.N[a_idx] += 1
             node.W[a_idx] += v_node
@@ -967,18 +968,13 @@ class BaselineMCTS:
         }
 
     def _compute_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
-        """Compute win probability for the current player based on root value."""
+        """Compute win probability for the current player based on root value (edge conversion)."""
         tree_data = self._compute_tree_data(root)
         root_value = tree_data["root_value"]
         
-        # Convert root value to win probability
-        # Root value is from the perspective of the player to move
-        # For RED player: root_value is probability RED wins
-        # For BLUE player: root_value is probability BLUE wins
-        if root_state.current_player_enum == Player.RED:
-            return root_value
-        else:
-            return 1.0 - root_value
+        # Convert signed value to probability only at the edge (for external API)
+        # Root value is now signed from player-to-move perspective in [-1,1]
+        return to_prob(root_value)
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
         """Extract the principal variation (best move sequence) from the MCTS tree."""
@@ -1094,6 +1090,7 @@ class BaselineMCTS:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
+        # TODO(step: tune): retune c_puct for signed Q values in [-1,1] range
         
         # Detect terminal moves if enabled and appropriate
         if self.cfg.enable_terminal_move_detection:
@@ -1175,7 +1172,7 @@ class BaselineMCTS:
         Args:
             board_key: The board state key
             policy: The policy logits
-            value: The value logit
+            value: The signed value (tanh-activated output in [-1,1] range)
         """
         # If key already exists, remove it first (will be re-added at end)
         if board_key in self.eval_cache:
