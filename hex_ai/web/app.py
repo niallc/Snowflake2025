@@ -502,10 +502,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "mcts_vs_direct": {}
             },
             "win_rate_analysis": {
-                "root_value": tree_data.get("root_value", 0.0),
-                "best_child_value": tree_data.get("best_child_value", 0.0),
-                "win_probability": tree_data.get("root_value", 0.5),  # Frontend will multiply by 100
-                "best_child_win_probability": tree_data.get("best_child_value", 0.5)
+                "root_value": tree_data.get("v_curr_signed_root", 0.0),
+                "best_child_value": tree_data.get("v_curr_signed_best_child", 0.0),
+                "win_probability": tree_data.get("v_curr_signed_root", 0.5),  # Frontend will multiply by 100
+                "best_child_win_probability": tree_data.get("v_curr_signed_best_child", 0.5)
             },
             "move_sequence_analysis": {
                 "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data.get("principal_variation", [])],
