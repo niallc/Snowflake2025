@@ -767,6 +767,8 @@ Examples:
                        help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
     parser.add_argument('--c-puct', type=str,
                        help=f'Comma-separated PUCT exploration constants for MCTS strategies (e.g., "1.2,1.5,2.0", default: {DEFAULT_C_PUCT})')
+    parser.add_argument('--enable-gumbel', type=str,
+                       help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
@@ -814,9 +816,13 @@ def main():
     if args.c_puct:
         c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
     
+    enable_gumbel = None
+    if args.enable_gumbel:
+        enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
+    
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes, c_pucts)
+        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)

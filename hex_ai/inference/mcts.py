@@ -684,33 +684,59 @@ class BaselineMCTS:
         """
         timing_tracker.start_timing("gumbel_selection")
         
-        # Get policy logits from root node
-        policy_logits = root.P.copy()  # These are already logits from neural network
+        # Time the policy logits retrieval
+        timing_tracker.start_timing("gumbel_policy_retrieval")
+        
+        # Get full tensor policy logits from neural network evaluation
+        # We need the full tensor (169 positions) with illegal actions masked as -inf
+        board_size = int(root.state.get_board_tensor().shape[-1])
+        action_size = board_size * board_size
+        
+        # Get the full policy logits from cache or re-evaluate
+        cached = self._get_from_cache(root.state_hash)
+        if cached is not None:
+            policy_logits_full, _ = cached
+        else:
+            # Re-evaluate to get full tensor logits
+            root_enc = root.state.get_board_tensor().to(dtype=torch.float32)
+            batch = torch.stack([root_enc], dim=0)
+            policy_cpu, _, _ = self.model.infer_timed(batch)
+            policy_logits_full = policy_cpu[0].numpy()
+        
+        timing_tracker.end_timing("gumbel_policy_retrieval")
+        
+        # Time the Gumbel algorithm execution
+        timing_tracker.start_timing("gumbel_algorithm")
         
         # Create functions for Gumbel selection that use the unified batching infrastructure
         def run_one_sim(forced_action: int) -> None:
             """Run one simulation with forced root action using batched infrastructure."""
-            # Use the unified simulation method
-            self._run_single_gumbel_simulation(root, forced_action, timing_tracker)
+            # Map tensor index back to legal move index for MCTS
+            legal_move_idx = root.legal_indices.index(forced_action)
+            self._run_single_gumbel_simulation(root, legal_move_idx, timing_tracker)
         
         def q_of_child(action: int) -> float:
-            """Get normalized Q-value for child action."""
-            if root.N[action] == 0:
+            """Get normalized Q-value for child action (action is tensor index)."""
+            # Map tensor index to legal move index
+            legal_move_idx = root.legal_indices.index(action)
+            if root.N[legal_move_idx] == 0:
                 return 0.5  # Neutral value for unvisited actions
             # Normalize Q-value from [-1,1] to [0,1] range
-            q_raw = root.Q[action]
+            q_raw = root.Q[legal_move_idx]
             return (q_raw + 1.0) / 2.0
         
         def n_of_child(action: int) -> int:
-            """Get visit count for child action."""
-            return root.N[action]
+            """Get visit count for child action (action is tensor index)."""
+            # Map tensor index to legal move index
+            legal_move_idx = root.legal_indices.index(action)
+            return root.N[legal_move_idx]
         
-        # Get legal action indices
-        legal_actions = list(range(len(root.legal_moves)))
+        # Get legal action indices (these are tensor indices, not legal move indices)
+        legal_actions = root.legal_indices.copy()
         
         # Run Gumbel-AlphaZero selection
-        selected_action = gumbel_alpha_zero_root_select(
-            policy_logits=policy_logits,
+        selected_tensor_action = gumbel_alpha_zero_root_select(
+            policy_logits=policy_logits_full,
             total_sims=total_sims,
             run_one_sim=run_one_sim,
             q_of_child=q_of_child,
@@ -721,11 +747,23 @@ class BaselineMCTS:
             c_scale=self.cfg.gumbel_c_scale
         )
         
+        timing_tracker.end_timing("gumbel_algorithm")
+        
+        # Time the final conversion
+        timing_tracker.start_timing("gumbel_final_conversion")
+        
+        # Convert tensor index back to legal move index for MCTS
+        selected_action = root.legal_indices.index(selected_tensor_action)
+        
+        timing_tracker.end_timing("gumbel_final_conversion")
         timing_tracker.end_timing("gumbel_selection")
         
         if verbose >= 2:
-            print(f"Gumbel selection completed. Selected action {selected_action} "
-                  f"({root.legal_moves[selected_action]})")
+            print(f"Gumbel selection completed. Selected tensor action {selected_tensor_action} "
+                  f"-> legal action {selected_action} ({root.legal_moves[selected_action]})")
+        
+        # Store the Gumbel-selected action for later use
+        self._gumbel_selected_action = selected_action
         
         return timing_tracker.get_final_stats()
 
@@ -737,6 +775,11 @@ class BaselineMCTS:
         This method creates a minimal batch of one leaf and uses the standard
         MCTS batching infrastructure to ensure efficiency.
         """
+        timing_tracker.start_timing("gumbel_single_sim")
+        
+        # Time child node creation if needed
+        timing_tracker.start_timing("gumbel_child_creation")
+        
         # Create child node if it doesn't exist
         if root.children[forced_action] is None:
             # Create child state
@@ -752,26 +795,37 @@ class BaselineMCTS:
         # Get the child node
         child = root.children[forced_action]
         
+        timing_tracker.end_timing("gumbel_child_creation")
+        
         # If child is terminal, backpropagate immediately
         if child.is_terminal:
+            timing_tracker.start_timing("gumbel_terminal_backprop")
             v_red_signed = self._get_terminal_value(child)
             self._backpropagate_path([(root, forced_action)], v_red_signed, child.depth)
+            timing_tracker.end_timing("gumbel_terminal_backprop")
             self._effective_sims_total += 1
+            timing_tracker.end_timing("gumbel_single_sim")
             return
         
         # If child is not expanded, use the standard MCTS batching infrastructure
         if not child.is_expanded:
+            timing_tracker.start_timing("gumbel_batch_processing")
             # Create a minimal batch with just this one leaf
             leaves = [child]
             paths = [[(root, forced_action)]]
             
             # Use the exact same batching infrastructure as standard MCTS
             self._process_leaves_batch(leaves, paths, timing_tracker)
+            timing_tracker.end_timing("gumbel_batch_processing")
         
         # Backpropagate the value
+        timing_tracker.start_timing("gumbel_backprop")
         v_red_signed = self._get_neural_network_value(child)
         self._backpropagate_path([(root, forced_action)], v_red_signed, child.depth)
+        timing_tracker.end_timing("gumbel_backprop")
         self._effective_sims_total += 1
+        
+        timing_tracker.end_timing("gumbel_single_sim")
 
     def _select_leaves_batch(
         self,
@@ -1051,6 +1105,14 @@ class BaselineMCTS:
 
     def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[int, int]:
         """Compute the selected move from the root node."""
+        # Check if Gumbel selection was used and return the selected action
+        if hasattr(self, '_gumbel_selected_action'):
+            selected_action = self._gumbel_selected_action
+            selected_move = root.legal_moves[selected_action]
+            if verbose >= 2:
+                print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
+            return selected_move
+        
         # Check if a terminal move was found during pre-check
         if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
             terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]

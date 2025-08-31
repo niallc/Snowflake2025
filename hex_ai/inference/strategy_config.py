@@ -23,7 +23,7 @@ class StrategyConfig:
 
 def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]] = None, 
                           search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
-                          c_pucts: Optional[List[float]] = None) -> List[StrategyConfig]:
+                          c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -126,6 +126,20 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 # Update strategy name to include c_puct for unique identification
                 config.name = f"{config.name}_cp{c_pucts[c_puct_idx]}"
                 c_puct_idx += 1
+    
+    if enable_gumbel:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(enable_gumbel) != len(mcts_configs):
+            raise ValueError(f"Number of enable_gumbel values ({len(enable_gumbel)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        gumbel_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["enable_gumbel_root_selection"] = enable_gumbel[gumbel_idx]
+                # Update strategy name to include gumbel indicator for unique identification
+                if enable_gumbel[gumbel_idx]:
+                    config.name = f"{config.name}_gumbel"
+                gumbel_idx += 1
     
     return configs
 
