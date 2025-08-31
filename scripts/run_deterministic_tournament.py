@@ -608,7 +608,10 @@ def run_deterministic_tournament(
         game_results = []
         for opening_idx, opening in enumerate(openings):
             if verbose >= 1:
-                print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
+                if opening_idx == 1:
+                    print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
+                else:
+                    print(",", opening_idx + 1, end="", flush=True)
             
             # Game 1: Strategy A (Blue) vs Strategy B (Red)
             logger.debug(f"Playing game 1: {strategy_a.name} (Blue) vs {strategy_b.name} (Red) from opening {opening_idx + 1}")
