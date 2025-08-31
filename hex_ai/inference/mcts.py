@@ -512,6 +512,13 @@ class BaselineMCTS:
         self._unique_evals_total = 0     # post-dedup, network calls actually done
         self._effective_sims_total = 0   # counts every backprop (incl. duplicates)
 
+        # Gumbel-specific performance counters
+        self._gumbel_nn_calls_per_move = 0
+        self._gumbel_total_leaves_evaluated = 0
+        self._gumbel_distinct_leaves_evaluated = 0
+        self._gumbel_candidates_m = 0
+        self._gumbel_rounds_R = 0
+
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
             max_detection_depth=cfg.terminal_detection_max_depth
@@ -585,11 +592,28 @@ class BaselineMCTS:
         tree_data = self._compute_tree_data(root)
         win_probability = self._compute_win_probability(root, root_state)
         
+        # Create base stats
+        stats = self._get_stats_builder().create_final_stats(
+            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
+        )
+        
+        # Add Gumbel-specific performance metrics if available
+        if hasattr(self, '_gumbel_nn_calls_per_move'):
+            # Use actual MCTS metrics for distinct leaves evaluation
+            actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
+            stats.update({
+                "gumbel_nn_calls_per_move": self._gumbel_nn_calls_per_move,
+                "gumbel_total_leaves_evaluated": self._gumbel_total_leaves_evaluated,
+                "gumbel_distinct_leaves_evaluated": actual_distinct_leaves,
+                "gumbel_candidates_m": self._gumbel_candidates_m,
+                "gumbel_rounds_R": self._gumbel_rounds_R,
+                "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
+                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated)
+            })
+        
         return MCTSResult(
             move=move,
-            stats=self._get_stats_builder().create_final_stats(
-                timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
-            ),
+            stats=stats,
             tree_data=tree_data,
             root_node=root,
             algorithm_termination_info=None,
@@ -729,7 +753,7 @@ class BaselineMCTS:
         legal_actions = root.legal_indices.copy()
         
         # Run batched Gumbel-AlphaZero selection
-        selected_tensor_action = gumbel_alpha_zero_root_batched(
+        selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
             policy_logits=policy_logits_full,
@@ -741,6 +765,14 @@ class BaselineMCTS:
             c_visit=self.cfg.gumbel_c_visit,
             c_scale=self.cfg.gumbel_c_scale
         )
+        
+        # Record Gumbel performance metrics
+        self._gumbel_nn_calls_per_move = gumbel_metrics["nn_calls_per_move"]
+        self._gumbel_total_leaves_evaluated = gumbel_metrics["total_leaves_evaluated"]
+        # For distinct leaves, we'll use the final MCTS metrics since individual batch stats don't include this
+        self._gumbel_distinct_leaves_evaluated = 0  # Will be updated later with final MCTS metrics
+        self._gumbel_candidates_m = gumbel_metrics["candidates_m"]
+        self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
         
         timing_tracker.end_timing("gumbel_algorithm")
         
