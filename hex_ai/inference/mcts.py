@@ -608,7 +608,8 @@ class BaselineMCTS:
                 "gumbel_candidates_m": self._gumbel_candidates_m,
                 "gumbel_rounds_R": self._gumbel_rounds_R,
                 "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
-                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated)
+                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
+                "gumbel_timing_breakdown": getattr(self, '_gumbel_timing_breakdown', {})
             })
         
         return MCTSResult(
@@ -773,6 +774,8 @@ class BaselineMCTS:
         self._gumbel_distinct_leaves_evaluated = 0  # Will be updated later with final MCTS metrics
         self._gumbel_candidates_m = gumbel_metrics["candidates_m"]
         self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
+        # Record detailed timing breakdown
+        self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
         
         timing_tracker.end_timing("gumbel_algorithm")
         
@@ -868,10 +871,11 @@ class BaselineMCTS:
                     # Map full action index -> local child idx
                     # (legal_indices aligns with stats arrays)
                     try:
-                        # Fast path: vectorized search
-                        li = np.asarray(node.legal_indices)
-                        loc_idx = int(np.where(li == forced_a_full)[0][0])
-                    except Exception:
+                        # OPTIMIZATION: Use dictionary lookup instead of linear search
+                        if not hasattr(node, '_legal_indices_dict'):
+                            node._legal_indices_dict = {idx: i for i, idx in enumerate(node.legal_indices)}
+                        loc_idx = node._legal_indices_dict[forced_a_full]
+                    except (KeyError, AttributeError):
                         # Fallback if forced action is illegal: normal PUCT
                         loc_idx = self._select_child_puct(node)
                 else:
