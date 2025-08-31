@@ -26,7 +26,7 @@ Examples:
 3. Use custom temperature:
    PYTHONPATH=. python scripts/run_deterministic_tournament.py \
      --model=current_best \
-     --strategies=policy,mcts_100 \
+     --strategies=policy,mcts_122 \
      --num-openings=150 \
      --temperature=0.1
 """
@@ -40,6 +40,7 @@ import logging
 import os
 import random
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -54,13 +55,14 @@ from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs
-from hex_ai.inference.tournament import TournamentResult
+from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis, calculate_head_to_head_stats, print_head_to_head_stats
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line
+from hex_ai.utils.perf import PERF
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -78,6 +80,79 @@ OUTPUT_DIR_PREFIX = "data/tournament_play/deterministic_tournament_"
 # TODO: Consider adding configuration for:
 # Low priority: Timeout handling for long-running strategies
 # Low priority: Progress saving/resume functionality for interrupted tournaments
+
+
+class DeterministicTournamentResult(BaseTournamentResult):
+    """Extended tournament result with timing tracking."""
+    
+    def __init__(self, participants: List[str]):
+        super().__init__(participants)
+        # Track timing data for each strategy
+        self.strategy_timings = {name: 0.0 for name in participants}
+        self.strategy_move_counts = {name: 0 for name in participants}
+        self.game_timings = []  # List of individual game timing data
+    
+    def record_game_with_timing(self, winner: str, loser: str, game_timing_data: Dict[str, Any]):
+        """Record a game result with timing information."""
+        # Record the basic game result
+        self.record_game(winner, loser)
+        
+        # Record timing data
+        strategy_timings = game_timing_data.get('strategy_timings', {})
+        for strategy_name, time_taken in strategy_timings.items():
+            if strategy_name in self.strategy_timings:
+                self.strategy_timings[strategy_name] += time_taken
+        
+        # Record move counts
+        total_moves = game_timing_data.get('total_moves', 0)
+        for strategy_name in strategy_timings:
+            if strategy_name in self.strategy_move_counts:
+                self.strategy_move_counts[strategy_name] += total_moves
+        
+        # Store individual game timing data
+        self.game_timings.append(game_timing_data)
+    
+    def get_timing_summary(self) -> Dict[str, Any]:
+        """Get a summary of timing statistics."""
+        summary = {}
+        
+        for strategy_name in self.participants:
+            total_time = self.strategy_timings.get(strategy_name, 0.0)
+            total_moves = self.strategy_move_counts.get(strategy_name, 0)
+            
+            summary[strategy_name] = {
+                'total_time': total_time,
+                'total_moves': total_moves,
+                'avg_time_per_move': total_time / max(1, total_moves),
+                'total_games': sum(1 for game in self.game_timings 
+                                 if strategy_name in game.get('strategy_timings', {}))
+            }
+        
+        return summary
+    
+    def print_timing_summary(self):
+        """Print a formatted timing summary."""
+        summary = self.get_timing_summary()
+        
+        print("\n" + "="*60)
+        print("TIMING SUMMARY")
+        print("="*60)
+        
+        # Sort strategies by total time
+        sorted_strategies = sorted(summary.items(), key=lambda x: x[1]['total_time'], reverse=True)
+        
+        for strategy_name, stats in sorted_strategies:
+            print(f"{strategy_name}:")
+            print(f"  Total time: {stats['total_time']:.3f}s")
+            print(f"  Total moves: {stats['total_moves']}")
+            print(f"  Average time per move: {stats['avg_time_per_move']:.3f}s")
+            print(f"  Games played: {stats['total_games']}")
+            print()
+        
+        # Print overall tournament timing
+        total_tournament_time = sum(stats['total_time'] for stats in summary.values())
+        print(f"Total tournament time: {total_tournament_time:.3f}s")
+        print("="*60)
 
 
 class OpeningPosition:
@@ -401,8 +476,15 @@ def play_deterministic_game(
         strategy_a_is_blue: Whether strategy_a plays as Blue (True) or Red (False)
     
     Returns:
-        Dictionary with game results
+        Dictionary with game results including timing information
     """
+    # Initialize timing tracking
+    strategy_timings = {
+        strategy_a.name: 0.0,
+        strategy_b.name: 0.0
+    }
+    move_count = 0
+    
     # Start from the opening position
     state = opening.get_state(board_size)
     
@@ -486,12 +568,20 @@ def play_deterministic_game(
                 strategy_config = config_a
                 strategy_name = strategy_a.name
     
-        # Select move
+        # Time the move selection
+        start_time = time.perf_counter()
         move = strategy_obj.select_move(state, model, strategy_config)
+        end_time = time.perf_counter()
+        
         if move is None:
             raise ValueError(f"Move selection returned None for {strategy_obj.get_name()}")
         
-        logger.debug(f"Player {current_player.name} ({strategy_name}) plays move {move}")
+        # Record timing for this strategy
+        move_time = end_time - start_time
+        strategy_timings[strategy_name] += move_time
+        move_count += 1
+        
+        logger.debug(f"Player {current_player.name} ({strategy_name}) plays move {move} in {move_time:.3f}s")
         
         # Apply move
         move_sequence.append(move)
@@ -520,6 +610,7 @@ def play_deterministic_game(
     
     logger.debug(f"Game complete: {winner_strategy} wins with {len(move_sequence)} moves")
     logger.debug(f"Final TRMPH: {trmph_str}")
+    logger.debug(f"Timing summary: {strategy_a.name}={strategy_timings[strategy_a.name]:.3f}s, {strategy_b.name}={strategy_timings[strategy_b.name]:.3f}s")
     
     return {
         'winner_strategy': winner_strategy,
@@ -527,7 +618,9 @@ def play_deterministic_game(
         'trmph_str': trmph_str,
         'move_sequence': move_sequence,
         'num_moves': len(move_sequence),
-        'opening': opening
+        'opening': opening,
+        'strategy_timings': strategy_timings,
+        'total_moves': move_count
     }
 
 
@@ -552,7 +645,7 @@ def run_deterministic_tournament(
     openings: List[OpeningPosition],
     temperature: float = DEFAULT_TEMPERATURE,
     verbose: int = DEFAULT_VERBOSE
-) -> TournamentResult:
+) -> DeterministicTournamentResult:
     """
     Run a deterministic tournament using pre-generated opening positions.
     
@@ -573,7 +666,7 @@ def run_deterministic_tournament(
     
     # Create tournament result tracking strategy names
     strategy_names = [config.name for config in strategy_configs]
-    result = TournamentResult(strategy_names)
+    result = DeterministicTournamentResult(strategy_names)
     
     # Preload the model for efficiency
     from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
@@ -671,7 +764,10 @@ def run_deterministic_tournament(
                     "winner_strategy": result_1['winner_strategy'],
                     "num_moves": result_1['num_moves'],
                     "opening_length": opening.opening_length,
-                    "temperature": temperature
+                    "temperature": temperature,
+                    "strategy_a_time": result_1['strategy_timings'].get(strategy_a.name, 0.0),
+                    "strategy_b_time": result_1['strategy_timings'].get(strategy_b.name, 0.0),
+                    "total_game_time": sum(result_1['strategy_timings'].values())
                 },
                 {
                     "timestamp": timestamp,
@@ -685,22 +781,25 @@ def run_deterministic_tournament(
                     "winner_strategy": result_2['winner_strategy'],
                     "num_moves": result_2['num_moves'],
                     "opening_length": opening.opening_length,
-                    "temperature": temperature
+                    "temperature": temperature,
+                    "strategy_a_time": result_2['strategy_timings'].get(strategy_b.name, 0.0),
+                    "strategy_b_time": result_2['strategy_timings'].get(strategy_a.name, 0.0),
+                    "total_game_time": sum(result_2['strategy_timings'].values())
                 }
             ]
             
             write_csv_results(rows, csv_file)
             
-            # Record results for tournament tracking
+            # Record results for tournament tracking with timing data
             # Game 1: Strategy A vs Strategy B
             winner_1 = result_1['winner_strategy']
             loser_1 = strategy_b.name if winner_1 == strategy_a.name else strategy_a.name
-            result.record_game(winner_1, loser_1)
+            result.record_game_with_timing(winner_1, loser_1, result_1)
             
             # Game 2: Strategy B vs Strategy A
             winner_2 = result_2['winner_strategy']
             loser_2 = strategy_a.name if winner_2 == strategy_b.name else strategy_b.name
-            result.record_game(winner_2, loser_2)
+            result.record_game_with_timing(winner_2, loser_2, result_2)
             
             if verbose >= 1:
                 print(f" - {result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
@@ -717,6 +816,12 @@ def run_deterministic_tournament(
         if total_games > 0:
             stats = calculate_head_to_head_stats(strategy_a.name, strategy_b.name, strategy_a_wins, strategy_b_wins, total_games)
             print_head_to_head_stats(stats)
+            
+            # Print timing summary for this match
+            total_time_a = sum(game['strategy_timings'].get(strategy_a.name, 0.0) for game in game_results)
+            total_time_b = sum(game['strategy_timings'].get(strategy_b.name, 0.0) for game in game_results)
+            
+            print(f"  Timing: {strategy_a.name}={total_time_a:.3f}s, {strategy_b.name}={total_time_b:.3f}s")
     
     logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
     return result
@@ -882,6 +987,9 @@ def main():
     # Print results
     print("\nDeterministic Tournament Complete!")
     print_comprehensive_tournament_analysis(result)
+    
+    # Print timing summary
+    result.print_timing_summary()
     
     # Print output location
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
