@@ -802,7 +802,7 @@ def run_deterministic_tournament(
             result.record_game_with_timing(winner_2, loser_2, result_2)
             
             if verbose >= 1:
-                print(f" - {result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
+                print(f"-{result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
         
         if verbose >= 1:
             print()  # New line after games

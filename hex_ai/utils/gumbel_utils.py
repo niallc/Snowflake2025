@@ -10,7 +10,8 @@ Reference: "Gumbel AlphaZero" by Danihelka et al. (2022)
 
 import math
 import numpy as np
-from typing import List, Callable, Optional, Tuple
+import time
+from typing import Callable, List, Optional, Tuple, Dict, Any
 
 
 def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
@@ -210,6 +211,19 @@ def gumbel_alpha_zero_root_batched(
         ValueError: If parameters are invalid
         RuntimeError: If no legal actions available
     """
+    # Detailed timing instrumentation
+    timing_data = {
+        'setup_time': 0.0,
+        'gumbel_sampling_time': 0.0,
+        'top_m_selection_time': 0.0,
+        'round_allocation_time': 0.0,
+        'mcts_execution_time': 0.0,
+        'ranking_time': 0.0,
+        'total_time': 0.0
+    }
+    
+    total_start = time.perf_counter()
+    
     if rng is None:
         rng = np.random
     
@@ -221,6 +235,9 @@ def gumbel_alpha_zero_root_batched(
     
     K = policy_logits.shape[0]
     
+    # Setup phase timing
+    setup_start = time.perf_counter()
+    
     # Create mask for illegal actions
     mask = np.full(K, -np.inf)
     mask[legal_actions] = 0.0
@@ -228,19 +245,31 @@ def gumbel_alpha_zero_root_batched(
     # Apply mask to logits
     logits = policy_logits + mask
     
-    # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    g = sample_gumbel(K, rng=rng)
-    
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
         # IMPROVEMENT: Cap candidates to prevent explosion in mid-game positions
         # Good default: don't consider more actions than we can reasonably evaluate
         m = min(len(legal_actions), total_sims, 32)  # Cap at 32 for k≈200-500
     
+    timing_data['setup_time'] = time.perf_counter() - setup_start
+    
+    # Gumbel sampling timing
+    gumbel_start = time.perf_counter()
+    
+    # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
+    g = sample_gumbel(K, rng=rng)
+    
+    timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
+    
+    # Top-m selection timing
+    top_m_start = time.perf_counter()
+    
     top_scores = g + logits
     
     # Get indices of top-m actions (unordered)
     top_idx = np.argpartition(-top_scores, range(m))[:m]
+    
+    timing_data['top_m_selection_time'] = time.perf_counter() - top_m_start
     
     # Sequential Halving over the candidate set
     cand = list(top_idx)
@@ -284,6 +313,14 @@ def gumbel_alpha_zero_root_batched(
         rng.shuffle(actions)
         return actions
     
+    # Round allocation and MCTS execution timing
+    round_start = time.perf_counter()
+    mcts_execution_start = time.perf_counter()
+    
+    # OPTIMIZATION: Collect all actions first, then execute MCTS once
+    all_actions = []
+    round_assignments = []  # Track which round each action belongs to
+    
     for r in range(R):
         if not cand or sims_used >= total_sims:
             break
@@ -299,13 +336,9 @@ def gumbel_alpha_zero_root_batched(
         )
         
         if actions_this_round:
-            # Track performance metrics from this round
-            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
-            # Track batch metrics more accurately
-            nn_calls_per_move += stats.get("batch_count", 0)
-            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
-            # Note: unique_evals_total is not available in individual batch stats
-            # We'll track this separately by looking at the final MCTS metrics
+            # Collect actions for this round
+            all_actions.extend(actions_this_round)
+            round_assignments.extend([r] * len(actions_this_round))
             sims_used += len(actions_this_round)
         
         if arms <= 1 or sims_used >= total_sims:
@@ -316,9 +349,24 @@ def gumbel_alpha_zero_root_batched(
         keep = max(1, (arms + 1) // 2)
         cand = cand[:keep]
     
+    # Execute all MCTS simulations in one call
+    if all_actions:
+        stats = mcts.run_forced_root_actions(root, all_actions, verbose=0)
+        nn_calls_per_move = stats.get("batch_count", 0)
+        total_leaves_evaluated = len(all_actions)
+    
+    timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
+    timing_data['round_allocation_time'] = time.perf_counter() - round_start
+    
+    # Final ranking timing
+    ranking_start = time.perf_counter()
+    
     # Final pick
     if len(cand) > 1:
         cand.sort(key=rank_key, reverse=True)
+    
+    timing_data['ranking_time'] = time.perf_counter() - ranking_start
+    timing_data['total_time'] = time.perf_counter() - total_start
     
     # Return both the selected action and performance metrics
     performance_metrics = {
@@ -328,7 +376,8 @@ def gumbel_alpha_zero_root_batched(
         "candidates_m": m,
         "rounds_R": R,
         "avg_nn_batch_size": total_leaves_evaluated / max(1, nn_calls_per_move),
-        "leaves_distinct_ratio": distinct_leaves_evaluated / max(1, total_leaves_evaluated)
+        "leaves_distinct_ratio": distinct_leaves_evaluated / max(1, total_leaves_evaluated),
+        "timing_breakdown": timing_data
     }
     
     return cand[0], performance_metrics
