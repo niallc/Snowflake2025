@@ -73,10 +73,10 @@ blue_prob = get_win_prob_from_model_output(value_logit, Winner.BLUE)
 
 ### Minimax Search
 ```python
-from hex_ai.inference.fixed_tree_search import convert_model_logit_to_minimax_value
+from hex_ai.value_utils import ValuePredictor
 
-# Convert to minimax-friendly value from root player's perspective
-minimax_value = convert_model_logit_to_minimax_value(value_logit, root_player)
+# Convert to minimax-friendly value from root player's reference frame
+minimax_value = ValuePredictor.convert_to_minimax_value(value_signed, root_player)
 ```
 
 ## Consistency Rules

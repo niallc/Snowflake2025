@@ -256,26 +256,26 @@ class ValuePredictor:
             raise ValueError(f"Invalid winner: {winner}")
     
     @staticmethod
-    def convert_to_minimax_value(model_output: float, root_player: Player) -> float:
+    def convert_to_minimax_value(red_ref_signed: float, root_player: Player) -> float:
         """
-        Convert model output to minimax-friendly value from root player's perspective.
+        Convert signed value from Red's reference frame to minimax-friendly value from root player's reference frame.
         
         Args:
-            model_output: Raw model output in [-1, 1] range (tanh activated)
-            root_player: Player whose perspective to use for minimax value
+            red_ref_signed: Signed value in [-1, 1] range from Red's reference frame (+1 = Red win, -1 = Blue win)
+            root_player: Player whose reference frame to use for minimax value
             
         Returns:
             Minimax value in [-1, 1] range where positive = good for root player
         """
-        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        prob_red_win = ValuePredictor.model_output_to_probability(red_ref_signed)
         
         if root_player == Player.BLUE:
             # For Blue: positive values = Blue wins (good), negative values = Red wins (bad)
-            # Convert from Red's win probability to Blue's perspective
+            # Convert from Red's win probability to Blue's reference frame
             return 1.0 - 2.0 * prob_red_win  # Maps [0,1] to [1,-1]
         else:  # root_player == Player.RED
-            # For Red: negative values = Red wins (good), positive values = Blue wins (bad)
-            # Convert from Red's win probability to Red's perspective
+            # For Red: positive values = Red wins (good), negative values = Blue wins (bad)
+            # Convert from Red's win probability to Red's reference frame
             return 2.0 * prob_red_win - 1.0  # Maps [0,1] to [-1,1]
     
     @staticmethod
