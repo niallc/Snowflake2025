@@ -136,6 +136,10 @@ class ValuePredictor:
     The new value head outputs values in [-1, 1] range with tanh activation.
     This utility provides a clean interface for converting these values to various
     probability formats needed by different parts of the codebase.
+    
+    Terminology: We use 'value_signed' as a shorthand for [-1, 1] scores returned
+    by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+    which were the old sigmoid-based outputs.
     """
     
     @staticmethod
@@ -205,6 +209,51 @@ class ValuePredictor:
             return 1.0 - prob_red_win
         else:
             raise ValueError(f"Invalid player: {player}")
+    
+    @staticmethod
+    def get_win_probability_for_winner(model_output: float, winner: Winner) -> float:
+        """
+        Get win probability for a specific winner from model output.
+        
+        Args:
+            model_output: Raw model output in [-1, 1] range (tanh activated)
+            winner: Winner to get win probability for
+            
+        Returns:
+            Win probability for the specified winner in [0, 1] range
+        """
+        if not isinstance(winner, Winner):
+            raise ValueError(f"Invalid winner: {winner}")
+        
+        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        
+        if winner == Winner.RED:
+            return prob_red_win
+        elif winner == Winner.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid winner: {winner}")
+    
+    @staticmethod
+    def get_win_probability_for_winner_tensor(model_output: torch.Tensor, winner: Winner) -> torch.Tensor:
+        """
+        Get win probability tensor for a specific winner from model output.
+        
+        Args:
+            model_output: Raw model output tensor in [-1, 1] range (tanh activated)
+            winner: Winner to get win probability for
+            
+        Returns:
+            Win probability tensor for the specified winner in [0, 1] range
+        """
+        prob_red_win = ValuePredictor.model_output_to_probability_tensor(model_output)
+        
+        if winner == Winner.RED:
+            return prob_red_win
+        elif winner == Winner.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid winner: {winner}")
     
     @staticmethod
     def convert_to_minimax_value(model_output: float, root_player: Player) -> float:
@@ -312,24 +361,7 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     else:
         raise ValueError(f"Unknown perspective: {perspective}")
 
-def get_win_prob_from_model_output(model_output: float, player) -> float:
-    """
-    Given the raw model output (logit) and a player (Winner or Player only),
-    return the probability that player wins.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    """
-    if isinstance(player, Player):
-        perspective = ValuePerspective.BLUE_WIN_PROB if player == Player.BLUE else ValuePerspective.RED_WIN_PROB
-    elif isinstance(player, Winner):
-        perspective = ValuePerspective.BLUE_WIN_PROB if player == Winner.BLUE else ValuePerspective.RED_WIN_PROB
-    else:
-        raise ValueError(f"Unknown player: {player}")
-    prob_red_win = torch.sigmoid(torch.tensor(model_output)).item()
-    return model_output_to_prob(prob_red_win, perspective)
+
 
 def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     """
@@ -598,7 +630,7 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     
     Args:
         state: Game state (must have .board and .get_legal_moves() methods)
-        model: Model instance (must have .simple_infer() method that returns (policy_logits, value_logit))
+        model: Model instance (must have .simple_infer() method that returns (policy_logits, value_output))
         temperature: Temperature for policy sampling (default 1.0)
         
     Returns:
