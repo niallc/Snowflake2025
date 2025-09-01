@@ -1122,7 +1122,7 @@ function displayDebugInfo(debugInfo) {
     output += `Current Player: ${debugInfo.basic.current_player}\n`;
     output += `Game Over: ${debugInfo.basic.game_over}\n`;
     output += `Legal Moves: ${debugInfo.basic.legal_moves_count}\n`;
-    output += `Value Logit: ${debugInfo.basic.value_logit.toFixed(4)}\n`;
+    output += `Value Signed: ${debugInfo.basic.value_signed.toFixed(4)}\n`;
     output += `Win Probability: ${(debugInfo.basic.win_probability * 100).toFixed(2)}%\n`;
     output += `Temperature: ${debugInfo.basic.temperature}\n`;
     output += `Search Widths: ${debugInfo.basic.search_widths ? debugInfo.basic.search_widths.join(',') : 'None'}\n`;
@@ -1537,7 +1537,7 @@ async function applyTrmphSequence() {
     state.legal_moves = result.legal_moves;
     state.winner = result.winner;
     state.policy = result.policy;
-    state.value = result.value;
+    state.value = result.value_signed;
     state.win_prob = result.win_prob;
     
     // Update the TRMPH string display
