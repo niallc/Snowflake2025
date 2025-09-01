@@ -81,7 +81,8 @@ DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
-DEFAULT_TERMINAL_MOVE_BOOST = 4.0
+# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
+DEFAULT_TERMINAL_MOVE_BOOST = 1.0
 
 # Default virtual loss for non-terminal moves
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
