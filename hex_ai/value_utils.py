@@ -1,11 +1,12 @@
-from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
 from hex_ai.config import (
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
 )
-import torch
+from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
+from hex_ai.utils.math_utils import validate_probabilities
 import numpy as np
+import torch
 from typing import List, Tuple
 
 # =============================
@@ -337,6 +338,10 @@ def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     if not isinstance(policy_logits, np.ndarray):
         policy_logits = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
     policy_probs = torch.softmax(torch.tensor(policy_logits), dim=0).numpy()
+    
+    # Validate the output probabilities
+    validate_probabilities(policy_probs, "Policy logits to probs")
+    
     return policy_probs
 
 def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.ndarray:
@@ -375,14 +380,8 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     # Apply softmax
     probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
     
-    # Validate that we got reasonable probabilities
-    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
-        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
-    
-    # Note: This check is redundant since softmax should never return all zeros for finite input
-    # But it's kept as a safety check for edge cases
-    if np.sum(probs) == 0:
-        raise ValueError(f"All probabilities are zero! Logits min/max: {logits.min():.6f}/{logits.max():.6f}, temperature: {temperature}")
+    # Validate that we got reasonable probabilities using our validation function
+    validate_probabilities(probs, f"Temperature-scaled softmax (T={temperature})")
     
     return probs
 
@@ -477,14 +476,8 @@ def policy_logits_to_probs_2d(policy_logits: np.ndarray, temperature: float = 1.
     # Reshape back to original shape
     probs = probs_flat.reshape(original_shape)
     
-    # Validate that we got reasonable probabilities
-    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
-        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
-    
-    # Note: This check is redundant since softmax should never return all zeros for finite input
-    # But it's kept as a safety check for edge cases
-    if np.sum(probs) == 0:
-        raise ValueError(f"All probabilities are zero! Logits min/max: {policy_logits.min():.6f}/{policy_logits.max():.6f}, temperature: {temperature}")
+    # Validate that we got reasonable probabilities using our validation function
+    validate_probabilities(probs, f"2D policy logits to probs (T={temperature})")
     
     return probs
 
