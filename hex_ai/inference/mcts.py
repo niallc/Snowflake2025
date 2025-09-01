@@ -1696,8 +1696,7 @@ def create_mcts_config(
         # Confidence-based termination (always enabled)
         "enable_confidence_termination": True,
         # Depth-based discounting to encourage shorter wins
-        #TODO: Re-enable depth_discounting once we've checked it's not the source of poor play.
-        "enable_depth_discounting": False,  # NOTE: TEMPORARILY Disabled!
+        "enable_depth_discounting": True,
         "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
