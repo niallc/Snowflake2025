@@ -686,8 +686,9 @@ def run_deterministic_tournament(
         for i, opening in enumerate(openings):
             f.write(f"Opening {i+1}: {opening.get_trmph_string()}\n")
     
-    # Track games for duplicate detection
-    seen_games = set()
+    # Track games for duplicate detection with more detailed tracking
+    seen_games = set()  # All games across all strategy pairs and openings
+    current_pair_games = {}  # Games from current strategy pair: {opening_idx: [game1_key, game2_key]}
     
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
@@ -697,6 +698,9 @@ def run_deterministic_tournament(
         pair_name = f"{strategy_a.name}_vs_{strategy_b.name}"
         trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
         csv_file = os.path.join(output_dir, f"{pair_name}.csv")
+        
+        # Reset tracking for this strategy pair
+        current_pair_games = {}
         
         # Play games from each opening position
         game_results = []
@@ -721,30 +725,31 @@ def run_deterministic_tournament(
             )
             game_results.append(result_2)
             
-            # Check for duplicate games
+            # Store games for this opening to check for immediate duplicates (Case 1)
             game_1_key = f"{result_1['trmph_str']}_{result_1['winner_char']}"
             game_2_key = f"{result_2['trmph_str']}_{result_2['winner_char']}"
+            current_pair_games[opening_idx] = [game_1_key, game_2_key]
             
-            logger.debug(f"Game 1 key: {game_1_key}")
-            logger.debug(f"Game 2 key: {game_2_key}")
-            logger.debug(f"Game 1 winner: {result_1['winner_strategy']} ({result_1['winner_char']})")
-            logger.debug(f"Game 2 winner: {result_2['winner_strategy']} ({result_2['winner_char']})")
+            # Case 1: Check if both strategies produced the same game from this opening
+            if game_1_key == game_2_key:
+                opening_trmph = opening.get_trmph_string()
+                print(f"Warning: {strategy_a.name} and {strategy_b.name} both produced same game {opening_trmph}")
             
-            if game_1_key in seen_games:
-                logger.warning(f"DUPLICATE GAME DETECTED! Game 1 already seen: {game_1_key}")
-                logger.warning(f"  Strategy A: {strategy_a.name}, Strategy B: {strategy_b.name}")
-                logger.warning(f"  Opening: {opening_idx + 1}, Opening moves: {opening.moves}")
-                logger.warning(f"  Result: {result_1['winner_strategy']} wins with {result_1['num_moves']} moves")
-            else:
-                seen_games.add(game_1_key)
-            
-            if game_2_key in seen_games:
-                logger.warning(f"DUPLICATE GAME DETECTED! Game 2 already seen: {game_2_key}")
-                logger.warning(f"  Strategy B: {strategy_b.name}, Strategy A: {strategy_a.name}")
-                logger.warning(f"  Opening: {opening_idx + 1}, Opening moves: {opening.moves}")
-                logger.warning(f"  Result: {result_2['winner_strategy']} wins with {result_2['num_moves']} moves")
-            else:
-                seen_games.add(game_2_key)
+            # Case 2: Check if either game duplicates a game from a different opening (SHOULD BE IMPOSSIBLE)
+            for other_opening_idx, other_games in current_pair_games.items():
+                if other_opening_idx != opening_idx:  # Different opening
+                    duplicate_game = None
+                    if game_1_key in other_games:
+                        duplicate_game = game_1_key
+                    elif game_2_key in other_games:
+                        duplicate_game = game_2_key
+                    
+                    if duplicate_game:
+                        print(f"ERROR: Game from opening {opening_idx + 1} duplicates game from opening {other_opening_idx + 1}")
+                        print(f"  This should be impossible! Opening positions should guarantee unique games.")
+                        print(f"  Opening {opening_idx + 1}: {opening.moves}")
+                        print(f"  Opening {other_opening_idx + 1}: {openings[other_opening_idx].moves}")
+                        sys.exit(1)
             
             # Log TRMPH results
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], trmph_file)
@@ -804,6 +809,16 @@ def run_deterministic_tournament(
             
             if verbose >= 1:
                 print(f":{result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
+        
+        # Case 3: Check for duplicate games across different strategy pairs
+        for result_data in game_results:
+            game_key = f"{result_data['trmph_str']}_{result_data['winner_char']}"
+            
+            if game_key in seen_games:
+                opening_trmph = result_data['opening'].get_trmph_string()
+                print(f"Warning: Duplicate game across strategy pairs from {opening_trmph}")
+            else:
+                seen_games.add(game_key)
         
         if verbose >= 1:
             print()  # New line after games
