@@ -15,7 +15,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
+from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, temperature_scaled_softmax, ValuePredictor
 from hex_ai.enums import Player
 from hex_ai.value_utils import (
     policy_logits_to_probs,
@@ -46,6 +46,10 @@ CORS(app)
 # Current MCTS: <1 move/sec despite batching ~64 evaluations
 # This represents a ~100x slowdown that needs systematic investigation
 # Key areas: state copying, tree traversal overhead, batch utilization, model call efficiency
+
+# NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+# returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+# which were the old sigmoid-based outputs.
 
 # TODO: Refactor duplicated logic across API functions
 # The following functions share common patterns that should be extracted into utilities:
@@ -179,8 +183,8 @@ def clear_model_wrapper_cache():
     app.logger.info("Model cache cleared")
     return 0  # Return 0 since we don't track individual cache sizes anymore
 
-def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                       temperature, verbose, model_move=None, model_id=None):
+def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
+                         temperature, verbose, model_move=None, model_id=None):
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
     
@@ -200,7 +204,7 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
         try:
             current_player_enum = state.current_player_enum
             current_player_color = winner_to_color(current_player_enum)
-            win_prob = get_win_prob_from_model_output(value_logit, current_player_enum)
+            win_prob = ValuePredictor.get_win_probability(value_signed, current_player_enum)
         except Exception as e:
             # Log the error and provide fallback values
             app.logger.error(f"Error in app.py debug info generation: {e}")
@@ -211,7 +215,7 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "current_player_raw": state.current_player,  # Add raw value for debugging
             "game_over": state.game_over,
             "legal_moves_count": len(state.get_legal_moves()),
-            "value_logit": float(value_logit),
+            "value_signed": float(value_signed),
             "win_probability": float(win_prob),
             "temperature": temperature,
             "model_move": model_move
@@ -415,12 +419,12 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         # Get direct policy comparison
         app.logger.info("Getting direct policy comparison...")
         policy_start = time.time()
-        policy_logits, value_logit = model.simple_infer(trmph)
+        policy_logits, value_output = model.simple_infer(trmph)
         policy_time = time.time() - policy_start
         app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
         
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_logit: {value_logit}")
+        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
         
         # Get legal moves and their probabilities
         legal_moves = state.get_legal_moves()
@@ -858,13 +862,13 @@ def api_state():
 
     # Model inference - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(trmph)
+    policy_logits, value_signed = model.simple_infer(trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     # Map policy to trmph moves
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
     # Win probability for current player - use enum directly
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -877,7 +881,7 @@ def api_state():
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "trmph": trmph,
     })
@@ -911,7 +915,7 @@ def api_apply_move():
     # Debug logging for board data (only if verbose >= 4)
     if verbose >= 4:
         app.logger.debug(f"Apply move - Board data being sent to frontend: {board}")
-        app.logger.debug(f"Apply move - Board type: {type(board)}, Board shape: {len(board)}x{len(board[0]) if board else 0}")
+        app.logger.debug(f"Apply move - Board data type: {type(board)}, Board shape: {len(board[0]) if board else 0}")
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
@@ -921,11 +925,12 @@ def api_apply_move():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
+    # TODO: value_logits don't exist anymore with tanh activation. Rename these to match naming in mcts.py.
+    policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -940,7 +945,7 @@ def api_apply_move():
         "winner": winner_color,
         "model_move": None,  # No computer move made
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
     })
 
@@ -991,11 +996,12 @@ def api_apply_trmph_sequence():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
+    # TODO: value_logits don't exist anymore with tanh activation. Rename these to match naming in mcts.py.
+    policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1009,7 +1015,7 @@ def api_apply_trmph_sequence():
         "legal_moves": legal_moves,
         "winner": winner_color,
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "moves_applied": len(moves),
         "game_over": state.game_over,

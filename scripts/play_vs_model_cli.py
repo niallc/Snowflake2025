@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Play Hex against a trained model via command line interface.
+
+NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+which were the old sigmoid-based outputs.
+"""
 import argparse
 import numpy as np
 import random
@@ -15,7 +22,7 @@ from hex_ai.value_utils import (
     ValuePerspective,
     model_output_to_prob,
     winner_to_color,
-    get_win_prob_from_model_output,
+    ValuePredictor,
     get_policy_probs_from_logits,
     temperature_scaled_softmax,
     # Add new utilities
@@ -119,9 +126,9 @@ def main():
             display_hex_board(state.board)
             print(f"Current .trmph: {state.to_trmph()}")
             # Show network's confidence (value head) for current player
-            _, _, value_logit = model.simple_infer(state.board)
+            _, _, value_signed = model.simple_infer(state.board)
             current_winner = Winner.BLUE if state.current_player_enum == Player.BLUE else Winner.RED
-            value = get_win_prob_from_model_output(value_logit, current_winner)
+            value = ValuePredictor.get_win_probability(value_signed, current_winner)
             player_str = current_winner.name.capitalize()
             print(f"Network confidence ({player_str} to play): {value:.3f} (probability {player_str} wins)")
             if state.current_player_enum == human_player:
@@ -149,7 +156,7 @@ def main():
                 print(f"Model plays: {colored_move}")
                 # Print model's win probability for its own color after its move
                 if move_value is not None:
-                    win_prob = get_win_prob_from_model_output(move_value, model_color_enum)
+                    win_prob = ValuePredictor.get_win_probability(move_value, model_color_enum)
                     print(f"Model's win probability ({model_color_enum.name.capitalize()}): {win_prob:.3f}")
                 state = apply_move_to_state(state, *move)
             move_num += 1

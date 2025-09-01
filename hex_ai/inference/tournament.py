@@ -8,7 +8,7 @@ from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import (
     Winner, 
-    get_win_prob_from_model_output,
+    ValuePredictor,
     # Add new utilities
     policy_logits_to_probs,
     get_legal_policy_probs,
@@ -37,6 +37,10 @@ from hex_ai.value_utils import int_to_player
 # TODO: Use incremental winner detection (UnionFind) for efficiency
 # TODO: Add Swiss, knockout, and other tournament types
 # TODO: Add logging and checkpointing for long tournaments
+
+# NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+# returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+# which were the old sigmoid-based outputs.
 
 @dataclass
 class GameResult:
@@ -188,8 +192,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
         return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
     
     # Evaluate win prob for blue after first move
-    _, value_logit = model_2.simple_infer(state.board)
-    win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
+    _, value_signed = model_2.simple_infer(state.board)
+    win_prob_blue = ValuePredictor.get_win_probability_for_winner(value_signed, Winner.BLUE)
     
     # Decide whether to swap: Red swaps if Blue's position is too good (>= threshold)
     if win_prob_blue >= play_config.swap_threshold:

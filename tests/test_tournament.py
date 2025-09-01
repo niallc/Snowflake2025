@@ -5,7 +5,7 @@ import os
 import time
 from hex_ai.utils import tournament_logging
 from hex_ai.inference import tournament
-from hex_ai.value_utils import get_win_prob_from_model_output, Winner
+from hex_ai.value_utils import ValuePredictor, Winner
 from hex_ai.enums import Piece
 import numpy as np
 
@@ -44,29 +44,29 @@ def print_timing_summary(request):
 # UNIT TESTS - Pure functions, no model inference or complex mocks
 # ============================================================================
 
-def test_get_win_prob_from_model_output_valid():
-    """Test win probability calculation from model output logits."""
-    # Model output 0.7 (sigmoid), so prob_red_win ~0.668
-    import torch
-    logit = torch.logit(torch.tensor(0.7)).item()
+def test_value_predictor_win_probability_valid():
+    """Test win probability calculation from model output using ValuePredictor."""
+    # Model output in [-1, 1] range (tanh activated)
+    # Test with a value that represents 0.7 probability for Red
+    value_output = 0.4  # This maps to 0.7 probability for Red: (0.4 + 1) / 2 = 0.7
     # Should work for Winner enums
-    p_blue = get_win_prob_from_model_output(logit, Winner.BLUE)
-    p_red = get_win_prob_from_model_output(logit, Winner.RED)
+    p_blue = ValuePredictor.get_win_probability_for_winner(value_output, Winner.BLUE)
+    p_red = ValuePredictor.get_win_probability_for_winner(value_output, Winner.RED)
     # Should also work for Winner enums (no string support)
-    p_blue2 = get_win_prob_from_model_output(logit, Winner.BLUE)
-    p_red2 = get_win_prob_from_model_output(logit, Winner.RED)
+    p_blue2 = ValuePredictor.get_win_probability_for_winner(value_output, Winner.BLUE)
+    p_red2 = ValuePredictor.get_win_probability_for_winner(value_output, Winner.RED)
     assert abs(p_blue + p_red - 1.0) < 1e-6
     assert abs(p_blue - p_blue2) < 1e-6
     assert abs(p_red - p_red2) < 1e-6
 
-def test_get_win_prob_from_model_output_invalid():
-    """Test win probability calculation with invalid inputs."""
-    import torch
-    logit = torch.logit(torch.tensor(0.7)).item()
+def test_value_predictor_win_probability_invalid():
+    """Test win probability calculation with invalid inputs using ValuePredictor."""
+    # Model output in [-1, 1] range (tanh activated)
+    value_output = 0.4
     with pytest.raises(ValueError):
-        get_win_prob_from_model_output(logit, 0)  # int not allowed
+        ValuePredictor.get_win_probability_for_winner(value_output, 0)  # int not allowed
     with pytest.raises(ValueError):
-        get_win_prob_from_model_output(logit, 'blue')  # strings no longer accepted
+        ValuePredictor.get_win_probability_for_winner(value_output, 'blue')  # strings no longer accepted
 
 def test_determine_winner_and_swap_logic():
     """Test that determine_winner correctly maps winner to model and color, with and without swap."""
@@ -144,14 +144,14 @@ def test_handle_pie_rule_swap_and_no_swap():
             self.checkpoint_path = "dummy"
         def infer(self, board):
             import numpy as np
-            import torch
             policy_logits = np.ones(169, dtype=np.float32)
-            # Convert Blue win probability to the correct logit
-            # get_win_prob_from_model_output expects: sigmoid(logit) = prob_red_win
-            # So if we want Blue to have win_prob_blue, we need sigmoid(logit) = 1.0 - win_prob_blue
-            prob_red_win = 1.0 - self.win_prob_blue
-            logit = torch.logit(torch.tensor(prob_red_win)).item()
-            return policy_logits, logit
+            # Convert Blue win probability to the correct model output
+            # ValuePredictor expects: model output in [-1, 1] range (tanh activated)
+            # If we want Blue to have win_prob_blue, we need model output that gives that probability
+            # For Blue win probability p, we need: (model_output + 1) / 2 = 1 - p
+            # So: model_output = 2 * (1 - p) - 1 = 1 - 2p
+            model_output = 1.0 - 2.0 * self.win_prob_blue
+            return policy_logits, model_output
         def simple_infer(self, board):
             # Add the method that the code expects
             return self.infer(board)

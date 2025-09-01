@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Simple inference CLI for Hex AI models.
+
+NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+which were the old sigmoid-based outputs.
+"""
 import argparse
 import sys
 import os
@@ -7,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.value_utils import ValuePerspective, get_win_prob_from_model_output, Winner, get_policy_probs_from_logits
+from hex_ai.value_utils import ValuePerspective, ValuePredictor, Winner, get_policy_probs_from_logits
 from hex_ai.models import TwoHeadedResNet
 
 def main():
@@ -30,15 +37,15 @@ def main():
     infer.display_board(args.trmph)
 
     print("\n--- Model Predictions ---")
-    policy_logits, value_logit = infer.simple_infer(args.trmph)
+    policy_logits, value_signed = infer.simple_infer(args.trmph)
     # Use the updated method that accepts logits directly
     top_moves = infer.get_top_k_moves(policy_logits, k=args.topk)
     print(f"Top {args.topk} moves (trmph format, probability):")
     for move, prob in top_moves:
         print(f"  {move}: {prob:.3f}")
-    print(f"Value head (logit): {value_logit:.3f}")
-    blue_prob = get_win_prob_from_model_output(value_logit, Winner.BLUE)
-    red_prob = get_win_prob_from_model_output(value_logit, Winner.RED)
+    print(f"Value head (signed): {value_signed:.3f}")
+    blue_prob = ValuePredictor.get_win_probability(value_signed, Winner.BLUE)
+    red_prob = ValuePredictor.get_win_probability(value_signed, Winner.RED)
     print(f"Value head (probability Blue wins): {blue_prob:.3f}")
     print(f"Value head (probability Red wins): {red_prob:.3f}")
 
