@@ -61,7 +61,7 @@ def test_early_termination():
         print(f"\n🧪 Testing: {name}")
         print(f"   Confidence termination: {config.enable_confidence_termination}")
         if config.enable_confidence_termination:
-            print(f"   Threshold: {config.confidence_termination_threshold} (stops when win prob ≥{config.confidence_termination_threshold} OR ≤{1-config.confidence_termination_threshold})")
+            print(f"   Threshold: {config.confidence_termination_threshold} (stops when signed value ≥{config.confidence_termination_threshold} OR ≤-{config.confidence_termination_threshold})")
         
         # Run MCTS
         mcts = BaselineMCTS(engine, model, config)

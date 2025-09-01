@@ -65,7 +65,7 @@ PRINCIPAL_VARIATION_MAX_LENGTH = 10
 # PUCT calculation threshold for avoiding division by zero
 PUCT_CALCULATION_THRESHOLD = 1e-9
 
-# Default confidence-based termination threshold
+# Default confidence-based termination threshold (distance from neutral for signed values)
 DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 
 # Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
@@ -321,36 +321,44 @@ class AlgorithmTerminationChecker:
         
         # 2. Check neural network confidence (requires root expansion)
         if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
-            win_prob = self._get_root_win_probability(root, eval_cache)
-            if self._is_position_clearly_decided(win_prob):
+            signed_value = self._get_root_signed_value(root, eval_cache)
+            if self._is_position_clearly_decided(signed_value):
                 if verbose >= 2:
-                    print(f"🎮 MCTS: Confidence-based termination (win prob: {win_prob:.3f})")
+                    print(f"🎮 MCTS: Confidence-based termination (signed value: {signed_value:.3f})")
                 return AlgorithmTerminationInfo(
                     reason="neural_network_confidence",
                     move=None,  # Will use top policy move
-                    win_prob=win_prob
+                    win_prob=signed_value
                 )
         
         return None  # Continue with MCTS
     
-    def _get_root_win_probability(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
-        """Get win probability for current player from neural network (edge conversion)."""
+    def _get_root_signed_value(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
+        """Get signed value for current player from neural network (edge conversion)."""
         cached = eval_cache.get(root.state_hash)
         if cached is None:
             raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
         _, value_signed = cached
-        # Convert signed value to probability only at the edge (for confidence termination)
+        
+        # Validate that the cached value is in the expected signed range
+        if not -1.1 <= value_signed <= 1.1:
+            raise ValueError(f"Neural network output {value_signed} is outside expected signed range [-1, 1]. "
+                           f"This suggests a mismatch between probability and signed value semantics.")
+        
+        # Convert signed value to player-to-move perspective for confidence termination
         # value_signed is the tanh-activated output in [-1,1] range in Red's perspective
         v_red_signed = float(value_signed)
         # Flip to player-to-move perspective: if RED to move keep v_red_signed, if BLUE to move flip to -v_red_signed
         v_curr_signed = red_signed_to_curr_signed(v_red_signed, root.to_play)
-        # Convert to probability for confidence checking
-        return signed_to_prob(v_curr_signed)
+        # Return signed value directly (no conversion to probability needed)
+        return v_curr_signed
     
-    def _is_position_clearly_decided(self, win_prob: float) -> bool:
-        """Check if position is clearly won or lost."""
-        return (win_prob >= self.cfg.confidence_termination_threshold or 
-                win_prob <= (1.0 - self.cfg.confidence_termination_threshold))
+    def _is_position_clearly_decided(self, signed_value: float) -> bool:
+        """Check if position is clearly won or lost using signed values."""
+        # signed_value is in [-1, 1] range in player-to-move perspective
+        # Check if position is clearly won (> threshold) or clearly lost (< -threshold)
+        return (signed_value >= self.cfg.confidence_termination_threshold or 
+                signed_value <= -self.cfg.confidence_termination_threshold)
 
 # ------------------ Config ------------------
 @dataclass
@@ -379,7 +387,7 @@ class BaselineMCTSConfig:
 
     # Confidence-based termination parameters
     enable_confidence_termination: bool = False
-    confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD
+    confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD  # Distance from neutral (0) for termination
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
@@ -432,7 +440,7 @@ class BaselineMCTSConfig:
         if self.terminal_detection_max_depth < 0:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
         if not 0 <= self.confidence_termination_threshold <= 1:
-            raise ValueError(f"confidence_termination_threshold must be between 0 and 1, got {self.confidence_termination_threshold}")
+            raise ValueError(f"confidence_termination_threshold must be between 0 and 1 (represents distance from neutral), got {self.confidence_termination_threshold}")
         if not 0 < self.depth_discount_factor <= 1:
             raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
 
@@ -1601,7 +1609,7 @@ def create_mcts_config(
     Args:
         config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
         sims: Number of simulations (overrides preset default)
-        confidence_termination_threshold: Win probability threshold for confidence termination (overrides preset default)
+        confidence_termination_threshold: Distance from neutral for confidence termination (overrides preset default)
         cache_size: Cache size for MCTS evaluation cache (overrides preset default)
         **kwargs: Additional parameters to override in the configuration
         
@@ -1651,9 +1659,9 @@ def create_mcts_config(
     config_params.update(kwargs)
     
     # Add common parameters that are the same across all presets
-    config_params.update({
+    # Only set defaults for parameters that weren't provided in kwargs
+    common_params = {
         "batch_cap": DEFAULT_BATCH_CAP,
-        "c_puct": DEFAULT_C_PUCT,
         "dirichlet_alpha": DEFAULT_DIRICHLET_ALPHA,
         "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
         "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
@@ -1671,8 +1679,17 @@ def create_mcts_config(
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-
-    })
+    }
+    
+    # Only set parameters if not already provided in kwargs
+    if "c_puct" not in config_params:
+        common_params["c_puct"] = DEFAULT_C_PUCT
+    if "dirichlet_alpha" not in config_params:
+        common_params["dirichlet_alpha"] = DEFAULT_DIRICHLET_ALPHA
+    if "dirichlet_eps" not in config_params:
+        common_params["dirichlet_eps"] = DEFAULT_DIRICHLET_EPS
+    
+    config_params.update(common_params)
     
     return BaselineMCTSConfig(**config_params)
 

@@ -37,6 +37,7 @@ python scripts/validate_environment.py
  - Do *not* focus on backward compatibility. If things change we'll update upstream and downstream code to have one clean modern approach. We don't want adapters and logic to handle old methods -- the code becomes hard to maintan then. Right now it's not a problem to just update other parts of the code. If it's too much to do at once, leave some TODO statements or similar to track what subsequent updates are needed to use the new approach. 
  - When writing code to test a fix, place it in temp/ and delete it when finished.
  - If running code to check that it works, but mindful of how computationally intensive it is! Creating more than 3 games takes time, generating move with more than e.g. 100 MCTS simulations per move takes time.
+  - Don't aim to maintain backward compatibility or build compatibility layers for out of date interfaces. Instead build single clean code paths. If in doubt, STOP and explain the issue, then we can decide how to resolve call-sites with different patterns, or similar issues.
 
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions
