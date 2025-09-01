@@ -2,20 +2,29 @@
 # Lean, single-threaded, explicitly-batched AlphaZero-style MCTS for Hex.
 # Compatible with flat-file or package imports via shims.
 #
-# WINNER PERSPECTIVE HANDLING:
-# This MCTS implementation uses a consistent approach to handle winner perspectives:
-# 1. Neural network outputs values in Red's perspective: +1 = Red win, -1 = Blue win
-# 2. Terminal nodes return values in Red's perspective: +1 = Red win, -1 = Blue win  
-# 3. During backpropagation, values are flipped to player-to-move perspective using red_signed_to_curr_signed()
-#    and discounted using distance-to-leaf (prefer shorter wins) with apply_depth_discount_signed()
-# 4. Final output is converted to probability using signed_to_prob() for external API
-# 
+# REFERENCE FRAME HANDLING:
+# This MCTS implementation manages three distinct reference frames for signed values [-1,1]:
+# 1. Neural network outputs: Always in Red's reference frame (red_ref_signed)
+#    +1 = Red win, -1 = Blue win
+# 2. Terminal nodes: Always in Red's reference frame (red_ref_signed)  
+#    +1 = Red win, -1 = Blue win
+# 3. MCTS tree values: Stored in player-to-move reference frame (ptm_ref_signed)
+#    +1 = current player wins, -1 = current player loses
+# 4. Final output: Converted to root player reference frame (root_ref_signed) for external API
+#
+# Notation: 
+# - red_ref = Red's reference frame
+# - ptm_ref = Player-to-move reference frame  
+# - root_ref = Root player reference frame
+# - signed = Values in [-1,1] range
+# - prob = Values in [0,1] range (probabilities)
+#
 # Key variable naming convention:
-# - v_red_signed: Always in Red's perspective (+1 = Red win, -1 = Blue win)
-# - v_curr_signed: In player-to-move perspective (+1 = current player wins, -1 = current player loses)
-# - value_signed: From neural network cache, in Red's perspective
-# - p_red: Red win probability in [0,1] range
-# - p_curr: Current player win probability in [0,1] range
+# - v_red_ref_signed: Always in Red's reference frame (+1 = Red win, -1 = Blue win)
+# - v_ptm_ref_signed: In player-to-move reference frame (+1 = current player wins, -1 = current player loses)
+# - value_signed: From neural network cache, in Red's reference frame
+# - p_red_prob: Red win probability in [0,1] range
+# - p_ptm_prob: Player-to-move win probability in [0,1] range
 #
 # TODO: Future improvements to consider:
 # - Add memory pooling for large tree structures to reduce allocation overhead
@@ -42,7 +51,7 @@ from collections import OrderedDict, deque
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
-from hex_ai.value_utils import player_to_winner, red_signed_to_curr_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
+from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
@@ -116,7 +125,7 @@ def add_to_accumulated_value(w: float, v: float) -> float:
     
     Args:
         w: Current accumulated value
-        v: Value to add (should be in player-to-move signed perspective)
+        v: Value to add (should be in player-to-move reference frame, signed)
         
     Returns:
         New accumulated value (w + v)
@@ -345,17 +354,17 @@ class AlgorithmTerminationChecker:
             raise ValueError(f"Neural network output {value_signed} is outside expected signed range [-1, 1]. "
                            f"This suggests a mismatch between probability and signed value semantics.")
         
-        # Convert signed value to player-to-move perspective for confidence termination
-        # value_signed is the tanh-activated output in [-1,1] range in Red's perspective
-        v_red_signed = float(value_signed)
-        # Flip to player-to-move perspective: if RED to move keep v_red_signed, if BLUE to move flip to -v_red_signed
-        v_curr_signed = red_signed_to_curr_signed(v_red_signed, root.to_play)
+        # Convert signed value to player-to-move reference frame for confidence termination
+        # value_signed is the tanh-activated output in [-1,1] range in Red's reference frame
+        v_red_ref_signed = float(value_signed)
+        # Flip to player-to-move reference frame: if RED to move keep v_red_ref_signed, if BLUE to move flip to -v_red_ref_signed
+        v_ptm_ref_signed = red_ref_signed_to_ptm_ref_signed(v_red_ref_signed, root.to_play)
         # Return signed value directly (no conversion to probability needed)
-        return v_curr_signed
+        return v_ptm_ref_signed
     
     def _is_position_clearly_decided(self, signed_value: float) -> bool:
         """Check if position is clearly won or lost using signed values."""
-        # signed_value is in [-1, 1] range in player-to-move perspective
+        # signed_value is in [-1, 1] range in player-to-move reference frame
         # Check if position is clearly won (> threshold) or clearly lost (< -threshold)
         return (signed_value >= self.cfg.confidence_termination_threshold or 
                 signed_value <= -self.cfg.confidence_termination_threshold)
@@ -496,8 +505,8 @@ class MCTSNode:
         # Stats (aligned to legal_moves order)
         self.children: List[Optional[MCTSNode]] = [None] * L
         self.N = np.zeros(L, dtype=np.int32)   # visit counts per action
-        self.W = np.zeros(L, dtype=np.float64) # total value per action
-        self.Q = np.zeros(L, dtype=np.float64) # mean value per action
+        self.W = np.zeros(L, dtype=np.float64) # accumulated values in ptm_ref_signed
+        self.Q = np.zeros(L, dtype=np.float64) # mean values in ptm_ref_signed
         self.P = np.zeros(L, dtype=np.float64) # prior probability per action (set on expand)
         self.is_expanded: bool = False
         self.state_hash: int = board_key(state)
@@ -527,7 +536,7 @@ class BaselineMCTS:
 
         # LRU Cache: board_key -> (policy_logits_np [A], value_signed_float)
         # Uses OrderedDict for O(1) LRU eviction
-        # Note: value_signed is the tanh-activated output in [-1,1] range in Red's perspective (not a logit)
+        # Note: value_signed is the tanh-activated output in [-1,1] range in Red's reference frame (red_ref_signed)
         self.eval_cache: OrderedDict[int, Tuple[np.ndarray, float]] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
@@ -1155,13 +1164,13 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
-            # Determine signed value for this leaf (always in Red's perspective: +1 = Red win, -1 = Blue win)
+            # Determine signed value for this leaf (always in Red's reference frame: +1 = Red win, -1 = Blue win)
             if leaf.is_terminal:
                 v_red_signed = self._get_terminal_value(leaf)
             else:
                 v_red_signed = self._get_neural_network_value(leaf)
             
-            # Backpropagate Red's signed value along path (will be flipped to player-to-move perspective during backprop)
+            # Backpropagate Red's signed value along path (will be flipped to player-to-move reference frame during backprop)
             self._backpropagate_path(path, v_red_signed, leaf.depth)
             simulations_completed += 1
         
@@ -1169,7 +1178,7 @@ class BaselineMCTS:
         return simulations_completed
 
     def _get_terminal_value(self, leaf: MCTSNode) -> float:
-        """Get signed value for a terminal leaf in Red's perspective: +1 = Red win, -1 = Blue win."""
+        """Get signed value for a terminal leaf in Red's reference frame: +1 = Red win, -1 = Blue win."""
         if leaf.winner == Winner.RED:
             return 1.0  # +1 = certain Red win
         elif leaf.winner == Winner.BLUE:
@@ -1178,36 +1187,37 @@ class BaselineMCTS:
             raise ValueError(f"Invalid winner enum for terminal Hex node: {leaf.winner!r} (draws are not possible in Hex)")
 
     def _get_neural_network_value(self, leaf: MCTSNode) -> float:
-        """Get signed value for a non-terminal leaf from neural network in Red's perspective: +1 = Red win, -1 = Blue win."""
+        """Get signed value for a non-terminal leaf from neural network in Red's reference frame: +1 = Red win, -1 = Blue win."""
         cached = self._get_from_cache(leaf.state_hash)
         if cached is None:
             raise RuntimeError(f"Leaf state not found in cache: {leaf.state_hash}")
         _, value_signed = cached
-        # Return signed value directly - tanh activation gives values in [-1,1] range in Red's perspective
+        # Return signed value directly - tanh activation gives values in [-1,1] range in Red's reference frame
         return float(value_signed)
 
-    def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], v_red_signed: float, leaf_depth: int):
+    def _backpropagate_path(self, path: List[Tuple[MCTSNode, int]], v_red_ref_signed: float, leaf_depth: int):
         """
         Backpropagate signed value along a path from leaf to root.
         
         Args:
             path: List of (node, action_index) pairs from root to leaf
-            v_red_signed: Signed value in Red's perspective (+1 = Red win, -1 = Blue win)
+            v_red_ref_signed: Signed value in Red's reference frame (+1 = Red win, -1 = Blue win)
             leaf_depth: Depth of the leaf node for distance-to-leaf calculation
         """
         for (node, a_idx) in reversed(path):
-            # Convert Red's signed value to player-to-move perspective
-            # If RED to move: keep v_red_signed; if BLUE to move: flip to -v_red_signed
-            v_curr_signed = red_signed_to_curr_signed(v_red_signed, node.to_play)
+            # Convert Red's signed value to player-to-move reference frame
+            # If RED to move: keep v_red_ref_signed; if BLUE to move: flip to -v_red_ref_signed
+            # This converts the leaf evaluation to "how good is this for the player at this node"
+            v_ptm_ref_signed = red_ref_signed_to_ptm_ref_signed(v_red_ref_signed, node.to_play)
             
             # Apply depth discounting in signed space (shrink toward 0)
             if self.cfg.enable_depth_discounting and node.depth > 0:
                 # Use distance-to-leaf for more intuitive discounting: prefer shorter wins
                 distance = distance_to_leaf(node.depth, leaf_depth)
-                v_curr_signed = apply_depth_discount_signed(v_curr_signed, self.cfg.depth_discount_factor, distance)
+                v_ptm_ref_signed = apply_depth_discount_signed(v_ptm_ref_signed, self.cfg.depth_discount_factor, distance)
             
             node.N[a_idx] = increment_visit_count(node.N[a_idx])
-            node.W[a_idx] = add_to_accumulated_value(node.W[a_idx], v_curr_signed)
+            node.W[a_idx] = add_to_accumulated_value(node.W[a_idx], v_ptm_ref_signed)
             node.Q[a_idx] = q_from_w_n(node.W[a_idx], node.N[a_idx])
 
     # ---------- New Result Computation Methods ----------
@@ -1291,8 +1301,8 @@ class BaselineMCTS:
         
         Returns:
             Dictionary containing:
-            - v_curr_signed_root: v_curr_signed (player-to-move signed value, +1 = current player wins, -1 = current player loses)
-            - v_curr_signed_best_child: v_curr_signed (player-to-move signed value, +1 = current player wins, -1 = current player loses)
+            - v_ptm_ref_signed_root: v_ptm_ref_signed (player-to-move reference frame, +1 = root player wins, -1 = root player loses)
+            - v_ptm_ref_signed_best_child: v_ptm_ref_signed (player-to-move reference frame, +1 = root player wins, -1 = root player loses)
             - visit_counts: Move visit counts in TRMPH format
             - mcts_probabilities: Move probabilities based on visit counts
             - Other tree statistics
@@ -1302,8 +1312,8 @@ class BaselineMCTS:
             return {
                 "visit_counts": {},
                 "mcts_probabilities": {},
-                "v_curr_signed_root": 0.0,
-                "v_curr_signed_best_child": 0.0,
+                "v_ptm_ref_signed_root": 0.0,
+                "v_ptm_ref_signed_best_child": 0.0,
                 "total_visits": 0,
                 "inferences": 0,
                 "total_nodes": 0,
@@ -1326,19 +1336,31 @@ class BaselineMCTS:
             else:
                 mcts_probabilities[move_trmph] = 0.0
 
-        # Get root value (average value of all children) - in player-to-move signed perspective
-        # root.W contains accumulated values in player-to-move perspective from backpropagation
+        # Get root value (average value of all children) - in player-to-move reference frame
+        # root.W contains accumulated values in player-to-move reference frame from backpropagation
+        # 
+        # This is from the ROOT player's perspective, representing the average value of all children.
+        # It's the average of "how good are all the moves for the root player"
         if total_visits > 0:
-            v_curr_signed_root = float(np.sum(root.W) / total_visits)  # v_curr_signed: +1 = current player wins, -1 = current player loses
+            v_ptm_ref_signed_root = float(np.sum(root.W) / total_visits)  # v_ptm_ref_signed: +1 = root player wins, -1 = root player loses
         else:
-            v_curr_signed_root = 0.0
+            v_ptm_ref_signed_root = 0.0
 
-        # Get best child value - in player-to-move signed perspective
-        # root.Q contains average values (W/N) in player-to-move perspective
+        # Get best child value - in player-to-move reference frame
+        # root.Q contains average values (W/N) in player-to-move reference frame
+        # 
+        # IMPORTANT: This is from the ROOT player's perspective, not the child's perspective.
+        # 
+        # Here's what happens during backpropagation:
+        # 1. Leaf node evaluates position in Red's reference frame (e.g., +0.8 = Red winning)
+        # 2. During backprop, this gets converted to each node's player-to-move reference frame
+        # 3. At the root, root.Q[i] represents "how good is move i for the root player"
+        # 4. So v_ptm_ref_signed_best_child is the best move's value from the root player's perspective
+        # 5. This is NOT the child's evaluation of its own position
         if len(root.Q) > 0:
-            v_curr_signed_best_child = float(np.max(root.Q))  # v_curr_signed: +1 = current player wins, -1 = current player loses
+            v_ptm_ref_signed_best_child = float(np.max(root.Q))  # v_ptm_ref_signed: +1 = root player wins, -1 = root player loses
         else:
-            v_curr_signed_best_child = 0.0
+            v_ptm_ref_signed_best_child = 0.0
 
         # Calculate total inferences (cache misses)
         total_inferences = self.cache_misses
@@ -1352,8 +1374,8 @@ class BaselineMCTS:
         return {
             "visit_counts": visit_counts,
             "mcts_probabilities": mcts_probabilities,
-            "v_curr_signed_root": v_curr_signed_root,  # v_curr_signed: player-to-move signed value (+1 = current player wins, -1 = current player loses)
-            "v_curr_signed_best_child": v_curr_signed_best_child,  # v_curr_signed: player-to-move signed value (+1 = current player wins, -1 = current player loses)
+            "v_ptm_ref_signed_root": v_ptm_ref_signed_root,  # v_ptm_ref_signed: player-to-move reference frame (+1 = root player wins, -1 = root player loses)
+            "v_ptm_ref_signed_best_child": v_ptm_ref_signed_best_child,  # v_ptm_ref_signed: player-to-move reference frame (+1 = root player wins, -1 = root player loses)
             "total_visits": total_visits,
             "inferences": total_inferences,
             "total_nodes": total_nodes,
@@ -1364,13 +1386,13 @@ class BaselineMCTS:
     def _compute_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
         """Compute win probability for the current player based on root value (edge conversion)."""
         tree_data = self._compute_tree_data(root)
-        v_curr_signed_root = tree_data["v_curr_signed_root"]
+        v_ptm_ref_signed_root = tree_data["v_ptm_ref_signed_root"]
         
         # Convert signed value to probability only at the edge (for external API)
-        # Root value is already in player-to-move perspective from backpropagation
+        # Root value is already in player-to-move reference frame from backpropagation
         # +1 = current player wins, -1 = current player loses, 0 = neutral
-        p_curr_root = signed_to_prob(v_curr_signed_root)  # current player win probability
-        return p_curr_root
+        p_ptm_prob_root = signed_to_prob(v_ptm_ref_signed_root)  # current player win probability
+        return p_ptm_prob_root
 
     def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
         """Extract the principal variation (best move sequence) from the MCTS tree."""
@@ -1566,7 +1588,7 @@ class BaselineMCTS:
         Args:
             board_key: The board state key
             policy: The policy logits
-            value: The signed value in Red's perspective (tanh-activated output in [-1,1] range)
+            value: The signed value in Red's reference frame (tanh-activated output in [-1,1] range)
         """
         # If key already exists, remove it first (will be re-added at end)
         if board_key in self.eval_cache:

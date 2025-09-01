@@ -668,19 +668,19 @@ def prob_to_signed(p_prob: float) -> float:
     """
     return 2.0 * p_prob - 1.0
 
-def red_signed_to_curr_signed(v_red_signed: float, player) -> float:
+def red_ref_signed_to_ptm_ref_signed(v_red_ref_signed: float, player) -> float:
     """
-    Given Red's signed value v_red ∈ [-1,1], return value from 'player-to-move' perspective.
+    Given Red's signed value v_red ∈ [-1,1], return value from 'player-to-move' reference frame.
     If RED to move: return v_red; if BLUE to move: return -v_red.
     
     Args:
-        v_red_signed: Red's signed value in [-1, 1] range
+        v_red_ref_signed: Red's signed value in [-1, 1] range
         player: Player enum (RED or BLUE)
         
     Returns:
-        Signed value from player-to-move perspective in [-1, 1] range
+        Signed value from player-to-move reference frame in [-1, 1] range
     """
-    return v_red_signed if player == Player.RED else -v_red_signed
+    return v_red_ref_signed if player == Player.RED else -v_red_ref_signed
 
 def apply_depth_discount_signed(v: float, gamma: float, dist: int) -> float:
     """
