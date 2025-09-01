@@ -463,7 +463,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
                 "early_termination_details": {
                     "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
-                    "win_probability": algorithm_termination_info.win_prob if algorithm_termination_info else None,
+                    "win_probability": algorithm_termination_info.value if algorithm_termination_info else None,
                     "move": algorithm_termination_info.move if algorithm_termination_info else None
                 },
                 "parameters": {
