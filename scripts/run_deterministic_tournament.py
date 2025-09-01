@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import random
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -988,6 +989,25 @@ def main():
     if args.c_puct:
         print(f"  C_PUCT values: {args.c_puct}")
     print(f"  Random seed: {args.seed}")
+    
+    # Print timestamp and git state
+    timestamp = datetime.now()
+    print(f"  Run time: {timestamp.strftime('%Y-%m-%d %H:%M')}")
+    
+    try:
+        # Get git commit hash
+        git_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD'], 
+                                         text=True, stderr=subprocess.DEVNULL).strip()[:8]
+        
+        # Check if there are uncommitted changes
+        git_status = subprocess.check_output(['git', 'status', '--porcelain'], 
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+        has_changes = bool(git_status)
+        
+        print(f"  Git: {git_hash}{' +changes' if has_changes else ''}")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("  Git: not available")
+    
     print()
     
     # Run tournament
