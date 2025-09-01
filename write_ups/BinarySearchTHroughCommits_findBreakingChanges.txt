@@ -1,0 +1,243 @@
+File tracking state of MCTS based play
+ 1. The original MCTS alorithm, before Gumbel Alpha-Zero root choice was introduced
+ 2. Gumbel based play
+across various commits while I was working on the Gumbel play.
+
+I use 
+scripts/run_deterministic_tournament.py
+to evaluate performance of the two type of algorithm.
+
+Main issues I want to understand
+  1. MCTS with 150 sims used to be markedly better than pure policy play. By the time I'd finished with Gumbel iterations on 31st August I realized that (Gumbel-off style) MCTS play had deteriorated to substantially below pure policy play.
+  Update: We see that at >= d7106686ffaeb157ba4c7ef58474493661d8c932 (14:51, 31st), before Gumbel was added, MCTS was already doing badly.
+  Hypothesis: Likely migrating from [0, 1] to [-1, 1] scores in MCTS caused the problem
+  Update: MCTS works well at <= (11.58.32 on 31st Aug '25) bca5dee54592b56fd5d27f1a5d65066563a112e7
+
+
+  2. In the middle of developing Gumbel, but before I got it to be fast, it was doing fantastically. Gumbel with 50 sims was beating the policy network convincingly.
+  - We see below at commit 6f40d88055b229a07c099a414686121bc9164fbf that it was winning 91.2% games while policy won 53.8%.
+  - We also see though that by bfe0939f62cf3088bf3e4bcf88d2b913fa12eb96 (which is later) Gumbel is only winning 62.5% and policy is at 60.8%.
+  - These numbers *need not* sum to 100% as they include games against the (currently very weak) MCTS play.
+  So, somewhere in making the Gumbel play faster I made it perform a lot less well.
+
+Plan: Use binary search over commits to find where performance changes.
+
+Summary of findings so far
+1. Gumbel-off style MCTS: Problems arose before commit 6f40d88055b229a07c099a414686121bc9164fbf (21.05.15 on 31st Aug '25)
+2. Gumbel: Performing well at 6f40d88055b229a07c099a414686121bc9164fbf  (21.05.15 on 31st Aug '25)
+
+
+------------------------
+
+(22.48.48 on 31st Aug '25)
+
+git checkout aug29
+(This corresponds to commit: bfe0939f62cf3088bf3e4bcf88d2b913fa12eb96)
+
+source hex_ai_env/bin/activate
+ PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_50,mcts_150,mcts_150 \
+  --batch-sizes=8,16,64 \
+  --c-puct=2.0,1.5,1.5 \
+  --enable-gumbel=True,False,False \
+  --opening-length=5 \
+  --num-openings=20
+
+Win Rates:
+  mcts_50_b8_cp2.0_gumbel: 62.5% (75/120 games)
+  policy: 60.8% (73/120 games)
+  mcts_150_b16_cp1.5: 38.3% (46/120 games)
+  mcts_150_b64_cp1.5: 38.3% (46/120 games)
+
+Comments:
+ - These games are going fast but somehow I'm getting lots of warnings about duplicate games in the first cycle.
+ - This need NOT be a bug in the tournament code. It's just that strategies A & B play the same for a given opening.
+
+TIMING SUMMARY
+mcts_150_b16_cp1.5:       Average time per move: 0.055s
+mcts_150_b64_cp1.5:       Average time per move: 0.055s
+mcts_50_b8_cp2.0_gumbel:  Average time per move: 0.014s
+policy:                   Average time per move: 0.002s
+
+So,
+ - Pre-Gumbel style MCTS: Broken, with 150 sims it's losing to the policy network.
+ - Gumbel: Not broken, not amazing. With 50 sims (bs=8, puct=2) it narrowly beats pure policy play.
+ - Gumbel is fast enough, seemingly faster per sim in this iteration.
+
+
+------------------------
+
+(21.05.15 on 31st Aug '25)
+
+git checkout 6f40d88055b229a07c099a414686121bc9164fbf
+
+Ran
+source hex_ai_env/bin/activate 
+ PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_50,mcts_150,mcts_150 \
+  --batch-sizes=8,16,64 \
+  --c-puct=2.0,1.5,1.5 \
+  --enable-gumbel=True,False,False \
+  --opening-length=5 \
+  --num-openings=40
+
+
+Results:
+  mcts_50_b8_cp2.0_gumbel: 91.2% (219/240 games)
+  policy: 53.8% (129/240 games)
+  mcts_150_b16_cp1.5: 27.9% (67/240 games)
+  mcts_150_b64_cp1.5: 27.1% (65/240 games)
+
+So,
+ - Pre-Gumbel MCTS: Has already been broken, with 150 sims it's losing to the policy network.
+ - Gumbel: Doing great, with 50 sims (bs=8, puct=2) it's beating the policy 67-13
+ - We don't have timing info, but from shell's 'time' command we see that Gumbel is currently >2x as slow as regular MCTS
+
+Ran 
+source hex_ai_env/bin/activate 
+time PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_50 \
+  --batch-sizes=8 \
+  --c-puct=2.0 \
+  --enable-gumbel=True \
+  --opening-length=5 \
+  --num-openings=1
+
+ - Getting through model loading etc. took about 3 seconds.
+ - 'time' Return values: 
+   - With game-gen running: PYTHONPATH=. python scripts/run_deterministic_tournament.py   --batch-sizes=8  23.59s user 1.09s system 92% cpu 26.804 total
+   - WI
+   ithout game-gen running: PYTHONPATH=. python scripts/run_deterministic_tournament.py   --batch-sizes=8  22.11s user 0.92s system 91% cpu 25.108 total
+
+
+
+source hex_ai_env/bin/activate 
+time PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_50 \
+  --batch-sizes=8 \
+  --c-puct=2.0 \
+  --enable-gumbel=False \
+  --opening-length=5 \
+  --num-openings=1
+
+- 'time' Return values: 
+   - With game-gen running: PYTHONPATH=. python scripts/run_deterministic_tournament.py   --batch-sizes=8  10.99s user 0.66s system 91% cpu 12.683 total
+   - Without game-gen running: PYTHONPATH=. python scripts/run_deterministic_tournament.py   --batch-sizes=8  10.33s user 0.56s system 90% cpu 12.093 total
+
+
+------------------------
+
+(17.40.28 on 31st Aug '25)
+
+git checkout 69832c7da3d777a5efe232927079a559bd4e8400
+
+Note: Modified command as tournament play doesn't yet support Gumbel.
+      This is completely fine as we know that Gumbel performed well *after* this point already
+      and are just trying to understand MCTS performance.
+      Similarly, timing info is no longer relevant here -- it is Gumbel efficiency that I am interested in.
+      Pre-Gumbel MCTS has been medium-fast (can be improved) throughout.
+
+source hex_ai_env/bin/activate 
+ PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_150 \
+  --batch-sizes=64 \
+  --c-puct=1.5 \
+  --opening-length=5 \
+  --num-openings=20
+
+Results:
+policy vs mcts_150_b64_cp1.5 Results:
+  policy: 29/40 wins (72.5%)
+  mcts_150_b64_cp1.5: 11/40 wins (27.5%)
+
+So,
+ - Gumbel-off MCTS was already broken at 69832c7da3d777a5efe232927079a559bd4e8400
+
+------------------------
+
+(15.14.08 on 30th Aug '25)
+
+  git checkout 6aee93761f9f894ac6ef7e5fc6299908fdd6a636
+
+ PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_150 \
+  --batch-sizes=64 \
+  --c-puct=1.5 \
+  --opening-length=5 \
+  --num-openings=20
+
+Win Rates:
+  policy: 50.0% (20/40 games)
+  mcts_150_b64_cp1.5: 50.0% (20/40 games)
+
+This is disappointing but with only 20 games maybe it's noise.
+
+To dig in further I then ran:
+
+PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_250 \
+  --batch-sizes=64 \
+  --opening-length=5 \
+  --num-openings=50
+
+Win Rates:
+  mcts_250_b64: 68.0% (68/100 games)
+  policy: 32.0% (32/100 games)
+
+This confirms that the MCTS is working approximately as well as I'd recalled at 6aee93761f9f894ac6ef7e5fc6299908fdd6a636.
+
+------------------------
+
+(14.51.10 on 31st Aug '25)
+
+  git checkout d7106686ffaeb157ba4c7ef58474493661d8c932
+
+PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_200 \
+  --batch-sizes=64 \
+  --opening-length=5 \
+  --num-openings=30
+
+Win Rates:
+  policy: 66.7% (40/60 games)
+  mcts_200_b64: 33.3% (20/60 games)
+
+This confirms that MCTS was *already broken* before Gumbel was introduced.
+
+
+------------------------
+
+(11.58.32 on 31st Aug '25)
+
+  git checkout bca5dee54592b56fd5d27f1a5d65066563a112e7
+
+Win Rates:
+  mcts_200_b64: 80.0% (48/60 games)
+  policy: 20.0% (12/60 games)
+
+------------------------
+
+(14.44.58 on 31st Aug '25)
+
+ git checkout 9d95ca6c29b3d662b6daab67543502972035f221
+
+PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+  --model=current_best \
+  --strategies=policy,mcts_200 \
+  --batch-sizes=64 \
+  --opening-length=5 \
+  --num-openings=30
+
+Win Rates:
+  policy: 66.7% (40/60 games)
+  mcts_200_b64: 33.3% (20/60 games)
+
+This confirms 9d95ca6c29b3d662b6daab67543502972035f221 as the breaking commit for pre-Gumbel MCTS style move choice.
