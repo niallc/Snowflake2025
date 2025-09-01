@@ -97,9 +97,12 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
 
 class MCTSStrategy(MoveSelectionStrategy):
     """Move selection using MCTS."""
-    
+
+    def __init__(self, verbose: int = 0):
+        self.verbose = verbose
+
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         # Create MCTS configuration optimized for tournament play
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
@@ -138,6 +141,11 @@ class MCTSStrategy(MoveSelectionStrategy):
         
         # Run MCTS and select move
         mcts = BaselineMCTS(engine, model_wrapper, mcts_config)
+        
+        # DEBUG: Print MCTS configuration to confirm what's actually being used
+        if verbose >= 5:
+            print(f"[MCTS DEBUG] add_root_noise={mcts_config.add_root_noise}, dirichlet_alpha={mcts_config.dirichlet_alpha}, dirichlet_eps={mcts_config.dirichlet_eps}")
+        
         result = mcts.run(state, verbose=0)  # Quiet mode for tournaments
         return result.move
     

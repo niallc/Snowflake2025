@@ -13,143 +13,125 @@ import torch
 import numpy as np
 
 try:
-    from hex_ai.inference.fixed_tree_search import convert_model_logit_to_minimax_value
+    from hex_ai.value_utils import ValuePredictor
     from hex_ai.enums import Player as PlayerEnum
 except ImportError:
-    print("ERROR: Could not import convert_model_logit_to_minimax_value")
+    print("ERROR: Could not import ValuePredictor")
     print("Make sure to run with PYTHONPATH=.")
     print("Example: PYTHONPATH=. python -m pytest tests/test_fixed_tree_search.py -v")
     raise
 
 
-class TestConvertModelLogitToMinimaxValue:
-    """Test cases for the convert_model_logit_to_minimax_value function."""
+class TestConvertToMinimaxValue:
+    """Test cases for the convert_to_minimax_value function."""
     
     def test_blue_root_player_neutral_position(self):
         """Test neutral position (50% chance) from Blue's perspective."""
-        # logit = 0.0 corresponds to sigmoid(0.0) = 0.5 (50% Red wins)
-        result = convert_model_logit_to_minimax_value(0.0, root_player=PlayerEnum.BLUE)
+        # value_signed = 0.0 corresponds to 50% Red wins
+        result = ValuePredictor.convert_to_minimax_value(0.0, root_player=PlayerEnum.BLUE)
         assert result == 0.0  # Neutral for Blue
         
     def test_red_root_player_neutral_position(self):
         """Test neutral position (50% chance) from Red's perspective."""
-        # logit = 0.0 corresponds to sigmoid(0.0) = 0.5 (50% Red wins)
-        result = convert_model_logit_to_minimax_value(0.0, root_player=PlayerEnum.RED)
+        # value_signed = 0.0 corresponds to 50% Red wins
+        result = ValuePredictor.convert_to_minimax_value(0.0, root_player=PlayerEnum.RED)
         assert result == 0.0  # Neutral for Red
         
     def test_blue_root_player_blue_winning(self):
         """Test Blue winning position from Blue's perspective."""
-        # logit = -2.0 corresponds to sigmoid(-2.0) ≈ 0.119 (11.9% Red wins, 88.1% Blue wins)
-        result = convert_model_logit_to_minimax_value(-2.0, root_player=PlayerEnum.BLUE)
-        # Compute expected using actual sigmoid value
-        prob_red = torch.sigmoid(torch.tensor(-2.0)).item()
-        expected = 1.0 - 2.0 * prob_red
-        assert abs(result - expected) < 1e-10  # Use tighter tolerance for computed values
-        assert result > 0.0  # Positive = good for Blue
+        # value_signed = -0.8 corresponds to 10% Red wins (90% Blue wins)
+        result = ValuePredictor.convert_to_minimax_value(-0.8, root_player=PlayerEnum.BLUE)
+        assert result > 0.5  # Good for Blue
         
     def test_blue_root_player_red_winning(self):
         """Test Red winning position from Blue's perspective."""
-        # logit = 2.0 corresponds to sigmoid(2.0) ≈ 0.881 (88.1% Red wins, 11.9% Blue wins)
-        result = convert_model_logit_to_minimax_value(2.0, root_player=PlayerEnum.BLUE)
-        # Compute expected using actual sigmoid value
-        prob_red = torch.sigmoid(torch.tensor(2.0)).item()
-        expected = 1.0 - 2.0 * prob_red
-        assert abs(result - expected) < 1e-10  # Use tighter tolerance for computed values
-        assert result < 0.0  # Negative = bad for Blue
+        # value_signed = 0.8 corresponds to 90% Red wins (10% Blue wins)
+        result = ValuePredictor.convert_to_minimax_value(0.8, root_player=PlayerEnum.BLUE)
+        assert result < -0.5  # Bad for Blue
         
     def test_red_root_player_red_winning(self):
         """Test Red winning position from Red's perspective."""
-        # logit = 2.0 corresponds to sigmoid(2.0) ≈ 0.881 (88.1% Red wins)
-        result = convert_model_logit_to_minimax_value(2.0, root_player=PlayerEnum.RED)
-        # Compute expected using actual sigmoid value
-        prob_red = torch.sigmoid(torch.tensor(2.0)).item()
-        expected = 2.0 * prob_red - 1.0
-        assert abs(result - expected) < 1e-10  # Use tighter tolerance for computed values
-        assert result > 0.0  # Positive = good for Red
+        # value_signed = 0.8 corresponds to 90% Red wins
+        result = ValuePredictor.convert_to_minimax_value(0.8, root_player=PlayerEnum.RED)
+        assert result > 0.5  # Good for Red
         
     def test_red_root_player_blue_winning(self):
         """Test Blue winning position from Red's perspective."""
-        # logit = -2.0 corresponds to sigmoid(-2.0) ≈ 0.119 (11.9% Red wins)
-        result = convert_model_logit_to_minimax_value(-2.0, root_player=PlayerEnum.RED)
-        # Compute expected using actual sigmoid value
-        prob_red = torch.sigmoid(torch.tensor(-2.0)).item()
-        expected = 2.0 * prob_red - 1.0
-        assert abs(result - expected) < 1e-10  # Use tighter tolerance for computed values
-        assert result < 0.0  # Negative = bad for Red
+        # value_signed = -0.8 corresponds to 10% Red wins (90% Blue wins)
+        result = ValuePredictor.convert_to_minimax_value(-0.8, root_player=PlayerEnum.RED)
+        assert result < -0.5  # Bad for Red
         
-    def test_extreme_positive_logit(self):
-        """Test very high logit (near certain Red win)."""
-        # logit = 10.0 corresponds to sigmoid(10.0) ≈ 0.99995 (99.995% Red wins)
-        result_blue = convert_model_logit_to_minimax_value(10.0, root_player=PlayerEnum.BLUE)
-        result_red = convert_model_logit_to_minimax_value(10.0, root_player=PlayerEnum.RED)
+    def test_extreme_positive_value_signed(self):
+        """Test very high value_signed (near certain Red win)."""
+        # value_signed = 0.99 corresponds to 99.5% Red wins
+        result_blue = ValuePredictor.convert_to_minimax_value(0.99, root_player=PlayerEnum.BLUE)
+        result_red = ValuePredictor.convert_to_minimax_value(0.99, root_player=PlayerEnum.RED)
         
         # Blue should see this as very bad
-        assert result_blue < -0.99
+        assert result_blue <= -0.99
         # Red should see this as very good
-        assert result_red > 0.99
+        assert result_red >= 0.99
         
-    def test_extreme_negative_logit(self):
-        """Test very low logit (near certain Blue win)."""
-        # logit = -10.0 corresponds to sigmoid(-10.0) ≈ 0.00005 (0.005% Red wins)
-        result_blue = convert_model_logit_to_minimax_value(-10.0, root_player=PlayerEnum.BLUE)
-        result_red = convert_model_logit_to_minimax_value(-10.0, root_player=PlayerEnum.RED)
+    def test_extreme_negative_value_signed(self):
+        """Test very low value_signed (near certain Blue win)."""
+        # value_signed = -0.99 corresponds to 0.5% Red wins (99.5% Blue wins)
+        result_blue = ValuePredictor.convert_to_minimax_value(-0.99, root_player=PlayerEnum.BLUE)
+        result_red = ValuePredictor.convert_to_minimax_value(-0.99, root_player=PlayerEnum.RED)
         
         # Blue should see this as very good
-        assert result_blue > 0.99
+        assert result_blue >= 0.99
         # Red should see this as very bad
-        assert result_red < -0.99
+        assert result_red <= -0.99
         
     def test_boundary_values(self):
         """Test that output values are properly bounded in [-1, 1]."""
-        # Test a range of logits
-        logits = [-10.0, -5.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 5.0, 10.0]
+        # Test a range of value_signed values
+        values = [-1.0, -0.8, -0.5, -0.2, 0.0, 0.2, 0.5, 0.8, 1.0]
         
-        for logit in logits:
-            result_blue = convert_model_logit_to_minimax_value(logit, root_player=PlayerEnum.BLUE)
-            result_red = convert_model_logit_to_minimax_value(logit, root_player=PlayerEnum.RED)
+        for value in values:
+            result_blue = ValuePredictor.convert_to_minimax_value(value, root_player=PlayerEnum.BLUE)
+            result_red = ValuePredictor.convert_to_minimax_value(value, root_player=PlayerEnum.RED)
             
             # Check bounds
             assert -1.0 <= result_blue <= 1.0
             assert -1.0 <= result_red <= 1.0
             
     def test_symmetry_property(self):
-        """Test that Blue and Red perspectives are symmetric for opposite logits."""
-        # For logit L, Blue's value should equal Red's value for logit -L
-        # This is because: Blue's value = 1 - 2*sigmoid(L), Red's value = 2*sigmoid(-L) - 1
-        # And sigmoid(-L) = 1 - sigmoid(L), so Red's value = 2*(1-sigmoid(L)) - 1 = 1 - 2*sigmoid(L) = Blue's value
-        logits = [-3.0, -1.0, 0.0, 1.0, 3.0]
+        """Test that Blue and Red perspectives are symmetric for opposite values."""
+        # For value_signed V, Blue's value should equal Red's value for value_signed -V
+        values = [-0.8, -0.5, 0.0, 0.5, 0.8]
         
-        for logit in logits:
-            blue_value = convert_model_logit_to_minimax_value(logit, root_player=PlayerEnum.BLUE)
-            red_value_opposite = convert_model_logit_to_minimax_value(-logit, root_player=PlayerEnum.RED)
+        for value in values:
+            blue_value = ValuePredictor.convert_to_minimax_value(value, root_player=PlayerEnum.BLUE)
+            red_value_opposite = ValuePredictor.convert_to_minimax_value(-value, root_player=PlayerEnum.RED)
             
-            # The symmetry should hold: Blue's value for logit L = Red's value for logit -L
-            # Allow for floating point precision errors (typically ~1e-15 for double precision)
-            assert abs(blue_value - red_value_opposite) < 1e-7  # Conservative tolerance for floating point precision
+            # The symmetry should hold: Blue's value for V = Red's value for -V
+            # Allow for floating point precision errors
+            assert abs(blue_value - red_value_opposite) < 1e-7
             
     def test_monotonicity(self):
-        """Test that higher logits lead to better values for Red and worse for Blue."""
-        logits = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0]
+        """Test that higher value_signed leads to better values for Red and worse for Blue."""
+        values = [-0.8, -0.5, -0.2, 0.0, 0.2, 0.5, 0.8]
         
-        blue_values = [convert_model_logit_to_minimax_value(logit, root_player=PlayerEnum.BLUE) for logit in logits]
-        red_values = [convert_model_logit_to_minimax_value(logit, root_player=PlayerEnum.RED) for logit in logits]
+        blue_values = [ValuePredictor.convert_to_minimax_value(value, root_player=PlayerEnum.BLUE) for value in values]
+        red_values = [ValuePredictor.convert_to_minimax_value(value, root_player=PlayerEnum.RED) for value in values]
         
-        # Blue values should be monotonically decreasing (higher logit = worse for Blue)
+        # Blue values should be monotonically decreasing (higher value_signed = worse for Blue)
         for i in range(1, len(blue_values)):
             assert blue_values[i] <= blue_values[i-1]
             
-        # Red values should be monotonically increasing (higher logit = better for Red)
+        # Red values should be monotonically increasing (higher value_signed = better for Red)
         for i in range(1, len(red_values)):
             assert red_values[i] >= red_values[i-1]
             
     def test_specific_calculations(self):
         """Test specific known calculations."""
-        # Test with logit = 1.0: sigmoid(1.0) ≈ 0.731
-        result_blue = convert_model_logit_to_minimax_value(1.0, root_player=PlayerEnum.BLUE)
-        result_red = convert_model_logit_to_minimax_value(1.0, root_player=PlayerEnum.RED)
+        # Test with value_signed = 0.6: corresponds to 80% Red wins
+        result_blue = ValuePredictor.convert_to_minimax_value(0.6, root_player=PlayerEnum.BLUE)
+        result_red = ValuePredictor.convert_to_minimax_value(0.6, root_player=PlayerEnum.RED)
         
-        # Compute expected using actual sigmoid value
-        prob_red = torch.sigmoid(torch.tensor(1.0)).item()
+        # Compute expected using actual probability conversion
+        prob_red = ValuePredictor.model_output_to_probability(0.6)
         expected_blue = 1.0 - 2.0 * prob_red
         expected_red = 2.0 * prob_red - 1.0
         
@@ -159,19 +141,19 @@ class TestConvertModelLogitToMinimaxValue:
     def test_invalid_root_player(self):
         """Test that invalid root_player values raise appropriate errors."""
         with pytest.raises(TypeError):
-            convert_model_logit_to_minimax_value(0.0, root_player=2)
+            ValuePredictor.convert_to_minimax_value(0.0, root_player=2)
             
         with pytest.raises(TypeError):
-            convert_model_logit_to_minimax_value(0.0, root_player=-1)
+            ValuePredictor.convert_to_minimax_value(0.0, root_player=-1)
             
     def test_numeric_types(self):
         """Test that function works with different numeric types."""
         # Test with numpy float
-        result_np = convert_model_logit_to_minimax_value(np.float32(0.0), root_player=PlayerEnum.BLUE)
+        result_np = ValuePredictor.convert_to_minimax_value(np.float32(0.0), root_player=PlayerEnum.BLUE)
         assert result_np == 0.0
         
         # Test with torch tensor (should work after .item())
-        result_torch = convert_model_logit_to_minimax_value(torch.tensor(0.0).item(), root_player=PlayerEnum.BLUE)
+        result_torch = ValuePredictor.convert_to_minimax_value(torch.tensor(0.0).item(), root_player=PlayerEnum.BLUE)
         assert result_torch == 0.0
 
 

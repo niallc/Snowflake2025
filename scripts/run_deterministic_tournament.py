@@ -988,6 +988,8 @@ def main():
         print(f"  Batch sizes: {args.batch_sizes}")
     if args.c_puct:
         print(f"  C_PUCT values: {args.c_puct}")
+    print(f"  Dirichlet noise: alpha=0.3, eps=0.25 (MCTS default)")
+    print(f"  Root noise: disabled (add_root_noise=False)")
     print(f"  Random seed: {args.seed}")
     
     # Print timestamp and git state

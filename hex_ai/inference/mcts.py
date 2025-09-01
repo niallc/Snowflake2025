@@ -378,7 +378,7 @@ class BaselineMCTSConfig:
     cache_size: int = DEFAULT_CACHE_SIZE
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
-    add_root_noise: bool = True
+    add_root_noise: bool = False
     # Temperature scaling parameters (always used)
     temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
     temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
