@@ -937,9 +937,9 @@ class Trainer:
                     'policies': policies.cpu(),
                     'values': values.cpu(),
                     'policy_logits': policy_pred.detach().cpu(),
-                    'value_logits': value_pred.detach().cpu(),
+                    'value_signed': value_pred.detach().cpu(),
                     'policy_logits_np': policy_pred.detach().cpu().numpy(),
-                    'value_logits_np': value_pred.detach().cpu().numpy(),
+                    'value_signed_np': value_pred.detach().cpu().numpy(),
                     'policies_np': policies.cpu().numpy(),
                     'values_np': values.cpu().numpy(),
                     'meta': {

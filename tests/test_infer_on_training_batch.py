@@ -17,9 +17,9 @@ def test_infer_on_training_batch_smoke():
     values = batch['values_cpu']
     model = ModelWrapper(CHECKPOINT, device="cpu")
     with torch.no_grad():
-        _, value_logits = model.batch_predict(boards)
+        _, value_signed = model.batch_predict(boards)
         # Convert from [-1, 1] range to [0, 1] probability using centralized utility
-        value_probs = ValuePredictor.batch_convert_to_probabilities(value_logits).squeeze(-1).numpy()
+        value_probs = ValuePredictor.batch_convert_to_probabilities(value_signed).squeeze(-1).numpy()
         targets = values.squeeze(-1).numpy() if values.ndim > 1 else values.numpy()
     assert value_probs.shape == targets.shape
     mse = np.mean((value_probs - targets) ** 2)

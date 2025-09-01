@@ -185,9 +185,9 @@ class SimpleModelInference:
         """
         Accepts a board in trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor format.
         Uses the same preprocessing pipeline as training to ensure consistency.
-        Returns (policy_logits, value_logit):
+        Returns (policy_logits, value_signed):
             - policy_logits: np.ndarray, raw policy logits (before softmax)
-            - value_logit: float, raw value output (tanh activated, [-1, 1] range)
+            - value_signed: float, raw value output (tanh activated, [-1, 1] range)
         """
         start_time = time.time()
         
@@ -237,11 +237,11 @@ class SimpleModelInference:
                 logging.getLogger(__name__).debug(f"simple_infer: input_device={from_device}")
             except Exception:
                 pass
-        policy_logits, value_logit = self.model.predict(input_tensor)
+        policy_logits, value_signed = self.model.predict(input_tensor)
         policy_logits_np = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
-        value_logit_val = value_logit.item() if hasattr(value_logit, 'item') else float(value_logit)
+        value_signed_val = value_signed.item() if hasattr(value_signed, 'item') else float(value_signed)
         
-        result = (policy_logits_np, value_logit_val)
+        result = (policy_logits_np, value_signed_val)
         
         # Store in cache
         self._store_in_cache(board, result)
@@ -258,7 +258,7 @@ class SimpleModelInference:
         Args:
             boards: List of boards in any supported format (trmph string, (N,N) np.ndarray, or (2,N,N) or (3,N,N) torch.Tensor)
         Returns:
-            Tuple of (policy_logits_list, value_logits_list) where each list contains the results for each board
+            Tuple of (policy_logits_list, value_signed_list) where each list contains the results for each board
         """
         if not boards:
             return [], []
@@ -369,12 +369,12 @@ class SimpleModelInference:
                 # Run batch inference
                 batch_index = i // optimal_batch_size
                 t0 = time.perf_counter()
-                policy_logits_batch, value_logits_batch = self.model.batch_predict(batch_tensor)
+                policy_logits_batch, value_signed_batch = self.model.batch_predict(batch_tensor)
                 t1 = time.perf_counter()
                 # Convert results
                 t_post0 = time.perf_counter()
                 batch_policies = [logits.detach().cpu().numpy() for logits in policy_logits_batch]
-                batch_values = [logit.item() for logit in value_logits_batch]
+                batch_values = [value.item() for value in value_signed_batch]
                 t_post1 = time.perf_counter()
                 stack_ms = (t_stack1 - t_stack0) * 1e3
                 predict_ms = (t1 - t0) * 1e3

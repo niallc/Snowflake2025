@@ -881,7 +881,7 @@ def api_state():
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
-        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "trmph": trmph,
     })
@@ -925,7 +925,6 @@ def api_apply_move():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    # TODO: value_logits don't exist anymore with tanh activation. Rename these to match naming in mcts.py.
     policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
@@ -945,7 +944,7 @@ def api_apply_move():
         "winner": winner_color,
         "model_move": None,  # No computer move made
         "policy": policy_dict,
-        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
     })
 
@@ -996,7 +995,6 @@ def api_apply_trmph_sequence():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    # TODO: value_logits don't exist anymore with tanh activation. Rename these to match naming in mcts.py.
     policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
@@ -1015,7 +1013,7 @@ def api_apply_trmph_sequence():
         "legal_moves": legal_moves,
         "winner": winner_color,
         "policy": policy_dict,
-        "value": float(value_signed) if 'value_signed' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "moves_applied": len(moves),
         "game_over": state.game_over,
