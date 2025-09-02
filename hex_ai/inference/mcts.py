@@ -960,11 +960,12 @@ class BaselineMCTS:
 
         board_size = int(root.state.get_board_tensor().shape[-1])
 
-        # If caller supplies forced actions, we must collect exactly that many leaves for this batch
+        # If caller supplies forced actions (likely as part of Gumbel), we must collect exactly that many leaves for this batch
         if forced_root_actions is not None:
             force_q = deque(forced_root_actions)
             select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
         else:
+            # Non-Gumbel code path
             force_q = deque()
             select_budget = min(self.cfg.batch_cap, sims_remaining)
 
@@ -985,7 +986,7 @@ class BaselineMCTS:
             node = root
             path: List[Tuple[MCTSNode, int]] = []
 
-            # Pop the forced action for THIS descent (if any)
+            # Gumbel specific code path: Pop the forced action for THIS descent (if any)
             forced_a_full = force_q.popleft() if force_q else None
 
             while True:
@@ -1013,6 +1014,7 @@ class BaselineMCTS:
                     break
 
                 # Choose child
+                # First check for Gumbel-specific forced action
                 if node is root and forced_a_full is not None:
                     # Map full action index -> local child idx
                     # (legal_indices aligns with stats arrays)
@@ -1025,6 +1027,7 @@ class BaselineMCTS:
                         # Fallback if forced action is illegal: normal PUCT
                         loc_idx = self._select_child_puct(node)
                 else:
+                    # Non-Gumbel code path
                     loc_idx = self._select_child_puct(node)
 
                 path.append((node, loc_idx))

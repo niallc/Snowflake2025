@@ -411,7 +411,7 @@ function makeHex(cx, cy, r, fill, highlight) {
     // console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
     if (!isNaN(row) && !isNaN(col)) {
       const trmph = rowcolToTrmph(row, col);
-      console.log('TRMPH format:', trmph);
+      // console.log('TRMPH format:', trmph);
       showTooltip(e, trmph);
     } else {
       console.log('Invalid row/col values - row:', row, 'col:', col);

@@ -445,7 +445,6 @@ class HexGameState:
         moves_str = trmph[4:]  # Remove "#13," prefix
         moves = split_trmph_moves(moves_str)
         
-        
         # First create an EMPTY BOARD, then add moves to it.
         # Blue always starts first, so we always begin with Player.BLUE
         # The moves will be applied in sequence (blue, red, blue, red, ...)
