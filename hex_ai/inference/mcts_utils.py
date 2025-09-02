@@ -13,7 +13,7 @@ from typing import List, Tuple, Dict, Any
 # =============================
 
 # Threshold for detailed exploration tracking (when simulations <= this value)
-DETAILED_EXPLORATION_THRESHOLD = 10
+DETAILED_EXPLORATION_THRESHOLD = 47
 
 def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     """
@@ -123,7 +123,8 @@ def should_enable_detailed_exploration(num_simulations: int) -> bool:
 
 
 def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray, 
-                                selected_action: int, depth: int, simulation_num: int) -> Dict[str, Any]:
+                                selected_action: int, depth: int, simulation_num: int, 
+                                path_to_node: List[str] = None) -> Dict[str, Any]:
     """
     Create detailed information about a single exploration step.
     
@@ -170,7 +171,8 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray,
         'selected_move': move_str,
         'selected_move_coords': move_coords,
         'is_terminal': node.is_terminal,
-        'winner': node.winner.value if node.winner else None
+        'winner': node.winner.value if node.winner else None,
+        'path_to_node': path_to_node or []
     }
     
     return step_info

@@ -78,7 +78,7 @@ from hex_ai.value_utils import ValuePredictor, winner_to_color
 TEMPERATURE_COMPARISON_THRESHOLD = 0.02  # Use deterministic selection for very low temperatures
 
 # Principal variation extraction limit
-PRINCIPAL_VARIATION_MAX_LENGTH = 10
+PRINCIPAL_VARIATION_MAX_LENGTH = 11
 
 # PUCT calculation threshold for avoiding division by zero
 PUCT_CALCULATION_THRESHOLD = 1e-9
@@ -584,13 +584,14 @@ class BaselineMCTS:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
 
     def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: np.ndarray, 
-                                selected_action: int, depth: int, simulation_num: int) -> None:
+                                selected_action: int, depth: int, simulation_num: int, 
+                                path_to_node: List[str] = None) -> None:
         """Record a single exploration step for detailed analysis."""
         if not self.detailed_exploration_enabled:
             return
         
         step_info = create_exploration_step_info(
-            node, action_idx, puct_scores, selected_action, depth, simulation_num
+            node, action_idx, puct_scores, selected_action, depth, simulation_num, path_to_node
         )
         self.exploration_trace.append(step_info)
 
@@ -717,7 +718,7 @@ class BaselineMCTS:
         tree_data = self.get_tree_data(root)
         return compute_win_probability_from_tree_data(tree_data)
 
-    def get_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
+    def get_principal_variation(self, root: MCTSNode, max_length: int = 12) -> List[Tuple[int, int]]:
         """Get the principal variation (best move sequence) from the MCTS tree."""
         return extract_principal_variation_from_tree(root, max_length)
 
@@ -1070,10 +1071,10 @@ class BaselineMCTS:
                         loc_idx = node._legal_indices_dict[forced_a_full]
                     except (KeyError, AttributeError):
                         # Fallback if forced action is illegal: normal PUCT
-                        loc_idx = self._select_child_puct(node)
+                        loc_idx = self._select_child_puct(node, node.depth)
                 else:
                     # Non-Gumbel code path
-                    loc_idx = self._select_child_puct(node)
+                    loc_idx = self._select_child_puct(node, node.depth)
 
                 path.append((node, loc_idx))
                 child = node.children[loc_idx]
@@ -1088,6 +1089,19 @@ class BaselineMCTS:
                     child.depth = node.depth + 1
                     timing_tracker.end_timing("state_creation")
                     node.children[loc_idx] = child
+                    
+                    # Record child node exploration if detailed tracking is enabled
+                    if self.detailed_exploration_enabled:
+                        # Record the child node's initial state
+                        child_puct_scores = np.zeros(len(child.legal_moves))
+                        # Extract move sequence from path
+                        move_sequence = []
+                        for path_node, path_action in path:
+                            if path_action < len(path_node.legal_moves):
+                                r, c = path_node.legal_moves[path_action]
+                                move_str = f"{chr(97 + c)}{r + 1}"
+                                move_sequence.append(move_str)
+                        self._record_exploration_step(child, 0, child_puct_scores, 0, child.depth, self.simulation_count, move_sequence)
 
                 node = child
 
@@ -1411,7 +1425,7 @@ class BaselineMCTS:
         node.P = softmax_np(legal_logits)
         node.is_expanded = True
 
-    def _select_child_puct(self, node: MCTSNode) -> int:
+    def _select_child_puct(self, node: MCTSNode, current_depth: int = 0) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
@@ -1436,7 +1450,7 @@ class BaselineMCTS:
                     # Create dummy PUCT scores for recording
                     dummy_scores = np.zeros(len(node.legal_moves))
                     dummy_scores[result] = 1.0  # Mark selected move
-                    self._record_exploration_step(node, result, dummy_scores, result, node.depth, self.simulation_count)
+                    self._record_exploration_step(node, result, dummy_scores, result, current_depth, self.simulation_count)
                 return result
             result = int(np.argmax(node.P))
             # Record exploration step for detailed tracking (early return case)
@@ -1444,7 +1458,7 @@ class BaselineMCTS:
                 # Create dummy PUCT scores for recording
                 dummy_scores = np.zeros(len(node.legal_moves))
                 dummy_scores[result] = 1.0  # Mark selected move
-                self._record_exploration_step(node, result, dummy_scores, result, node.depth, self.simulation_count)
+                self._record_exploration_step(node, result, dummy_scores, result, current_depth, self.simulation_count)
             return result
         
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
@@ -1464,7 +1478,7 @@ class BaselineMCTS:
         
         # Record exploration step for detailed tracking
         if self.detailed_exploration_enabled:
-            self._record_exploration_step(node, result, score, result, node.depth, self.simulation_count)
+            self._record_exploration_step(node, result, score, result, current_depth, self.simulation_count)
         
         # End timing PUCT calculation
         t_puct_end = time.perf_counter()
