@@ -420,6 +420,8 @@ class BaselineMCTSConfig:
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
+    # NOTE: Gumbel now validates legal actions and crashes on illegal forced actions instead of falling back to PUCT
+    # This exposes desync bugs between the action list and root state rather than masking them
     
     # Gumbel temperature control parameters
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
@@ -1130,14 +1132,27 @@ class BaselineMCTS:
                 if node is root and forced_a_full is not None:
                     # Map full action index -> local child idx
                     # (legal_indices aligns with stats arrays)
-                    try:
-                        # OPTIMIZATION: Use dictionary lookup instead of linear search
-                        if not hasattr(node, '_legal_indices_dict'):
-                            node._legal_indices_dict = {idx: i for i, idx in enumerate(node.legal_indices)}
-                        loc_idx = node._legal_indices_dict[forced_a_full]
-                    except (KeyError, AttributeError):
-                        # Fallback if forced action is illegal: normal PUCT
-                        loc_idx = self._select_child_puct(node, node.depth)
+                    
+                    # CRITICAL FIX: Validate forced action is legal instead of silent fallback
+                    # This exposes bugs instead of masking them with PUCT fallback
+                    if forced_a_full not in node.legal_indices:
+                        # Log detailed information about the mismatch
+                        print(f"ERROR: Gumbel forced action {forced_a_full} is illegal at root!")
+                        print(f"Root legal indices: {sorted(node.legal_indices)}")
+                        print(f"Root legal moves: {node.legal_moves}")
+                        print(f"Root state hash: {node.state_hash}")
+                        
+                        # CRASH instead of fallback to expose the bug
+                        raise RuntimeError(
+                            f"Gumbel forced action {forced_a_full} is illegal at root. "
+                            f"Legal indices: {sorted(node.legal_indices)}. "
+                            f"This indicates a desync between Gumbel's action list and the current root state."
+                        )
+                    
+                    # Fast path: use dictionary lookup for mapping
+                    if not hasattr(node, '_legal_indices_dict'):
+                        node._legal_indices_dict = {idx: i for i, idx in enumerate(node.legal_indices)}
+                    loc_idx = node._legal_indices_dict[forced_a_full]
                 else:
                     # Non-Gumbel code path
                     loc_idx = self._select_child_puct(node, node.depth)
