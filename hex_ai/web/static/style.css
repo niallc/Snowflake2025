@@ -579,4 +579,64 @@ button:hover {
 
 #winner-red-btn:hover {
   background-color: #c82333;
+}
+
+/* Detailed MCTS Exploration Styles */
+#detailed-exploration {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f9f9f9;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+}
+
+#detailed-exploration h4 {
+  margin: 0 0 12px 0;
+  color: #2a3a4a;
+  font-size: 1.0em;
+}
+
+#exploration-content {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  background: #fff;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.exploration-step {
+  margin-bottom: 12px;
+  padding: 8px;
+  border-left: 3px solid #8bd6d6;
+  background: #f8fdfd;
+}
+
+.exploration-step.red-turn {
+  border-left-color: #ffcea5;
+  background: #fffaf6;
+}
+
+.step-header {
+  font-weight: bold;
+  color: #2a3a4a;
+  margin-bottom: 4px;
+}
+
+.puct-scores {
+  margin-left: 12px;
+  font-size: 0.8em;
+}
+
+.puct-score-item {
+  margin-bottom: 2px;
+}
+
+.selected-move {
+  font-weight: bold;
+  color: #0077cc;
 } 

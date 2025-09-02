@@ -12,6 +12,9 @@ from typing import List, Tuple, Dict, Any
 # MCTS Tree Analysis Utilities
 # =============================
 
+# Threshold for detailed exploration tracking (when simulations <= this value)
+DETAILED_EXPLORATION_THRESHOLD = 10
+
 def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     """
     Compute win probability for the current player based on tree data.
@@ -104,6 +107,102 @@ def calculate_tree_statistics(root_node) -> Tuple[int, int]:
         return total_nodes, max_depth
     
     return count_nodes_and_depth(root_node, 0)
+
+
+def should_enable_detailed_exploration(num_simulations: int) -> bool:
+    """
+    Determine if detailed exploration tracking should be enabled.
+    
+    Args:
+        num_simulations: Number of simulations to be performed
+        
+    Returns:
+        True if detailed exploration should be enabled (≤10 simulations)
+    """
+    return num_simulations <= DETAILED_EXPLORATION_THRESHOLD
+
+
+def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray, 
+                                selected_action: int, depth: int, simulation_num: int) -> Dict[str, Any]:
+    """
+    Create detailed information about a single exploration step.
+    
+    Args:
+        node: MCTS node being explored
+        action_idx: Index of the selected action
+        puct_scores: PUCT scores for all actions
+        selected_action: Index of the selected action (same as action_idx)
+        depth: Current depth in the tree
+        simulation_num: Current simulation number
+        
+    Returns:
+        Dictionary containing exploration step information
+    """
+    # Get move coordinates
+    move_coords = node.legal_moves[action_idx]
+    move_str = f"{chr(97 + move_coords[1])}{move_coords[0] + 1}"
+    
+    # Get top PUCT scores for this node
+    top_scores = []
+    for i, score in enumerate(puct_scores):
+        if i < len(node.legal_moves):
+            move = node.legal_moves[i]
+            move_name = f"{chr(97 + move[1])}{move[0] + 1}"
+            top_scores.append({
+                'move': move_name,
+                'score': float(score),
+                'visits': int(node.N[i]),
+                'q_value': float(node.Q[i]),
+                'prior': float(node.P[i])
+            })
+    
+    # Sort by PUCT score
+    top_scores.sort(key=lambda x: x['score'], reverse=True)
+    
+    step_info = {
+        'simulation': simulation_num,
+        'depth': depth,
+        'node_hash': node.state_hash,
+        'to_play': node.to_play.value,
+        'legal_moves': [f"{chr(97 + m[1])}{m[0] + 1}" for m in node.legal_moves],
+        'top_puct_scores': top_scores[:5],  # Top 5 scores
+        'selected_action': action_idx,
+        'selected_move': move_str,
+        'selected_move_coords': move_coords,
+        'is_terminal': node.is_terminal,
+        'winner': node.winner.value if node.winner else None
+    }
+    
+    return step_info
+
+
+def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any], 
+                                         detailed_exploration_enabled: bool,
+                                         exploration_trace: List[Dict[str, Any]],
+                                         simulation_count: int) -> Dict[str, Any]:
+    """
+    Add detailed exploration data to tree data for API consumption.
+    
+    Args:
+        tree_data: Base tree data dictionary
+        detailed_exploration_enabled: Whether detailed exploration was enabled
+        exploration_trace: List of exploration steps
+        simulation_count: Total number of simulations performed
+        
+    Returns:
+        Tree data with detailed exploration information added
+    """
+    if detailed_exploration_enabled and exploration_trace:
+        tree_data['detailed_exploration'] = {
+            'enabled': True,
+            'simulation_threshold': DETAILED_EXPLORATION_THRESHOLD,
+            'total_simulations': simulation_count,
+            'trace': exploration_trace
+        }
+    else:
+        tree_data['detailed_exploration'] = {'enabled': False}
+    
+    return tree_data
 
 
 def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10) -> dict:
