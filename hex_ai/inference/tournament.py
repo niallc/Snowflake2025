@@ -8,7 +8,7 @@ from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import (
     Winner, 
-    get_win_prob_from_model_output,
+    ValuePredictor,
     # Add new utilities
     policy_logits_to_probs,
     get_legal_policy_probs,
@@ -37,6 +37,10 @@ from hex_ai.value_utils import int_to_player
 # TODO: Use incremental winner detection (UnionFind) for efficiency
 # TODO: Add Swiss, knockout, and other tournament types
 # TODO: Add logging and checkpointing for long tournaments
+
+# NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+# returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+# which were the old sigmoid-based outputs.
 
 @dataclass
 class GameResult:
@@ -87,12 +91,6 @@ class TournamentResult:
             win_rates[name] = wins / games if games > 0 else 0.0
         return win_rates
 
-    def print_summary(self):
-        print("\nTournament Results:")
-        for name in self.participants:
-            print(f"{name}: {self.win_rates()[name]*100:.1f}% win rate ({sum(self.results[name][op]['wins'] for op in self.results[name])} wins / {sum(self.results[name][op]['games'] for op in self.results[name])} games)")
-        print()
-
     # Optional: Elo calculation (simple version)
     def elo_ratings(self, k=32, base=1500) -> Dict[str, float]:
         """
@@ -133,47 +131,7 @@ class TournamentResult:
         
         return ratings
 
-    def print_elo(self):
-        elos = self.elo_ratings()
-        print("Elo Ratings:")
-        for name, elo in sorted(elos.items(), key=lambda x: -x[1]):
-            print(f"  {name}: {elo:.1f}")
-        print()
-    
-    def print_detailed_analysis(self):
-        """Print detailed tournament analysis including both win rates and ELO ratings."""
-        print("\n" + "="*60)
-        print("TOURNAMENT ANALYSIS")
-        print("="*60)
-        
-        # Win rates
-        win_rates = self.win_rates()
-        print("\nWin Rates:")
-        for name, rate in sorted(win_rates.items(), key=lambda x: -x[1]):
-            games_played = sum(self.results[name][op]['games'] for op in self.results[name])
-            wins = sum(self.results[name][op]['wins'] for op in self.results[name])
-            print(f"  {name}: {rate*100:.1f}% ({wins}/{games_played} games)")
-        
-        # ELO ratings
-        elos = self.elo_ratings()
-        print("\nElo Ratings (order-independent calculation):")
-        for name, elo in sorted(elos.items(), key=lambda x: -x[1]):
-            print(f"  {name}: {elo:.1f}")
-        
-        # Head-to-head results
-        print("\nHead-to-Head Results:")
-        for name in sorted(self.participants):
-            print(f"\n  {name} vs:")
-            for op in sorted(self.participants):
-                if op != name:
-                    wins = self.results[name][op]['wins']
-                    losses = self.results[name][op]['losses']
-                    games = self.results[name][op]['games']
-                    if games > 0:
-                        win_rate = wins / games * 100
-                        print(f"    {op}: {wins}-{losses} ({win_rate:.1f}%)")
-        
-        print("\n" + "="*60)
+
 
 class TournamentPlayConfig:
     """
@@ -234,8 +192,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
         return PieRuleResult(swap=False, swap_decision=None, model_1=model_1, model_2=model_2)
     
     # Evaluate win prob for blue after first move
-    _, value_logit = model_2.simple_infer(state.board)
-    win_prob_blue = get_win_prob_from_model_output(value_logit, Winner.BLUE)
+    _, value_signed = model_2.simple_infer(state.board)
+    win_prob_blue = ValuePredictor.get_win_probability_for_winner(value_signed, Winner.BLUE)
     
     # Decide whether to swap: Red swaps if Blue's position is too good (>= threshold)
     if win_prob_blue >= play_config.swap_threshold:
@@ -487,6 +445,8 @@ def run_round_robin_tournament(
     result = TournamentResult(config.checkpoint_paths)
     
     for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
+        print(f"\nPlaying {config.num_games} games: {os.path.basename(model_a_path)} vs {os.path.basename(model_b_path)}")
+        
         for game_idx in range(config.num_games):
             # Play both games (each model goes first once)
             game_results = play_games_with_each_first(
@@ -522,8 +482,26 @@ def run_round_robin_tournament(
                 print(f"Search widths: {config.search_widths}")  # Legacy
             if verbose >= 1:
                 print(f"{game_idx+1},", end="", flush=True)
+        
+        # Print match results after all games between this pair are complete
+        if verbose >= 1:
+            print()  # New line after game numbers
+            
+            # Calculate head-to-head stats for this match
+            model_a_name = os.path.basename(model_a_path)
+            model_b_name = os.path.basename(model_b_path)
+            
+            # Get results for this specific pair
+            model_a_wins = result.results[model_a_path][model_b_path]['wins']
+            model_b_wins = result.results[model_b_path][model_a_path]['wins']
+            total_games = model_a_wins + model_b_wins
+            
+            if total_games > 0:
+                from hex_ai.utils.tournament_stats import calculate_head_to_head_stats, print_head_to_head_stats
+                stats = calculate_head_to_head_stats(model_a_name, model_b_name, model_a_wins, model_b_wins, total_games)
+                print_head_to_head_stats(stats)
     
-    print("Done.")
+    print("\nDone.")
     return result
 
 # Example usage (to be moved to CLI or script):

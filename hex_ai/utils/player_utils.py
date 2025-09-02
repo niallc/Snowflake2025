@@ -7,6 +7,30 @@ to avoid circular imports.
 
 import numpy as np
 from hex_ai.value_utils import Player
+from hex_ai.enums import Channel
+
+
+def _get_player_to_move_from_count(blue_count: int, red_count: int) -> Player:
+    """
+    Determine current player from piece counts.
+    
+    Args:
+        blue_count: Number of blue pieces
+        red_count: Number of red pieces
+        
+    Returns:
+        Player: Player.BLUE if it's blue's turn, Player.RED if it's red's turn
+        
+    Logic:
+        - Equal pieces (0,0), (1,1), (2,2), ... = BLUE's turn (BLUE always starts)
+        - One more blue (1,0), (2,1), (3,2), ... = RED's turn
+    """
+    if blue_count == red_count:
+        return Player.BLUE
+    elif blue_count == red_count + 1:
+        return Player.RED
+    else:
+        raise ValueError(f"Invalid piece counts: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red.")
 
 
 def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> Player:
@@ -27,21 +51,18 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
     if board_2ch.shape[0] != 2:
         raise ValueError(f"Expected board with 2 channels, got shape {board_2ch.shape}")
     
-    blue_count = int(np.sum(board_2ch[0]))
-    red_count = int(np.sum(board_2ch[1]))
+    blue_count = int(np.sum(board_2ch[Channel.BLUE.value]))
+    red_count = int(np.sum(board_2ch[Channel.RED.value]))
     
-    if blue_count == red_count:
-        return Player.BLUE
-    elif blue_count == red_count + 1:
-        return Player.RED
-    else:
+    try:
+        # Use centralized utility to determine current player
+        return _get_player_to_move_from_count(blue_count, red_count)
+    except ValueError as e:
         # Invalid board state - use error tracking if available
-        error_msg = f"Invalid board state: blue_count={blue_count}, red_count={red_count}. Board must have equal or one more blue than red."
-        
         if error_tracker is not None:
             error_tracker.record_error(
                 board_state=board_2ch,
-                error_msg=error_msg,
+                error_msg=str(e),
                 file_info=getattr(error_tracker, '_current_file', "Unknown"),
                 sample_info=getattr(error_tracker, '_current_sample', "Unknown")
             )
@@ -50,4 +71,4 @@ def get_player_to_move_from_board(board_2ch: np.ndarray, error_tracker=None) -> 
             return Player.BLUE
         else:
             # Fall back to original behavior if no error tracker
-            raise ValueError(error_msg)
+            raise

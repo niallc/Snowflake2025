@@ -17,7 +17,8 @@ from hex_ai.inference.game_engine import (
     apply_move_to_state,
     apply_move_to_state_trmph,
     apply_move_to_tensor_trmph,
-    HexGameState
+    HexGameState,
+    make_empty_hex_state
 )
 from hex_ai.config import BOARD_SIZE, EMPTY_ONEHOT, PIECE_ONEHOT
 from hex_ai.enums import Piece, Player
@@ -191,7 +192,7 @@ class TestApplyMoveToState:
     
     def test_apply_valid_move(self):
         """Test applying a valid move to a game state."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply blue move
         new_state = apply_move_to_state(state, 0, 0)
@@ -203,7 +204,7 @@ class TestApplyMoveToState:
     
     def test_apply_invalid_move(self):
         """Test that applying an invalid move raises an error."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply first move
         state = apply_move_to_state(state, 0, 0)
@@ -215,7 +216,7 @@ class TestApplyMoveToState:
     def test_apply_move_to_finished_game(self):
         """Test that applying move to finished game raises an error."""
         # Create a state with many moves (simulating near-finished game)
-        state = HexGameState()
+        state = make_empty_hex_state()
         for i in range(BOARD_SIZE * BOARD_SIZE - 1):  # Fill almost entire board
             row = i // BOARD_SIZE
             col = i % BOARD_SIZE
@@ -233,7 +234,7 @@ class TestApplyMoveToStateTrmph:
     
     def test_apply_valid_trmph_move(self):
         """Test applying a valid TRMPH move."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply blue move using TRMPH
         new_state = apply_move_to_state_trmph(state, "a1")  # (0, 0)
@@ -245,14 +246,14 @@ class TestApplyMoveToStateTrmph:
     
     def test_apply_invalid_trmph_move(self):
         """Test that applying an invalid TRMPH move raises an error."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         with pytest.raises(ValueError, match="Invalid TRMPH move"):
             apply_move_to_state_trmph(state, "invalid")
     
     def test_apply_trmph_move_to_occupied_position(self):
         """Test that applying TRMPH move to occupied position raises an error."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply first move
         state = apply_move_to_state_trmph(state, "a1")
@@ -291,7 +292,7 @@ class TestIntegration:
     def test_tensor_and_state_consistency(self):
         """Test that tensor and state approaches produce consistent results."""
         # Start with empty state
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply move using state approach
         new_state = apply_move_to_state(state, 0, 0)
@@ -312,7 +313,7 @@ class TestIntegration:
     
     def test_trmph_consistency(self):
         """Test that TRMPH and direct approaches produce consistent results."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply move using direct coordinates
         state_direct = apply_move_to_state(state, 0, 0)
@@ -331,7 +332,7 @@ class TestEdgeCases:
     
     def test_sequence_of_moves(self):
         """Test applying a sequence of moves to verify player alternation."""
-        state = HexGameState()
+        state = make_empty_hex_state()
         
         # Apply several moves
         moves = [(0, 0), (1, 1), (2, 2), (3, 3)]

@@ -1,11 +1,12 @@
-from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
 from hex_ai.config import (
     TRMPH_BLUE_WIN, TRMPH_RED_WIN,
     TRAINING_BLUE_WIN, TRAINING_RED_WIN,
     BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
 )
-import torch
+from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
+from hex_ai.utils.math_utils import validate_probabilities
 import numpy as np
+import torch
 from typing import List, Tuple
 
 # =============================
@@ -135,6 +136,10 @@ class ValuePredictor:
     The new value head outputs values in [-1, 1] range with tanh activation.
     This utility provides a clean interface for converting these values to various
     probability formats needed by different parts of the codebase.
+    
+    Terminology: We use 'value_signed' as a shorthand for [-1, 1] scores returned
+    by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+    which were the old sigmoid-based outputs.
     """
     
     @staticmethod
@@ -206,26 +211,71 @@ class ValuePredictor:
             raise ValueError(f"Invalid player: {player}")
     
     @staticmethod
-    def convert_to_minimax_value(model_output: float, root_player: Player) -> float:
+    def get_win_probability_for_winner(model_output: float, winner: Winner) -> float:
         """
-        Convert model output to minimax-friendly value from root player's perspective.
+        Get win probability for a specific winner from model output.
         
         Args:
             model_output: Raw model output in [-1, 1] range (tanh activated)
-            root_player: Player whose perspective to use for minimax value
+            winner: Winner to get win probability for
+            
+        Returns:
+            Win probability for the specified winner in [0, 1] range
+        """
+        if not isinstance(winner, Winner):
+            raise ValueError(f"Invalid winner: {winner}")
+        
+        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        
+        if winner == Winner.RED:
+            return prob_red_win
+        elif winner == Winner.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid winner: {winner}")
+    
+    @staticmethod
+    def get_win_probability_for_winner_tensor(model_output: torch.Tensor, winner: Winner) -> torch.Tensor:
+        """
+        Get win probability tensor for a specific winner from model output.
+        
+        Args:
+            model_output: Raw model output tensor in [-1, 1] range (tanh activated)
+            winner: Winner to get win probability for
+            
+        Returns:
+            Win probability tensor for the specified winner in [0, 1] range
+        """
+        prob_red_win = ValuePredictor.model_output_to_probability_tensor(model_output)
+        
+        if winner == Winner.RED:
+            return prob_red_win
+        elif winner == Winner.BLUE:
+            return 1.0 - prob_red_win
+        else:
+            raise ValueError(f"Invalid winner: {winner}")
+    
+    @staticmethod
+    def convert_to_minimax_value(red_ref_signed: float, root_player: Player) -> float:
+        """
+        Convert signed value from Red's reference frame to minimax-friendly value from root player's reference frame.
+        
+        Args:
+            red_ref_signed: Signed value in [-1, 1] range from Red's reference frame (+1 = Red win, -1 = Blue win)
+            root_player: Player whose reference frame to use for minimax value
             
         Returns:
             Minimax value in [-1, 1] range where positive = good for root player
         """
-        prob_red_win = ValuePredictor.model_output_to_probability(model_output)
+        prob_red_win = ValuePredictor.model_output_to_probability(red_ref_signed)
         
         if root_player == Player.BLUE:
             # For Blue: positive values = Blue wins (good), negative values = Red wins (bad)
-            # Convert from Red's win probability to Blue's perspective
+            # Convert from Red's win probability to Blue's reference frame
             return 1.0 - 2.0 * prob_red_win  # Maps [0,1] to [1,-1]
         else:  # root_player == Player.RED
-            # For Red: negative values = Red wins (good), positive values = Blue wins (bad)
-            # Convert from Red's win probability to Red's perspective
+            # For Red: positive values = Red wins (good), negative values = Blue wins (bad)
+            # Convert from Red's win probability to Red's reference frame
             return 2.0 * prob_red_win - 1.0  # Maps [0,1] to [-1,1]
     
     @staticmethod
@@ -279,7 +329,9 @@ def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> 
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
     model_output is the probability that Red wins (after applying sigmoid to the raw logit).
     """
-    if perspective == ValuePerspective.TRAINING_TARGET:
+    if perspective is None:
+        raise ValueError("perspective cannot be None")
+    elif perspective == ValuePerspective.TRAINING_TARGET:
         return model_output
     elif perspective == ValuePerspective.BLUE_WIN_PROB:
         return 1.0 - model_output
@@ -298,7 +350,9 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     The value head predicts Red's win probability, so the model output convention
     is the probability that Red wins.
     """
-    if perspective == ValuePerspective.TRAINING_TARGET:
+    if perspective is None:
+        raise ValueError("perspective cannot be None")
+    elif perspective == ValuePerspective.TRAINING_TARGET:
         return prob
     elif perspective == ValuePerspective.BLUE_WIN_PROB:
         return 1.0 - prob
@@ -307,24 +361,7 @@ def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
     else:
         raise ValueError(f"Unknown perspective: {perspective}")
 
-def get_win_prob_from_model_output(model_output: float, player) -> float:
-    """
-    Given the raw model output (logit) and a player (Winner or Player only),
-    return the probability that player wins.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    """
-    if isinstance(player, Player):
-        perspective = ValuePerspective.BLUE_WIN_PROB if player == Player.BLUE else ValuePerspective.RED_WIN_PROB
-    elif isinstance(player, Winner):
-        perspective = ValuePerspective.BLUE_WIN_PROB if player == Winner.BLUE else ValuePerspective.RED_WIN_PROB
-    else:
-        raise ValueError(f"Unknown player: {player}")
-    prob_red_win = torch.sigmoid(torch.tensor(model_output)).item()
-    return model_output_to_prob(prob_red_win, perspective)
+
 
 def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     """
@@ -333,6 +370,10 @@ def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     if not isinstance(policy_logits, np.ndarray):
         policy_logits = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
     policy_probs = torch.softmax(torch.tensor(policy_logits), dim=0).numpy()
+    
+    # Validate the output probabilities
+    validate_probabilities(policy_probs, "Policy logits to probs")
+    
     return policy_probs
 
 def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.ndarray:
@@ -351,10 +392,17 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
         - temperature < 1.0: More deterministic (sharper distribution)
         - temperature > 1.0: More random (flatter distribution)
         - temperature = 0.0: Greedy selection (argmax)
+        - temperature < 0.02: Uses deterministic selection to avoid numerical issues
     """
 
     if temperature <= 0:
         # Greedy selection: return one-hot vector for argmax
+        result = np.zeros_like(logits)
+        result[np.argmax(logits)] = 1.0
+        return result
+    
+    # For very low temperatures, use deterministic selection to avoid numerical issues
+    if temperature < 0.02:
         result = np.zeros_like(logits)
         result[np.argmax(logits)] = 1.0
         return result
@@ -364,14 +412,8 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
     # Apply softmax
     probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
     
-    # Validate that we got reasonable probabilities
-    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
-        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
-    
-    # Note: This check is redundant since softmax should never return all zeros for finite input
-    # But it's kept as a safety check for edge cases
-    if np.sum(probs) == 0:
-        raise ValueError(f"All probabilities are zero! Logits min/max: {logits.min():.6f}/{logits.max():.6f}, temperature: {temperature}")
+    # Validate that we got reasonable probabilities using our validation function
+    validate_probabilities(probs, f"Temperature-scaled softmax (T={temperature})")
     
     return probs
 
@@ -466,14 +508,8 @@ def policy_logits_to_probs_2d(policy_logits: np.ndarray, temperature: float = 1.
     # Reshape back to original shape
     probs = probs_flat.reshape(original_shape)
     
-    # Validate that we got reasonable probabilities
-    if np.any(np.isnan(probs)) or np.any(np.isinf(probs)):
-        raise ValueError(f"Invalid probabilities detected: NaN or Inf values in softmax output")
-    
-    # Note: This check is redundant since softmax should never return all zeros for finite input
-    # But it's kept as a safety check for edge cases
-    if np.sum(probs) == 0:
-        raise ValueError(f"All probabilities are zero! Logits min/max: {policy_logits.min():.6f}/{policy_logits.max():.6f}, temperature: {temperature}")
+    # Validate that we got reasonable probabilities using our validation function
+    validate_probabilities(probs, f"2D policy logits to probs (T={temperature})")
     
     return probs
 
@@ -594,7 +630,7 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
     
     Args:
         state: Game state (must have .board and .get_legal_moves() methods)
-        model: Model instance (must have .simple_infer() method that returns (policy_logits, value_logit))
+        model: Model instance (must have .simple_infer() method that returns (policy_logits, value_output))
         temperature: Temperature for policy sampling (default 1.0)
         
     Returns:
@@ -628,6 +664,78 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
         # Sample a move
         chosen_idx = np.random.choice(len(legal_moves), p=legal_policy)
         return legal_moves[chosen_idx] 
+
+# =============================
+# Value-Semantics Abstraction (Step 1: Contract Establishment)
+# =============================
+
+def signed_to_prob(v_signed: float) -> float:
+    """
+    Map a signed value v ∈ [-1,1] to probability p ∈ [0,1], with 0.5 == neutral.
+    
+    Args:
+        v_signed: Signed value in [-1, 1] range where +1 = certain Red win, -1 = certain Blue win
+        
+    Returns:
+        Probability in [0, 1] range where 0.5 = neutral
+    """
+    return 0.5 * (v_signed + 1.0)
+
+def prob_to_signed(p_prob: float) -> float:
+    """
+    Map probability p ∈ [0,1] to signed value v ∈ [-1,1], with 0 == neutral.
+    
+    Args:
+        p_prob: Probability in [0, 1] range where 0.5 = neutral
+        
+    Returns:
+        Signed value in [-1, 1] range where +1 = certain Red win, -1 = certain Blue win
+    """
+    return 2.0 * p_prob - 1.0
+
+def red_ref_signed_to_ptm_ref_signed(v_red_ref_signed: float, player) -> float:
+    """
+    Given Red's signed value v_red ∈ [-1,1], return value from 'player-to-move' reference frame.
+    If RED to move: return v_red; if BLUE to move: return -v_red.
+    
+    Args:
+        v_red_ref_signed: Red's signed value in [-1, 1] range
+        player: Player enum (RED or BLUE)
+        
+    Returns:
+        Signed value from player-to-move reference frame in [-1, 1] range
+    """
+    return v_red_ref_signed if player == Player.RED else -v_red_ref_signed
+
+def apply_depth_discount_signed(v: float, gamma: float, dist: int) -> float:
+    """
+    Signed-space discount: shrink v ∈ [-1,1] toward 0 (neutral) by gamma^dist.
+    
+    Args:
+        v: A signed value (either Red-centric or already flipped to player-to-move)
+        gamma: Discount factor in (0,1]; gamma=1 keeps v unchanged; smaller gamma shrinks faster
+        dist: Non-negative integer 'distance' along the path (prefer distance-to-leaf over absolute depth
+              if the intent is to prefer shorter wins/losses during backup)
+        
+    Returns:
+        (gamma ** dist) * v (still in [-1,1])
+    """
+    return (gamma ** max(0, int(dist))) * v
+
+def distance_to_leaf(current_depth: int, leaf_depth: int) -> int:
+    """
+    Prefer this over absolute node depth when discounting backups from a single simulation:
+    dist = leaf_depth - current_depth (>= 0).
+    This aligns with "prefer shorter wins" without penalizing the static position of a node in the tree.
+    
+    Args:
+        current_depth: Current node's depth in the tree
+        leaf_depth: Leaf node's depth in the tree
+        
+    Returns:
+        Distance from current node to leaf (>= 0)
+    """
+    return max(0, int(leaf_depth) - int(current_depth))
 
 # =============================
 # Move Application Utilities
@@ -779,4 +887,6 @@ def player_to_winner(player: Player) -> Winner:
 
 def winner_to_player(winner: Winner) -> Player:
     """Convert Winner enum to Player enum."""
-    return Player.BLUE if winner == Winner.BLUE else Player.RED 
+    return Player.BLUE if winner == Winner.BLUE else Player.RED
+
+ 

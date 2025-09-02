@@ -50,18 +50,18 @@ def test_early_termination():
     # Test different configurations
     configs = [
         ("Standard MCTS (no early termination)", BaselineMCTSConfig(sims=200)),
-        ("Self-play config (aggressive)", create_mcts_config("selfplay", sims=200, early_termination_threshold=0.85)),
-        ("Tournament config (conservative)", create_mcts_config("tournament", sims=200, early_termination_threshold=0.95)),
-        ("Fast self-play config (very aggressive)", create_mcts_config("fast_selfplay", sims=200, early_termination_threshold=0.8)),
+        ("Self-play config (aggressive)", create_mcts_config("selfplay", sims=200, confidence_termination_threshold=0.85)),
+        ("Tournament config (conservative)", create_mcts_config("tournament", sims=200, confidence_termination_threshold=0.95)),
+        ("Fast self-play config (very aggressive)", create_mcts_config("fast_selfplay", sims=200, confidence_termination_threshold=0.8)),
     ]
     
     results = []
     
     for name, config in configs:
         print(f"\n🧪 Testing: {name}")
-        print(f"   Simple termination: {config.enable_early_termination}")
-        if config.enable_early_termination:
-            print(f"   Threshold: {config.early_termination_threshold} (stops when win prob ≥{config.early_termination_threshold} OR ≤{1-config.early_termination_threshold})")
+        print(f"   Confidence termination: {config.enable_confidence_termination}")
+        if config.enable_confidence_termination:
+            print(f"   Threshold: {config.confidence_termination_threshold} (stops when signed value ≥{config.confidence_termination_threshold} OR ≤-{config.confidence_termination_threshold})")
         
         # Run MCTS
         mcts = BaselineMCTS(engine, model, config)
@@ -122,10 +122,10 @@ def test_early_termination_on_different_positions():
     model = ModelWrapper(model_path, device="cpu")
     
     # Use fast self-play config for testing
-    config = create_mcts_config("fast_selfplay", sims=100, early_termination_threshold=0.8)
+    config = create_mcts_config("fast_selfplay", sims=100, confidence_termination_threshold=0.8)
     
-    print(f"\n🎯 Testing early termination on different game positions:")
-    print(f"Config: {config.early_termination_threshold} threshold")
+    print(f"\n🎯 Testing confidence termination on different game positions:")
+    print(f"Config: {config.confidence_termination_threshold} threshold")
     
     for position_name, trmph_game in test_positions:
         moves = trmph_to_moves(trmph_game)

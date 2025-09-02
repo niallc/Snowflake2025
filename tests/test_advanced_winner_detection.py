@@ -10,7 +10,7 @@ This module tests complex scenarios including:
 
 import pytest
 import numpy as np
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves, trmph_move_to_rowcol, rowcol_to_trmph
 
 
@@ -52,7 +52,7 @@ class TestTrmphAdvancedCases:
         bare_moves = strip_trmph_preamble(trmph)
         moves = split_trmph_moves(bare_moves)
         centre_move = "g7"  # (6,6)
-        state = HexGameState()
+        state = make_empty_hex_state()
         state = self.play_moves_except(state, moves, centre_move)
         # No winner yet
         self.assert_winner(state, None, context="centre_connects before g7")
@@ -71,7 +71,7 @@ class TestTrmphAdvancedCases:
         bare_moves = strip_trmph_preamble(trmph)
         moves = split_trmph_moves(bare_moves)
         centre_move = "g7"  # (6,6)
-        state = HexGameState()
+        state = make_empty_hex_state()
         state = self.play_moves_except(state, moves, centre_move)
         self.assert_winner(state, None, context="ccts_blue before g7")
         # Blue plays g7
@@ -88,7 +88,7 @@ class TestTrmphAdvancedCases:
         bare_moves = strip_trmph_preamble(trmph)
         moves = split_trmph_moves(bare_moves)
         centre_move = "g7"  # (6,6)
-        state = HexGameState()
+        state = make_empty_hex_state()
         state = self.play_moves_except(state, moves, centre_move)
         self.assert_winner(state, None, context="ccts_red before g7")
         # Red plays g7
@@ -104,7 +104,7 @@ class TestTrmphAdvancedCases:
         trmph = "#13,m11f5d4h6i6i7h7i5e8e7k4j5c8d9d8e9g7g6d6c7d7d5c6f8f7g9j8j6c5h8b10c9b9c11d10c10l5b12k8k9i10j9i9k7m6l7m7l8m8l10l9k10a13a12m9m10k6j7"
         bare_moves = strip_trmph_preamble(trmph)
         moves = split_trmph_moves(bare_moves)
-        state = HexGameState()
+        state = make_empty_hex_state()
         for move in moves:
             row, col = trmph_move_to_rowcol(move)
             state = state.make_move(row, col)

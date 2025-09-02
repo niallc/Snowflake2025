@@ -27,6 +27,12 @@ class MoveSelectionConfig:
     mcts_dirichlet_alpha: float = 0.3
     mcts_dirichlet_eps: float = 0.25
     batch_size: Optional[int] = None  # Override default batch size for MCTS
+    # For Gumbel AlphaZero root selection
+    enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
+    gumbel_sim_threshold: int = 200  # Use Gumbel selection when sims <= this threshold
+    gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
+    gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
+    gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -91,18 +97,42 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
 
 class MCTSStrategy(MoveSelectionStrategy):
     """Move selection using MCTS."""
-    
+
+    def __init__(self, verbose: int = 0):
+        self.verbose = verbose
+
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         # Create MCTS configuration optimized for tournament play
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
-            early_termination_threshold=0.95  # Conservative early termination for quality
+            confidence_termination_threshold=0.95,  # Conservative confidence termination for quality
+            c_puct=config.mcts_c_puct,  # Pass the c_puct parameter from strategy config
+            dirichlet_alpha=config.mcts_dirichlet_alpha,  # Pass the dirichlet_alpha parameter
+            dirichlet_eps=config.mcts_dirichlet_eps,  # Pass the dirichlet_eps parameter
+            enable_depth_discounting=False  # Disable depth discounting for tournament play
         )
         
         # Override batch size if specified in config
         if config.batch_size is not None:
             mcts_config.batch_cap = config.batch_size
+        
+        # Set temperature from tournament configuration
+        # For deterministic tournaments, we want to use the same temperature for all moves
+        # rather than temperature decay, so set both start and end to the same value
+        mcts_config.temperature_start = config.temperature
+        mcts_config.temperature_end = config.temperature
+        
+        # Disable Dirichlet noise for deterministic tournaments
+        mcts_config.add_root_noise = False
+        
+        # Configure Gumbel AlphaZero parameters if enabled
+        if config.enable_gumbel_root_selection:
+            mcts_config.enable_gumbel_root_selection = True
+            mcts_config.gumbel_sim_threshold = config.gumbel_sim_threshold
+            mcts_config.gumbel_c_visit = config.gumbel_c_visit
+            mcts_config.gumbel_c_scale = config.gumbel_c_scale
+            mcts_config.gumbel_m_candidates = config.gumbel_m_candidates
         
         # Create required components
         engine = HexGameEngine()
@@ -111,6 +141,11 @@ class MCTSStrategy(MoveSelectionStrategy):
         
         # Run MCTS and select move
         mcts = BaselineMCTS(engine, model_wrapper, mcts_config)
+        
+        # DEBUG: Print MCTS configuration to confirm what's actually being used
+        if verbose >= 5:
+            print(f"[MCTS DEBUG] add_root_noise={mcts_config.add_root_noise}, dirichlet_alpha={mcts_config.dirichlet_alpha}, dirichlet_eps={mcts_config.dirichlet_eps}")
+        
         result = mcts.run(state, verbose=0)  # Quiet mode for tournaments
         return result.move
     
@@ -119,7 +154,10 @@ class MCTSStrategy(MoveSelectionStrategy):
     
     def get_config_summary(self, config: MoveSelectionConfig) -> str:
         batch_info = f", batch={config.batch_size}" if config.batch_size is not None else ""
-        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info})"
+        gumbel_info = ""
+        if config.enable_gumbel_root_selection:
+            gumbel_info = f", gumbel(c_visit={config.gumbel_c_visit}, c_scale={config.gumbel_c_scale}, m={config.gumbel_m_candidates})"
+        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info}{gumbel_info})"
 
 
 # Strategy registry

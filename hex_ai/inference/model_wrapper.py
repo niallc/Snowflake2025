@@ -84,7 +84,7 @@ class ModelWrapper:
             board_tensor: torch.Tensor of shape (3, N, N) or (batch_size=1, 3, N, N)
         Returns:
             policy_logits: torch.Tensor of shape (169,) or (N*N,)
-            value_logit: torch.Tensor of shape (1,)
+            value_signed: torch.Tensor of shape (1,)
         """
         self.model.eval()
         with torch.no_grad():
@@ -96,9 +96,9 @@ class ModelWrapper:
                 logging.getLogger(__name__).debug(
                     f"predict: input_device_before={before_device}, input_device_after={board_tensor.device}, model_device={next(self.model.parameters()).device}"
                 )
-            policy_logits, value_logit = self.model(board_tensor)
+            policy_logits, value_signed = self.model(board_tensor)
             # Remove batch dimension for single input
-            return policy_logits[0].cpu(), value_logit[0].cpu()
+            return policy_logits[0].cpu(), value_signed[0].cpu()
 
     def batch_predict(self, board_tensors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -107,7 +107,7 @@ class ModelWrapper:
             board_tensors: torch.Tensor of shape (batch_size, 3, N, N)
         Returns:
             policy_logits: torch.Tensor of shape (batch_size, N*N)
-            value_logits: torch.Tensor of shape (batch_size, 1)
+            value_signed: torch.Tensor of shape (batch_size, 1)
         """
         self.model.eval()
         with torch.no_grad():
@@ -124,8 +124,8 @@ class ModelWrapper:
                 logger.debug(
                     f"batch_predict: input_device_before={before_device}, input_device_after={board_tensors.device}, model_device={next(self.model.parameters()).device}"
                 )
-            policy_logits, value_logits = self.model(board_tensors)
-            return policy_logits.cpu(), value_logits.cpu()
+            policy_logits, value_signed = self.model(board_tensors)
+            return policy_logits.cpu(), value_signed.cpu()
 
     def infer_timed(self, board_tensors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
         """
@@ -134,7 +134,7 @@ class ModelWrapper:
             board_tensors: torch.Tensor of shape (batch_size, 3, N, N)
         Returns:
             policy_logits: torch.Tensor of shape (batch_size, N*N) on CPU
-            value_logits: torch.Tensor of shape (batch_size, 1) on CPU
+            value_signed: torch.Tensor of shape (batch_size, 1) on CPU
             timing_info: Dict with timing details (h2d_ms, forward_ms, d2h_ms, batch_size, device, param_dtype)
         """
         self.model.eval()
@@ -152,7 +152,7 @@ class ModelWrapper:
         # Time the actual neural network forward pass (pure inference)
         pure_forward_start = time.perf_counter()
         with torch.no_grad():
-            policy_logits, value_logits = self.model(board_tensors)
+            policy_logits, value_signed = self.model(board_tensors)
         pure_forward_ms = (time.perf_counter() - pure_forward_start) * 1000.0
         
         # Time device synchronization
@@ -162,7 +162,7 @@ class ModelWrapper:
             sync_ms = (time.perf_counter() - sync_start) * 1000.0
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             # Simple host read approach - no MPS events for now
-            _ = (policy_logits.sum() + value_logits.sum()).item()
+            _ = (policy_logits.sum() + value_signed.sum()).item()
             sync_ms = 0.0  # No separate sync needed
         else:
             sync_ms = (time.perf_counter() - sync_start) * 1000.0
@@ -173,7 +173,7 @@ class ModelWrapper:
         # Time device to host transfer
         d2h_start = time.perf_counter()
         policy_cpu = policy_logits.cpu()
-        value_cpu = value_logits.cpu()
+        value_cpu = value_signed.cpu()
         d2h_ms = (time.perf_counter() - d2h_start) * 1000.0
         
         timing_info = {

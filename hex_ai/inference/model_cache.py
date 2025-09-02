@@ -5,11 +5,13 @@ This module provides efficient model caching to avoid reloading models
 for every move during tournaments.
 """
 
+import os
 from typing import Dict, Optional, Tuple
 from pathlib import Path
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.inference.model_config import get_normalized_path
 
 
 class ModelCache:
@@ -26,21 +28,23 @@ class ModelCache:
     
     def get_simple_model(self, checkpoint_path: str) -> SimpleModelInference:
         """Get or create a SimpleModelInference instance."""
-        if checkpoint_path not in self._simple_models:
-            self._simple_models[checkpoint_path] = SimpleModelInference(checkpoint_path)
-        return self._simple_models[checkpoint_path]
+        normalized_path = get_normalized_path(checkpoint_path)
+        if normalized_path not in self._simple_models:
+            self._simple_models[normalized_path] = SimpleModelInference(checkpoint_path)
+        return self._simple_models[normalized_path]
     
     def get_wrapper_model(self, checkpoint_path: str) -> ModelWrapper:
         """Get or create a ModelWrapper instance."""
-        if checkpoint_path not in self._wrapper_models:
+        normalized_path = get_normalized_path(checkpoint_path)
+        if normalized_path not in self._wrapper_models:
             # Get the simple model first to extract model_type
             simple_model = self.get_simple_model(checkpoint_path)
-            self._wrapper_models[checkpoint_path] = ModelWrapper(
+            self._wrapper_models[normalized_path] = ModelWrapper(
                 checkpoint_path, 
                 device=None, 
                 model_type=simple_model.model_type
             )
-        return self._wrapper_models[checkpoint_path]
+        return self._wrapper_models[normalized_path]
     
     def preload_models(self, checkpoint_paths: list) -> None:
         """Preload all models for a tournament."""

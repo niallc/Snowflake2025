@@ -28,7 +28,7 @@ class SelfPlayEngine:
                  cache_size: int = 10000, temperature: float = 0.5, temperature_end: float = 0.01, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
-                 mcts_sims: int = 500):
+                 mcts_sims: int = 500, c_puct: float = 1.5, enable_gumbel: bool = True):
         
         # Generate a unique run seed based on current time
         self.run_seed = int(time.time() * 1000000) % (2**32)
@@ -49,6 +49,8 @@ class SelfPlayEngine:
             use_batched_inference: Whether to use batched inference for better performance
             output_dir: Output directory for streaming files (used if streaming_file is None)
             mcts_sims: Number of MCTS simulations per move
+            c_puct: PUCT exploration constant for MCTS
+            enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
         """
         self.model_path = model_path
         self.batch_size = batch_size
@@ -61,6 +63,8 @@ class SelfPlayEngine:
         self.use_batched_inference = use_batched_inference
         self.output_dir = output_dir
         self.mcts_sims = mcts_sims
+        self.c_puct = c_puct
+        self.enable_gumbel = enable_gumbel
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -69,11 +73,13 @@ class SelfPlayEngine:
         self.game_engine = HexGameEngine()
         # Create ModelWrapper for MCTS
         self.model_wrapper = ModelWrapper(model_path, device=get_device())
-        # Create MCTS configuration optimized for self-play with early termination
+        # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
-            early_termination_threshold=0.85,  # Aggressive early termination for speed
-            cache_size=self.cache_size  # Use same cache size as SimpleModelInference
+            confidence_termination_threshold=0.85,  # Aggressive confidence termination for speed
+            cache_size=self.cache_size,  # Use same cache size as SimpleModelInference
+            c_puct=self.c_puct,  # Use specified PUCT exploration constant
+            enable_gumbel_root_selection=self.enable_gumbel  # Enable/disable Gumbel root selection
         )
         
         # Performance tracking
@@ -102,6 +108,8 @@ class SelfPlayEngine:
                 f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
                 f.write(f"# Model: {model_path}\n")
                 f.write(f"# MCTS simulations: {mcts_sims}\n")
+                f.write(f"# C_PUCT: {c_puct}\n")
+                f.write(f"# Gumbel root selection: {enable_gumbel}\n")
                 f.write(f"# Temperature: {temperature}\n")
                 f.write("# Format: trmph_string winner\n")
         
@@ -114,6 +122,8 @@ class SelfPlayEngine:
             print(f"  Batch size: {batch_size}")
             print(f"  Cache size: {cache_size}")
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
+            print(f"  C_PUCT: {c_puct}")
+            print(f"  Gumbel root selection: {enable_gumbel}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
@@ -147,7 +157,7 @@ class SelfPlayEngine:
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
         
-        state = HexGameState()  # Always uses 13x13 board
+        state = make_empty_hex_state()  # Always uses 13x13 board
         
         # Apply opening move if provided
         if opening_move is not None:
@@ -184,7 +194,7 @@ class SelfPlayEngine:
             
             # Get root value (approximate from MCTS)
             tree_data = mcts_result.tree_data
-            search_value = tree_data.get('root_value', 0.0)
+            search_value = tree_data.get('v_curr_signed_root', 0.0)
             
             # Log MCTS statistics
             if self.verbose >= 2:

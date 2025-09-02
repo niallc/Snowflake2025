@@ -90,7 +90,7 @@ let state = {
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
-  red_model_id: 'model1',
+  red_model_id: 'model2',  // Use different model for red by default
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
@@ -98,6 +98,11 @@ let state = {
   red_num_simulations: 2005,
   blue_exploration_constant: 1.4,
   red_exploration_constant: 1.4,
+  // Gumbel settings
+  blue_enable_gumbel: true,
+  red_enable_gumbel: true,
+  blue_gumbel_max_sims: 500,
+  red_gumbel_max_sims: 500,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
@@ -126,14 +131,18 @@ function getCurrentPlayerSettings() {
       model_id: state.blue_model_id,
       temperature: state.blue_temperature,
       num_simulations: state.blue_num_simulations,
-      exploration_constant: state.blue_exploration_constant
+      exploration_constant: state.blue_exploration_constant,
+      enable_gumbel: state.blue_enable_gumbel,
+      gumbel_max_sims: state.blue_gumbel_max_sims
     };
   } else {
     return {
       model_id: state.red_model_id,
       temperature: state.red_temperature,
       num_simulations: state.red_num_simulations,
-      exploration_constant: state.red_exploration_constant
+      exploration_constant: state.red_exploration_constant,
+      enable_gumbel: state.red_enable_gumbel,
+      gumbel_max_sims: state.red_gumbel_max_sims
     };
   }
 }
@@ -141,6 +150,40 @@ function getCurrentPlayerSettings() {
 // --- Utility: Convert (row, col) to TRMPH move ---
 function rowcolToTrmph(row, col) {
   return String.fromCharCode(97 + col) + (row + 1);
+}
+
+// --- Custom Tooltip Functions ---
+let tooltip = null;
+
+function showTooltip(event, text) {
+  // Remove existing tooltip
+  hideTooltip();
+  
+  // Create tooltip element
+  tooltip = document.createElement('div');
+  tooltip.textContent = text;
+  tooltip.style.cssText = `
+    position: fixed;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+    pointer-events: none;
+    z-index: 1000;
+    left: ${event.clientX + 10}px;
+    top: ${event.clientY - 30}px;
+  `;
+  
+  document.body.appendChild(tooltip);
+}
+
+function hideTooltip() {
+  if (tooltip) {
+    tooltip.remove();
+    tooltip = null;
+  }
 }
 
 // --- API Calls ---
@@ -172,36 +215,6 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMove(trmph, move, model_id = 'model1', temperature = 1.0, 
-                       blue_model_id = 'model1', blue_temperature = 1.0,
-                       red_model_id = 'model2', red_temperature = 1.0,
-                       blue_num_simulations = 200, blue_exploration_constant = 1.4,
-                       red_num_simulations = 200, red_exploration_constant = 1.4,
-                       verbose = 1) {
-  console.log(`fetchMove called with blue_model_id: ${blue_model_id}, red_model_id: ${red_model_id}`);
-  const resp = await fetch('/api/move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      trmph, 
-      move, 
-      model_id, 
-      temperature,
-      blue_model_id,
-      blue_temperature,
-      blue_num_simulations,
-      blue_exploration_constant,
-      red_model_id,
-      red_temperature,
-      red_num_simulations,
-      red_exploration_constant,
-      verbose
-    }),
-  });
-  if (!resp.ok) throw new Error('API error');
-  return await resp.json();
-}
-
 async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.0) {
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
@@ -213,7 +226,8 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 }
 
 async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
-                               num_simulations = 200, exploration_constant = 1.4) {
+                               num_simulations = 200, exploration_constant = 1.4,
+                               enable_gumbel = true, gumbel_max_sims = 500) {
   console.log(`makeComputerMove called with model_id: ${model_id}`);
   
   // Always use MCTS endpoint
@@ -226,7 +240,9 @@ async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
       num_simulations, 
       exploration_constant, 
       temperature, 
-      verbose 
+      verbose,
+      enable_gumbel,
+      gumbel_max_sims
     }),
   });
   if (!resp.ok) throw new Error('API error');
@@ -265,15 +281,18 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
 
   // --- Draw player edge indicators ---
   // Blue: top and bottom (across the topmost and bottommost hexes)
+  // Increase stroke width to extend the strips toward the board
   svg.appendChild(makeEdgeLine(
     hexCenter(0, 0).x, hexCenter(0, 0).y - HEX_RADIUS,
     hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y - HEX_RADIUS,
-    COLORS.BLUE_EDGE_BORDER
+    COLORS.BLUE_EDGE_BORDER,
+    18  // Increased stroke width from 10 to 20 to extend down
   ));
   svg.appendChild(makeEdgeLine(
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, 0).y + HEX_RADIUS,
     hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).x, hexCenter(GAME_CONSTANTS.BOARD_SIZE - 1, GAME_CONSTANTS.BOARD_SIZE - 1).y + HEX_RADIUS,
-    COLORS.BLUE_EDGE_BORDER
+    COLORS.BLUE_EDGE_BORDER,
+    18  // Increased stroke width from 10 to 20 to extend up
   ));
   
   // Red edges: pass through midpoints of the true outer edges
@@ -288,7 +307,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // left side uses edge between vertices 2 and 3
   const leftTopMid  = edgeMidpoint(tl[2], tl[3]);
   const leftBotMid  = edgeMidpoint(bl[2], bl[3]);
-  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+  svg.appendChild(makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, COLORS.RED_EDGE_BORDER, 22));
 
   const tr = hexVertices(hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).x,
                         hexCenter(0, GAME_CONSTANTS.BOARD_SIZE - 1).y, HEX_RADIUS);
@@ -298,7 +317,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
   // right side uses edge between vertices 0 and 5
   const rightTopMid = edgeMidpoint(tr[0], tr[5]);
   const rightBotMid = edgeMidpoint(br[0], br[5]);
-  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 17));
+  svg.appendChild(makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, COLORS.RED_EDGE_BORDER, 22));
 
 
   // Draw hexes
@@ -331,6 +350,36 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
         hex.addEventListener('click', onCellClick);
       }
       svg.appendChild(hex);
+      
+      // Add TRMPH label in center of hex
+      const trmphLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      trmphLabel.setAttribute('x', x);
+      trmphLabel.setAttribute('y', y + 4); // Slight vertical adjustment for centering
+      trmphLabel.setAttribute('text-anchor', 'middle');
+      trmphLabel.setAttribute('dominant-baseline', 'middle');
+      trmphLabel.setAttribute('font-size', '10px');
+      trmphLabel.setAttribute('font-family', 'monospace');
+      trmphLabel.setAttribute('pointer-events', 'none'); // Make text non-interactive
+      
+      // Set label color based on piece type
+      let labelColor = '#e0e0e0'; // Default light grey for empty hexes
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) {
+        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+          labelColor = '#004499'; // Much darker blue for last move
+        } else {
+          labelColor = '#00eeee'; // trmph label color, blue
+        }
+      } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
+        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+          labelColor = '#992200'; // Much darker red for last move
+        } else {
+          labelColor = '#ddcc00'; // trmph label color, red
+        }
+      }
+      
+      trmphLabel.setAttribute('fill', labelColor);
+      trmphLabel.textContent = rowcolToTrmph(row, col);
+      svg.appendChild(trmphLabel);
     }
   }
   container.appendChild(svg);
@@ -353,6 +402,26 @@ function makeHex(cx, cy, r, fill, highlight) {
   hex.setAttribute('stroke', COLORS.HEX_GRID_COLOR);
   hex.setAttribute('stroke-width', 2);
   if (highlight) hex.style.cursor = 'pointer';
+  
+  // Add tooltip functionality
+  hex.addEventListener('mouseenter', function(e) {
+    // console.log('Mouse enter event triggered!');
+    const row = parseInt(this.getAttribute('data-row'));
+    const col = parseInt(this.getAttribute('data-col'));
+    // console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
+    if (!isNaN(row) && !isNaN(col)) {
+      const trmph = rowcolToTrmph(row, col);
+      console.log('TRMPH format:', trmph);
+      showTooltip(e, trmph);
+    } else {
+      console.log('Invalid row/col values - row:', row, 'col:', col);
+    }
+  });
+  
+  hex.addEventListener('mouseleave', function(e) {
+    hideTooltip();
+  });
+  
   return hex;
 }
 
@@ -439,6 +508,17 @@ function updateUI() {
   if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
   if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
   
+  // Update Gumbel controls
+  const blueEnableGumbel = document.getElementById('blue-enable-gumbel');
+  const blueGumbelMaxSims = document.getElementById('blue-gumbel-max-sims');
+  const redEnableGumbel = document.getElementById('red-enable-gumbel');
+  const redGumbelMaxSims = document.getElementById('red-gumbel-max-sims');
+  
+  if (blueEnableGumbel) blueEnableGumbel.checked = state.blue_enable_gumbel;
+  if (blueGumbelMaxSims) blueGumbelMaxSims.value = state.blue_gumbel_max_sims;
+  if (redEnableGumbel) redEnableGumbel.checked = state.red_enable_gumbel;
+  if (redGumbelMaxSims) redGumbelMaxSims.value = state.red_gumbel_max_sims;
+  
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
   if (debugOutput) {
@@ -489,18 +569,22 @@ async function onCellClick(e) {
       
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant;
+      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant, computerEnableGumbel, computerGumbelMaxSims;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
         computerTemperature = state.blue_temperature;
         computerNumSimulations = state.blue_num_simulations;
         computerExplorationConstant = state.blue_exploration_constant;
+        computerEnableGumbel = state.blue_enable_gumbel;
+        computerGumbelMaxSims = state.blue_gumbel_max_sims;
       } else {
         computerModelId = state.red_model_id;
         computerTemperature = state.red_temperature;
         computerNumSimulations = state.red_num_simulations;
         computerExplorationConstant = state.red_exploration_constant;
+        computerEnableGumbel = state.red_enable_gumbel;
+        computerGumbelMaxSims = state.red_gumbel_max_sims;
       }
       
       // Make computer move with verbose output
@@ -510,7 +594,9 @@ async function onCellClick(e) {
         computerTemperature,
         state.verbose_level,
         computerNumSimulations,
-        computerExplorationConstant
+        computerExplorationConstant,
+        computerEnableGumbel,
+        computerGumbelMaxSims
       );
       
       if (computerResult.success) {
@@ -549,7 +635,7 @@ function getLastMove(board, legalMoves) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, temperature, num_simulations, exploration_constant } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Save state for undo functionality before computer move
@@ -562,7 +648,9 @@ async function stepComputerMove() {
       temperature, 
       state.verbose_level,
       num_simulations,
-      exploration_constant
+      exploration_constant,
+      enable_gumbel,
+      gumbel_max_sims
     );
     
     if (result.success) {
@@ -649,9 +737,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       redSelect.appendChild(option);
     });
     
-    // Set default selections
-    blueSelect.value = state.blue_model_id;
-    redSelect.value = state.red_model_id;
+    // Set default selections - check if the default values exist in the dropdown
+    if (state.available_models.some(model => model.id === state.blue_model_id)) {
+      blueSelect.value = state.blue_model_id;
+    } else if (state.available_models.length > 0) {
+      // Fallback to first available model
+      state.blue_model_id = state.available_models[0].id;
+      blueSelect.value = state.blue_model_id;
+      console.log(`Blue model not found, using: ${state.blue_model_id}`);
+    }
+    
+    if (state.available_models.some(model => model.id === state.red_model_id)) {
+      redSelect.value = state.red_model_id;
+    } else if (state.available_models.length > 0) {
+      // Fallback to first available model if red model not found
+      const redFallbackIndex = Math.min(1, state.available_models.length - 1);
+      state.red_model_id = state.available_models[redFallbackIndex].id;
+      redSelect.value = state.red_model_id;
+      console.log(`Red model not found, using: ${state.red_model_id}`);
+    }
+    
+    console.log(`Model dropdowns initialized. Available models: ${state.available_models.map(m => m.id).join(', ')}`);
+    console.log(`Selected models - Blue: ${state.blue_model_id}, Red: ${state.red_model_id}`);
   } catch (err) {
     console.error('Failed to load models:', err);
   }
@@ -704,6 +811,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('red-exploration-constant').addEventListener('input', (e) => {
     state.red_exploration_constant = parseFloat(e.target.value);
+  });
+
+  // Gumbel controls
+  document.getElementById('blue-enable-gumbel').addEventListener('change', (e) => {
+    state.blue_enable_gumbel = e.target.checked;
+  });
+  document.getElementById('blue-gumbel-max-sims').addEventListener('input', (e) => {
+    state.blue_gumbel_max_sims = parseInt(e.target.value);
+  });
+  document.getElementById('red-enable-gumbel').addEventListener('change', (e) => {
+    state.red_enable_gumbel = e.target.checked;
+  });
+  document.getElementById('red-gumbel-max-sims').addEventListener('input', (e) => {
+    state.red_gumbel_max_sims = parseInt(e.target.value);
   });
 
   // Step button handler
@@ -770,6 +891,66 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- Debug Output Functions ---
+function displayAlgorithmInfo(debugInfo) {
+  if (!debugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // Algorithm identification (always show at top)
+  if (debugInfo.algorithm_info) {
+    const algo = debugInfo.algorithm_info;
+    output += '=== ALGORITHM USED ===\n';
+    output += `Algorithm: ${algo.algorithm}\n`;
+    
+    if (algo.early_termination) {
+      output += `Early Termination: YES (${algo.early_termination_reason})\n`;
+      
+      // Add specific information for terminal move detection
+      if (algo.early_termination_reason === 'terminal_move' && algo.early_termination_details) {
+        const details = algo.early_termination_details;
+        if (details.move) {
+          output += `Terminal Move: ${details.move[0]},${details.move[1]} (${String.fromCharCode(97 + details.move[1])}${details.move[0] + 1})\n`;
+        }
+        output += `Win Probability: ${(details.win_probability * 100).toFixed(1)}%\n`;
+      }
+    } else {
+      output += `Early Termination: NO\n`;
+    }
+    
+    // Display algorithm-specific parameters
+    if (algo.parameters) {
+      output += `Parameters: `;
+      const paramStrings = [];
+      for (const [key, value] of Object.entries(algo.parameters)) {
+        if (Array.isArray(value)) {
+          paramStrings.push(`${key}=[${value.join(',')}]`);
+        } else {
+          paramStrings.push(`${key}=${value}`);
+        }
+      }
+      output += paramStrings.join(', ');
+      output += '\n';
+    }
+    output += '\n';
+  }
+  
+  return output;
+}
+
+function shouldShowMCTSStats(mctsDebugInfo) {
+  // Determine if MCTS-specific statistics should be displayed.
+  if (!mctsDebugInfo || !mctsDebugInfo.algorithm_info) return false;
+  
+  const algorithmUsed = mctsDebugInfo.algorithm_info.algorithm;
+  const earlyTerminated = mctsDebugInfo.algorithm_info.early_termination;
+  
+  // Don't show MCTS stats for early termination cases
+  return algorithmUsed === "MCTS" && !earlyTerminated;
+}
+
 function displayMCTSDebugInfo(mctsDebugInfo) {
   if (!mctsDebugInfo || state.verbose_level === 0) return;
   
@@ -778,8 +959,14 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   
   let output = '';
   
-  // MCTS Search Statistics (condensed)
-  if (mctsDebugInfo.search_stats) {
+  // Display algorithm information first
+  output += displayAlgorithmInfo(mctsDebugInfo);
+  
+  // Determine once whether to show MCTS-specific stats
+  const showMCTSStats = shouldShowMCTSStats(mctsDebugInfo);
+  
+  // MCTS Search Statistics (condensed) - only show if MCTS was used
+  if (mctsDebugInfo.search_stats && showMCTSStats) {
     output += '=== MCTS SEARCH STATISTICS ===\n';
     output += `Simulations: ${mctsDebugInfo.search_stats.num_simulations} | `;
     output += `Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s | `;
@@ -794,8 +981,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     output += `Selected: ${mctsDebugInfo.move_selection.selected_move} (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
   }
   
-  // Tree Statistics (condensed)
-  if (mctsDebugInfo.tree_statistics) {
+  // Tree Statistics (condensed) - only show if MCTS was used
+  if (mctsDebugInfo.tree_statistics && showMCTSStats) {
     output += '=== TREE STATISTICS ===\n';
     output += `Nodes: ${mctsDebugInfo.tree_statistics.total_nodes} | `;
     output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth} | `;
@@ -806,8 +993,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   if (mctsDebugInfo.move_probabilities) {
     output += '=== MOVE PROBABILITIES ===\n';
     
-    // MCTS visit counts (top moves only)
-    if (mctsDebugInfo.move_probabilities.mcts_visits) {
+    // MCTS visit counts (top moves only) - only show if MCTS was used
+    if (mctsDebugInfo.move_probabilities.mcts_visits && showMCTSStats) {
       output += 'MCTS Visit Counts:\n';
       const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
         .sort(([,a], [,b]) => b - a);
@@ -848,8 +1035,8 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     }
   }
   
-  // Comparison (top differences only)
-  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct) {
+  // Comparison (top differences only) - only show if MCTS was used
+  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct && showMCTSStats) {
     output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
     const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
       .sort(([,a], [,b]) => Math.abs(b.difference) - Math.abs(a.difference))
@@ -917,6 +1104,9 @@ function displayDebugInfo(debugInfo) {
   
   let output = '';
   
+  // Display algorithm information first
+  output += displayAlgorithmInfo(debugInfo);
+  
   // Model information
   if (debugInfo.model_info) {
     output += '=== MODEL INFORMATION ===\n';
@@ -932,7 +1122,7 @@ function displayDebugInfo(debugInfo) {
     output += `Current Player: ${debugInfo.basic.current_player}\n`;
     output += `Game Over: ${debugInfo.basic.game_over}\n`;
     output += `Legal Moves: ${debugInfo.basic.legal_moves_count}\n`;
-    output += `Value Logit: ${debugInfo.basic.value_logit.toFixed(4)}\n`;
+    output += `Value Signed: ${debugInfo.basic.value_signed.toFixed(4)}\n`;
     output += `Win Probability: ${(debugInfo.basic.win_probability * 100).toFixed(2)}%\n`;
     output += `Temperature: ${debugInfo.basic.temperature}\n`;
     output += `Search Widths: ${debugInfo.basic.search_widths ? debugInfo.basic.search_widths.join(',') : 'None'}\n`;
@@ -1347,7 +1537,7 @@ async function applyTrmphSequence() {
     state.legal_moves = result.legal_moves;
     state.winner = result.winner;
     state.policy = result.policy;
-    state.value = result.value;
+    state.value = result.value_signed;
     state.win_prob = result.win_prob;
     
     // Update the TRMPH string display
@@ -1377,6 +1567,110 @@ function showTrmphStatus(message, type) {
   const statusElement = document.getElementById('trmph-sequence-status');
   statusElement.textContent = message;
   statusElement.className = `status-message ${type}`;
+}
+
+// Save game functionality
+async function saveGame() {
+  try {
+    // Get current MCTS parameters
+    const mctsParams = {
+      blue: {
+        num_simulations: state.blue_num_simulations,
+        exploration_constant: state.blue_exploration_constant,
+        temperature: state.blue_temperature
+      },
+      red: {
+        num_simulations: state.red_num_simulations,
+        exploration_constant: state.red_exploration_constant,
+        temperature: state.red_temperature
+      }
+    };
+    
+    // Determine which model to use (use blue's model for now)
+    const modelId = state.blue_model_id;
+    
+    const response = await fetch('/api/save_game', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        winner: state.winner,
+        model_id: modelId,
+        mcts_params: mctsParams
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      alert(`Game saved successfully!\n\nWinner: ${state.winner}\nSaved to: ${result.trmph_file}`);
+    } else if (result.needs_winner_input) {
+      // Show winner selection modal
+      showWinnerModal();
+    } else {
+      alert(`Error saving game: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error saving game:', error);
+    alert(`Error saving game: ${error.message}`);
+  }
+}
+
+function showWinnerModal() {
+  document.getElementById('winner-modal').style.display = 'block';
+}
+
+function closeWinnerModal() {
+  document.getElementById('winner-modal').style.display = 'none';
+}
+
+async function selectWinner(winner) {
+  closeWinnerModal();
+  
+  try {
+    // Get current MCTS parameters
+    const mctsParams = {
+      blue: {
+        num_simulations: state.blue_num_simulations,
+        exploration_constant: state.blue_exploration_constant,
+        temperature: state.blue_temperature
+      },
+      red: {
+        num_simulations: state.red_num_simulations,
+        exploration_constant: state.red_exploration_constant,
+        temperature: state.red_temperature
+      }
+    };
+    
+    // Determine which model to use (use blue's model for now)
+    const modelId = state.blue_model_id;
+    
+    const response = await fetch('/api/save_game', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        trmph: state.trmph,
+        winner: winner,
+        model_id: modelId,
+        mcts_params: mctsParams
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      alert(`Game saved successfully!\n\nWinner: ${winner}\nSaved to: ${result.trmph_file}`);
+    } else {
+      alert(`Error saving game: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error saving game:', error);
+    alert(`Error saving game: ${error.message}`);
+  }
 }
 
 // Event listeners for model browser
@@ -1442,4 +1736,22 @@ document.addEventListener('DOMContentLoaded', function() {
   // TRMPH sequence functionality
   document.getElementById('apply-trmph-sequence').addEventListener('click', applyTrmphSequence);
   document.getElementById('clear-trmph-sequence').addEventListener('click', clearTrmphSequence);
+  
+  // Save game functionality
+  document.getElementById('save-game-btn').addEventListener('click', saveGame);
+  
+  // Winner selection modal
+  document.getElementById('winner-blue-btn').addEventListener('click', () => selectWinner('blue'));
+  document.getElementById('winner-red-btn').addEventListener('click', () => selectWinner('red'));
+  document.getElementById('winner-cancel-btn').addEventListener('click', closeWinnerModal);
+  
+  // Close winner modal when clicking outside
+  document.getElementById('winner-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'winner-modal') {
+      closeWinnerModal();
+    }
+  });
+  
+  // Close winner modal with X button
+  document.querySelector('#winner-modal .close').addEventListener('click', closeWinnerModal);
 }); 

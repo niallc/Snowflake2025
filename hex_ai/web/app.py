@@ -12,28 +12,27 @@ import time # Added for time.time()
 from hex_ai.utils import format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move
+
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, get_win_prob_from_model_output, temperature_scaled_softmax
+from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, temperature_scaled_softmax, ValuePredictor
 from hex_ai.enums import Player
 from hex_ai.value_utils import (
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
+    signed_to_prob,
 )
+from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.enums import Piece
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
-from hex_ai.inference.model_config import get_default_model_paths
-
-# Model checkpoint defaults from central configuration
-DEFAULT_MODEL_PATHS = get_default_model_paths()
-DEFAULT_CHKPT_PATH1 = DEFAULT_MODEL_PATHS["model1"]
-DEFAULT_CHKPT_PATH2 = DEFAULT_MODEL_PATHS["model2"]
+from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
+from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -50,13 +49,17 @@ CORS(app)
 # This represents a ~100x slowdown that needs systematic investigation
 # Key areas: state copying, tree traversal overhead, batch utilization, model call efficiency
 
+# NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
+# returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
+# which were the old sigmoid-based outputs.
+
 # TODO: Refactor duplicated logic across API functions
 # The following functions share common patterns that should be extracted into utilities:
 # - api_state(), api_apply_move(), api_apply_trmph_sequence(), api_move()
 # Common patterns: TRMPH parsing/validation, player color conversion, model inference, response construction
 
 # TODO: Additional refactoring opportunities:
-# 1. Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py)
+# 1. ✅ Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py) - FIXED
 # 2. Consolidate temperature scaling logic (duplicated in batched_mcts.py, mcts.py, value_utils.py)
 # 3. Create centralized move selection utility (duplicated in batched_mcts.py, mcts.py, web/app.py)
 # 4. Create base MCTS node class (duplicated between BatchedMCTSNode and MCTSNode)
@@ -76,93 +79,54 @@ def log_response_info(response):
         app.logger.info(f"HTTP Request/Response cycle: {request.method} {request.path} took {request_time:.3f}s")
     return response
 
-# Global model instances
-MODELS = {}
-MODEL_PATHS = {
-    "model1": os.environ.get("HEX_MODEL_PATH1", DEFAULT_CHKPT_PATH1),
-    "model2": os.environ.get("HEX_MODEL_PATH2", DEFAULT_CHKPT_PATH2),
-}
-
 # Global model browser instance
 MODEL_BROWSER = create_model_browser()
 
-# Dynamic model registry for user-selected models
+# Dynamic model registry for user-selected models (these override the central registry)
 DYNAMIC_MODELS = {}
 
-# Global ModelWrapper cache to avoid recreating expensive ModelWrapper instances
-MODEL_WRAPPERS = {}
+# Get centralized model cache
+MODEL_CACHE = get_model_cache()
 
 # --- Model Management ---
 def get_model(model_id="model1"):
-    """Get or create a model instance for the given model_id."""
-    global MODELS, DYNAMIC_MODELS
-    
+    """Get or create a model instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
-    app.logger.debug(f"Available dynamic models: {list(DYNAMIC_MODELS.keys())}")
-    app.logger.debug(f"Available predefined models: {list(MODEL_PATHS.keys())}")
-    app.logger.debug(f"Currently loaded models: {list(MODELS.keys())}")
     
-    # Check if it's a dynamic model (user-selected)
+    # Check if it's a dynamic model (user-selected) - these override the central registry
     if model_id in DYNAMIC_MODELS:
         model_path = DYNAMIC_MODELS[model_id]
         app.logger.debug(f"Found dynamic model {model_id} -> {model_path}")
         
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading dynamic model {model_id} from {model_path}")
-                
-                # Handle relative paths by prepending checkpoints directory
-                if not os.path.isabs(model_path):
-                    full_model_path = os.path.join("checkpoints", model_path)
-                    app.logger.debug(f"Converted relative path to: {full_model_path}")
-                else:
-                    full_model_path = model_path
-                
-                # Check if file exists before loading
-                if not os.path.exists(full_model_path):
-                    raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
-                
-                app.logger.debug(f"File exists, attempting to load with SimpleModelInference")
-                MODELS[model_id] = SimpleModelInference(full_model_path)
-                app.logger.info(f"Successfully loaded dynamic model {model_id} from {full_model_path}")
-            except Exception as e:
-                app.logger.error(f"Failed to load dynamic model {model_id} from {full_model_path}: {e}")
-                app.logger.error(f"Exception type: {type(e).__name__}")
-                import traceback
-                app.logger.error(f"Traceback: {traceback.format_exc()}")
-                raise
+        # Handle relative paths by prepending checkpoints directory
+        if not os.path.isabs(model_path):
+            full_model_path = os.path.join("checkpoints", model_path)
+            app.logger.debug(f"Converted relative path to: {full_model_path}")
         else:
-            app.logger.debug(f"Model {model_id} already loaded")
-        return MODELS[model_id]
+            full_model_path = model_path
+        
+        # Check if file exists before loading
+        if not os.path.exists(full_model_path):
+            raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
+        
+        app.logger.debug(f"Loading dynamic model {model_id} from {full_model_path}")
+        return MODEL_CACHE.get_simple_model(full_model_path)
     
-    # Check if it's a predefined model
-    if model_id in MODEL_PATHS:
-        app.logger.debug(f"Found predefined model {model_id} -> {MODEL_PATHS[model_id]}")
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading predefined model {model_id} from {MODEL_PATHS[model_id]}")
-                MODELS[model_id] = SimpleModelInference(MODEL_PATHS[model_id])
-                app.logger.info(f"Successfully loaded model {model_id} from {MODEL_PATHS[model_id]}")
-            except Exception as e:
-                app.logger.error(f"Failed to load model {model_id}: {e}")
-                raise
-        return MODELS[model_id]
+    # Use centralized model configuration
+    if is_valid_model_id(model_id):
+        model_path = get_model_path(model_id)
+        app.logger.debug(f"Found model {model_id} -> {model_path}")
+        
+        # Centralized config provides absolute paths, so use directly
+        return MODEL_CACHE.get_simple_model(model_path)
     
     # If model_id is a direct path, try to load it
     if os.path.exists(model_id):
         app.logger.debug(f"Model_id appears to be a direct path: {model_id}")
-        if model_id not in MODELS:
-            try:
-                app.logger.debug(f"Loading model from direct path {model_id}")
-                MODELS[model_id] = SimpleModelInference(model_id)
-                app.logger.info(f"Successfully loaded model from path {model_id}")
-            except Exception as e:
-                app.logger.error(f"Failed to load model from path {model_id}: {e}")
-                raise
-        return MODELS[model_id]
+        return MODEL_CACHE.get_simple_model(model_id)
     
     app.logger.error(f"Unknown model_id: {model_id}")
-    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, predefined={list(MODEL_PATHS.keys())}")
+    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, registered={get_all_model_info()}")
     raise ValueError(f"Unknown model_id: {model_id}")
 
 def register_dynamic_model(model_id: str, model_path: str):
@@ -173,50 +137,68 @@ def register_dynamic_model(model_id: str, model_path: str):
 
 def get_available_models():
     """Return list of available model configurations."""
-    # Extract filenames from paths for display
-    model1_filename = os.path.basename(MODEL_PATHS["model1"])
-    model2_filename = os.path.basename(MODEL_PATHS["model2"])
+    # Get all models from central registry
+    all_models = get_all_model_info()
     
-    return [
-        {"id": "model1", "name": f"Model 1 ({model1_filename})", "path": MODEL_PATHS["model1"]},
-        {"id": "model2", "name": f"Model 2 ({model2_filename})", "path": MODEL_PATHS["model2"]},
-    ]
+    # Filter to only show the main model IDs (model1, model2) to avoid duplicates
+    # since current_best/previous_best point to the same files
+    main_models = [model for model in all_models if model['id'] in ['model1', 'model2']]
+    
+    # Add 'name' field that the frontend expects
+    for model in main_models:
+        # Create a user-friendly name from the filename
+        model["name"] = f"Model {model['id']} ({model['filename']})"
+    
+    # Add dynamic models
+    for model_id, model_path in DYNAMIC_MODELS.items():
+        filename = os.path.basename(model_path)
+        main_models.append({
+            "id": model_id,
+            "name": f"Dynamic ({filename})",
+            "path": model_path
+        })
+    
+    return main_models
 
 def get_cached_model_wrapper(model_id: str):
-    """Get or create a cached ModelWrapper instance for the given model_id."""
-    global MODEL_WRAPPERS, MODELS
+    """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
+    app.logger.debug(f"get_cached_model_wrapper called with model_id: {model_id}")
     
-    if model_id not in MODEL_WRAPPERS:
-        app.logger.info(f"Creating new ModelWrapper for {model_id} (this may take several seconds)...")
-        wrapper_start_time = time.time()
-        
-        # Get the model instance first
-        model = get_model(model_id)
-        
-        # Create ModelWrapper
-        model_wrapper = ModelWrapper(model.checkpoint_path, device=None, model_type=model.model_type)
-        
-        wrapper_creation_time = time.time() - wrapper_start_time
-        app.logger.info(f"ModelWrapper creation took {wrapper_creation_time:.3f}s for {model_id}")
-        
-        MODEL_WRAPPERS[model_id] = model_wrapper
+    # Get the model path for this model_id
+    if model_id in DYNAMIC_MODELS:
+        model_path = DYNAMIC_MODELS[model_id]
+        if not os.path.isabs(model_path):
+            model_path = os.path.join("checkpoints", model_path)
+    elif is_valid_model_id(model_id):
+        model_path = get_model_path(model_id)
+    elif os.path.exists(model_id):
+        model_path = model_id
     else:
-        app.logger.debug(f"Using cached ModelWrapper for {model_id}")
+        raise ValueError(f"Unknown model_id: {model_id}")
     
-    return MODEL_WRAPPERS[model_id]
+    app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
+    return MODEL_CACHE.get_wrapper_model(model_path)
 
 def clear_model_wrapper_cache():
-    """Clear the ModelWrapper cache to free memory."""
-    global MODEL_WRAPPERS
-    cache_size = len(MODEL_WRAPPERS)
-    MODEL_WRAPPERS.clear()
-    app.logger.info(f"Cleared ModelWrapper cache ({cache_size} instances)")
-    return cache_size
+    """Clear the model cache to free memory."""
+    MODEL_CACHE.clear_cache()
+    app.logger.info("Model cache cleared")
+    return 0  # Return 0 since we don't track individual cache sizes anymore
 
-def generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                       search_widths, temperature, verbose, model_move=None, search_tree=None, model_id=None):
+def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
+                         temperature, verbose, model_move=None, model_id=None):
     """Generate comprehensive debug information based on verbose level."""
     debug_info = {}
+    
+    # Add algorithm identification
+    debug_info["algorithm_info"] = {
+        "algorithm": "Policy-Only",
+        "early_termination": False,
+        "early_termination_reason": "none",
+        "parameters": {
+            "temperature": temperature
+        }
+    }
     
     # Level 1: Basic policy and value analysis
     if verbose >= 1:
@@ -224,7 +206,7 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
         try:
             current_player_enum = state.current_player_enum
             current_player_color = winner_to_color(current_player_enum)
-            win_prob = get_win_prob_from_model_output(value_logit, current_player_enum)
+            win_prob = ValuePredictor.get_win_probability(value_signed, current_player_enum)
         except Exception as e:
             # Log the error and provide fallback values
             app.logger.error(f"Error in app.py debug info generation: {e}")
@@ -235,10 +217,9 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "current_player_raw": state.current_player,  # Add raw value for debugging
             "game_over": state.game_over,
             "legal_moves_count": len(state.get_legal_moves()),
-            "value_logit": float(value_logit),
+            "value_signed": float(value_signed),
             "win_probability": float(win_prob),
             "temperature": temperature,
-            "search_widths": search_widths,
             "model_move": model_move
         }
         
@@ -247,7 +228,7 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             debug_info["model_info"] = {
                 "model_id": model_id,
                 "model_type": type(model).__name__,
-                "model_path": DYNAMIC_MODELS.get(model_id, MODEL_PATHS.get(model_id, "unknown"))
+                "model_path": DYNAMIC_MODELS.get(model_id, get_model_path(model_id))
             }
         
         # Use existing utilities to get policy analysis
@@ -280,175 +261,23 @@ def generate_debug_info(state, model, policy_logits, value_logit, policy_probs,
             "total_legal_moves": len(legal_moves)
         }
     
-    # Level 2: Detailed analysis including tree search
-    if verbose >= 2 and search_tree is not None:
-        try:
-            # Use the actual search tree from the main flow
-            debug_info["tree_search"] = {
-                "search_widths": search_widths,
-                "tree_depth": len(search_widths),
-                "final_value": float(search_tree.value) if search_tree.value is not None else None,
-                "best_move": fc.rowcol_to_trmph(*search_tree.best_move) if search_tree.best_move else None,
-                "tree_size": count_tree_nodes(search_tree)
-            }
-            
-            # Add terminal node analysis
-            if verbose >= 3:
-                debug_info["tree_search"]["terminal_nodes"] = collect_terminal_nodes(search_tree)
-                
-        except Exception as e:
-            debug_info["tree_search"] = {"error": str(e)}
+    # Level 2: Detailed analysis (removed tree search since we only use MCTS now)
+    if verbose >= 2:
+        # No tree search analysis needed since we only use MCTS
+        pass
     
-    # Level 3: Full analysis including policy-value conflicts
+    # Level 3: Full analysis (removed policy-value comparison since we only use MCTS now)
     if verbose >= 3:
-        # Compare policy top move vs tree search best move
-        if debug_info.get("policy_analysis") and debug_info.get("tree_search"):
-            policy_top_move = debug_info["policy_analysis"]["top_moves"][0]["move"]
-            tree_best_move = debug_info["tree_search"]["best_move"]
-            
-            debug_info["policy_value_comparison"] = {
-                "policy_top_move": policy_top_move,
-                "tree_best_move": tree_best_move,
-                "moves_match": policy_top_move == tree_best_move,
-                "policy_top_prob": debug_info["policy_analysis"]["top_moves"][0]["probability"]
-            }
+        # No policy-value comparison needed since we only use MCTS
+        pass
     
     return debug_info
 
-def count_tree_nodes(node):
-    """Count total nodes in search tree."""
-    count = 1
-    for child in node.children.values():
-        count += count_tree_nodes(child)
-    return count
 
-def collect_terminal_nodes(root):
-    """Collect all terminal nodes with their values."""
-    terminals = []
-    
-    def collect_terminals(node):
-        if not node.children:  # Terminal node
-            terminals.append({
-                "path": [fc.rowcol_to_trmph(*move) for move in node.path],
-                "value": float(node.value) if node.value is not None else None,
-                "depth": node.depth
-            })
-        else:
-            for child in node.children.values():
-                collect_terminals(child)
-    
-    collect_terminals(root)
-    return terminals
 
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
-
-# --- Computer move functionality ---
-def make_computer_move(trmph, model_id, search_widths=None, temperature=1.0, verbose=0):
-    """Make one computer move and return the new state."""
-    try:
-        app.logger.debug(f"make_computer_move called with model_id: {model_id}")
-        app.logger.debug(f"Current dynamic models: {DYNAMIC_MODELS}")
-        
-        state = HexGameState.from_trmph(trmph)
-        app.logger.debug(f"Game state created, game_over: {state.game_over}")
-        
-        # If game is over, return current state
-        if state.game_over:
-            app.logger.debug("Game is over, returning current state")
-            return {
-                "success": True,
-                "new_trmph": trmph,
-                "board": state.board.tolist(),
-                "player": winner_to_color(state.current_player),
-                "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": winner_to_color(state.winner) if state.winner is not None else None,
-                "move_made": None,
-                "game_over": True
-            }
-        
-        app.logger.debug(f"Attempting to get model with model_id: {model_id}")
-        try:
-            model = get_model(model_id)
-            app.logger.debug(f"Successfully got model: {type(model)}")
-        except Exception as e:
-            app.logger.error(f"Failed to get model {model_id}: {e}")
-            return {
-                "success": False,
-                "error": f"Model loading failed: {e}"
-            }
-        
-        debug_info = {}
-        
-        # Use tree search if search_widths provided, otherwise use simple policy
-        search_tree = None
-        if search_widths and len(search_widths) > 0:
-            try:
-                # Capture debug information during the actual search
-                if verbose >= 1:
-                    # Get policy and value for the current state before search
-                    policy_logits, value_logit = model.simple_infer(trmph)
-                    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-                    
-                    # Generate basic debug info from the original state
-                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, None, model_id)  # No search tree yet
-                
-                best_move, _, search_tree = minimax_policy_value_search(
-                    state, model, search_widths, batch_size=1000, temperature=temperature,
-                    return_tree=(verbose >= 2)  # Only return tree if we need debug info
-                )
-                if best_move is not None:
-                    best_move_trmph = fc.rowcol_to_trmph(*best_move)
-                else:
-                    app.logger.error("Tree search returned None for best_move")
-                    raise RuntimeError("Tree search returned None for best_move")
-                    
-                # Update debug info with search tree if available
-                if verbose >= 2 and search_tree is not None:
-                    debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                                  search_widths, temperature, verbose, None, search_tree, model_id)
-            except Exception as e:
-                app.logger.error(f"Tree search failed: {e}")
-                raise RuntimeError(f"Tree search failed: {e}")
-        else:
-            # Simple policy-based move using centralized utilities
-            if verbose >= 1:
-                # Get policy and value for the current state before move selection
-                policy_logits, value_logit = model.simple_infer(trmph)
-                policy_probs = policy_logits_to_probs(policy_logits, temperature)
-                
-                # Generate basic debug info from the original state
-                debug_info = generate_debug_info(state, model, policy_logits, value_logit, policy_probs, 
-                                              search_widths, temperature, verbose, None, None, model_id)
-            
-            best_move = select_policy_move(state, model, temperature)
-            best_move_trmph = fc.rowcol_to_trmph(*best_move)
-        
-        # Update debug info with the actual move made
-        if verbose >= 1 and debug_info:
-            debug_info["basic"]["model_move"] = best_move_trmph
-        
-        # Apply the move using centralized utility
-        state = apply_move_to_state_trmph(state, best_move_trmph)
-        
-        return {
-            "success": True,
-            "new_trmph": state.to_trmph(),
-            "board": state.board.tolist(),
-            "player": winner_to_color(state.current_player),
-            "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": winner_to_color(state.winner) if state.winner is not None else None,
-            "move_made": best_move_trmph,
-            "game_over": state.game_over,
-            "debug_info": debug_info if verbose >= 1 else None
-        }
-        
-    except Exception as e:
-        app.logger.error(f"Computer move failed: {e}")
-        return {"success": False, "error": str(e)}
-
 
 # TODO: Remove this function
 def _build_orchestration_from_dict(cfg: dict | None) -> None:
@@ -457,11 +286,12 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
 
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
-                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None):
+                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
+                   enable_gumbel=True, gumbel_max_sims=500):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
+        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
         state = HexGameState.from_trmph(trmph)
@@ -496,11 +326,23 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             }
         
         # Create MCTS configuration
-        mcts_config = BaselineMCTSConfig(
+        # Ensure temperature_end is <= temperature_start
+        if temperature_end > temperature:
+            app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
+            temperature_end = temperature / 10
+        
+        # Warn about very low temperatures that will use deterministic selection
+        if temperature < 0.02:
+            app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
+        
+        mcts_config = create_mcts_config(
+            config_type="tournament",
             sims=num_simulations,
             c_puct=exploration_constant,
             temperature_start=temperature,
-            temperature_end=temperature_end
+            temperature_end=temperature_end,
+            enable_gumbel_root_selection=enable_gumbel,
+            gumbel_sim_threshold=gumbel_max_sims
         )
         app.logger.info(f"MCTS config created: {mcts_config}")
         
@@ -523,7 +365,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         mcts_start_time = time.time()
         app.logger.info("About to call run_mcts_move...")
         try:
-            move, stats, tree_data = run_mcts_move(engine, model_wrapper, state, mcts_config)
+            move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
             app.logger.info("run_mcts_move completed successfully")
         except Exception as e:
             app.logger.error(f"run_mcts_move failed with exception: {e}")
@@ -579,26 +421,27 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         # Get direct policy comparison
         app.logger.info("Getting direct policy comparison...")
         policy_start = time.time()
-        policy_logits, value_logit = model.simple_infer(trmph)
+        policy_logits, value_output = model.simple_infer(trmph)
         policy_time = time.time() - policy_start
         app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
         
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_logit: {value_logit}")
+        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
         
-        # Get legal moves and their probabilities
+        # Get legal moves count for summary
         legal_moves = state.get_legal_moves()
-        original_legal_moves_count = len(legal_moves)  # Store for summary
+        original_legal_moves_count = len(legal_moves)
         app.logger.info(f"Legal moves count: {original_legal_moves_count}")
+        
+        # Get direct policy probabilities for comparison with MCTS
         legal_move_probs = {}
         for move in legal_moves:
             move_trmph = fc.rowcol_to_trmph(*move)
-            # Convert (row, col) to tensor index to access policy_probs array
             tensor_idx = fc.rowcol_to_tensor(*move)
             if 0 <= tensor_idx < len(policy_probs):
                 legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
-        # Log only top 10 legal move probabilities to reduce verbosity
+        # Log top 10 legal move probabilities
         sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
         top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
         app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
@@ -609,20 +452,72 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"Move applied. New state game_over: {state.game_over}")
         
         # Generate MCTS diagnostic info
+        # Determine algorithm type based on algorithm termination info
+        if algorithm_termination_info:
+            if algorithm_termination_info.reason == "terminal_move":
+                algorithm = "Terminal Move Detection"
+            elif algorithm_termination_info.reason == "neural_network_confidence":
+                algorithm = "Confidence-Based Termination"
+            else:
+                algorithm = "MCTS (Algorithm Termination)"
+        else:
+            algorithm = "MCTS"
+        
+        # Use centralized utilities for value conversions and tree data
+        
+        # Get win probabilities using centralized utility
+        root_win_prob = compute_win_probability_from_tree_data(tree_data)
+        best_child_signed_value = tree_data.get("v_ptm_ref_signed_best_child", 0.0)
+        best_child_win_prob = signed_to_prob(best_child_signed_value)
+        
+        # Handle algorithm termination win probability
+        if algorithm_termination_info and algorithm_termination_info.win_prob is not None:
+            if algorithm_termination_info.reason == "terminal_move":
+                algorithm_win_prob = 1.0  # Already correct
+            else:
+                algorithm_win_prob = signed_to_prob(algorithm_termination_info.win_prob)
+        else:
+            algorithm_win_prob = None
+        
+        # Log the conversion for debugging
+        app.logger.debug(f"Value conversion: root_prob={root_win_prob:.3f}, "
+                        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}")
+        if algorithm_termination_info:
+            app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
+                           f"original_win_prob={algorithm_termination_info.win_prob}, converted={algorithm_win_prob}")
+        
         mcts_debug_info = {
+            "algorithm_info": {
+                "algorithm": algorithm,
+                "early_termination": algorithm_termination_info is not None,
+                "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+                "early_termination_details": {
+                    "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+                    "win_probability": algorithm_win_prob,  # Use converted probability
+                    "move": algorithm_termination_info.move if algorithm_termination_info else None
+                },
+                "parameters": {
+                    "simulations": num_simulations,
+                    "exploration_constant": exploration_constant,
+                    "temperature": temperature,
+                    "temperature_end": temperature_end
+                }
+            },
             "search_stats": {
-                "num_simulations": num_simulations,
+                "num_simulations": num_simulations if not algorithm_termination_info else 0,
                 "search_time": mcts_search_time,
                 "exploration_constant": exploration_constant,
                 "temperature": temperature,
                 "mcts_stats": stats,
-                "inferences": tree_data.get("inferences", 0)
+                "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
+                "algorithm_used": algorithm
             },
             "tree_statistics": {
-                "total_visits": tree_data.get("total_visits", 0),
-                "total_nodes": tree_data.get("total_nodes", 0),
-                "max_depth": tree_data.get("max_depth", 0),
-                "inferences": tree_data.get("inferences", 0)
+                "total_visits": tree_data["total_visits"] if not algorithm_termination_info else 0,
+                "total_nodes": tree_data["total_nodes"] if not algorithm_termination_info else 0,
+                "max_depth": tree_data["max_depth"] if not algorithm_termination_info else 0,
+                "inferences": tree_data["inferences"] if not algorithm_termination_info else 0,
+                "algorithm_note": "No tree search performed" if algorithm_termination_info else "Full MCTS tree search"
             },
             "move_selection": {
                 "selected_move": selected_move_trmph,
@@ -630,29 +525,30 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             },
             "move_probabilities": {
                 "direct_policy": legal_move_probs,
-                "mcts_visits": tree_data.get("visit_counts", {}),
-                "mcts_probabilities": tree_data.get("mcts_probabilities", {})
+                "mcts_visits": tree_data["visit_counts"],
+                "mcts_probabilities": tree_data["mcts_probabilities"]
             },
             "comparison": {
                 "mcts_vs_direct": {}
             },
             "win_rate_analysis": {
-                "root_value": tree_data.get("root_value", 0.0),
-                "best_child_value": tree_data.get("best_child_value", 0.0),
-                "win_probability": tree_data.get("root_value", 0.5),  # Frontend will multiply by 100
-                "best_child_win_probability": tree_data.get("best_child_value", 0.5)
+                "root_value": tree_data["v_ptm_ref_signed_root"],
+                "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
+                "win_probability": root_win_prob,
+                "best_child_win_probability": best_child_win_prob
             },
             "move_sequence_analysis": {
-                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data.get("principal_variation", [])],
+                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data["principal_variation"]],
                 "alternative_lines": [],  # Placeholder - would need more complex tree analysis
-                "pv_length": len(tree_data.get("principal_variation", []))
+                "pv_length": len(tree_data["principal_variation"])
             },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                "top_mcts_move": max(tree_data.get("mcts_probabilities", {}).items(), key=lambda x: x[1])[0] if tree_data.get("mcts_probabilities") else None,
+                "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
                 "total_legal_moves": original_legal_moves_count,
-                "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}",
-                "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1))
+                "moves_explored": f"{tree_data['total_visits']}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
+                "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
+                "algorithm_summary": algorithm
             },
                     "profiling_summary": {
             "total_compute_ms": int(mcts_search_time * 1000.0),
@@ -688,9 +584,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         }
         
         # Add comparison data
+        mcts_probs = tree_data["mcts_probabilities"]
         for move_trmph in legal_move_probs:
             direct_prob = legal_move_probs.get(move_trmph, 0)
-            mcts_prob = tree_data.get("mcts_probabilities", {}).get(move_trmph, 0.0)
+            mcts_prob = mcts_probs.get(move_trmph, 0.0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
                 "mcts_probability": mcts_prob,
@@ -723,6 +620,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                               'efficiency_gain_percent']:
                         if value is None:
                             app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
+                            obj[key] = 0.0
+                        elif isinstance(value, str):
+                            app.logger.warning(f"Found string value '{value}' in numeric field {current_path}, replacing with 0.0")
                             obj[key] = 0.0
                     validate_numeric_fields(value, current_path)
             elif isinstance(obj, list):
@@ -859,9 +759,13 @@ def api_clear_cache():
 def api_cache_status():
     """Get cache status."""
     try:
+        # Get cache statistics from the centralized cache
+        # Note: The centralized cache doesn't expose individual model keys,
+        # so we return basic cache information
         return jsonify({
-            "cached_models": list(MODEL_WRAPPERS.keys()),
-            "cache_size": len(MODEL_WRAPPERS)
+            "cache_type": "centralized_model_cache",
+            "cache_status": "active",
+            "note": "Using centralized ModelCache - individual model tracking not available"
         })
     except Exception as e:
         app.logger.error(f"Error getting cache status: {e}")
@@ -985,13 +889,13 @@ def api_state():
 
     # Model inference - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(trmph)
+    policy_logits, value_signed = model.simple_infer(trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     # Map policy to trmph moves
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
     # Win probability for current player - use enum directly
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1004,7 +908,7 @@ def api_state():
         "legal_moves": legal_moves,
         "winner": winner,
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "trmph": trmph,
     })
@@ -1038,7 +942,7 @@ def api_apply_move():
     # Debug logging for board data (only if verbose >= 4)
     if verbose >= 4:
         app.logger.debug(f"Apply move - Board data being sent to frontend: {board}")
-        app.logger.debug(f"Apply move - Board type: {type(board)}, Board shape: {len(board)}x{len(board[0]) if board else 0}")
+        app.logger.debug(f"Apply move - Board data type: {type(board)}, Board shape: {len(board[0]) if board else 0}")
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
 
@@ -1048,11 +952,11 @@ def api_apply_move():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
+    policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1067,7 +971,7 @@ def api_apply_move():
         "winner": winner_color,
         "model_move": None,  # No computer move made
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
     })
 
@@ -1118,11 +1022,11 @@ def api_apply_trmph_sequence():
 
     # Recompute policy/value for the new state - fail fast if this fails
     model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
+    policy_logits, value_signed = model.simple_infer(new_trmph)
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
+    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1136,206 +1040,12 @@ def api_apply_trmph_sequence():
         "legal_moves": legal_moves,
         "winner": winner_color,
         "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
+        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
         "win_prob": win_prob,
         "moves_applied": len(moves),
         "game_over": state.game_over,
     })
 
-@app.route("/api/move", methods=["POST"])
-def api_move():
-    data = request.get_json()
-    trmph = data.get("trmph")
-    move = data.get("move")
-    model_id = data.get("model_id", "model1")
-    search_widths = data.get("search_widths", None)
-    temperature = data.get("temperature", 0.15)  # Default temperature
-    temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
-    verbose = data.get("verbose", 1)  # Verbose level: 0=none, 1=basic, 2=detailed, 3=full
-    
-    # MCTS parameters
-    use_mcts = data.get("use_mcts", True)
-    num_simulations = data.get("num_simulations", 200)
-    exploration_constant = data.get("exploration_constant", 1.4)
-    
-    try:
-        state = HexGameState.from_trmph(trmph)
-    except Exception as e:
-        return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
-    
-    try:
-        state = apply_move_to_state_trmph(state, move)
-    except Exception as e:
-        return jsonify({"error": f"Invalid move: {e}"}), 400
-
-    new_trmph = state.to_trmph()
-    board = state.board.tolist()
-    player_enum = state.current_player_enum  # Use enum directly
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
-
-    model_move = None
-    debug_info = {}
-    # If game not over and it's model's turn, have model pick a move
-    app.logger.info(f"Game state after human move: game_over={state.game_over}, current_player={player_enum}")
-    if not state.game_over:
-        try:
-            # Determine which player's settings to use for the computer move
-            # The current player after the human move determines whose settings to use
-            current_player_enum = state.current_player_enum
-            current_player_color = winner_to_color(current_player_enum)
-            
-            if current_player_color == 'blue':
-                # Use blue's settings for blue's computer move
-                computer_model_id = data.get("blue_model_id", model_id)
-                computer_search_widths = data.get("blue_search_widths", search_widths)
-                computer_temperature = data.get("blue_temperature", temperature)
-                computer_temperature_end = data.get("blue_temperature_end", temperature_end)
-                computer_use_mcts = data.get("blue_use_mcts", use_mcts)
-                computer_num_simulations = data.get("blue_num_simulations", num_simulations)
-                computer_exploration_constant = data.get("blue_exploration_constant", exploration_constant)
-            else:  # current_player_color == 'red'
-                # Use red's settings for red's computer move
-                computer_model_id = data.get("red_model_id", model_id)
-                computer_search_widths = data.get("red_search_widths", search_widths)
-                computer_temperature = data.get("red_temperature", temperature)
-                computer_temperature_end = data.get("red_temperature_end", temperature_end)
-                computer_use_mcts = data.get("red_use_mcts", use_mcts)
-                computer_num_simulations = data.get("red_num_simulations", num_simulations)
-                computer_exploration_constant = data.get("red_exploration_constant", exploration_constant)
-            
-            model = get_model(computer_model_id)
-            
-            # Capture the state before the computer move for debug info
-            state_before_computer_move = state
-            trmph_before_computer_move = new_trmph
-            
-            # Choose between MCTS and fixed-tree search
-            search_tree = None
-            mcts_debug_info = {}
-            
-            if computer_use_mcts:
-                # Use MCTS for move selection
-                try:
-                    app.logger.debug(f"Using MCTS with {computer_num_simulations} simulations")
-                    mcts_result = make_mcts_move(
-                        trmph_before_computer_move, 
-                        computer_model_id, 
-                        computer_num_simulations, 
-                        computer_exploration_constant, 
-                        computer_temperature,
-                        computer_temperature_end,
-                        verbose
-                    )
-                    
-                    if mcts_result["success"]:
-                        best_move_trmph = mcts_result["move_made"]
-                        mcts_debug_info = mcts_result.get("mcts_debug_info", {})
-                        # Convert TRMPH move back to coordinates for consistency
-                        best_move = fc.trmph_move_to_rowcol(best_move_trmph)
-                    else:
-                        app.logger.error(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                        raise RuntimeError(f"MCTS failed: {mcts_result.get('error', 'Unknown error')}")
-                        
-                except Exception as e:
-                    app.logger.error(f"MCTS failed: {e}")
-                    raise RuntimeError(f"MCTS failed: {e}")
-                    
-            elif computer_search_widths and len(computer_search_widths) > 0:
-                # Use fixed-tree search if search_widths provided
-                try:
-                    best_move, _, search_tree = minimax_policy_value_search(
-                        state, model, computer_search_widths, batch_size=1000, temperature=computer_temperature,
-                        return_tree=(verbose >= 2)  # Only return tree if we need debug info
-                    )
-                    if best_move is not None:
-                        best_move_trmph = fc.rowcol_to_trmph(*best_move)
-                    else:
-                        app.logger.error("Tree search returned None for best_move")
-                        raise RuntimeError("Tree search returned None for best_move")
-                except Exception as e:
-                    app.logger.error(f"Tree search failed: {e}")
-                    raise RuntimeError(f"Tree search failed: {e}")
-            else:
-                # Simple policy-based move using centralized utilities
-                best_move = select_policy_move(state, model, computer_temperature)
-                best_move_trmph = fc.rowcol_to_trmph(*best_move)
-            
-            # Apply model move using centralized utility
-            state = apply_move_to_state_trmph(state, best_move_trmph)
-            model_move = best_move_trmph
-            new_trmph = state.to_trmph()
-            board = state.board.tolist()
-            legal_moves = moves_to_trmph(state.get_legal_moves())
-            winner = state.winner
-            
-            # Generate debug information after the move is made (when all data is available)
-            if verbose >= 1:
-                # Get policy and value for the state BEFORE the computer move (the state the computer was thinking about)
-                policy_logits, value_logit = model.simple_infer(trmph_before_computer_move)
-                policy_probs = policy_logits_to_probs(policy_logits, computer_temperature)
-                
-                if computer_use_mcts:
-                    # Use MCTS debug info
-                    debug_info = mcts_debug_info
-                else:
-                    # Generate debug info using the actual search tree from the move selection
-                    debug_info = generate_debug_info(state_before_computer_move, model, policy_logits, value_logit, policy_probs, 
-                                                  computer_search_widths, computer_temperature, verbose, model_move, search_tree, computer_model_id)
-            
-        except Exception as e:
-            app.logger.error(f"Model move failed: {e}")
-            # Continue without model move if there's an error
-    
-    # Use enum-based color conversion - much safer
-    player_color = winner_to_color(player_enum)
-    winner_color = winner_to_color(winner) if winner is not None else None
-
-    # Recompute policy/value for final state using centralized utilities
-    model = get_model(model_id)
-    policy_logits, value_logit = model.simple_infer(new_trmph)
-    # Apply temperature scaling to policy using centralized utility
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = get_win_prob_from_model_output(value_logit, player_enum)
-
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-
-    response = {
-        "new_trmph": new_trmph,
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,
-        "player_index": player_index,
-        "legal_moves": legal_moves,
-        "winner": winner_color,
-        "model_move": model_move,
-        "policy": policy_dict,
-        "value": float(value_logit) if 'value_logit' in locals() else 0.0,
-        "win_prob": win_prob,
-    }
-    
-    if verbose >= 1:
-        if computer_use_mcts:
-            response["mcts_debug_info"] = debug_info
-        else:
-            response["debug_info"] = debug_info
-    
-    return jsonify(response)
-
-@app.route("/api/computer_move", methods=["POST"])
-def api_computer_move():
-    data = request.get_json()
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")
-    search_widths = data.get("search_widths", None)
-    temperature = data.get("temperature", 1.0)
-    verbose = data.get("verbose", 0)
-    
-    result = make_computer_move(trmph, model_id, search_widths, temperature, verbose)
-    return jsonify(result)
 
 
 @app.route("/api/mcts_move", methods=["POST"])
@@ -1352,8 +1062,10 @@ def api_mcts_move():
     temperature = data.get("temperature", 1.0)
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
+    enable_gumbel = data.get("enable_gumbel", True)
+    gumbel_max_sims = data.get("gumbel_max_sims", 500)
     
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}")
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     
     # Optional orchestration overrides from request
     orchestration_cfg = data.get("orchestration", None)
@@ -1368,6 +1080,8 @@ def api_mcts_move():
         temperature_end,
         verbose,
         orchestration_overrides=orchestration,
+        enable_gumbel=enable_gumbel,
+        gumbel_max_sims=gumbel_max_sims
     )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
@@ -1387,6 +1101,89 @@ def api_mcts_move():
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
     
     return jsonify(result)
+
+@app.route("/api/save_game", methods=["POST"])
+def api_save_game():
+    """Save a game to the web_games directory in TRMPH format."""
+    data = request.get_json()
+    app.logger.info(f"=== SAVE GAME API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
+    trmph = data.get("trmph")
+    winner = data.get("winner")  # "blue", "red", or None if game not finished
+    model_id = data.get("model_id", "model1")
+    mcts_params = data.get("mcts_params", {})
+    
+    if not trmph:
+        return jsonify({"success": False, "error": "TRMPH sequence is required"}), 400
+    
+    try:
+        # Create web_games directory if it doesn't exist
+        web_games_dir = os.path.join("data", "web_games")
+        os.makedirs(web_games_dir, exist_ok=True)
+        
+        # Determine winner for TRMPH format
+        trmph_winner = None
+        if winner:
+            if winner.lower() == "blue":
+                trmph_winner = TRMPH_BLUE_WIN
+            elif winner.lower() == "red":
+                trmph_winner = TRMPH_RED_WIN
+            else:
+                return jsonify({"success": False, "error": f"Invalid winner: {winner}"}), 400
+        else:
+            # Game not finished, need user input
+            return jsonify({
+                "success": False, 
+                "needs_winner_input": True,
+                "message": "Game is not finished. Please specify the winner."
+            }), 400
+        
+        # Save to TRMPH file
+        trmph_file = os.path.join(web_games_dir, "web_games.trmph")
+        with open(trmph_file, 'a') as f:
+            f.write(f"{trmph} {trmph_winner}\n")
+        
+        # Save metadata to log file
+        log_file = os.path.join(web_games_dir, "web_games.log")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get model info
+        model_info = {}
+        if model_id in DYNAMIC_MODELS:
+            model_info["path"] = DYNAMIC_MODELS[model_id]
+        elif is_valid_model_id(model_id):
+            model_info["path"] = get_model_path(model_id)
+        else:
+            model_info["path"] = "unknown"
+        
+        log_entry = {
+            "timestamp": timestamp,
+            "trmph": trmph,
+            "winner": winner,
+            "model_id": model_id,
+            "model_path": model_info["path"],
+            "mcts_params": mcts_params
+        }
+        
+        with open(log_file, 'a') as f:
+            f.write(f"{log_entry}\n")
+        
+        app.logger.info(f"Game saved successfully to {trmph_file}")
+        app.logger.info(f"Metadata logged to {log_file}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Game saved successfully. Winner: {winner}",
+            "trmph_file": trmph_file,
+            "log_file": log_file
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error saving game: {e}")
+        import traceback
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": f"Failed to save game: {e}"}), 500
 
 @app.route("/favicon.ico")
 def favicon():
