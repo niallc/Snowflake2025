@@ -94,13 +94,13 @@ let state = {
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_num_simulations: 2005,
-  red_num_simulations: 2005,
+  blue_num_simulations: 46,
+  red_num_simulations: 46,
   blue_exploration_constant: 1.4,
   red_exploration_constant: 1.4,
   // Gumbel settings
-  blue_enable_gumbel: true,
-  red_enable_gumbel: true,
+  blue_enable_gumbel: false,
+  red_enable_gumbel: false,
   blue_gumbel_max_sims: 500,
   red_gumbel_max_sims: 500,
   auto_step_active: false,
@@ -608,12 +608,17 @@ async function onCellClick(e) {
         state.last_move = computerResult.move_made ? getLastMoveFromTrmph(computerResult.move_made) : null;
         state.last_move_player = computerPlayer;
         
-        // Display debug information if available
-        if (computerResult.debug_info) {
-          displayDebugInfo(computerResult.debug_info);
-        } else if (computerResult.mcts_debug_info) {
-          displayMCTSDebugInfo(computerResult.mcts_debug_info);
-        }
+              // Display debug information if available
+      if (computerResult.debug_info) {
+        displayDebugInfo(computerResult.debug_info);
+      } else if (computerResult.mcts_debug_info) {
+        displayMCTSDebugInfo(computerResult.mcts_debug_info);
+      }
+      
+      // Display detailed exploration if tree_data exists
+      if (computerResult.tree_data) {
+        displayDetailedExploration({ tree_data: computerResult.tree_data });
+      }
         
         updateUI();
       } else {
@@ -669,6 +674,11 @@ async function stepComputerMove() {
         displayMCTSDebugInfo(result.mcts_debug_info);
       }
       
+      // Display detailed exploration if tree_data exists
+      if (result.tree_data) {
+        displayDetailedExploration({ tree_data: result.tree_data });
+      }
+      
       updateUI();
       
       // If auto-step is active and game isn't over, schedule next move
@@ -702,6 +712,13 @@ function stopAutoStep() {
 
 // --- Controls ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // Verify detailed exploration elements exist (quiet check)
+  const explorationDiv = document.getElementById('detailed-exploration');
+  const explorationContent = document.getElementById('exploration-content');
+  if (!explorationDiv || !explorationContent) {
+    console.warn('Detailed exploration elements not found in DOM');
+  }
+  
   // Load game constants from backend
   try {
     const constantsResult = await fetchConstants();
@@ -1097,7 +1114,9 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
 }
 
 function displayDebugInfo(debugInfo) {
-  if (!debugInfo || state.verbose_level === 0) return;
+  if (!debugInfo || state.verbose_level === 0) {
+    return;
+  }
   
   const debugContent = document.getElementById('debug-content');
   if (!debugContent) return;
@@ -1195,6 +1214,11 @@ function displayDebugInfo(debugInfo) {
   
   debugContent.textContent = output;
   
+  console.log('🚨🚨🚨 ABOUT TO CALL DISPLAY DETAILED EXPLORATION! 🚨🚨🚨');
+  console.log('🔍 About to call displayDetailedExploration with debugInfo:', debugInfo);
+  console.log('🔍 debugInfo type:', typeof debugInfo);
+  console.log('🔍 debugInfo keys:', debugInfo ? Object.keys(debugInfo) : 'null/undefined');
+  
   // Display detailed exploration if available
   displayDetailedExploration(debugInfo);
 }
@@ -1203,19 +1227,45 @@ function displayDetailedExploration(debugInfo) {
   const explorationDiv = document.getElementById('detailed-exploration');
   const explorationContent = document.getElementById('exploration-content');
   
-  if (!explorationDiv || !explorationContent) return;
-  
-  // Check if we have detailed exploration data
-  const mctsData = debugInfo.mcts_debug_info;
-  const treeData = mctsData && mctsData.tree_data;
-  const detailedExploration = treeData && treeData.detailed_exploration;
-  
-  if (!detailedExploration || !detailedExploration.enabled) {
-    explorationDiv.style.display = 'none';
+  if (!explorationDiv || !explorationContent) {
+    console.warn('Could not find detailed exploration DOM elements');
     return;
   }
   
+  // Always show the section, but explain why it might be empty
   explorationDiv.style.display = 'block';
+  
+  // Check if we have detailed exploration data
+  // Look for tree_data either directly or nested in mcts_debug_info
+  const mctsData = debugInfo.mcts_debug_info;
+  const treeData = debugInfo.tree_data || (mctsData && mctsData.tree_data);
+  
+  const detailedExploration = treeData && treeData.detailed_exploration;
+  
+  if (!detailedExploration || !detailedExploration.enabled) {
+    let output = '=== DETAILED MCTS EXPLORATION TRACE ===\n';
+    output += '❌ Detailed exploration is not available.\n\n';
+    
+    if (!debugInfo) {
+      output += 'Reason: No debug info provided\n';
+    } else if (!mctsData) {
+      output += 'Reason: No MCTS debug info found\n';
+    } else if (!treeData) {
+      output += 'Reason: No tree data found\n';
+    } else if (!detailedExploration) {
+      output += 'Reason: No detailed exploration data in tree data\n';
+      if (treeData) {
+        output += `Tree data keys: ${Object.keys(treeData).join(', ')}\n`;
+      }
+    } else if (!detailedExploration.enabled) {
+      output += `Reason: Detailed exploration is disabled\n`;
+      output += `Simulation threshold: ≤10\n`;
+      output += `Current simulations: ${mctsData?.search_stats?.num_simulations || 'unknown'}\n`;
+    }
+    
+    explorationContent.textContent = output;
+    return;
+  }
   
   let output = '';
   output += `=== DETAILED MCTS EXPLORATION TRACE ===\n`;
@@ -1224,28 +1274,98 @@ function displayDetailedExploration(debugInfo) {
   
   if (detailedExploration.trace && detailedExploration.trace.length > 0) {
     detailedExploration.trace.forEach((step, index) => {
-      output += `--- Simulation ${step.simulation} (Step ${index + 1}) ---\n`;
-      output += `Depth: ${step.depth} | Player: ${step.to_play.toUpperCase()}\n`;
-      output += `Node: ${step.node_hash.toString(16).slice(-8)} | Terminal: ${step.is_terminal}\n`;
-      
-      if (step.is_terminal) {
-        output += `Winner: ${step.winner || 'None'}\n`;
-      } else {
-        output += `Legal moves: ${step.legal_moves.join(', ')}\n`;
-        output += `Selected: ${step.selected_move} (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
+      try {
+        output += `=== SIMULATION ${step.simulation} ===\n`;
+        output += `Step ${index + 1}: ${step.depth === 0 ? 'Root Selection' : 'Child Expansion'}\n`;
+        output += `├─ Depth: ${step.depth} ${step.depth === 0 ? '(Root)' : `(Level ${step.depth})`}\n`;
+        output += `├─ Player: ${step.to_play === 0 ? 'BLUE' : step.to_play === 1 ? 'RED' : step.to_play}\n`;
+        output += `├─ Node Stats: ${step.depth === 0 ? 'Root node' : `Child node at depth ${step.depth}`}, ${step.legal_moves.length} legal moves\n`;
+        output += `└─ Terminal: ${step.is_terminal}\n`;
         
-        if (step.top_puct_scores && step.top_puct_scores.length > 0) {
-          output += `Top PUCT scores:\n`;
-          step.top_puct_scores.forEach((score, i) => {
-            const isSelected = score.move === step.selected_move;
-            const marker = isSelected ? '→ ' : '  ';
-            output += `${marker}${score.move}: PUCT=${score.score.toFixed(3)} `;
-            output += `(Q=${score.q_value.toFixed(3)}, N=${score.visits}, P=${score.prior.toFixed(3)})\n`;
-          });
+        // Add move sequence context if we have coordinates
+        if (step.selected_move_coords && step.depth > 0) {
+          output += `\nStep ${index + 1}.0: Path Context\n`;
+          if (step.path_to_node && step.path_to_node.length > 0) {
+            output += `└─ Path to this node: ${step.path_to_node.join(' → ')}\n`;
+          } else {
+            output += `└─ Path to this node: [Path tracking not available]\n`;
+          }
         }
+        
+        if (step.is_terminal) {
+          output += `\nStep ${index + 1}.1: Terminal State Evaluation\n`;
+          output += `└─ Winner: ${step.winner || 'None'}\n`;
+        } else {
+          output += `\nStep ${index + 1}.1: Legal Move Analysis\n`;
+          output += `└─ Available moves: ${step.legal_moves.length} (${step.legal_moves.slice(0, 3).join(', ')}${step.legal_moves.length > 3 ? '...' : ''})\n`;
+          
+          output += `\nStep ${index + 1}.2: PUCT Score Calculation\n`;
+          output += `   Algorithm: For each legal move, compute PUCT score to balance exploration vs exploitation\n`;
+          if (step.top_puct_scores && step.top_puct_scores.length > 0) {
+            // Try to get exploration constant from MCTS debug info
+            const explorationConstant = mctsData?.algorithm_info?.parameters?.exploration_constant || 'C';
+            
+            step.top_puct_scores.forEach((score, i) => {
+              const isSelected = score.move === step.selected_move;
+              const marker = isSelected ? '→ ' : '  ';
+              const puctBreakdown = `Q=${score.q_value.toFixed(3)} + ${explorationConstant}×√(N_total)/√(N=${score.visits}) + P=${score.prior.toFixed(3)}`;
+              output += `${marker}${score.move}: PUCT=${score.score.toFixed(3)}\n`;
+              output += `    Breakdown: ${puctBreakdown}\n`;
+            });
+          }
+          
+          output += `\nStep ${index + 1}.3: Action Selection\n`;
+          output += `   Algorithm: Choose move with highest PUCT score for tree traversal\n`;
+          output += `└─ Selected: ${step.selected_move} at (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
+        }
+        
+        output += '\n';
+      } catch (error) {
+        console.error('Error processing exploration step:', error, step);
+        output += `Error processing step: ${error.message}\n\n`;
       }
-      output += '\n';
     });
+    
+    // Add algorithm summary
+    output += `=== ALGORITHM SUMMARY ===\n`;
+    output += `MCTS Algorithm Flow:\n`;
+    output += `1. Selection: Choose child nodes using PUCT formula\n`;
+    output += `2. Expansion: Create new child nodes for unexplored actions\n`;
+    output += `3. Simulation: Rollout to terminal state using policy network\n`;
+    output += `4. Backpropagation: Update node statistics (N, Q, W)\n\n`;
+    output += `Detailed Exploration Context:\n`;
+    output += `├─ Root Selection (Depth 0): Choosing which move to explore from current game state\n`;
+    output += `├─ Child Expansion (Depth 1+): Creating/visiting nodes deeper in the tree\n`;
+    output += `├─ PUCT Scoring: Q (value) + C×√(N_total)/√(N) (exploration) + P (prior)\n`;
+    output += `└─ Tree Growth: Each simulation can expand the tree to new depths\n\n`;
+    output += `Note: Depth 0 = Root node, Depth 1+ = Child nodes in the tree.\n`;
+    output += `Each step shows the algorithm's decision-making process.\n\n`;
+    
+    // Add exploration insights
+    output += `Exploration Insights:\n`;
+    output += `├─ PUCT Formula: Q + C×√(N_total)/√(N) + P\n`;
+    output += `├─ Q: Average value from backpropagation\n`;
+    output += `├─ C: Exploration constant (${mctsData?.algorithm_info?.parameters?.exploration_constant || 'unknown'})\n`;
+    output += `├─ N: Visit count for this action\n`;
+    output += `└─ P: Prior probability from neural network\n\n`;
+    
+    // Add tree statistics if available
+    if (treeData) {
+      output += `Tree Statistics:\n`;
+      output += `├─ Total nodes: ${treeData.total_nodes || 'N/A'}\n`;
+      output += `├─ Max depth: ${treeData.max_depth || 'N/A'}\n`;
+      output += `├─ Total visits: ${treeData.total_visits || 'N/A'}\n`;
+      output += `└─ Neural inferences: ${treeData.inferences || 'N/A'}\n`;
+      
+      // Add visit distribution analysis
+      if (treeData.visit_counts && treeData.visit_counts.length > 0) {
+        const sortedVisits = [...treeData.visit_counts].sort((a, b) => b - a);
+        output += `\nVisit Distribution:\n`;
+        output += `├─ Most visited: ${sortedVisits[0] || 'N/A'} visits\n`;
+        output += `├─ Median visits: ${sortedVisits[Math.floor(sortedVisits.length/2)] || 'N/A'}\n`;
+        output += `└─ Least visited: ${sortedVisits[sortedVisits.length-1] || 'N/A'} visits\n`;
+      }
+    }
   } else {
     output += 'No exploration trace available.\n';
   }
