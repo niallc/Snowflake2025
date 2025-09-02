@@ -9,6 +9,10 @@ The key insight is that by starting from the same opening positions,
 we can directly compare how different strategies perform from identical
 starting points, making the comparison much more robust.
 
+Different runs can use different opening sets by changing the --seed parameter,
+allowing you to gather more data across multiple tournament runs while
+maintaining deterministic gameplay within each run.
+
 Examples:
 
 1. Compare strategies using 100 diverse openings:
@@ -29,6 +33,20 @@ Examples:
      --strategies=policy,mcts_122 \
      --num-openings=150 \
      --temperature=0.1
+
+4. Get different opening sets for multiple runs:
+   # Each run automatically gets a different seed (from time)
+   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+     --model=current_best \
+     --strategies=policy,mcts_122 \
+     --num-openings=100
+   
+   # Or manually specify seeds for reproducible results
+   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+     --model=current_best \
+     --strategies=policy,mcts_122 \
+     --num-openings=100 \
+     --seed=123
 """
 
 import argparse
@@ -73,7 +91,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_OPENING_LENGTH = 5
 DEFAULT_NUM_OPENINGS = 100
 DEFAULT_TEMPERATURE = 0.0
-DEFAULT_SEED = 42
+DEFAULT_SEED = None  # Will be set to int(time.time()) if None
 DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/twoNetGames"
 TRMPH_FILE_PATTERN = "*.trmph"
@@ -452,6 +470,39 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = DEFA
             logger.warning(f"Could not save cache file {cache_file}: {e}")
     
     return diverse_openings
+
+
+def select_random_openings(openings: List[OpeningPosition], num_openings: int, seed: Optional[int] = None) -> List[OpeningPosition]:
+    """
+    Randomly select a subset of unique openings from the available pool.
+    
+    This function ensures that different tournament runs can use different
+    opening sets while maintaining deterministic gameplay within each run.
+    It also maintains the uniqueness property of the original code.
+    
+    Args:
+        openings: List of all available opening positions (assumed to be unique)
+        num_openings: Number of openings to select
+        seed: Optional random seed for reproducible selection
+    
+    Returns:
+        List of randomly selected unique OpeningPosition objects
+    """
+    if seed is not None:
+        random.seed(seed)
+    
+    if num_openings >= len(openings):
+        # If we need all or more openings than available, return all
+        logger.info(f"Requested {num_openings} openings, returning all {len(openings)} available")
+        return openings.copy()
+    
+    # Randomly sample without replacement - this maintains uniqueness
+    # since the input openings are already unique and we're sampling without replacement
+    selected_indices = random.sample(range(len(openings)), num_openings)
+    selected_openings = [openings[i] for i in selected_indices]
+    
+    logger.info(f"Randomly selected {len(selected_openings)} unique openings from pool of {len(openings)}")
+    return selected_openings
 
 
 def play_deterministic_game(
@@ -894,7 +945,7 @@ Examples:
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
-                       help=f'Random seed for opening generation (default: {DEFAULT_SEED})')
+                       help=f'Random seed for opening selection (different seeds produce different opening sets) (default: auto-generated from time)')
     parser.add_argument('--verbose', type=int, default=DEFAULT_VERBOSE,
                        help=f'Verbosity level (default: {DEFAULT_VERBOSE})')
     
@@ -904,7 +955,12 @@ Examples:
 def main():
     args = parse_args()
     
-    # Set random seed for reproducible opening generation
+    # Generate seed if none provided, or use provided seed
+    if args.seed is None:
+        args.seed = int(time.time())
+        print(f"Auto-generated seed: {args.seed}")
+    
+    # Set random seed for reproducible opening selection
     set_deterministic_seeds(args.seed)
     
     # Validate model path
@@ -952,12 +1008,12 @@ def main():
     if args.opening_file and os.path.exists(args.opening_file):
         print(f"Loading openings from: {args.opening_file}")
         try:
-            openings = load_openings_from_file(args.opening_file, args.opening_length)
+            all_openings = load_openings_from_file(args.opening_file, args.opening_length)
         except ValueError as e:
             print(f"ERROR: {e}")
             sys.exit(1)
     else:
-        print(f"Generating {args.num_openings} diverse openings...")
+        print(f"Generating diverse openings...")
         
         # Find TRMPH files
         trmph_files = find_trmph_files(args.trmph_source)
@@ -965,23 +1021,28 @@ def main():
             print(f"ERROR: No TRMPH files found in {args.trmph_source}")
             sys.exit(1)
         
-        # Generate diverse openings
-        openings = generate_diverse_openings(
+        # Generate diverse openings (generate more than needed to allow for random selection)
+        target_generation = max(args.num_openings * 2, 500)  # Generate at least 2x what we need
+        all_openings = generate_diverse_openings(
             trmph_files, 
             opening_length=args.opening_length,
-            target_count=args.num_openings,
+            target_count=target_generation,
             cache_file=args.cache_file
         )
     
-    if not openings:
+    if not all_openings:
         print("ERROR: No opening positions generated")
         sys.exit(1)
+    
+    # Randomly select the desired number of openings from the available pool
+    print(f"Randomly selecting {args.num_openings} openings from pool of {len(all_openings)}...")
+    openings = select_random_openings(all_openings, args.num_openings, seed=args.seed)
     
     # Print configuration
     print("\nDeterministic Tournament Configuration:")
     print(f"  Model: {args.model} ({os.path.basename(model_path)})")
     print(f"  Strategies: {[str(c) for c in strategy_configs]}")
-    print(f"  Number of openings: {len(openings)}")
+    print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
     print(f"  Opening length: {args.opening_length} moves")
     print(f"  Temperature: {args.temperature}")
     if args.batch_sizes:
@@ -990,7 +1051,7 @@ def main():
         print(f"  C_PUCT values: {args.c_puct}")
     print(f"  Dirichlet noise: alpha=0.3, eps=0.25 (MCTS default)")
     print(f"  Root noise: disabled (add_root_noise=False)")
-    print(f"  Random seed: {args.seed}")
+    print(f"  Random seed: {args.seed} (for opening selection)")
     
     # Print timestamp and git state
     timestamp = datetime.now()

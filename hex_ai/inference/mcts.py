@@ -594,7 +594,7 @@ class BaselineMCTS:
         if termination_info:
             # Handle algorithm termination
             move = self._get_algorithm_termination_move(root, termination_info, verbose)
-            tree_data = self._compute_tree_data(root)
+            tree_data = self.get_tree_data(root)
             win_probability = termination_info.win_prob
             
             # Attach metrics for algorithm termination cases too
@@ -1002,7 +1002,8 @@ class BaselineMCTS:
                     if node.state_hash not in self.eval_cache and not node.is_terminal:
                         distinct_hashes.add(node.state_hash)
 
-                    # Flush triggers
+                    # Flush triggers, U & T are helper variables to determnd when to call the network
+                    # (nothing to do with the PUCT formula) 
                     U = len(distinct_hashes)
                     T = len(leaves)
                     if U >= distinct_target:
