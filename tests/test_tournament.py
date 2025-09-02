@@ -6,7 +6,8 @@ import time
 from hex_ai.utils import tournament_logging
 from hex_ai.inference import tournament
 from hex_ai.value_utils import ValuePredictor, Winner
-from hex_ai.enums import Piece
+from hex_ai.enums import Piece, Player
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 import numpy as np
 
 ALL_RESULTS_DIR = "checkpoints/hyperparameter_tuning/"
@@ -104,7 +105,7 @@ def test_determine_winner_and_swap_logic():
 def test_network_outputs_are_logits():
     """Test that the network outputs are used as logits, not probabilities, in move selection."""
     from hex_ai.inference.tournament import select_move
-    from hex_ai.inference.game_engine import HexGameState
+    from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
     class DummyModel:
         def __init__(self): 
             self.checkpoint_path = 'dummy'
@@ -127,7 +128,7 @@ def test_network_outputs_are_logits():
                 value = 0.0
                 results.append((policy_logits, value))
             return results
-    state = HexGameState()
+    state = make_empty_hex_state()
     model = DummyModel()
     # Use temperature=0.0 for deterministic behavior to test argmax
     move = select_move(state, model, search_widths=None, temperature=0.0)
@@ -137,7 +138,6 @@ def test_network_outputs_are_logits():
 def test_handle_pie_rule_swap_and_no_swap():
     """Test handle_pie_rule returns correct swap/model assignment and swap_decision."""
     from hex_ai.inference.tournament import handle_pie_rule, TournamentPlayConfig
-    from hex_ai.inference.game_engine import HexGameState
     class DummyModel:
         def __init__(self, win_prob_blue):
             self.win_prob_blue = win_prob_blue
@@ -156,7 +156,7 @@ def test_handle_pie_rule_swap_and_no_swap():
             # Add the method that the code expects
             return self.infer(board)
     # No swap: win_prob_blue below threshold (Blue's position not good enough to swap)
-    state = HexGameState()
+    state = make_empty_hex_state()
     model_1 = DummyModel(0.2)  # This gives win_prob_blue around 0.2
     model_2 = DummyModel(0.2)
     play_config = TournamentPlayConfig(pie_rule=True, swap_threshold=0.5)
@@ -166,7 +166,7 @@ def test_handle_pie_rule_swap_and_no_swap():
     assert result.model_1 == model_1  # model_1 stays as blue
     assert result.model_2 == model_2  # model_2 stays as red
     # Swap: win_prob_blue above threshold (Blue's position too good, Red should swap)
-    state = HexGameState()
+    state = make_empty_hex_state()
     model_1 = DummyModel(0.8)  # This gives win_prob_blue around 0.8
     model_2 = DummyModel(0.8)
     play_config = TournamentPlayConfig(pie_rule=True, swap_threshold=0.5)
@@ -179,7 +179,6 @@ def test_handle_pie_rule_swap_and_no_swap():
 def test_select_move_policy_and_tree_search():
     """Test select_move chooses the correct move for both policy and tree search."""
     from hex_ai.inference.tournament import select_move
-    from hex_ai.inference.game_engine import HexGameState
     class DummyModel:
         def __init__(self):
             self.checkpoint_path = "dummy"
@@ -201,7 +200,7 @@ def test_select_move_policy_and_tree_search():
                 policies.append(policy_logits)
                 values.append(value)
             return policies, values
-    state = HexGameState()
+    state = make_empty_hex_state()
     model = DummyModel()
     # Policy move (no search_widths)
     move = select_move(state, model, search_widths=None, temperature=1.0)
@@ -214,7 +213,6 @@ def test_select_move_policy_and_tree_search():
 
 def test_winner_detection_with_known_positions():
     """Test winner detection with known TRMPH positions that have clear winners."""
-    from hex_ai.inference.game_engine import HexGameState
     
     # Test cases: (trmph_string, expected_winner, description)
     test_cases = [
@@ -236,7 +234,6 @@ def test_winner_detection_with_known_positions():
 
 def test_one_move_to_win_positions():
     """Test positions where one more move creates a win."""
-    from hex_ai.inference.game_engine import HexGameState
     
     # Test cases: (trmph_string, winning_move, expected_winner, description)
     test_cases = [
@@ -258,7 +255,6 @@ def test_one_move_to_win_positions():
 
 def test_tournament_structural_integrity_with_known_positions():
     """Test structural integrity using known positions to ensure moves are legal and board updates correctly."""
-    from hex_ai.inference.game_engine import HexGameState
     
     # Test a simple position
     trmph = "#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7"
@@ -269,7 +265,7 @@ def test_tournament_structural_integrity_with_known_positions():
     assert state.winner == Winner.BLUE, "Winner should be blue"
     
     # Verify all moves in the sequence are legal
-    test_state = HexGameState()
+    test_state = make_empty_hex_state()
     seen_moves = set()
     
     for move in state.move_history:

@@ -3,19 +3,20 @@
 Test batch inference functionality to ensure it works correctly and efficiently.
 """
 
-import sys
 import os
+import sys
 import time
 import numpy as np
-import torch
+import pytest
 
 # Add the parent directory to the path so we can import hex_ai modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.config import BOARD_SIZE
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 from hex_ai.enums import Piece, Player
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.utils.player_utils import get_player_to_move_from_board
+from hex_ai.utils.format_conversion import board_nxn_to_2nxn
 
 
 def create_test_boards(num_boards=10, board_size=13):
@@ -31,7 +32,7 @@ def create_test_boards(num_boards=10, board_size=13):
         for j in range(num_moves):
             row = j % board_size
             col = (j + i) % board_size
-            player = Player.BLUE.value if j % 2 == 0 else Player.RED.value
+            player = Piece.BLUE.value if j % 2 == 0 else Piece.RED.value
             board[row, col] = player
         
         boards.append(board)
@@ -168,7 +169,11 @@ def test_batch_inference_edge_cases():
     print("Testing mixed input formats...")
     test_boards = create_test_boards(3)
     # Convert one board to TRMPH string format
-    state = HexGameState(board=test_boards[1], current_player=Player.BLUE.value)
+    # Determine the correct player from the board state
+    board_2ch = board_nxn_to_2nxn(test_boards[1])
+    board_2ch_np = board_2ch.detach().cpu().numpy()  # Convert torch tensor to numpy
+    current_player = get_player_to_move_from_board(board_2ch_np)
+    state = HexGameState(current_player, board=test_boards[1])
     trmph_board = state.to_trmph()
     mixed_boards = [test_boards[0], trmph_board, test_boards[2]]
     

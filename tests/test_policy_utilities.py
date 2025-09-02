@@ -125,7 +125,7 @@ def test_consistency_with_original_logic():
 
 def test_select_policy_move():
     """Test the new select_policy_move function."""
-    from hex_ai.inference.game_engine import HexGameState
+    from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
     
     # Create a mock model that returns predictable logits for a 13x13 board (169 positions)
     class MockModel:
@@ -140,7 +140,7 @@ def test_select_policy_move():
             return logits, 0.0
     
     # Create a game state with some moves already made
-    state = HexGameState()
+    state = make_empty_hex_state()
     # Make a few moves to create a non-empty board
     state = state.make_move(0, 0)  # Blue plays at (0,0)
     state = state.make_move(1, 1)  # Red plays at (1,1)
@@ -168,7 +168,7 @@ def test_select_policy_move():
     
     # Test error case: no legal moves (game over)
     # Create a finished game state by filling most of the board
-    finished_state = HexGameState()
+    finished_state = make_empty_hex_state()
     # Fill most of the board to create a nearly finished game
     for i in range(12):  # Don't fill completely to avoid winner detection issues
         for j in range(12):
