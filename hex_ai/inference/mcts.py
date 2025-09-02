@@ -583,7 +583,7 @@ class BaselineMCTS:
         if self.detailed_exploration_enabled and hasattr(self, 'verbose') and self.verbose >= 2:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
 
-    def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: np.ndarray, 
+    def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: List[float],
                                 selected_action: int, depth: int, simulation_num: int, 
                                 path_to_node: List[str] = None) -> None:
         """Record a single exploration step for detailed analysis."""
@@ -594,6 +594,63 @@ class BaselineMCTS:
             node, action_idx, puct_scores, selected_action, depth, simulation_num, path_to_node
         )
         self.exploration_trace.append(step_info)
+
+    def _record_node_selection(self, available_nodes: List[MCTSNode], selected_node: MCTSNode, 
+                              simulation_num: int, selection_type: str = "UCB1") -> None:
+        """
+        Record node selection decisions for detailed exploration tracking.
+        
+        IMPORTANT: This method ONLY records debug information and does NOT affect
+        the actual MCTS algorithm. The UCB1 calculation here is an approximation
+        for display purposes only.
+        """
+        if not self.detailed_exploration_enabled:
+            return
+        
+        # Calculate UCB1 scores for all available nodes
+        node_scores = []
+        for node in available_nodes:
+            if node is not None:
+                # NOTE: This is an APPROXIMATION for debug output only
+                # The actual MCTS algorithm uses proper UCB1 with parent visit counts
+                # We can't access parent.N here, so we use a simplified formula for display
+                N_node = sum(node.N) if len(node.N) > 0 else 1
+                Q_node = np.mean(node.Q) if len(node.Q) > 0 else 0.0
+                C = self.cfg.c_puct
+                # APPROXIMATION: Using sqrt(1/N_node) instead of sqrt(ln(N_parent)/N_node)
+                # Add safety check to avoid division by zero and infinite values
+                if N_node <= 0:
+                    ucb1_approximation = Q_node + C * 1.0  # Safe fallback
+                else:
+                    ucb1_approximation = Q_node + C * math.sqrt(1.0 / N_node)
+                
+                # Ensure the result is finite for JSON serialization
+                if not math.isfinite(ucb1_approximation):
+                    ucb1_approximation = Q_node  # Fallback to just Q value
+                
+                node_scores.append({
+                    'depth': int(node.depth),  # Convert to Python int
+                    'ucb1_approximation': float(ucb1_approximation),  # Convert to Python float
+                    'q_value': float(Q_node),  # Convert to Python float
+                    'visits': int(N_node),  # Convert to Python int
+                    'is_selected': bool(node == selected_node)  # Convert to Python bool
+                })
+        
+        # Sort by UCB1 approximation
+        node_scores.sort(key=lambda x: x['ucb1_approximation'], reverse=True)
+        
+        # Create selection info
+        selection_info = {
+            'type': 'node_selection',
+            'simulation': int(simulation_num),  # Convert to Python int
+            'selection_type': str(selection_type),  # Convert to Python str
+            'available_nodes': int(len(available_nodes)),  # Convert to Python int
+            'selected_node_depth': int(selected_node.depth),  # Convert to Python int
+            'node_scores': node_scores[:5],  # Top 5 nodes
+            'selection_reason': f"Selected depth {selected_node.depth} node with highest UCB1 score"
+        }
+        
+        self.exploration_trace.append(selection_info)
 
     # ---------- Public API ----------
     
@@ -1030,6 +1087,15 @@ class BaselineMCTS:
 
             node = root
             path: List[Tuple[MCTSNode, int]] = []
+            
+            # DEBUG TRACKING ONLY: Record node selection decisions for detailed exploration
+            # This does NOT affect the actual MCTS algorithm - it's purely for display purposes
+            if self.detailed_exploration_enabled:
+                # Collect all available nodes (root and its children)
+                available_nodes = [root]
+                if root.is_expanded:
+                    available_nodes.extend([child for child in root.children if child is not None])
+                self._record_node_selection(available_nodes, root, self.simulation_count)
 
             # Gumbel specific code path: Pop the forced action for THIS descent (if any)
             forced_a_full = force_q.popleft() if force_q else None
@@ -1094,6 +1160,8 @@ class BaselineMCTS:
                     if self.detailed_exploration_enabled:
                         # Record the child node's initial state
                         child_puct_scores = np.zeros(len(child.legal_moves))
+                        # Convert numpy types to Python types for JSON serialization
+                        child_puct_scores_python = [float(s) for s in child_puct_scores]
                         # Extract move sequence from path
                         move_sequence = []
                         for path_node, path_action in path:
@@ -1101,7 +1169,7 @@ class BaselineMCTS:
                                 r, c = path_node.legal_moves[path_action]
                                 move_str = f"{chr(97 + c)}{r + 1}"
                                 move_sequence.append(move_str)
-                        self._record_exploration_step(child, 0, child_puct_scores, 0, child.depth, self.simulation_count, move_sequence)
+                        self._record_exploration_step(child, 0, child_puct_scores_python, 0, child.depth, self.simulation_count, move_sequence)
 
                 node = child
 
@@ -1450,7 +1518,9 @@ class BaselineMCTS:
                     # Create dummy PUCT scores for recording
                     dummy_scores = np.zeros(len(node.legal_moves))
                     dummy_scores[result] = 1.0  # Mark selected move
-                    self._record_exploration_step(node, result, dummy_scores, result, current_depth, self.simulation_count)
+                    # Convert numpy types to Python types for JSON serialization
+                    dummy_scores_python = [float(s) for s in dummy_scores]
+                    self._record_exploration_step(node, result, dummy_scores_python, result, current_depth, self.simulation_count)
                 return result
             result = int(np.argmax(node.P))
             # Record exploration step for detailed tracking (early return case)
@@ -1458,7 +1528,9 @@ class BaselineMCTS:
                 # Create dummy PUCT scores for recording
                 dummy_scores = np.zeros(len(node.legal_moves))
                 dummy_scores[result] = 1.0  # Mark selected move
-                self._record_exploration_step(node, result, dummy_scores, result, current_depth, self.simulation_count)
+                # Convert numpy types to Python types for JSON serialization
+                dummy_scores_python = [float(s) for s in dummy_scores]
+                self._record_exploration_step(node, result, dummy_scores_python, result, current_depth, self.simulation_count)
             return result
         
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
@@ -1478,7 +1550,9 @@ class BaselineMCTS:
         
         # Record exploration step for detailed tracking
         if self.detailed_exploration_enabled:
-            self._record_exploration_step(node, result, score, result, current_depth, self.simulation_count)
+            # Convert numpy types to Python types for JSON serialization
+            score_python = [float(s) for s in score]
+            self._record_exploration_step(node, result, score_python, result, current_depth, self.simulation_count)
         
         # End timing PUCT calculation
         t_puct_end = time.perf_counter()

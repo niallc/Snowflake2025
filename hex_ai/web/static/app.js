@@ -1275,12 +1275,35 @@ function displayDetailedExploration(debugInfo) {
   if (detailedExploration.trace && detailedExploration.trace.length > 0) {
     detailedExploration.trace.forEach((step, index) => {
       try {
-        output += `=== SIMULATION ${step.simulation} ===\n`;
-        output += `Step ${index + 1}: ${step.depth === 0 ? 'Root Selection' : 'Child Expansion'}\n`;
-        output += `├─ Depth: ${step.depth} ${step.depth === 0 ? '(Root)' : `(Level ${step.depth})`}\n`;
-        output += `├─ Player: ${step.to_play === 0 ? 'BLUE' : step.to_play === 1 ? 'RED' : step.to_play}\n`;
-        output += `├─ Node Stats: ${step.depth === 0 ? 'Root node' : `Child node at depth ${step.depth}`}, ${step.legal_moves.length} legal moves\n`;
-        output += `└─ Terminal: ${step.is_terminal}\n`;
+        // Handle different types of steps
+        if (step.type === 'node_selection') {
+          // Node selection step
+          output += `=== NODE SELECTION (Simulation ${step.simulation}) ===\n`;
+          output += `Step ${index + 1}: Node Selection Decision\n`;
+          output += `├─ Selection Type: ${step.selection_type}\n`;
+          output += `├─ Available Nodes: ${step.available_nodes}\n`;
+          output += `├─ Selected Node: Depth ${step.selected_node_depth}\n`;
+          output += `└─ Reason: ${step.selection_reason}\n`;
+          
+          if (step.node_scores && step.node_scores.length > 0) {
+            output += `\nStep ${index + 1}.1: UCB1 Scoring for Node Selection\n`;
+            output += `   ⚠️  APPROXIMATION: UCB1 = Q + C×√(1/N_node) for each available node\n`;
+            output += `   Note: This is a simplified formula for debug display only. The actual MCTS algorithm\n`;
+            output += `   uses the full UCB1 formula with parent visit counts.\n`;
+            step.node_scores.forEach((nodeScore, i) => {
+              const isSelected = nodeScore.is_selected ? '→ ' : '  ';
+              output += `${isSelected}Depth ${nodeScore.depth}: UCB1≈${nodeScore.ucb1_approximation.toFixed(3)}\n`;
+              output += `    Breakdown: Q=${nodeScore.q_value.toFixed(3)} + C×√(1/N_node=${nodeScore.visits})\n`;
+            });
+          }
+        } else {
+          // Regular exploration step
+          output += `=== SIMULATION ${step.simulation} ===\n`;
+          output += `Step ${index + 1}: ${step.depth === 0 ? 'Root Selection' : 'Child Expansion'}\n`;
+          output += `├─ Depth: ${step.depth} ${step.depth === 0 ? '(Root)' : `(Level ${step.depth})`}\n`;
+          output += `├─ Player: ${step.to_play === 0 ? 'BLUE' : step.to_play === 1 ? 'RED' : step.to_play}\n`;
+          output += `├─ Node Stats: ${step.depth === 0 ? 'Root node' : `Child node at depth ${step.depth}`}, ${step.legal_moves.length} legal moves\n`;
+          output += `└─ Terminal: ${step.is_terminal}\n`;
         
         // Add move sequence context if we have coordinates
         if (step.selected_move_coords && step.depth > 0) {
@@ -1317,6 +1340,7 @@ function displayDetailedExploration(debugInfo) {
           output += `\nStep ${index + 1}.3: Action Selection\n`;
           output += `   Algorithm: Choose move with highest PUCT score for tree traversal\n`;
           output += `└─ Selected: ${step.selected_move} at (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
+        }
         }
         
         output += '\n';
