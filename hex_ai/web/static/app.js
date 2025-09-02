@@ -1194,6 +1194,63 @@ function displayDebugInfo(debugInfo) {
   }
   
   debugContent.textContent = output;
+  
+  // Display detailed exploration if available
+  displayDetailedExploration(debugInfo);
+}
+
+function displayDetailedExploration(debugInfo) {
+  const explorationDiv = document.getElementById('detailed-exploration');
+  const explorationContent = document.getElementById('exploration-content');
+  
+  if (!explorationDiv || !explorationContent) return;
+  
+  // Check if we have detailed exploration data
+  const mctsData = debugInfo.mcts_debug_info;
+  const treeData = mctsData && mctsData.tree_data;
+  const detailedExploration = treeData && treeData.detailed_exploration;
+  
+  if (!detailedExploration || !detailedExploration.enabled) {
+    explorationDiv.style.display = 'none';
+    return;
+  }
+  
+  explorationDiv.style.display = 'block';
+  
+  let output = '';
+  output += `=== DETAILED MCTS EXPLORATION TRACE ===\n`;
+  output += `Simulation threshold: ${detailedExploration.simulation_threshold}\n`;
+  output += `Total simulations: ${detailedExploration.total_simulations}\n\n`;
+  
+  if (detailedExploration.trace && detailedExploration.trace.length > 0) {
+    detailedExploration.trace.forEach((step, index) => {
+      output += `--- Simulation ${step.simulation} (Step ${index + 1}) ---\n`;
+      output += `Depth: ${step.depth} | Player: ${step.to_play.toUpperCase()}\n`;
+      output += `Node: ${step.node_hash.toString(16).slice(-8)} | Terminal: ${step.is_terminal}\n`;
+      
+      if (step.is_terminal) {
+        output += `Winner: ${step.winner || 'None'}\n`;
+      } else {
+        output += `Legal moves: ${step.legal_moves.join(', ')}\n`;
+        output += `Selected: ${step.selected_move} (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
+        
+        if (step.top_puct_scores && step.top_puct_scores.length > 0) {
+          output += `Top PUCT scores:\n`;
+          step.top_puct_scores.forEach((score, i) => {
+            const isSelected = score.move === step.selected_move;
+            const marker = isSelected ? '→ ' : '  ';
+            output += `${marker}${score.move}: PUCT=${score.score.toFixed(3)} `;
+            output += `(Q=${score.q_value.toFixed(3)}, N=${score.visits}, P=${score.prior.toFixed(3)})\n`;
+          });
+        }
+      }
+      output += '\n';
+    });
+  } else {
+    output += 'No exploration trace available.\n';
+  }
+  
+  explorationContent.textContent = output;
 }
 
 function saveStateForUndo() {

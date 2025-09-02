@@ -56,7 +56,10 @@ from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
     extract_principal_variation_from_tree,
     calculate_tree_statistics,
-    format_mcts_tree_data_for_api
+    format_mcts_tree_data_for_api,
+    should_enable_detailed_exploration,
+    create_exploration_step_info,
+    add_detailed_exploration_to_tree_data
 )
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -96,6 +99,8 @@ DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 # Default depth discount factor
 # TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 1.00
+
+
 
 # ---- MCTS Invariant Wrappers ----
 def q_from_w_n(w: float, n: int) -> float:
@@ -564,6 +569,30 @@ class BaselineMCTS:
         
         # Stats builder (will be updated with current cache counts when needed)
         self.stats_builder = None
+        
+        # Detailed exploration tracking for small simulation counts
+        self.detailed_exploration_enabled = False
+        self.exploration_trace = []
+        self.simulation_count = 0
+
+    def _enable_detailed_exploration_if_needed(self, num_simulations: int) -> None:
+        """Enable detailed exploration tracking if simulation count is below threshold."""
+        self.detailed_exploration_enabled = should_enable_detailed_exploration(num_simulations)
+        self.exploration_trace = []
+        self.simulation_count = 0
+        if self.detailed_exploration_enabled and hasattr(self, 'verbose') and self.verbose >= 2:
+            print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
+
+    def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: np.ndarray, 
+                                selected_action: int, depth: int, simulation_num: int) -> None:
+        """Record a single exploration step for detailed analysis."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        step_info = create_exploration_step_info(
+            node, action_idx, puct_scores, selected_action, depth, simulation_num
+        )
+        self.exploration_trace.append(step_info)
 
     # ---------- Public API ----------
     
@@ -586,6 +615,11 @@ class BaselineMCTS:
             raise RuntimeError("Cannot run MCTS on a terminal game state")
         if verbose < 0:
             raise ValueError(f"verbose must be non-negative, got {verbose}")
+        
+        # Enable detailed exploration tracking if needed
+        self._enable_detailed_exploration_if_needed(self.cfg.sims)
+        self.verbose = verbose
+        
         # Prepare root node
         root = self._prepare_root_node(root_state, verbose)
         
@@ -666,7 +700,17 @@ class BaselineMCTS:
         Returns:
             Dictionary containing formatted tree data for API consumption
         """
-        return format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH)
+        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH)
+        
+        # Add detailed exploration data if available
+        tree_data = add_detailed_exploration_to_tree_data(
+            tree_data, 
+            self.detailed_exploration_enabled, 
+            self.exploration_trace, 
+            self.simulation_count
+        )
+        
+        return tree_data
 
     def get_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
         """Get win probability for the current player."""
@@ -1196,6 +1240,10 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
+            # Increment simulation counter for detailed tracking
+            if self.detailed_exploration_enabled:
+                self.simulation_count += 1
+            
             # Determine signed value for this leaf (always in Red's reference frame: +1 = Red win, -1 = Blue win)
             if leaf.is_terminal:
                 v_red_signed = self._get_terminal_value(leaf)
@@ -1382,8 +1430,22 @@ class BaselineMCTS:
             # But prioritize terminal moves
             if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
                 terminal_indices = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
-                return terminal_indices[0]  # Return first terminal move
-            return int(np.argmax(node.P))
+                result = terminal_indices[0]  # Return first terminal move
+                # Record exploration step for detailed tracking (early return case)
+                if self.detailed_exploration_enabled:
+                    # Create dummy PUCT scores for recording
+                    dummy_scores = np.zeros(len(node.legal_moves))
+                    dummy_scores[result] = 1.0  # Mark selected move
+                    self._record_exploration_step(node, result, dummy_scores, result, node.depth, self.simulation_count)
+                return result
+            result = int(np.argmax(node.P))
+            # Record exploration step for detailed tracking (early return case)
+            if self.detailed_exploration_enabled:
+                # Create dummy PUCT scores for recording
+                dummy_scores = np.zeros(len(node.legal_moves))
+                dummy_scores[result] = 1.0  # Mark selected move
+                self._record_exploration_step(node, result, dummy_scores, result, node.depth, self.simulation_count)
+            return result
         
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
         
@@ -1399,6 +1461,10 @@ class BaselineMCTS:
         
         score = node.Q + U
         result = int(np.argmax(score))
+        
+        # Record exploration step for detailed tracking
+        if self.detailed_exploration_enabled:
+            self._record_exploration_step(node, result, score, result, node.depth, self.simulation_count)
         
         # End timing PUCT calculation
         t_puct_end = time.perf_counter()
