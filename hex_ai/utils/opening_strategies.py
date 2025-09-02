@@ -10,6 +10,7 @@ import random
 from typing import List, Optional, Tuple
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.utils.format_conversion import trmph_move_to_rowcol
+from hex_ai.enums import Player
 
 
 class OpeningStrategy:
@@ -175,7 +176,7 @@ def create_board_with_opening(opening_move: Optional[Tuple[int, int]],
     Returns:
         HexGameState with the opening move applied
     """
-    state = HexGameState()
+    state = make_empty_hex_state()
     
     if opening_move is not None:
         row, col = opening_move

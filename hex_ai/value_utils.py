@@ -887,4 +887,6 @@ def player_to_winner(player: Player) -> Winner:
 
 def winner_to_player(winner: Winner) -> Player:
     """Convert Winner enum to Player enum."""
-    return Player.BLUE if winner == Winner.BLUE else Player.RED 
+    return Player.BLUE if winner == Winner.BLUE else Player.RED
+
+ 

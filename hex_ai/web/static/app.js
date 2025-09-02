@@ -405,10 +405,10 @@ function makeHex(cx, cy, r, fill, highlight) {
   
   // Add tooltip functionality
   hex.addEventListener('mouseenter', function(e) {
-    console.log('Mouse enter event triggered!');
+    // console.log('Mouse enter event triggered!');
     const row = parseInt(this.getAttribute('data-row'));
     const col = parseInt(this.getAttribute('data-col'));
-    console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
+    // console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
     if (!isNaN(row) && !isNaN(col)) {
       const trmph = rowcolToTrmph(row, col);
       console.log('TRMPH format:', trmph);

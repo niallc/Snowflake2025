@@ -22,7 +22,9 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
+    signed_to_prob,
 )
+from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.enums import Piece
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
@@ -426,19 +428,20 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
         
-        # Get legal moves and their probabilities
+        # Get legal moves count for summary
         legal_moves = state.get_legal_moves()
-        original_legal_moves_count = len(legal_moves)  # Store for summary
+        original_legal_moves_count = len(legal_moves)
         app.logger.info(f"Legal moves count: {original_legal_moves_count}")
+        
+        # Get direct policy probabilities for comparison with MCTS
         legal_move_probs = {}
         for move in legal_moves:
             move_trmph = fc.rowcol_to_trmph(*move)
-            # Convert (row, col) to tensor index to access policy_probs array
             tensor_idx = fc.rowcol_to_tensor(*move)
             if 0 <= tensor_idx < len(policy_probs):
                 legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
         
-        # Log only top 10 legal move probabilities to reduce verbosity
+        # Log top 10 legal move probabilities
         sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
         top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
         app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
@@ -460,6 +463,29 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         else:
             algorithm = "MCTS"
         
+        # Use centralized utilities for value conversions and tree data
+        
+        # Get win probabilities using centralized utility
+        root_win_prob = compute_win_probability_from_tree_data(tree_data)
+        best_child_signed_value = tree_data.get("v_ptm_ref_signed_best_child", 0.0)
+        best_child_win_prob = signed_to_prob(best_child_signed_value)
+        
+        # Handle algorithm termination win probability
+        if algorithm_termination_info and algorithm_termination_info.win_prob is not None:
+            if algorithm_termination_info.reason == "terminal_move":
+                algorithm_win_prob = 1.0  # Already correct
+            else:
+                algorithm_win_prob = signed_to_prob(algorithm_termination_info.win_prob)
+        else:
+            algorithm_win_prob = None
+        
+        # Log the conversion for debugging
+        app.logger.debug(f"Value conversion: root_prob={root_win_prob:.3f}, "
+                        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}")
+        if algorithm_termination_info:
+            app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
+                           f"original_win_prob={algorithm_termination_info.win_prob}, converted={algorithm_win_prob}")
+        
         mcts_debug_info = {
             "algorithm_info": {
                 "algorithm": algorithm,
@@ -467,7 +493,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
                 "early_termination_details": {
                     "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
-                    "win_probability": algorithm_termination_info.value if algorithm_termination_info else None,
+                    "win_probability": algorithm_win_prob,  # Use converted probability
                     "move": algorithm_termination_info.move if algorithm_termination_info else None
                 },
                 "parameters": {
@@ -487,10 +513,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "algorithm_used": algorithm
             },
             "tree_statistics": {
-                "total_visits": tree_data.get("total_visits", 0) if not algorithm_termination_info else 0,
-                "total_nodes": tree_data.get("total_nodes", 0) if not algorithm_termination_info else 0,
-                "max_depth": tree_data.get("max_depth", 0) if not algorithm_termination_info else 0,
-                "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
+                "total_visits": tree_data["total_visits"] if not algorithm_termination_info else 0,
+                "total_nodes": tree_data["total_nodes"] if not algorithm_termination_info else 0,
+                "max_depth": tree_data["max_depth"] if not algorithm_termination_info else 0,
+                "inferences": tree_data["inferences"] if not algorithm_termination_info else 0,
                 "algorithm_note": "No tree search performed" if algorithm_termination_info else "Full MCTS tree search"
             },
             "move_selection": {
@@ -499,29 +525,29 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             },
             "move_probabilities": {
                 "direct_policy": legal_move_probs,
-                "mcts_visits": tree_data.get("visit_counts", {}),
-                "mcts_probabilities": tree_data.get("mcts_probabilities", {})
+                "mcts_visits": tree_data["visit_counts"],
+                "mcts_probabilities": tree_data["mcts_probabilities"]
             },
             "comparison": {
                 "mcts_vs_direct": {}
             },
             "win_rate_analysis": {
-                "root_value": tree_data.get("v_curr_signed_root", 0.0),
-                "best_child_value": tree_data.get("v_curr_signed_best_child", 0.0),
-                "win_probability": tree_data.get("v_curr_signed_root", 0.5),  # Frontend will multiply by 100
-                "best_child_win_probability": tree_data.get("v_curr_signed_best_child", 0.5)
+                "root_value": tree_data["v_ptm_ref_signed_root"],
+                "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
+                "win_probability": root_win_prob,
+                "best_child_win_probability": best_child_win_prob
             },
             "move_sequence_analysis": {
-                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data.get("principal_variation", [])],
+                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data["principal_variation"]],
                 "alternative_lines": [],  # Placeholder - would need more complex tree analysis
-                "pv_length": len(tree_data.get("principal_variation", []))
+                "pv_length": len(tree_data["principal_variation"])
             },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                "top_mcts_move": max(tree_data.get("mcts_probabilities", {}).items(), key=lambda x: x[1])[0] if tree_data.get("mcts_probabilities") else None,
+                "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
                 "total_legal_moves": original_legal_moves_count,
-                "moves_explored": f"{tree_data.get('total_visits', 0)}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
-                "search_efficiency": tree_data.get("inferences", 0) / max(1, tree_data.get("total_visits", 1)) if not algorithm_termination_info else 0.0,
+                "moves_explored": f"{tree_data['total_visits']}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
+                "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
                 "algorithm_summary": algorithm
             },
                     "profiling_summary": {
@@ -558,9 +584,10 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         }
         
         # Add comparison data
+        mcts_probs = tree_data["mcts_probabilities"]
         for move_trmph in legal_move_probs:
             direct_prob = legal_move_probs.get(move_trmph, 0)
-            mcts_prob = tree_data.get("mcts_probabilities", {}).get(move_trmph, 0.0)
+            mcts_prob = mcts_probs.get(move_trmph, 0.0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
                 "mcts_probability": mcts_prob,

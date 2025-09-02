@@ -52,6 +52,12 @@ from collections import OrderedDict, deque
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
 from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
+from hex_ai.inference.mcts_utils import (
+    compute_win_probability_from_tree_data,
+    extract_principal_variation_from_tree,
+    calculate_tree_statistics,
+    format_mcts_tree_data_for_api
+)
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
@@ -88,7 +94,8 @@ DEFAULT_TERMINAL_MOVE_BOOST = 1.0
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
-DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.95
+# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
+DEFAULT_DEPTH_DISCOUNT_FACTOR = 1.00
 
 # ---- MCTS Invariant Wrappers ----
 def q_from_w_n(w: float, n: int) -> float:
@@ -175,11 +182,6 @@ DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
 DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
 DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
 
-# Default terminal detection parameters
-DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
-DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
-
-
 # ------------------ Terminal Move Detector ------------------
 class TerminalMoveDetector:
     """Centralized terminal move detection with consistent behavior."""
@@ -194,7 +196,7 @@ class TerminalMoveDetector:
             return False
         
         # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 1
+        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 2
         if len(node.state.move_history) < min_move_count:
             return False
         
@@ -564,6 +566,7 @@ class BaselineMCTS:
         self.stats_builder = None
 
     # ---------- Public API ----------
+    
     def run(self, root_state: HexGameState, verbose: int = 0) -> MCTSResult:
         """
         Run MCTS for cfg.sims simulations starting from root_state.
@@ -622,8 +625,8 @@ class BaselineMCTS:
         
         # Compute results directly
         move = self._compute_move(root, root_state, verbose)
-        tree_data = self._compute_tree_data(root)
-        win_probability = self._compute_win_probability(root, root_state)
+        tree_data = self.get_tree_data(root)
+        win_probability = self.get_win_probability(root, root_state)
         
         # Create base stats
         stats = self._get_stats_builder().create_final_stats(
@@ -653,6 +656,30 @@ class BaselineMCTS:
             algorithm_termination_info=None,
             win_probability=win_probability
         )
+
+    # ---------- Data Access (Getters) ----------
+    
+    def get_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
+        """
+        Get formatted tree data for API consumption.
+        
+        Returns:
+            Dictionary containing formatted tree data for API consumption
+        """
+        return format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH)
+
+    def get_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
+        """Get win probability for the current player."""
+        tree_data = self.get_tree_data(root)
+        return compute_win_probability_from_tree_data(tree_data)
+
+    def get_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
+        """Get the principal variation (best move sequence) from the MCTS tree."""
+        return extract_principal_variation_from_tree(root, max_length)
+
+    def get_tree_statistics(self, root: MCTSNode) -> Tuple[int, int]:
+        """Get tree traversal statistics."""
+        return calculate_tree_statistics(root)
 
     def _prepare_root_node(self, root_state: HexGameState, verbose: int) -> MCTSNode:
         """Prepare and initialize the root node for MCTS search."""
@@ -1256,14 +1283,6 @@ class BaselineMCTS:
                     print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
                 return terminal_move
 
-        # Check terminal moves (no fallback needed - already detected if appropriate)
-        if self.cfg.enable_terminal_move_detection:
-            terminal_move = self.terminal_detector.get_terminal_move(root)
-            if terminal_move:
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using terminal move: {terminal_move}")
-                return terminal_move
-
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
         if counts.sum() <= 0:
@@ -1296,171 +1315,8 @@ class BaselineMCTS:
                 a_idx = int(np.argmax(counts))
         return root.legal_moves[a_idx]
 
-    def _compute_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
-        """
-        Compute tree data for analysis.
-        
-        Returns:
-            Dictionary containing:
-            - v_ptm_ref_signed_root: v_ptm_ref_signed (player-to-move reference frame, +1 = root player wins, -1 = root player loses)
-            - v_ptm_ref_signed_best_child: v_ptm_ref_signed (player-to-move reference frame, +1 = root player wins, -1 = root player loses)
-            - visit_counts: Move visit counts in TRMPH format
-            - mcts_probabilities: Move probabilities based on visit counts
-            - Other tree statistics
-        """
-        # TODO: Consider caching this computation if called multiple times
-        if root.is_terminal:
-            return {
-                "visit_counts": {},
-                "mcts_probabilities": {},
-                "v_ptm_ref_signed_root": 0.0,
-                "v_ptm_ref_signed_best_child": 0.0,
-                "total_visits": 0,
-                "inferences": 0,
-                "total_nodes": 0,
-                "max_depth": 0
-            }
-
-        # Get visit counts and convert to TRMPH format
-        visit_counts = {}
-        mcts_probabilities = {}
-        total_visits = int(np.sum(root.N))
-        
-        for i, (row, col) in enumerate(root.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
-            visits = int(root.N[i])
-            visit_counts[move_trmph] = visits
-            
-            # Calculate MCTS probability (visit count / total visits)
-            if total_visits > 0:
-                mcts_probabilities[move_trmph] = visits / total_visits
-            else:
-                mcts_probabilities[move_trmph] = 0.0
-
-        # Get root value (average value of all children) - in player-to-move reference frame
-        # root.W contains accumulated values in player-to-move reference frame from backpropagation
-        # 
-        # This is from the ROOT player's perspective, representing the average value of all children.
-        # It's the average of "how good are all the moves for the root player"
-        if total_visits > 0:
-            v_ptm_ref_signed_root = float(np.sum(root.W) / total_visits)  # v_ptm_ref_signed: +1 = root player wins, -1 = root player loses
-        else:
-            v_ptm_ref_signed_root = 0.0
-
-        # Get best child value - in player-to-move reference frame
-        # root.Q contains average values (W/N) in player-to-move reference frame
-        # 
-        # IMPORTANT: This is from the ROOT player's perspective, not the child's perspective.
-        # 
-        # Here's what happens during backpropagation:
-        # 1. Leaf node evaluates position in Red's reference frame (e.g., +0.8 = Red winning)
-        # 2. During backprop, this gets converted to each node's player-to-move reference frame
-        # 3. At the root, root.Q[i] represents "how good is move i for the root player"
-        # 4. So v_ptm_ref_signed_best_child is the best move's value from the root player's perspective
-        # 5. This is NOT the child's evaluation of its own position
-        if len(root.Q) > 0:
-            v_ptm_ref_signed_best_child = float(np.max(root.Q))  # v_ptm_ref_signed: +1 = root player wins, -1 = root player loses
-        else:
-            v_ptm_ref_signed_best_child = 0.0
-
-        # Calculate total inferences (cache misses)
-        total_inferences = self.cache_misses
-
-        # Calculate tree traversal statistics
-        total_nodes, max_depth = self._calculate_tree_statistics(root)
-
-        # Get principal variation
-        principal_variation = self._extract_principal_variation(root, max_length=PRINCIPAL_VARIATION_MAX_LENGTH)
-
-        return {
-            "visit_counts": visit_counts,
-            "mcts_probabilities": mcts_probabilities,
-            "v_ptm_ref_signed_root": v_ptm_ref_signed_root,  # v_ptm_ref_signed: player-to-move reference frame (+1 = root player wins, -1 = root player loses)
-            "v_ptm_ref_signed_best_child": v_ptm_ref_signed_best_child,  # v_ptm_ref_signed: player-to-move reference frame (+1 = root player wins, -1 = root player loses)
-            "total_visits": total_visits,
-            "inferences": total_inferences,
-            "total_nodes": total_nodes,
-            "max_depth": max_depth,
-            "principal_variation": principal_variation
-        }
-
-    def _compute_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
-        """Compute win probability for the current player based on root value (edge conversion)."""
-        tree_data = self._compute_tree_data(root)
-        v_ptm_ref_signed_root = tree_data["v_ptm_ref_signed_root"]
-        
-        # Convert signed value to probability only at the edge (for external API)
-        # Root value is already in player-to-move reference frame from backpropagation
-        # +1 = current player wins, -1 = current player loses, 0 = neutral
-        p_ptm_prob_root = signed_to_prob(v_ptm_ref_signed_root)  # current player win probability
-        return p_ptm_prob_root
-
-    def _extract_principal_variation(self, root: MCTSNode, max_length: int = 10) -> List[Tuple[int, int]]:
-        """Extract the principal variation (best move sequence) from the MCTS tree."""
-        if root is None:
-            raise ValueError("Root node cannot be None")
-        if max_length <= 0:
-            raise ValueError(f"max_length must be positive, got {max_length}")
-        
-        if root.is_terminal:
-            return []
-
-        pv = []
-        current_node = root
-        
-        for _ in range(max_length):
-            if current_node.is_terminal or not current_node.is_expanded:
-                break
-                
-            # Find the move with highest visit count
-            if len(current_node.N) == 0:
-                break
-                
-            best_move_idx = int(np.argmax(current_node.N))
-            best_move = current_node.legal_moves[best_move_idx]
-            pv.append(best_move)
-            
-            # Move to the best child
-            child = current_node.children[best_move_idx]
-            if child is None:
-                break
-            current_node = child
-            
-        return pv
-
-    def _calculate_tree_statistics(self, root: MCTSNode) -> Tuple[int, int]:
-        """
-        Calculate tree traversal statistics.
-        
-        Args:
-            root: Root node of the tree
-            
-        Returns:
-            Tuple of (total_nodes, max_depth)
-        """
-        if root is None:
-            return 0, 0
-        
-        def count_nodes_and_depth(node: MCTSNode, current_depth: int) -> Tuple[int, int]:
-            if node is None:
-                return 0, current_depth - 1
-            
-            total_nodes = 1
-            max_depth = current_depth
-            
-            for child in node.children:
-                if child is not None:
-                    child_nodes, child_depth = count_nodes_and_depth(child, current_depth + 1)
-                    total_nodes += child_nodes
-                    max_depth = max(max_depth, child_depth)
-            
-            return total_nodes, max_depth
-        
-        return count_nodes_and_depth(root, 0)
-
-
-    # ---------- Internal ----------
-
+    # ---------- Internal Implementation ----------
+    
     def _get_stats_builder(self) -> MCTSStatsBuilder:
         """Get stats builder with current cache counts."""
         return MCTSStatsBuilder(self.cache_hits, self.cache_misses)

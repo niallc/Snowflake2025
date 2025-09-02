@@ -16,7 +16,7 @@ from hex_ai.inference.fixed_tree_search import (
     evaluate_leaf_nodes,
     minimax_backup
 )
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 from hex_ai.config import BOARD_SIZE
 
 
@@ -55,7 +55,7 @@ def manual_verification_test():
     print("Expected: 2 * 2 * 2 = 8 terminal nodes")
     
     # Create starting position
-    state = HexGameState()
+    state = make_empty_hex_state()
     print(f"\nStarting state:")
     print(f"Current player: {state.current_player} ({'Blue' if state.current_player == 0 else 'Red'})")
     
@@ -105,7 +105,7 @@ def main():
     model = SimpleModelInference(MODEL_PATH)
     
     # Create starting position
-    state = HexGameState()
+    state = make_empty_hex_state()
     print(f"Starting state: player {state.current_player}")
     
     # Build tree with small search

@@ -157,7 +157,7 @@ class SelfPlayEngine:
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
         
-        state = HexGameState()  # Always uses 13x13 board
+        state = make_empty_hex_state()  # Always uses 13x13 board
         
         # Apply opening move if provided
         if opening_move is not None:

@@ -18,7 +18,7 @@ from hex_ai.inference.board_utils import board_to_string, is_empty, place_piece
 from hex_ai.utils.format_conversion import (
     board_nxn_to_2nxn, board_nxn_to_3nxn, rowcol_to_trmph, split_trmph_moves, trmph_move_to_rowcol
 )
-from hex_ai.value_utils import apply_move_to_tensor, get_top_k_legal_moves, sample_move_by_value
+from hex_ai.value_utils import apply_move_to_tensor, get_top_k_legal_moves, sample_move_by_value, get_player_to_move_from_moves
 
 
 # Edge coordinates for Union-Find
@@ -78,13 +78,14 @@ class UnionFind:
         y_root = self.find(y)
         return x_root == y_root
 
+
 @dataclass(init=False)
 class HexGameState:
     """
     Represents the state of a Hex game using N×N character format.
     """
     board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1'))
-    _current_player: Player = field(default_factory=lambda: Player.BLUE, repr=False)
+    _current_player: Player = field(init=False, repr=False)  # No default - must be set in __init__
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
     _winner: Optional[WinnerEnum] = field(default=None, repr=False)
@@ -92,25 +93,15 @@ class HexGameState:
     # Operation stack for undo functionality
     _undo_stack: List[Dict[str, Any]] = field(default_factory=list, init=False)
 
-    def __init__(self, board: Optional[np.ndarray] = None, current_player: Optional[int] = None,
-                 _current_player: Optional[Player] = None, move_history: Optional[List[Tuple[int, int]]] = None,
+    def __init__(self, _current_player: Player, board: Optional[np.ndarray] = None,
+                 move_history: Optional[List[Tuple[int, int]]] = None,
                  game_over: bool = False, winner: Optional[WinnerEnum] = None):
         # Initialize board
         self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
         # Initialize current player with compatibility for legacy int
-        if _current_player is not None:
-            if not isinstance(_current_player, Player):
-                raise TypeError(f"_current_player must be Player, got {type(_current_player)}")
-            self._current_player = _current_player
-        elif current_player is not None:
-            if current_player == Player.BLUE.value:
-                self._current_player = Player.BLUE
-            elif current_player == Player.RED.value:
-                self._current_player = Player.RED
-            else:
-                raise ValueError(f"{current_player} is not a valid Player")
-        else:
-            self._current_player = Player.BLUE
+        if not isinstance(_current_player, Player):
+            raise TypeError(f"_current_player must be Player, got {type(_current_player)}")
+        self._current_player = _current_player
         # Initialize other fields
         self.move_history = move_history.copy() if move_history is not None else []
         self.game_over = game_over
@@ -266,8 +257,8 @@ class HexGameState:
         new_board = place_piece(self.board, row, col, piece)
         new_move_history = self.move_history + [(row, col)]
         new_state = HexGameState(
-            board=new_board,
             _current_player=Player.RED if self._current_player == Player.BLUE else Player.BLUE,
+            board=new_board,
             move_history=new_move_history,
             game_over=False,
             winner=None
@@ -453,7 +444,14 @@ class HexGameState:
             raise ValueError("Invalid TRMPH format")
         moves_str = trmph[4:]  # Remove "#13," prefix
         moves = split_trmph_moves(moves_str)
-        state = cls()
+        
+        
+        # First create an EMPTY BOARD, then add moves to it.
+        # Blue always starts first, so we always begin with Player.BLUE
+        # The moves will be applied in sequence (blue, red, blue, red, ...)
+        state = make_empty_hex_state()
+        
+        # Apply all moves
         for move in moves:
             row, col = trmph_move_to_rowcol(move)
             state = state.make_move(row, col)
@@ -482,7 +480,7 @@ class HexGameEngine:
     
     def reset(self) -> HexGameState:
         """Start a new game."""
-        return HexGameState()
+        return make_empty_hex_state()
     
     def make_move(self, state: HexGameState, row: int, col: int) -> HexGameState:
         """
@@ -641,4 +639,16 @@ def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
         _, value_signed = model.simple_infer(temp_state.board)
         move_values.append(value_signed)
     chosen_idx = sample_move_by_value(move_values, temperature)
-    return topk_moves[chosen_idx] 
+    return topk_moves[chosen_idx]
+
+
+def make_empty_hex_state() -> HexGameState:
+    """Create an empty Hex game state with Blue as the starting player.
+    
+    This is the standard way to start a new game. Blue always goes first
+    in Hex by convention.
+    
+    Returns:
+        A new HexGameState with an empty board and Blue to play
+    """
+    return HexGameState(Player.BLUE) 

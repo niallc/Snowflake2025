@@ -1,11 +1,11 @@
 import pytest
 import numpy as np
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 from hex_ai.enums import Piece, Player, Winner
 
 @pytest.fixture
 def empty_state():
-    return HexGameState()
+    return make_empty_hex_state()
 
 def test_initial_state(empty_state):
     state = empty_state
@@ -29,7 +29,7 @@ def test_make_move_and_switch_player(empty_state):
 
 def test_blue_win_detection():
     # Blue wins with a vertical line in column 0
-    state = HexGameState()
+    state = make_empty_hex_state()
     for row in range(13):
         state = state.make_move(row, 0)
         if row < 12:
@@ -40,7 +40,7 @@ def test_blue_win_detection():
 def test_trmph_serialization_and_deserialization():
     # Play a few moves, serialize to trmph, then restore
     moves = [(0, 0), (0, 1), (1, 0), (1, 1)]
-    state = HexGameState()
+    state = make_empty_hex_state()
     for move in moves:
         state = state.make_move(*move)
     trmph = state.to_trmph()
@@ -54,7 +54,7 @@ def test_trmph_serialization_and_deserialization():
 def test_midgame_no_winner():
     # Play a few moves, but no winner
     moves = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 2)]
-    state = HexGameState()
+    state = make_empty_hex_state()
     for move in moves:
         state = state.make_move(*move)
     assert not state.game_over
