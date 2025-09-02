@@ -5,6 +5,7 @@ This module contains utilities that are specific to MCTS tree operations,
 separate from general value processing utilities.
 """
 
+import math
 import numpy as np
 from typing import List, Tuple, Dict, Any
 
@@ -122,7 +123,7 @@ def should_enable_detailed_exploration(num_simulations: int) -> bool:
     return num_simulations <= DETAILED_EXPLORATION_THRESHOLD
 
 
-def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray, 
+def create_exploration_step_info(node, action_idx: int, puct_scores: List[float], 
                                 selected_action: int, depth: int, simulation_num: int, 
                                 path_to_node: List[str] = None) -> Dict[str, Any]:
     """
@@ -141,6 +142,8 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray,
     """
     # Get move coordinates
     move_coords = node.legal_moves[action_idx]
+    # Convert numpy coordinates to Python tuples for JSON serialization
+    move_coords_python = (int(move_coords[0]), int(move_coords[1]))
     move_str = f"{chr(97 + move_coords[1])}{move_coords[0] + 1}"
     
     # Get top PUCT scores for this node
@@ -149,34 +152,59 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: np.ndarray,
         if i < len(node.legal_moves):
             move = node.legal_moves[i]
             move_name = f"{chr(97 + move[1])}{move[0] + 1}"
+            
+            # Ensure all numeric values are finite for JSON serialization
+            safe_score = float(score) if math.isfinite(float(score)) else 0.0
+            safe_visits = int(node.N[i]) if node.N[i] >= 0 else 0
+            safe_q_value = float(node.Q[i]) if math.isfinite(float(node.Q[i])) else 0.0
+            safe_prior = float(node.P[i]) if math.isfinite(float(node.P[i])) else 0.0
+            
             top_scores.append({
                 'move': move_name,
-                'score': float(score),
-                'visits': int(node.N[i]),
-                'q_value': float(node.Q[i]),
-                'prior': float(node.P[i])
+                'score': safe_score,
+                'visits': safe_visits,
+                'q_value': safe_q_value,
+                'prior': safe_prior
             })
     
     # Sort by PUCT score
     top_scores.sort(key=lambda x: x['score'], reverse=True)
     
     step_info = {
-        'simulation': simulation_num,
-        'depth': depth,
-        'node_hash': node.state_hash,
-        'to_play': node.to_play.value,
-        'legal_moves': [f"{chr(97 + m[1])}{m[0] + 1}" for m in node.legal_moves],
+        'simulation': int(simulation_num),
+        'depth': int(depth),
+        'node_hash': int(node.state_hash),  # Convert to Python int
+        'to_play': int(node.to_play.value),  # Convert to Python int
+        'legal_moves': [f"{chr(97 + int(m[1]))}{int(m[0]) + 1}" for m in node.legal_moves],
         'top_puct_scores': top_scores[:5],  # Top 5 scores
-        'selected_action': action_idx,
+        'selected_action': int(action_idx),
         'selected_move': move_str,
-        'selected_move_coords': move_coords,
-        'is_terminal': node.is_terminal,
-        'winner': node.winner.value if node.winner else None,
+        'selected_move_coords': move_coords_python,
+        'is_terminal': bool(node.is_terminal),  # Convert to Python bool
+        'winner': int(node.winner.value) if node.winner else None,  # Convert to Python int
         'path_to_node': path_to_node or []
     }
     
     return step_info
 
+
+def sanitize_numeric_values(obj):
+    """
+    Recursively sanitize numeric values to ensure they are JSON-serializable.
+    Replaces Infinity, -Infinity, and NaN with safe fallback values.
+    """
+    if isinstance(obj, dict):
+        return {k: sanitize_numeric_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_numeric_values(item) for item in obj]
+    elif isinstance(obj, float):
+        if not math.isfinite(obj):
+            return 0.0  # Safe fallback for infinite/NaN values
+        return obj
+    elif isinstance(obj, int):
+        return obj
+    else:
+        return obj
 
 def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any], 
                                          detailed_exploration_enabled: bool,
@@ -195,11 +223,13 @@ def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any],
         Tree data with detailed exploration information added
     """
     if detailed_exploration_enabled and exploration_trace:
+        # Sanitize the exploration trace to ensure all numeric values are JSON-serializable
+        sanitized_trace = sanitize_numeric_values(exploration_trace)
         tree_data['detailed_exploration'] = {
             'enabled': True,
             'simulation_threshold': DETAILED_EXPLORATION_THRESHOLD,
             'total_simulations': simulation_count,
-            'trace': exploration_trace
+            'trace': sanitized_trace
         }
     else:
         tree_data['detailed_exploration'] = {'enabled': False}
