@@ -1287,9 +1287,9 @@ function displayDetailedExploration(debugInfo) {
           
           if (step.node_scores && step.node_scores.length > 0) {
             output += `\nStep ${index + 1}.1: UCB1 Scoring for Node Selection\n`;
-            output += `   ⚠️  APPROXIMATION: UCB1 = Q + C×√(1/N_node) for each available node\n`;
-            output += `   Note: This is a simplified formula for debug display only. The actual MCTS algorithm\n`;
-            output += `   uses the full UCB1 formula with parent visit counts.\n`;
+            output += `   ⚠️  APPROX UCB1 = Q + C×√(1/N_node) for each available node\n`;
+            // output += `   Note: This is a simplified formula for debug display only. The actual MCTS algorithm\n`;
+            // output += `   uses the full UCB1 formula with parent visit counts.\n`;
             step.node_scores.forEach((nodeScore, i) => {
               const isSelected = nodeScore.is_selected ? '→ ' : '  ';
               output += `${isSelected}Depth ${nodeScore.depth}: UCB1≈${nodeScore.ucb1_approximation.toFixed(3)}\n`;
@@ -1340,6 +1340,16 @@ function displayDetailedExploration(debugInfo) {
           output += `\nStep ${index + 1}.3: Action Selection\n`;
           output += `   Algorithm: Choose move with highest PUCT score for tree traversal\n`;
           output += `└─ Selected: ${step.selected_move} at (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
+          
+          // Add what happens next in the algorithm
+          output += `\nStep ${index + 1}.4: Next Algorithm Steps\n`;
+          output += `   After selecting this move, the algorithm will:\n`;
+          output += `   1. Check if a child node exists for this move\n`;
+          output += `   2. If not, expand the tree by creating a new child node\n`;
+          output += `   3. If yes, traverse to the existing child node\n`;
+          output += `   4. Continue selection/expansion until reaching an unexpanded node\n`;
+          output += `   5. Run a simulation (rollout) from that node\n`;
+          output += `   6. Backpropagate the result up the tree\n`;
         }
         }
         
@@ -1362,6 +1372,12 @@ function displayDetailedExploration(debugInfo) {
     output += `├─ Child Expansion (Depth 1+): Creating/visiting nodes deeper in the tree\n`;
     output += `├─ PUCT Scoring: Q (value) + C×√(N_total)/√(N) (exploration) + P (prior)\n`;
     output += `└─ Tree Growth: Each simulation can expand the tree to new depths\n\n`;
+    output += `What Each Step Shows:\n`;
+    output += `├─ Node Selection: Which node in the tree to explore next (using UCB1)\n`;
+    output += `├─ Action Selection: Which move to make from that node (using PUCT)\n`;
+    output += `├─ Tree Traversal: How the algorithm navigates the existing tree\n`;
+    output += `├─ Expansion: When and where new nodes are created\n`;
+    output += `└─ Simulation: The rollout process from unexpanded nodes\n\n`;
     output += `Note: Depth 0 = Root node, Depth 1+ = Child nodes in the tree.\n`;
     output += `Each step shows the algorithm's decision-making process.\n\n`;
     
@@ -1372,6 +1388,11 @@ function displayDetailedExploration(debugInfo) {
     output += `├─ C: Exploration constant (${mctsData?.algorithm_info?.parameters?.exploration_constant || 'unknown'})\n`;
     output += `├─ N: Visit count for this action\n`;
     output += `└─ P: Prior probability from neural network\n\n`;
+    output += `Understanding the Scores:\n`;
+    output += `├─ High PUCT Score: Move is promising (high Q-value, low visits, or high prior)\n`;
+    output += `├─ Low PUCT Score: Move is less promising or already well-explored\n`;
+    output += `├─ UCB1 (Node Selection): Balances exploration of different tree regions\n`;
+    output += `└─ PUCT (Action Selection): Balances exploitation of known good moves vs exploration of new ones\n\n`;
     
     // Add tree statistics if available
     if (treeData) {
