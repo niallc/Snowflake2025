@@ -641,6 +641,130 @@ def select_policy_move(state, model, temperature: float = 1.0) -> Tuple[int, int
         return legal_moves[chosen_idx] 
 
 # =============================
+# Value-Semantics Abstraction (Step 1: Contract Establishment)
+# =============================
+
+def to_prob(v_signed: float) -> float:
+    """
+    Map a signed value v ∈ [-1,1] to probability p ∈ [0,1], with 0.5 == neutral.
+    
+    Args:
+        v_signed: Signed value in [-1, 1] range where +1 = certain Red win, -1 = certain Blue win
+        
+    Returns:
+        Probability in [0, 1] range where 0.5 = neutral
+    """
+    return 0.5 * (v_signed + 1.0)
+
+def to_signed(p_prob: float) -> float:
+    """
+    Map probability p ∈ [0,1] to signed value v ∈ [-1,1], with 0 == neutral.
+    
+    Args:
+        p_prob: Probability in [0, 1] range where 0.5 = neutral
+        
+    Returns:
+        Signed value in [-1, 1] range where +1 = certain Red win, -1 = certain Blue win
+    """
+    return 2.0 * p_prob - 1.0
+
+def signed_for_player_to_move(v_red_signed: float, player) -> float:
+    """
+    Given Red's signed value v_red ∈ [-1,1], return value from 'player-to-move' perspective.
+    If RED to move: return v_red; if BLUE to move: return -v_red.
+    
+    Args:
+        v_red_signed: Red's signed value in [-1, 1] range
+        player: Player enum (RED or BLUE)
+        
+    Returns:
+        Signed value from player-to-move perspective in [-1, 1] range
+    """
+    return v_red_signed if player == Player.RED else -v_red_signed
+
+def prob_for_player_to_move(p_red: float, player) -> float:
+    """
+    Given Red's win probability p_red ∈ [0,1], return probability from 'player-to-move' perspective.
+    If RED to move: p_red; else: 1 - p_red.
+    
+    Args:
+        p_red: Red's win probability in [0, 1] range
+        player: Player enum (RED or BLUE)
+        
+    Returns:
+        Win probability from player-to-move perspective in [0, 1] range
+    """
+    return p_red if player == Player.RED else (1.0 - p_red)
+
+def apply_depth_discount_signed(v: float, gamma: float, dist: int) -> float:
+    """
+    Signed-space discount: shrink v ∈ [-1,1] toward 0 (neutral) by gamma^dist.
+    
+    Args:
+        v: A signed value (either Red-centric or already flipped to player-to-move)
+        gamma: Discount factor in (0,1]; gamma=1 keeps v unchanged; smaller gamma shrinks faster
+        dist: Non-negative integer 'distance' along the path (prefer distance-to-leaf over absolute depth
+              if the intent is to prefer shorter wins/losses during backup)
+        
+    Returns:
+        (gamma ** dist) * v (still in [-1,1])
+    """
+    return (gamma ** max(0, int(dist))) * v
+
+def apply_depth_discount_toward_neutral_prob(p: float, gamma: float, dist: int) -> float:
+    """
+    Probability-space analog: shrink p ∈ [0,1] toward 0.5 by gamma^dist.
+    p' = 0.5 + (gamma ** dist) * (p - 0.5)
+    
+    Args:
+        p: Probability in [0, 1] range
+        gamma: Discount factor in (0,1]
+        dist: Non-negative integer distance
+        
+    Returns:
+        Discounted probability in [0, 1] range, shrunk toward 0.5
+    """
+    return 0.5 + (gamma ** max(0, int(dist))) * (p - 0.5)
+
+def distance_to_leaf(current_depth: int, leaf_depth: int) -> int:
+    """
+    Prefer this over absolute node depth when discounting backups from a single simulation:
+    dist = leaf_depth - current_depth (>= 0).
+    This aligns with "prefer shorter wins" without penalizing the static position of a node in the tree.
+    
+    Args:
+        current_depth: Current node's depth in the tree
+        leaf_depth: Leaf node's depth in the tree
+        
+    Returns:
+        Distance from current node to leaf (>= 0)
+    """
+    return max(0, int(leaf_depth) - int(current_depth))
+
+def backprop_value_current_behavior(p_red_leaf: float, player_to_move, gamma: float, depth_or_dist: int) -> float:
+    """
+    Illustrative only: replicate current behavior exactly (probability space),
+    but route through the abstraction so we can flip to signed in a later step.
+    
+    Args:
+        p_red_leaf: Red's win probability from leaf evaluation
+        player_to_move: Player whose turn it is to move
+        gamma: Discount factor
+        depth_or_dist: Depth or distance for discounting
+        
+    Returns:
+        Value for backpropagation (current probability-space behavior)
+    """
+    # Current code uses probability space for v_node:
+    v_node_prob = prob_for_player_to_move(p_red_leaf, player_to_move)
+    # If discounting is enabled, keep current behavior or switch to neutral-centered variant later:
+    #   - If the existing code multiplies by gamma^depth directly on probabilities, mirror that here.
+    #   - Otherwise, prefer the neutral-centered version below (to be enabled in a later step).
+    # Neutral-centered (recommended for later):
+    # v_node_prob = apply_depth_discount_toward_neutral_prob(v_node_prob, gamma, depth_or_dist)
+    return v_node_prob
+
+# =============================
 # Move Application Utilities
 # =============================
 

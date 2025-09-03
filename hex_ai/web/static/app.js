@@ -90,7 +90,7 @@ let state = {
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
-  red_model_id: 'model1',
+  red_model_id: 'model2',  // Use different model for red by default
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
@@ -706,9 +706,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       redSelect.appendChild(option);
     });
     
-    // Set default selections
-    blueSelect.value = state.blue_model_id;
-    redSelect.value = state.red_model_id;
+    // Set default selections - check if the default values exist in the dropdown
+    if (state.available_models.some(model => model.id === state.blue_model_id)) {
+      blueSelect.value = state.blue_model_id;
+    } else if (state.available_models.length > 0) {
+      // Fallback to first available model
+      state.blue_model_id = state.available_models[0].id;
+      blueSelect.value = state.blue_model_id;
+      console.log(`Blue model not found, using: ${state.blue_model_id}`);
+    }
+    
+    if (state.available_models.some(model => model.id === state.red_model_id)) {
+      redSelect.value = state.red_model_id;
+    } else if (state.available_models.length > 0) {
+      // Fallback to first available model if red model not found
+      const redFallbackIndex = Math.min(1, state.available_models.length - 1);
+      state.red_model_id = state.available_models[redFallbackIndex].id;
+      redSelect.value = state.red_model_id;
+      console.log(`Red model not found, using: ${state.red_model_id}`);
+    }
+    
+    console.log(`Model dropdowns initialized. Available models: ${state.available_models.map(m => m.id).join(', ')}`);
+    console.log(`Selected models - Blue: ${state.blue_model_id}, Red: ${state.red_model_id}`);
   } catch (err) {
     console.error('Failed to load models:', err);
   }
