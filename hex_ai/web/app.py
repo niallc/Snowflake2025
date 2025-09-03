@@ -603,7 +603,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "winner": winner_to_color(state.winner) if state.winner is not None else None,
             "move_made": selected_move_trmph,
             "game_over": state.game_over,
-            "mcts_debug_info": mcts_debug_info
+            "mcts_debug_info": mcts_debug_info,
+            "tree_data": tree_data
         }
         
         # Validate that no None values exist in numeric fields that frontend expects
@@ -649,6 +650,15 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"Move made: {result['move_made']}")
         app.logger.info(f"Game over: {result['game_over']}")
         app.logger.info(f"Winner: {result['winner']}")
+        
+        # Log detailed exploration info if available
+        if 'tree_data' in result and 'detailed_exploration' in result['tree_data']:
+            de = result['tree_data']['detailed_exploration']
+            app.logger.info(f"Detailed exploration: enabled={de.get('enabled')}, "
+                           f"simulations={de.get('total_simulations')}, "
+                           f"trace_length={len(de.get('trace', []))}")
+        else:
+            app.logger.info("No detailed exploration data found in tree_data")
         
         # Log response size for debugging
         import json
