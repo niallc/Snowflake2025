@@ -654,6 +654,171 @@ class BaselineMCTS:
         
         self.exploration_trace.append(selection_info)
 
+    def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
+        """Record the start of a descent."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'descent_start',
+            'sim': int(sim),
+            'root_visits': int(root_visits),
+            'gumbel_forced': bool(gumbel_forced)
+        }
+        if pv_hint:
+            event['pv_hint'] = pv_hint
+        
+        self.exploration_trace.append(event)
+
+    def _record_forced_root_action(self, sim: int, tensor_action: int, legal_at_root: bool) -> None:
+        """Record when Gumbel forces a root action."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'forced_root_action',
+            'sim': int(sim),
+            'tensor_action': int(tensor_action),
+            'legal_at_root': bool(legal_at_root)
+        }
+        
+        if not legal_at_root:
+            event['note'] = 'masked_illegal'
+        
+        self.exploration_trace.append(event)
+
+    def _record_select_action(self, depth: int, n_total: float, q: float, p: float, n: int, u: float, 
+                            score: float, terminal_flag_for_child: bool = False, note: Optional[str] = None) -> None:
+        """Record a PUCT action selection."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'select_action',
+            'depth': int(depth),
+            'n_total': float(n_total),
+            'q': float(q),
+            'p': float(p),
+            'n': int(n),
+            'u': float(u),
+            'score': float(score),
+            'terminal_flag_for_child': bool(terminal_flag_for_child)
+        }
+        
+        if note:
+            event['note'] = str(note)
+        
+        self.exploration_trace.append(event)
+
+    def _record_node_realized(self, depth: int, move: str, child_hash: int) -> None:
+        """Record when a child node is first created."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'node_realized',
+            'depth': int(depth),
+            'move': str(move),
+            'child_hash': int(child_hash)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_leaf_selected(self, depth: int, node_hash: int, leaf_reason: str, T: int, U: int, distinct_target: int) -> None:
+        """Record when a leaf is selected during descent."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'leaf_selected',
+            'depth': int(depth),
+            'node_hash': int(node_hash),
+            'leaf_reason': str(leaf_reason),
+            'T': int(T),
+            'U': int(U),
+            'distinct_target': int(distinct_target)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_batch_flush(self, reason: str, T: int, U: int, distinct_target: int, select_budget: int) -> None:
+        """Record when a batch is flushed early."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'batch_flush',
+            'reason': str(reason),
+            'T': int(T),
+            'U': int(U),
+            'distinct_target': int(distinct_target),
+            'select_budget': int(select_budget)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_nn_eval_start(self, batch_size: int, to_eval: int, distinct: int, cache_hits_in_batch: int) -> None:
+        """Record when neural network evaluation starts."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'nn_eval_start',
+            'batch_size': int(batch_size),
+            'to_eval': int(to_eval),
+            'distinct': int(distinct),
+            'cache_hits_in_batch': int(cache_hits_in_batch)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_nn_eval_done(self, effective_batch_size: int, value_range: List[float], 
+                            mean_policy_entropy: float, time_ms: float) -> None:
+        """Record when neural network evaluation completes."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'nn_eval_done',
+            'effective_batch_size': int(effective_batch_size),
+            'value_range': [float(value_range[0]), float(value_range[1])],
+            'mean_policy_entropy': float(mean_policy_entropy),
+            'time_ms': float(time_ms)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_expand_node(self, depth: int, node_hash: int, children_count: int, 
+                           prior_mass_top3: float, value_signed_red_ref: float) -> None:
+        """Record when a node is expanded."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'expand_node',
+            'depth': int(depth),
+            'node_hash': int(node_hash),
+            'children_count': int(children_count),
+            'prior_mass_top3': float(prior_mass_top3),
+            'value_signed_red_ref': float(value_signed_red_ref)
+        }
+        
+        self.exploration_trace.append(event)
+
+    def _record_backprop_update(self, path_len: int, root_q_before: float, root_q_after: float) -> None:
+        """Record when backpropagation updates the root."""
+        if not self.detailed_exploration_enabled:
+            return
+        
+        event = {
+            'type': 'backprop_update',
+            'path_len': int(path_len),
+            'root_q_before': float(root_q_before),
+            'root_q_after': float(root_q_after)
+        }
+        
+        self.exploration_trace.append(event)
+
     # ---------- Public API ----------
     
     def run(self, root_state: HexGameState, verbose: int = 0) -> MCTSResult:
@@ -1090,22 +1255,55 @@ class BaselineMCTS:
             node = root
             path: List[Tuple[MCTSNode, int]] = []
             
-            # DEBUG TRACKING ONLY: Record node selection decisions for detailed exploration
-            # This does NOT affect the actual MCTS algorithm - it's purely for display purposes
+            # Record descent start for detailed exploration
             if self.detailed_exploration_enabled:
-                # Collect all available nodes (root and its children)
-                available_nodes = [root]
-                if root.is_expanded:
-                    available_nodes.extend([child for child in root.children if child is not None])
-                self._record_node_selection(available_nodes, root, self.simulation_count)
+                # Get root visit count
+                root_visits = int(np.sum(root.N)) if root.N is not None else 0
+                # Check if Gumbel is forcing actions
+                gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
+                # Get PV hint (first 2-3 moves)
+                pv_hint = None
+                if root.is_expanded and len(root.children) > 0:
+                    pv_moves = []
+                    current = root
+                    for _ in range(3):  # Get up to 3 moves
+                        if current.is_expanded and len(current.children) > 0:
+                            best_child_idx = int(np.argmax(current.N))
+                            if best_child_idx < len(current.legal_moves):
+                                r, c = current.legal_moves[best_child_idx]
+                                pv_moves.append(f"{chr(97 + c)}{r + 1}")
+                                current = current.children[best_child_idx]
+                                if current is None:
+                                    break
+                        else:
+                            break
+                    if pv_moves:
+                        pv_hint = pv_moves
+                
+                self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
+            
+
 
             # Gumbel specific code path: Pop the forced action for THIS descent (if any)
             forced_a_full = force_q.popleft() if force_q else None
+            
+            # Record forced root action for detailed exploration
+            if self.detailed_exploration_enabled and forced_a_full is not None:
+                legal_at_root = forced_a_full in node.legal_indices
+                self._record_forced_root_action(self.simulation_count, forced_a_full, legal_at_root)
 
             while True:
                 if node.is_terminal:
                     leaves.append(node)
                     paths.append(path.copy())
+                    
+                    # Record leaf selection for detailed exploration
+                    if self.detailed_exploration_enabled:
+                        self._record_leaf_selected(
+                            node.depth, node.state_hash, "terminal", 
+                            len(leaves), len(distinct_hashes), distinct_target
+                        )
+                    
                     break
                 if not node.is_expanded:
                     leaves.append(node)
@@ -1115,14 +1313,29 @@ class BaselineMCTS:
                     if node.state_hash not in self.eval_cache and not node.is_terminal:
                         distinct_hashes.add(node.state_hash)
 
+                    # Record leaf selection for detailed exploration
+                    if self.detailed_exploration_enabled:
+                        self._record_leaf_selected(
+                            node.depth, node.state_hash, "unexpanded", 
+                            len(leaves), len(distinct_hashes), distinct_target
+                        )
+
                     # Flush triggers, U & T are helper variables to determnd when to call the network
                     # (nothing to do with the PUCT formula) 
                     U = len(distinct_hashes)
                     T = len(leaves)
                     if U >= distinct_target:
+                        # Record batch flush for detailed exploration
+                        if self.detailed_exploration_enabled:
+                            self._record_batch_flush("distinct_target_reached", T, U, distinct_target, select_budget)
+                        
                         timing_tracker.end_timing("select")
                         return leaves, paths
                     if T >= 16 and U / max(1, T) < 0.5:
+                        # Record batch flush for detailed exploration
+                        if self.detailed_exploration_enabled:
+                            self._record_batch_flush("low_distinct_ratio", T, U, distinct_target, select_budget)
+                        
                         timing_tracker.end_timing("select")
                         return leaves, paths
                     break
@@ -1171,20 +1384,13 @@ class BaselineMCTS:
                     timing_tracker.end_timing("state_creation")
                     node.children[loc_idx] = child
                     
-                    # Record child node exploration if detailed tracking is enabled
+                    # Record node realization for detailed exploration
                     if self.detailed_exploration_enabled:
-                        # Record the child node's initial state
-                        child_puct_scores = np.zeros(len(child.legal_moves))
-                        # Convert numpy types to Python types for JSON serialization
-                        child_puct_scores_python = [float(s) for s in child_puct_scores]
-                        # Extract move sequence from path
-                        move_sequence = []
-                        for path_node, path_action in path:
-                            if path_action < len(path_node.legal_moves):
-                                r, c = path_node.legal_moves[path_action]
-                                move_str = f"{chr(97 + c)}{r + 1}"
-                                move_sequence.append(move_str)
-                        self._record_exploration_step(child, 0, child_puct_scores_python, 0, child.depth, self.simulation_count, move_sequence)
+                        r, c = node.legal_moves[loc_idx]
+                        move_str = f"{chr(97 + c)}{r + 1}"
+                        self._record_node_realized(child.depth, move_str, child.state_hash)
+                    
+
 
                 node = child
 
@@ -1192,6 +1398,10 @@ class BaselineMCTS:
                 if len(leaves) >= select_budget:
                     break
 
+        # Record budget_full batch flush for detailed exploration
+        if self.detailed_exploration_enabled:
+            self._record_batch_flush("budget_full", len(leaves), len(distinct_hashes), distinct_target, select_budget)
+        
         timing_tracker.end_timing("select")
         return leaves, paths
 
@@ -1292,6 +1502,18 @@ class BaselineMCTS:
         if not encodings:
             return
         
+        # Record NN eval start for detailed exploration
+        if self.detailed_exploration_enabled:
+            # Calculate cache hits for this batch
+            cache_hits_in_batch = 0
+            for leaf_idx in need_eval_idxs:
+                if leaves[leaf_idx].state_hash in self.eval_cache:
+                    cache_hits_in_batch += 1
+            
+            self._record_nn_eval_start(
+                len(leaves), len(need_eval_idxs), len(encodings), cache_hits_in_batch
+            )
+        
         batch_tensor = torch.stack(encodings, dim=0)
         board_size = int(batch_tensor.shape[-1])
         action_size = board_size * board_size
@@ -1302,6 +1524,31 @@ class BaselineMCTS:
         # Record performance metrics
         self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
         timing_tracker.record_batch_metrics(tm)
+        
+        # Record NN eval done for detailed exploration
+        if self.detailed_exploration_enabled:
+            # Calculate value range and policy entropy
+            values = [float(v.item()) for v in value_cpu]
+            value_range = [min(values), max(values)]
+            
+            # Calculate mean policy entropy
+            mean_entropy = 0.0
+            if len(policy_cpu) > 0:
+                entropies = []
+                for pol in policy_cpu:
+                    pol_np = pol.numpy()
+                    # Convert to probabilities and calculate entropy
+                    pol_probs = softmax_np(pol_np)
+                    entropy = -np.sum(pol_probs * np.log(pol_probs + 1e-8))
+                    entropies.append(entropy)
+                mean_entropy = float(np.mean(entropies))
+            
+            # Get inference time
+            time_ms = tm.get("forward_ms", 0.0)
+            
+            self._record_nn_eval_done(
+                len(need_eval_idxs), value_range, mean_entropy, time_ms
+            )
         
         # Cache results and expand nodes
         for j, leaf_idx in enumerate(need_eval_idxs):
@@ -1341,6 +1588,14 @@ class BaselineMCTS:
             if self.detailed_exploration_enabled:
                 self.simulation_count += 1
             
+            # Record backprop update for detailed exploration
+            if self.detailed_exploration_enabled:
+                # Get root Q before backprop
+                root = path[0][0] if path else None
+                root_q_before = 0.0
+                if root and root.is_expanded and len(root.Q) > 0:
+                    root_q_before = float(np.max(root.Q))
+            
             # Determine signed value for this leaf (always in Red's reference frame: +1 = Red win, -1 = Blue win)
             if leaf.is_terminal:
                 v_red_signed = self._get_terminal_value(leaf)
@@ -1349,6 +1604,18 @@ class BaselineMCTS:
             
             # Backpropagate Red's signed value along path (will be flipped to player-to-move reference frame during backprop)
             self._backpropagate_path(path, v_red_signed, leaf.depth)
+            
+            # Record backprop update for detailed exploration
+            if self.detailed_exploration_enabled:
+                # Get root Q after backprop
+                root_q_after = 0.0
+                if root and root.is_expanded and len(root.Q) > 0:
+                    root_q_after = float(np.max(root.Q))
+                
+                self._record_backprop_update(
+                    len(path), root_q_before, root_q_after
+                )
+            
             simulations_completed += 1
         
         timing_tracker.end_timing("backprop")
@@ -1507,6 +1774,26 @@ class BaselineMCTS:
         legal_logits = logits[node.legal_indices] if len(node.legal_indices) > 0 else np.array([0.0], dtype=np.float64)
         node.P = softmax_np(legal_logits)
         node.is_expanded = True
+        
+        # Record expand node for detailed exploration
+        if self.detailed_exploration_enabled:
+            # Calculate top3 prior mass
+            if len(node.P) >= 3:
+                top3_indices = np.argsort(node.P)[-3:]
+                prior_mass_top3 = float(np.sum(node.P[top3_indices]))
+            else:
+                prior_mass_top3 = float(np.sum(node.P))
+            
+            # Get value from cache (should be available since we just put it there)
+            value_signed_red_ref = 0.0
+            cached = self._get_from_cache(node.state_hash)
+            if cached:
+                _, value_signed_red_ref = cached
+            
+            self._record_expand_node(
+                node.depth, node.state_hash, len(node.legal_moves),
+                prior_mass_top3, value_signed_red_ref
+            )
 
     def _select_child_puct(self, node: MCTSNode, current_depth: int = 0) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
@@ -1528,24 +1815,20 @@ class BaselineMCTS:
             if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
                 terminal_indices = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
                 result = terminal_indices[0]  # Return first terminal move
-                # Record exploration step for detailed tracking (early return case)
+                # Record select action for detailed exploration (degenerate case)
                 if self.detailed_exploration_enabled:
-                    # Create dummy PUCT scores for recording
-                    dummy_scores = np.zeros(len(node.legal_moves))
-                    dummy_scores[result] = 1.0  # Mark selected move
-                    # Convert numpy types to Python types for JSON serialization
-                    dummy_scores_python = [float(s) for s in dummy_scores]
-                    self._record_exploration_step(node, result, dummy_scores_python, result, current_depth, self.simulation_count)
+                    self._record_select_action(
+                        current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+                        terminal_flag_for_child=True, note="degenerate_argmax_p"
+                    )
                 return result
             result = int(np.argmax(node.P))
-            # Record exploration step for detailed tracking (early return case)
+            # Record select action for detailed exploration (degenerate case)
             if self.detailed_exploration_enabled:
-                # Create dummy PUCT scores for recording
-                dummy_scores = np.zeros(len(node.legal_moves))
-                dummy_scores[result] = 1.0  # Mark selected move
-                # Convert numpy types to Python types for JSON serialization
-                dummy_scores_python = [float(s) for s in dummy_scores]
-                self._record_exploration_step(node, result, dummy_scores_python, result, current_depth, self.simulation_count)
+                self._record_select_action(
+                    current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+                    note="degenerate_argmax_p"
+                )
             return result
         
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
@@ -1563,11 +1846,19 @@ class BaselineMCTS:
         score = node.Q + U
         result = int(np.argmax(score))
         
-        # Record exploration step for detailed tracking
+        # Record select action for detailed exploration
         if self.detailed_exploration_enabled:
-            # Convert numpy types to Python types for JSON serialization
-            score_python = [float(s) for s in score]
-            self._record_exploration_step(node, result, score_python, result, current_depth, self.simulation_count)
+            # Get the selected child's values
+            q = float(node.Q[result])
+            p = float(node.P[result])
+            n = int(node.N[result])
+            u = float(U[result])
+            score_val = float(score[result])
+            terminal_flag = node.terminal_moves[result] if hasattr(node, 'terminal_moves') and len(node.terminal_moves) > result else False
+            
+            self._record_select_action(
+                current_depth, N_sum, q, p, n, u, score_val, terminal_flag
+            )
         
         # End timing PUCT calculation
         t_puct_end = time.perf_counter()

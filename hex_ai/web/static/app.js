@@ -1259,7 +1259,7 @@ function displayDetailedExploration(debugInfo) {
       }
     } else if (!detailedExploration.enabled) {
       output += `Reason: Detailed exploration is disabled\n`;
-      output += `Simulation threshold: ≤10\n`;
+      output += `Simulation threshold: ${detailedExploration.simulation_threshold || '≤47'}\n`;
       output += `Current simulations: ${mctsData?.search_stats?.num_simulations || 'unknown'}\n`;
     }
     
@@ -1276,81 +1276,64 @@ function displayDetailedExploration(debugInfo) {
     detailedExploration.trace.forEach((step, index) => {
       try {
         // Handle different types of steps
-        if (step.type === 'node_selection') {
-          // Node selection step
-          output += `=== NODE SELECTION (Simulation ${step.simulation}) ===\n`;
-          output += `Step ${index + 1}: Node Selection Decision\n`;
-          output += `├─ Selection Type: ${step.selection_type}\n`;
-          output += `├─ Available Nodes: ${step.available_nodes}\n`;
-          output += `├─ Selected Node: Depth ${step.selected_node_depth}\n`;
-          output += `└─ Reason: ${step.selection_reason}\n`;
-          
-          if (step.node_scores && step.node_scores.length > 0) {
-            output += `\nStep ${index + 1}.1: UCB1 Scoring for Node Selection\n`;
-            output += `   ⚠️  APPROX UCB1 = Q + C×√(1/N_node) for each available node\n`;
-            // output += `   Note: This is a simplified formula for debug display only. The actual MCTS algorithm\n`;
-            // output += `   uses the full UCB1 formula with parent visit counts.\n`;
-            step.node_scores.forEach((nodeScore, i) => {
-              const isSelected = nodeScore.is_selected ? '→ ' : '  ';
-              output += `${isSelected}Depth ${nodeScore.depth}: UCB1≈${nodeScore.ucb1_approximation.toFixed(3)}\n`;
-              output += `    Breakdown: Q=${nodeScore.q_value.toFixed(3)} + C×√(1/N_node=${nodeScore.visits})\n`;
-            });
-          }
-        } else {
-          // Regular exploration step
-          output += `=== SIMULATION ${step.simulation} ===\n`;
-          output += `Step ${index + 1}: ${step.depth === 0 ? 'Root Selection' : 'Child Expansion'}\n`;
-          output += `├─ Depth: ${step.depth} ${step.depth === 0 ? '(Root)' : `(Level ${step.depth})`}\n`;
-          output += `├─ Player: ${step.to_play === 0 ? 'BLUE' : step.to_play === 1 ? 'RED' : step.to_play}\n`;
-          output += `├─ Node Stats: ${step.depth === 0 ? 'Root node' : `Child node at depth ${step.depth}`}, ${step.legal_moves.length} legal moves\n`;
-          output += `└─ Terminal: ${step.is_terminal}\n`;
-        
-        // Add move sequence context if we have coordinates
-        if (step.selected_move_coords && step.depth > 0) {
-          output += `\nStep ${index + 1}.0: Path Context\n`;
-          if (step.path_to_node && step.path_to_node.length > 0) {
-            output += `└─ Path to this node: ${step.path_to_node.join(' → ')}\n`;
-          } else {
-            output += `└─ Path to this node: [Path tracking not available]\n`;
-          }
-        }
-        
-        if (step.is_terminal) {
-          output += `\nStep ${index + 1}.1: Terminal State Evaluation\n`;
-          output += `└─ Winner: ${step.winner || 'None'}\n`;
-        } else {
-          output += `\nStep ${index + 1}.1: Legal Move Analysis\n`;
-          output += `└─ Available moves: ${step.legal_moves.length} (${step.legal_moves.slice(0, 3).join(', ')}${step.legal_moves.length > 3 ? '...' : ''})\n`;
-          
-          output += `\nStep ${index + 1}.2: PUCT Score Calculation\n`;
-          output += `   Algorithm: For each legal move, compute PUCT score to balance exploration vs exploitation\n`;
-          if (step.top_puct_scores && step.top_puct_scores.length > 0) {
-            // Try to get exploration constant from MCTS debug info
-            const explorationConstant = mctsData?.algorithm_info?.parameters?.exploration_constant || 'C';
+        switch (step.type) {
+          case 'descent_start':
+            output += `=== DESCENT #${step.sim} — root visits: ${step.root_visits} — gumbel_forced: ${step.gumbel_forced} ===\n`;
+            if (step.pv_hint) {
+              output += `PV: ${step.pv_hint.join(' → ')}\n`;
+            }
+            break;
             
-            step.top_puct_scores.forEach((score, i) => {
-              const isSelected = score.move === step.selected_move;
-              const marker = isSelected ? '→ ' : '  ';
-              const puctBreakdown = `Q=${score.q_value.toFixed(3)} + ${explorationConstant}×√(N_total)/√(N=${score.visits}) + P=${score.prior.toFixed(3)}`;
-              output += `${marker}${score.move}: PUCT=${score.score.toFixed(3)}\n`;
-              output += `    Breakdown: ${puctBreakdown}\n`;
-            });
-          }
-          
-          output += `\nStep ${index + 1}.3: Action Selection\n`;
-          output += `   Algorithm: Choose move with highest PUCT score for tree traversal\n`;
-          output += `└─ Selected: ${step.selected_move} at (${step.selected_move_coords[0]}, ${step.selected_move_coords[1]})\n`;
-          
-          // Add what happens next in the algorithm
-          output += `\nStep ${index + 1}.4: Next Algorithm Steps\n`;
-          output += `   After selecting this move, the algorithm will:\n`;
-          output += `   1. Check if a child node exists for this move\n`;
-          output += `   2. If not, expand the tree by creating a new child node\n`;
-          output += `   3. If yes, traverse to the existing child node\n`;
-          output += `   4. Continue selection/expansion until reaching an unexpanded node\n`;
-          output += `   5. Run a simulation (rollout) from that node\n`;
-          output += `   6. Backpropagate the result up the tree\n`;
-        }
+          case 'forced_root_action':
+            output += `🎲 Gumbel forced root action: ${step.tensor_action} (legal: ${step.legal_at_root})`;
+            if (step.note) {
+              output += ` [${step.note}]`;
+            }
+            output += '\n';
+            break;
+            
+          case 'select_action':
+            output += `PUCT: score = Q + (C × P × √N_total / (1 + N))\n`;
+            output += `→ Selected: Q=${step.q.toFixed(3)} U=${step.u.toFixed(3)} P=${step.p.toFixed(3)} N=${step.n} N_total=${step.n_total} ⇒ score=${step.score.toFixed(3)}`;
+            if (step.terminal_flag_for_child) {
+              output += ` (terminal-boosted)`;
+            }
+            if (step.note === "degenerate_argmax_p") {
+              output += ` [argmax(P) path]`;
+            }
+            output += '\n';
+            break;
+            
+          case 'node_realized':
+            output += `Created child ${step.move} @depth ${step.depth} (hash ${step.child_hash})\n`;
+            break;
+            
+          case 'leaf_selected':
+            output += `🌿 Leaf selected @depth ${step.depth} — ${step.leaf_reason}. Batch: T=${step.T}, U=${step.U} (target=${step.distinct_target})\n`;
+            break;
+            
+          case 'batch_flush':
+            output += `⚡ Batch flush: ${step.reason} (T=${step.T}, U=${step.U}, target=${step.distinct_target}, budget=${step.select_budget})\n`;
+            break;
+            
+          case 'nn_eval_start':
+            output += `🧠 NN eval start: batch=${step.batch_size}, to_eval=${step.to_eval}, distinct=${step.distinct}, cache_hits=${step.cache_hits_in_batch}\n`;
+            break;
+            
+          case 'nn_eval_done':
+            output += `🧠 NN eval done: eff=${step.effective_batch_size}, value_range=[${step.value_range[0].toFixed(3)}, ${step.value_range[1].toFixed(3)}], mean_entropy=${step.mean_policy_entropy.toFixed(3)}, time=${step.time_ms.toFixed(1)}ms\n`;
+            break;
+            
+          case 'expand_node':
+            output += `Expanded node @depth ${step.depth} (children=${step.children_count}, top3_prior_mass=${step.prior_mass_top3.toFixed(3)}, value_red=${step.value_signed_red_ref.toFixed(3)})\n`;
+            break;
+            
+          case 'backprop_update':
+            output += `⬆️ Backprop: path_len=${step.path_len}, root_Q: ${step.root_q_before.toFixed(3)} → ${step.root_q_after.toFixed(3)}\n`;
+            break;
+            
+          default:
+            output += `Unknown step type: ${step.type}\n`;
         }
         
         output += '\n';
