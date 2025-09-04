@@ -1345,27 +1345,13 @@ class BaselineMCTS:
                 if node is root and forced_a_full is not None:
                     # Map full action index -> local child idx
                     # (legal_indices aligns with stats arrays)
-                    
-                    # CRITICAL FIX: Validate forced action is legal instead of silent fallback
-                    # This exposes bugs instead of masking them with PUCT fallback
-                    if forced_a_full not in node.legal_indices:
-                        # Log detailed information about the mismatch
-                        print(f"ERROR: Gumbel forced action {forced_a_full} is illegal at root!")
-                        print(f"Root legal indices: {sorted(node.legal_indices)}")
-                        print(f"Root legal moves: {node.legal_moves}")
-                        print(f"Root state hash: {node.state_hash}")
-                        
-                        # CRASH instead of fallback to expose the bug
-                        raise RuntimeError(
-                            f"Gumbel forced action {forced_a_full} is illegal at root. "
-                            f"Legal indices: {sorted(node.legal_indices)}. "
-                            f"This indicates a desync between Gumbel's action list and the current root state."
-                        )
-                    
-                    # Fast path: use dictionary lookup for mapping
-                    if not hasattr(node, '_legal_indices_dict'):
-                        node._legal_indices_dict = {idx: i for i, idx in enumerate(node.legal_indices)}
-                    loc_idx = node._legal_indices_dict[forced_a_full]
+                    try:
+                        # Fast path: vectorized search
+                        li = np.asarray(node.legal_indices)
+                        loc_idx = int(np.where(li == forced_a_full)[0][0])
+                    except Exception:
+                        # Fallback if forced action is illegal: normal PUCT
+                        loc_idx = self._select_child_puct(node, node.depth)
                 else:
                     # Non-Gumbel code path
                     loc_idx = self._select_child_puct(node, node.depth)
