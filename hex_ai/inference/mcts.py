@@ -1083,7 +1083,7 @@ class BaselineMCTS:
         
         # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
         # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
-        print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
+        # print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
         if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
             # Pick argmax over priors among legal actions
             selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))

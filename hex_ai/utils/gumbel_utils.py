@@ -213,7 +213,7 @@ def gumbel_alpha_zero_root_batched(
         ValueError: If parameters are invalid
         RuntimeError: If no legal actions available
     """
-    print(f"GUMBEL FUNCTION CALLED: total_sims={total_sims}, legal_actions={len(legal_actions)}")
+    # print(f"GUMBEL FUNCTION CALLED: total_sims={total_sims}, legal_actions={len(legal_actions)}")
     
     # Detailed timing instrumentation
     timing_data = {
@@ -253,9 +253,9 @@ def gumbel_alpha_zero_root_batched(
     if len(validated_legal_actions) != len(legal_actions):
         # Log the mismatch for debugging
         illegal_actions = [a for a in legal_actions if a not in current_legal_indices]
-        print(f"WARNING: Gumbel received {len(illegal_actions)} illegal actions: {illegal_actions}")
-        print(f"Current root legal indices: {sorted(current_legal_indices)}")
-        print(f"Original legal_actions: {sorted(legal_actions)}")
+        # print(f"WARNING: Gumbel received {len(illegal_actions)} illegal actions: {illegal_actions}")
+        # print(f"Current root legal indices: {sorted(current_legal_indices)}")
+        # print(f"Original legal_actions: {sorted(legal_actions)}")
         
         # If no actions remain valid, this is a critical error
         if not validated_legal_actions:
@@ -303,7 +303,7 @@ def gumbel_alpha_zero_root_batched(
     R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
     sims_used = 0
     
-    print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
+    # print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
     
     # Performance tracking
     nn_calls_per_move = 0
@@ -320,7 +320,7 @@ def gumbel_alpha_zero_root_batched(
         score_val = g[a] + logits[a] + sigma * q_val
         
         # DEBUG: Print Q-values and visit counts
-        print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+        # print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
         
         return score_val
     
