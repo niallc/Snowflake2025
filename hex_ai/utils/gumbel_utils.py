@@ -342,10 +342,6 @@ def gumbel_alpha_zero_root_batched(
     round_start = time.perf_counter()
     mcts_execution_start = time.perf_counter()
     
-    # OPTIMIZATION: Collect all actions first, then execute MCTS once
-    all_actions = []
-    round_assignments = []  # Track which round each action belongs to
-    
     for r in range(R):
         if not cand or sims_used >= total_sims:
             break
@@ -361,9 +357,13 @@ def gumbel_alpha_zero_root_batched(
         )
         
         if actions_this_round:
-            # Collect actions for this round
-            all_actions.extend(actions_this_round)
-            round_assignments.extend([r] * len(actions_this_round))
+            # Track performance metrics from this round
+            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+            # Track batch metrics more accurately
+            nn_calls_per_move += stats.get("batch_count", 0)
+            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
+            # Note: unique_evals_total is not available in individual batch stats
+            # We'll track this separately by looking at the final MCTS metrics
             sims_used += len(actions_this_round)
         
         if arms <= 1 or sims_used >= total_sims:
@@ -373,12 +373,6 @@ def gumbel_alpha_zero_root_batched(
         cand.sort(key=rank_key, reverse=True)
         keep = max(1, (arms + 1) // 2)
         cand = cand[:keep]
-    
-    # Execute all MCTS simulations in one call
-    if all_actions:
-        stats = mcts.run_forced_root_actions(root, all_actions, verbose=0)
-        nn_calls_per_move = stats.get("batch_count", 0)
-        total_leaves_evaluated = len(all_actions)
     
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start
