@@ -3,9 +3,12 @@ Game engine for Hex AI.
 
 This module provides the core game logic for Hex, including board representation,
 move validation, winner detection, and game state management.
+
+The winner detection uses an efficient array-based Union-Find (DSU) implementation
+that provides O(1) connectivity checks and incremental updates, making it suitable
+for high-frequency MCTS tree traversal.
 """
 
-from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,56 +30,194 @@ RIGHT_EDGE = BOARD_SIZE
 TOP_EDGE = -1
 BOTTOM_EDGE = BOARD_SIZE
 
-# Union-Find data structure for tracking connected components
-Piece = namedtuple("Piece", ["row", "column", "colour"])
+# Hex neighbor directions (same for all positions)
+HEX_NEIGHBOR_DIRECTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, -1), (-1, 1)]
 
-class UnionFind:
-    """Union-Find data structure for tracking connected components in Hex."""
+# Edge indices for DSU connectivity
+EDGE_INDICES = {
+    'red_left': BOARD_SIZE * BOARD_SIZE,
+    'red_right': BOARD_SIZE * BOARD_SIZE + 1,
+    'blue_top': BOARD_SIZE * BOARD_SIZE,
+    'blue_bottom': BOARD_SIZE * BOARD_SIZE + 1
+}
+
+# Precomputed neighbor lookup table for efficient connectivity
+# Each cell (r, c) maps to a list of up to 6 neighbor indices
+NEIGHBORS: List[List[int]] = []
+
+def _get_adjacent_positions(row: int, col: int) -> List[Tuple[int, int]]:
+    """Get adjacent positions for a given (row, col) coordinate."""
+    adjacent = []
+    for dr, dc in HEX_NEIGHBOR_DIRECTIONS:
+        new_row, new_col = row + dr, col + dc
+        if 0 <= new_row < BOARD_SIZE and 0 <= new_col < BOARD_SIZE:
+            adjacent.append((new_row, new_col))
+    return adjacent
+
+def _initialize_neighbors():
+    """Initialize the global NEIGHBORS lookup table using shared logic."""
+    global NEIGHBORS
+    NEIGHBORS = []
     
-    def __init__(self):
-        self.parents_ = dict()
-        self.ranks_ = dict()
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            neighbors = []
+            for nr, nc in _get_adjacent_positions(r, c):
+                neighbors.append(nr * BOARD_SIZE + nc)
+            NEIGHBORS.append(neighbors)
+
+# Initialize the neighbor lookup table
+_initialize_neighbors()
+
+def rowcol_to_index(r: int, c: int) -> int:
+    """Convert (row, col) to DSU index."""
+    return r * BOARD_SIZE + c
+
+def index_to_rowcol(idx: int) -> Tuple[int, int]:
+    """Convert DSU index to (row, col)."""
+    return idx // BOARD_SIZE, idx % BOARD_SIZE
+
+def _get_edge_connections(row: int, col: int, piece_color: str) -> List[int]:
+    """Get edge indices that a piece at (row, col) should connect to."""
+    edge_connections = []
     
-    def make_set(self, x):
-        """Create a new set containing element x."""
-        if x not in self.parents_:
-            self.parents_[x] = None
-            self.ranks_[x] = 0
+    if piece_color == PieceEnum.RED.value:
+        if col == 0:  # Left edge
+            edge_connections.append(EDGE_INDICES['red_left'])
+        if col == BOARD_SIZE - 1:  # Right edge
+            edge_connections.append(EDGE_INDICES['red_right'])
+    else:  # BLUE
+        if row == 0:  # Top edge
+            edge_connections.append(EDGE_INDICES['blue_top'])
+        if row == BOARD_SIZE - 1:  # Bottom edge
+            edge_connections.append(EDGE_INDICES['blue_bottom'])
     
-    def find(self, x):
-        """Find the root of the set containing x, with path compression."""
-        assert x in self.parents_, f"Element {x} not found in UnionFind. Call make_set first."
+    return edge_connections
+
+def _create_dsu_pair() -> Tuple['ArrayDSU', 'ArrayDSU']:
+    """Create a pair of DSUs for red and blue connectivity tracking."""
+    dsu_size = BOARD_SIZE * BOARD_SIZE + 2  # +2 for edge nodes
+    return ArrayDSU(dsu_size), ArrayDSU(dsu_size)
+
+# Efficient array-based Union-Find data structure for Hex connectivity
+class ArrayDSU:
+    """
+    Array-based Union-Find data structure optimized for Hex game connectivity.
+    
+    Uses integer indices instead of namedtuples for maximum performance.
+    Supports both regular operations and rollback for MCTS tree traversal.
+    """
+    
+    def __init__(self, size: int):
+        """
+        Initialize DSU for given size.
         
-        if self.parents_[x] is None:
-            return x
+        Args:
+            size: Total number of elements (board cells + edge nodes)
+        """
+        self.size = size
+        self.parent = list(range(size))
+        self.size_array = [1] * size
         
-        # Path compression
-        self.parents_[x] = self.find(self.parents_[x])
-        return self.parents_[x]
+    def find(self, x: int) -> int:
+        """Find root with path compression."""
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
     
-    def union(self, x, y):
-        """Union the sets containing x and y."""
+    def union(self, x: int, y: int) -> bool:
+        """
+        Union two sets by size.
+        
+        Returns:
+            True if union was performed, False if already connected
+        """
         x_root = self.find(x)
         y_root = self.find(y)
         
         if x_root == y_root:
-            return  # Already in same set
+            return False
         
-        # Union by rank
-        if self.ranks_[x_root] < self.ranks_[y_root]:
-            self.parents_[x_root] = y_root
-        elif self.ranks_[x_root] > self.ranks_[y_root]:
-            self.parents_[y_root] = x_root
-        else:
-            # Same rank, arbitrarily make x_root the parent
-            self.parents_[y_root] = x_root
-            self.ranks_[x_root] += 1
+        # Union by size
+        if self.size_array[x_root] < self.size_array[y_root]:
+            x_root, y_root = y_root, x_root
+        
+        self.parent[y_root] = x_root
+        self.size_array[x_root] += self.size_array[y_root]
+        return True
     
-    def are_connected(self, x, y):
-        """Check if x and y are in the same connected component."""
+    def connected(self, x: int, y: int) -> bool:
+        """Check if two elements are connected."""
+        return self.find(x) == self.find(y)
+    
+    def copy(self) -> 'ArrayDSU':
+        """Create a copy of this DSU."""
+        new_dsu = ArrayDSU(self.size)
+        new_dsu.parent = self.parent.copy()
+        new_dsu.size_array = self.size_array.copy()
+        return new_dsu
+
+
+class DSURollback:
+    """
+    Union-Find with rollback capability for MCTS tree traversal.
+    
+    This allows efficient apply/undo operations by maintaining a history
+    of all changes that can be reverted.
+    """
+    
+    def __init__(self, size: int):
+        self.size = size
+        self.parent = list(range(size))
+        self.size_array = [1] * size
+        self.history: List[Tuple[int, int, int, int]] = []  # (child, old_parent, new_parent, old_size)
+    
+    def find(self, x: int) -> int:
+        """Find root without path compression (for rollback compatibility)."""
+        while self.parent[x] != x:
+            x = self.parent[x]
+        return x
+    
+    def union(self, x: int, y: int) -> bool:
+        """
+        Union two sets and record the operation for rollback.
+        
+        Returns:
+            True if union was performed, False if already connected
+        """
         x_root = self.find(x)
         y_root = self.find(y)
-        return x_root == y_root
+        
+        if x_root == y_root:
+            return False
+        
+        # Union by size
+        if self.size_array[x_root] < self.size_array[y_root]:
+            x_root, y_root = y_root, x_root
+        
+        # Record the operation for rollback
+        self.history.append((y_root, y_root, x_root, self.size_array[x_root]))
+        
+        self.parent[y_root] = x_root
+        self.size_array[x_root] += self.size_array[y_root]
+        return True
+    
+    def connected(self, x: int, y: int) -> bool:
+        """Check if two elements are connected."""
+        return self.find(x) == self.find(y)
+    
+    def snapshot(self) -> int:
+        """Create a snapshot and return the current history length."""
+        return len(self.history)
+    
+    def rollback_to(self, snapshot: int) -> None:
+        """Rollback to a previous snapshot."""
+        while len(self.history) > snapshot:
+            child, old_parent, new_parent, old_size = self.history.pop()
+            self.parent[child] = old_parent
+            self.size_array[new_parent] = old_size
+
+
 
 
 @dataclass(init=False)
@@ -92,6 +233,10 @@ class HexGameState:
     
     # Operation stack for undo functionality
     _undo_stack: List[Dict[str, Any]] = field(default_factory=list, init=False)
+    
+    # Efficient connectivity tracking
+    red_dsu: ArrayDSU = field(init=False, repr=False)
+    blue_dsu: ArrayDSU = field(init=False, repr=False)
 
     def __init__(self, _current_player: Player, board: Optional[np.ndarray] = None,
                  move_history: Optional[List[Tuple[int, int]]] = None,
@@ -108,6 +253,12 @@ class HexGameState:
         # Winner internal storage uses Enum only
         self._winner = winner
         self._undo_stack = []
+        
+        # Initialize DSUs for connectivity tracking
+        self.red_dsu, self.blue_dsu = _create_dsu_pair()
+        
+        # Build initial connectivity from board state
+        self._build_initial_connectivity()
     
     @property
     def board_2nxn(self) -> torch.Tensor:
@@ -183,7 +334,9 @@ class HexGameState:
             'current_player': self._current_player,
             'game_over': self.game_over,
             'winner': self.winner,
-            'move': (row, col)
+            'move': (row, col),
+            'red_dsu': self.red_dsu.copy(),
+            'blue_dsu': self.blue_dsu.copy()
         }
         self._undo_stack.append(undo_info)
         
@@ -193,8 +346,11 @@ class HexGameState:
         self.move_history.append((row, col))
         self._current_player = Player.RED if self._current_player == Player.BLUE else Player.BLUE
         
-        # Check for winner
-        winner = self._find_winner()
+        # Connect the new piece to its neighbors
+        self._connect_piece_to_neighbors(row, col)
+        
+        # Check for winner using efficient connectivity
+        winner = self._check_winner_efficient()
         if winner:
             self.game_over = True
             self.winner = winner
@@ -217,6 +373,8 @@ class HexGameState:
         self.current_player = undo_info['current_player']
         self.game_over = undo_info['game_over']
         self.winner = undo_info['winner']
+        self.red_dsu = undo_info['red_dsu']
+        self.blue_dsu = undo_info['blue_dsu']
         
         # Remove the last move from history
         if self.move_history:
@@ -239,23 +397,57 @@ class HexGameState:
             game_over=self.game_over,
             winner=self.winner
         )
+        # Copy DSUs for connectivity tracking
+        new_state.red_dsu = self.red_dsu.copy()
+        new_state.blue_dsu = self.blue_dsu.copy()
         # Don't copy the undo stack - it's not needed for new states
         return new_state
 
-    def make_move(self, row: int, col: int) -> 'HexGameState':
-        # TODO: PERFORMANCE CRITICAL - Replace deepcopy with apply/undo pattern
-        # Current make_move() creates new HexGameState objects which is expensive for MCTS
-        # IMPLEMENTATION PLAN (Phase 3.1):
-        # 1) Add apply_move() method to HexGameState that mutates in place
-        # 2) Add undo_last() method that restores previous state
-        # 3) Update MCTS to use apply → encode → undo pattern for evaluations
-        # 4) Use fast_copy() only when child nodes need to be materialized
-        # Expected gain: 10-20x speedup in expansion phase
-        if not self.is_valid_move(row, col):
-            raise ValueError(f"Invalid move: ({row}, {col})")
+    def _build_initial_connectivity(self) -> None:
+        """Build initial connectivity from the current board state."""
+        # Connect all existing pieces to their neighbors
+        for r in range(BOARD_SIZE):
+            for c in range(BOARD_SIZE):
+                if self.board[r, c] != PieceEnum.EMPTY.value:
+                    self._connect_piece_to_neighbors(r, c)
+    
+    def _connect_piece_to_neighbors(self, row: int, col: int) -> None:
+        """Connect a piece to its same-color neighbors using efficient DSU."""
+        piece_idx = rowcol_to_index(row, col)
+        piece_color = self.board[row, col]
+        
+        # Choose the appropriate DSU
+        dsu = self.red_dsu if piece_color == PieceEnum.RED.value else self.blue_dsu
+        
+        # Connect to same-color neighbors
+        for neighbor_idx in NEIGHBORS[piece_idx]:
+            nr, nc = index_to_rowcol(neighbor_idx)
+            if self.board[nr, nc] == piece_color:
+                dsu.union(piece_idx, neighbor_idx)
+        
+        # Connect to edges if on board edge
+        for edge_idx in _get_edge_connections(row, col, piece_color):
+            dsu.union(piece_idx, edge_idx)
+    
+    def _check_winner_efficient(self) -> Optional[WinnerEnum]:
+        """Check for winner using efficient DSU connectivity."""
+        # Check red win (horizontal connection)
+        if self.red_dsu.connected(EDGE_INDICES['red_left'], EDGE_INDICES['red_right']):
+            return WinnerEnum.RED
+        
+        # Check blue win (vertical connection)
+        if self.blue_dsu.connected(EDGE_INDICES['blue_top'], EDGE_INDICES['blue_bottom']):
+            return WinnerEnum.BLUE
+        
+        return None
+
+    def _create_child_state(self, row: int, col: int) -> 'HexGameState':
+        """Create a child state with the given move applied."""
         piece = PieceEnum.BLUE if self._current_player == Player.BLUE else PieceEnum.RED
         new_board = place_piece(self.board, row, col, piece)
         new_move_history = self.move_history + [(row, col)]
+        
+        # Create new state with copied DSUs
         new_state = HexGameState(
             _current_player=Player.RED if self._current_player == Player.BLUE else Player.BLUE,
             board=new_board,
@@ -263,160 +455,33 @@ class HexGameState:
             game_over=False,
             winner=None
         )
-        # Winner detection
-        # TODO: Improve Efficiency: We currently find the winner from scratch after
-        # every move. UnionFind is an efficient incremental algorithm and we should
-        # update an existing UnionFind object instead of creating a new one.
-        winner = new_state._find_winner()
+        
+        # Copy DSUs from parent state
+        new_state.red_dsu = self.red_dsu.copy()
+        new_state.blue_dsu = self.blue_dsu.copy()
+        
+        return new_state
+
+    def make_move(self, row: int, col: int) -> 'HexGameState':
+        """Create a new state with the move applied using efficient DSU copy."""
+        if not self.is_valid_move(row, col):
+            raise ValueError(f"Invalid move: ({row}, {col})")
+        
+        # Create child state with the move applied
+        new_state = self._create_child_state(row, col)
+        
+        # Connect the new piece to its neighbors
+        new_state._connect_piece_to_neighbors(row, col)
+        
+        # Check for winner using efficient connectivity
+        winner = new_state._check_winner_efficient()
         if winner:
             new_state.game_over = True
             new_state.winner = winner
+        
         return new_state
 
-    def _get_adjacent_positions(self, row: int, col: int) -> List[Tuple[int, int]]:
-        adjacent = []
-        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, -1), (-1, 1)]:
-            new_row, new_col = row + dr, col + dc
-            if 0 <= new_row < BOARD_SIZE and 0 <= new_col < BOARD_SIZE:
-                adjacent.append((new_row, new_col))
-        return adjacent
 
-    def _find_winner(self) -> Optional[WinnerEnum]:
-        """Find the winner using Union-Find connected components."""
-        connections = self._build_connections()
-        
-        # Check for red win (horizontal connection)
-        red_left = Piece(row=0, column=LEFT_EDGE, colour="red")
-        red_right = Piece(row=0, column=RIGHT_EDGE, colour="red")
-        if connections.are_connected(red_left, red_right):
-            return WinnerEnum.RED
-        
-        # Check for blue win (vertical connection)
-        blue_top = Piece(row=TOP_EDGE, column=0, colour="blue")
-        blue_bottom = Piece(row=BOTTOM_EDGE, column=0, colour="blue")
-        if connections.are_connected(blue_top, blue_bottom):
-            return WinnerEnum.BLUE
-        
-        return None
-    
-    def _build_connections(self) -> UnionFind:
-        """Build Union-Find connections for all pieces on the board."""
-        connections = UnionFind()
-        
-        # Initialize special edge pieces
-        red_left = Piece(row=0, column=LEFT_EDGE, colour="red")
-        red_right = Piece(row=0, column=RIGHT_EDGE, colour="red")
-        blue_top = Piece(row=TOP_EDGE, column=0, colour="blue")
-        blue_bottom = Piece(row=BOTTOM_EDGE, column=0, colour="blue")
-        
-        connections.make_set(red_left)
-        connections.make_set(red_right)
-        connections.make_set(blue_top)
-        connections.make_set(blue_bottom)
-        if VERBOSE_LEVEL >= 4:
-            print(f"[DEBUG] Initialized edge pieces: {red_left}, {red_right}, {blue_top}, {blue_bottom}")
-        
-        # Add all pieces on the board and connect them
-        for row in range(BOARD_SIZE):
-            for col in range(BOARD_SIZE):
-                if self.board[row, col] == PieceEnum.RED.value:
-                    piece = Piece(row=row, column=col, colour="red")
-                    connections.make_set(piece)
-                    if VERBOSE_LEVEL >= 4:
-                        print(f"[DEBUG] Make set for RED piece: {piece}")
-                    self._connect_piece_to_neighbors(piece, connections)
-                elif self.board[row, col] == PieceEnum.BLUE.value:
-                    piece = Piece(row=row, column=col, colour="blue")
-                    connections.make_set(piece)
-                    if VERBOSE_LEVEL >= 4:
-                        print(f"[DEBUG] Make set for BLUE piece: {piece}")
-                    self._connect_piece_to_neighbors(piece, connections)
-        
-        # Explicitly connect edge pieces to board edge pieces (legacy logic)
-        for col in range(BOARD_SIZE):
-            # Blue: top and bottom rows
-            if self.board[0, col] == PieceEnum.BLUE.value:
-                piece = Piece(row=0, column=col, colour="blue")
-                connections.union(piece, blue_top)
-                if VERBOSE_LEVEL >= 4:
-                    print(f"[DEBUG] Union BLUE top: {piece} <-> {blue_top}")
-            if self.board[BOARD_SIZE-1, col] == PieceEnum.BLUE.value:
-                piece = Piece(row=BOARD_SIZE-1, column=col, colour="blue")
-                connections.union(piece, blue_bottom)
-                if VERBOSE_LEVEL >= 4:
-                    print(f"[DEBUG] Union BLUE bottom: {piece} <-> {blue_bottom}")
-        for row in range(BOARD_SIZE):
-            # Red: left and right columns
-            if self.board[row, 0] == PieceEnum.RED.value:
-                piece = Piece(row=row, column=0, colour="red")
-                connections.union(piece, red_left)
-                if VERBOSE_LEVEL >= 4:
-                    print(f"[DEBUG] Union RED left: {piece} <-> {red_left}")
-            if self.board[row, BOARD_SIZE-1] == PieceEnum.RED.value:
-                piece = Piece(row=row, column=BOARD_SIZE-1, colour="red")
-                connections.union(piece, red_right)
-                if VERBOSE_LEVEL >= 4:
-                    print(f"[DEBUG] Union RED right: {piece} <-> {red_right}")
-        if VERBOSE_LEVEL >= 4:
-            print("[DEBUG] Final Union-Find parents:")
-            for k, v in connections.parents_.items():
-                print(f"  {k} -> {v}")
-        return connections
-    
-    def _connect_piece_to_neighbors(self, piece: Piece, connections: UnionFind):
-        """Connect a piece to its same-color neighbors."""
-        neighbors = self._get_same_color_neighbors(piece)
-        if VERBOSE_LEVEL >= 4:
-            print(f"[DEBUG] {piece} neighbors: {neighbors}")
-        for neighbor in neighbors:
-            if neighbor not in connections.parents_:
-                connections.make_set(neighbor)
-                if VERBOSE_LEVEL >= 4:
-                    print(f"[DEBUG] Make set for neighbor: {neighbor}")
-            connections.union(piece, neighbor)
-            if VERBOSE_LEVEL >= 4:
-                print(f"[DEBUG] Union: {piece} <-> {neighbor}")
-    
-    def _get_same_color_neighbors(self, piece: Piece) -> List[Piece]:
-        """Get all same-color neighbors of a piece."""
-        neighbors = []
-        color = piece.colour
-        expected_value = PieceEnum.RED.value if color == "red" else PieceEnum.BLUE.value
-        
-        # Get adjacent positions
-        adjacent_positions = self._get_adjacent_positions(piece.row, piece.column)
-        
-        for adj_row, adj_col in adjacent_positions:
-            if self._is_valid_position(adj_row, adj_col):
-                # Check if this position has a piece of the same color
-                if self.board[adj_row, adj_col] == expected_value:
-                    neighbor = Piece(row=adj_row, column=adj_col, colour=color)
-                    neighbors.append(neighbor)
-            else:
-                # Check if this connects to an edge piece
-                edge_piece = self._get_edge_piece(adj_row, adj_col, color)
-                if edge_piece:
-                    neighbors.append(edge_piece)
-        
-        return neighbors
-    
-    def _is_valid_position(self, row: int, col: int) -> bool:
-        """Check if a position is valid on the board."""
-        return 0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE
-    
-    def _get_edge_piece(self, row: int, col: int, piece: Piece) -> Optional[Piece]:
-        """Get the appropriate edge piece for off-board positions."""
-        if piece == Piece.RED:
-            if col == LEFT_EDGE:
-                return Piece(row=0, column=LEFT_EDGE, colour="red")
-            elif col == RIGHT_EDGE:
-                return Piece(row=0, column=RIGHT_EDGE, colour="red")
-        elif piece == Piece.BLUE:
-            if row == TOP_EDGE:
-                return Piece(row=TOP_EDGE, column=0, colour="blue")
-            elif row == BOTTOM_EDGE:
-                return Piece(row=BOTTOM_EDGE, column=0, colour="blue")
-        return None
 
     def get_legal_moves(self) -> List[Tuple[int, int]]:
         return [(row, col)
@@ -459,7 +524,8 @@ class HexGameState:
     def __str__(self) -> str:
         status = f"Player {'Blue' if self._current_player == Player.BLUE else 'Red'}'s turn"
         if self.game_over:
-            status = f"Game over - {self.winner.title()} wins!"
+            winner_name = str(self.winner)
+            status = f"Game over - {winner_name} wins!"
         return f"HexGameState(moves={len(self.move_history)}, {status})\n" + board_to_string(self.board)
 
     def __repr__(self) -> str:
@@ -531,7 +597,7 @@ class HexGameEngine:
         Returns:
             Winner enum or None if no winner
         """
-        return state._find_winner()
+        return state._check_winner_efficient()
     
     def is_game_over(self, state: HexGameState) -> bool:
         """
