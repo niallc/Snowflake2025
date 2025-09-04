@@ -425,7 +425,8 @@ class BaselineMCTSConfig:
     
     # Gumbel temperature control parameters
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
-    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Shared cutoff for both paths
+    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
+    gumbel_temperature_deterministic_cutoff: float = -1.0  # TODO: TEMPORARY - Allow Gumbel to always run its algorithm
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -1011,6 +1012,9 @@ class BaselineMCTS:
                      sims_remaining <= self.cfg.gumbel_sim_threshold and
                      root.is_expanded and not root.is_terminal)
         
+        # DEBUG: Print Gumbel decision
+        print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
+        
         if use_gumbel:
             if verbose >= 1:
                 print(f"Using Gumbel-AlphaZero root selection for {sims_remaining} simulations")
@@ -1077,8 +1081,10 @@ class BaselineMCTS:
         is_self_play = self.cfg.add_root_noise  # Use add_root_noise as proxy for self-play
         priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=is_self_play)
         
-        # Deterministic cutoff (same as non-Gumbel)
-        if tau <= self.cfg.temperature_deterministic_cutoff:
+        # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
+        # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
+        print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
+        if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
             # Pick argmax over priors among legal actions
             selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
             selected_action = root.legal_indices.index(selected_tensor_action)
@@ -1111,6 +1117,7 @@ class BaselineMCTS:
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
         
         # Run batched Gumbel-AlphaZero selection with temperature
+        print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
@@ -2008,6 +2015,7 @@ def create_mcts_config(
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
+        "gumbel_temperature_deterministic_cutoff": -1.0,  # TODO: TEMPORARY - Allow Gumbel to always run
     }
     
     # Only set parameters if not already provided in kwargs

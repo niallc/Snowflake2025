@@ -213,6 +213,8 @@ def gumbel_alpha_zero_root_batched(
         ValueError: If parameters are invalid
         RuntimeError: If no legal actions available
     """
+    print(f"GUMBEL FUNCTION CALLED: total_sims={total_sims}, legal_actions={len(legal_actions)}")
+    
     # Detailed timing instrumentation
     timing_data = {
         'setup_time': 0.0,
@@ -235,8 +237,8 @@ def gumbel_alpha_zero_root_batched(
     if total_sims <= 0:
         raise ValueError(f"total_sims must be positive, got {total_sims}")
     
-    if temperature <= 0:
-        raise ValueError(f"temperature must be positive, got {temperature}")
+    if temperature < 0:
+        raise ValueError(f"temperature must be non-negative, got {temperature}")
     
     K = policy_logits.shape[0]
     
@@ -301,6 +303,8 @@ def gumbel_alpha_zero_root_batched(
     R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
     sims_used = 0
     
+    print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
+    
     # Performance tracking
     nn_calls_per_move = 0
     total_leaves_evaluated = 0
@@ -312,7 +316,12 @@ def gumbel_alpha_zero_root_batched(
         maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
         sigma = (c_visit + maxN) ** c_scale
         q_val = q_of_child(a)
+        n_val = n_of_child(a)
         score_val = g[a] + logits[a] + sigma * q_val
+        
+        # DEBUG: Print Q-values and visit counts
+        print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+        
         return score_val
     
     def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
