@@ -99,8 +99,8 @@ let state = {
   blue_exploration_constant: 2.9,
   red_exploration_constant: 2.9,
   // Gumbel settings
-  blue_enable_gumbel: false,
-  red_enable_gumbel: false,
+  blue_enable_gumbel: true,
+  red_enable_gumbel: true,
   blue_gumbel_max_sims: 500,
   red_gumbel_max_sims: 500,
   auto_step_active: false,

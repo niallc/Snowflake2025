@@ -452,7 +452,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
         app.logger.info(f"Move applied. New state game_over: {state.game_over}")
         
         # Generate MCTS diagnostic info
-        # Determine algorithm type based on algorithm termination info
+        # Determine algorithm type based on algorithm termination info and Gumbel usage
         if algorithm_termination_info:
             if algorithm_termination_info.reason == "terminal_move":
                 algorithm = "Terminal Move Detection"
@@ -461,7 +461,12 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
             else:
                 algorithm = "MCTS (Algorithm Termination)"
         else:
-            algorithm = "MCTS"
+            # Check if Gumbel was used based on MCTS stats
+            gumbel_used = stats.get('gumbel_candidates_m', 0) > 0
+            if gumbel_used:
+                algorithm = "MCTS (Gumbel on)"
+            else:
+                algorithm = "MCTS (Gumbel off)"
         
         # Use centralized utilities for value conversions and tree data
         
@@ -500,7 +505,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
                     "simulations": num_simulations,
                     "exploration_constant": exploration_constant,
                     "temperature": temperature,
-                    "temperature_end": temperature_end
+                    "temperature_end": temperature_end,
+                    "gumbel_enabled": enable_gumbel,
+                    "gumbel_max_sims": gumbel_max_sims
                 }
             },
             "search_stats": {
@@ -526,7 +533,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
             "move_probabilities": {
                 "direct_policy": legal_move_probs,
                 "mcts_visits": tree_data["visit_counts"],
-                "mcts_probabilities": tree_data["mcts_probabilities"]
+                "mcts_probabilities": tree_data["mcts_probabilities"],
+                "mcts_temperature_scaled_probabilities": temperature_scaled_mcts_probs
             },
             "comparison": {
                 "mcts_vs_direct": {}
@@ -542,13 +550,27 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
                 "alternative_lines": [],  # Placeholder - would need more complex tree analysis
                 "pv_length": len(tree_data["principal_variation"])
             },
+            "gumbel_analysis": {
+                "gumbel_used": stats.get('gumbel_candidates_m', 0) > 0,
+                "gumbel_candidates_m": stats.get('gumbel_candidates_m', 0),
+                "gumbel_rounds_R": stats.get('gumbel_rounds_R', 0),
+                "gumbel_nn_calls_per_move": stats.get('gumbel_nn_calls_per_move', 0),
+                "gumbel_total_leaves_evaluated": stats.get('gumbel_total_leaves_evaluated', 0),
+                "gumbel_distinct_leaves_evaluated": stats.get('gumbel_distinct_leaves_evaluated', 0),
+                "gumbel_avg_nn_batch_size": stats.get('gumbel_avg_nn_batch_size', 0.0),
+                "gumbel_leaves_distinct_ratio": stats.get('gumbel_leaves_distinct_ratio', 0.0)
+            },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
                 "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
+                "top_mcts_move_temperature_scaled": max(temperature_scaled_mcts_probs.items(), key=lambda x: x[1])[0] if temperature_scaled_mcts_probs and len(temperature_scaled_mcts_probs) > 0 else None,
+                "top_mcts_move_raw_visits": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
                 "total_legal_moves": original_legal_moves_count,
                 "moves_explored": f"{tree_data['total_visits']}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
                 "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
-                "algorithm_summary": algorithm
+                "algorithm_summary": algorithm,
+                "gumbel_summary": f"Gumbel: {'ON' if stats.get('gumbel_candidates_m', 0) > 0 else 'OFF'} (candidates: {stats.get('gumbel_candidates_m', 0)}, rounds: {stats.get('gumbel_rounds_R', 0)})",
+                "move_selection_explanation": "Top MCTS Move shows raw visit counts. Top MCTS Move (Temperature Scaled) shows what's actually used for move selection."
             },
                     "profiling_summary": {
             "total_compute_ms": int(mcts_search_time * 1000.0),
@@ -583,14 +605,50 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
             },
         }
         
+        # Calculate temperature-scaled MCTS probabilities (what's actually used for move selection)
+        temperature_scaled_mcts_probs = {}
+        if tree_data["mcts_probabilities"] and not algorithm_termination_info:
+            # Get visit counts from tree data
+            visit_counts = tree_data["visit_counts"]
+            total_visits = sum(visit_counts.values())
+            
+            if total_visits > 0:
+                # Apply the same temperature scaling as used in _compute_move
+                move_count = len(state.move_history)
+                temp = temperature  # Use the same temperature as passed to the function
+                
+                if temp <= 0.02:  # Deterministic cutoff
+                    # Use raw visit counts (deterministic selection)
+                    for move_trmph, visits in visit_counts.items():
+                        temperature_scaled_mcts_probs[move_trmph] = visits / total_visits
+                else:
+                    # Apply temperature scaling
+                    try:
+                        counts_array = np.array([visit_counts.get(move_trmph, 0) for move_trmph in legal_move_probs.keys()])
+                        pi = np.power(counts_array, 1.0 / temp)
+                        if np.isfinite(pi).all() and np.sum(pi) > 0:
+                            pi /= np.sum(pi)
+                            for i, move_trmph in enumerate(legal_move_probs.keys()):
+                                temperature_scaled_mcts_probs[move_trmph] = float(pi[i])
+                        else:
+                            # Fall back to raw probabilities if temperature scaling fails
+                            for move_trmph in legal_move_probs.keys():
+                                temperature_scaled_mcts_probs[move_trmph] = visit_counts.get(move_trmph, 0) / total_visits
+                    except (OverflowError, ValueError):
+                        # Fall back to raw probabilities
+                        for move_trmph in legal_move_probs.keys():
+                            temperature_scaled_mcts_probs[move_trmph] = visit_counts.get(move_trmph, 0) / total_visits
+        
         # Add comparison data
         mcts_probs = tree_data["mcts_probabilities"]
         for move_trmph in legal_move_probs:
             direct_prob = legal_move_probs.get(move_trmph, 0)
             mcts_prob = mcts_probs.get(move_trmph, 0.0)
+            temp_scaled_prob = temperature_scaled_mcts_probs.get(move_trmph, 0.0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
                 "mcts_probability": mcts_prob,
+                "mcts_temperature_scaled_probability": temp_scaled_prob,
                 "difference": mcts_prob - direct_prob
             }
         
