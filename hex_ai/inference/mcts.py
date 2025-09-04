@@ -1013,7 +1013,7 @@ class BaselineMCTS:
                      root.is_expanded and not root.is_terminal)
         
         # DEBUG: Print Gumbel decision
-        print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
+        # print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
         
         if use_gumbel:
             if verbose >= 1:
@@ -1117,7 +1117,7 @@ class BaselineMCTS:
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
         
         # Run batched Gumbel-AlphaZero selection with temperature
-        print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
+        # print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
