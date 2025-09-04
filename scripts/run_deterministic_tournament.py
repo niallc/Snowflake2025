@@ -914,7 +914,7 @@ Examples:
   %(prog)s --model=current_best --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
   
   # Compare different PUCT exploration constants
-  %(prog)s --model=current_best --strategies=mcts_100,mcts_100,mcts_100 --c-puct=1.2,1.5,2.0 --num-openings=50
+  %(prog)s --model=current_best --strategies=mcts_100,mcts_100,mcts_100 --c-puct=2.2,2.8,3.6 --num-openings=50
         """
     )
     
@@ -939,7 +939,7 @@ Examples:
     parser.add_argument('--batch-sizes', type=str,
                        help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
     parser.add_argument('--c-puct', type=str,
-                       help=f'Comma-separated PUCT exploration constants for MCTS strategies (e.g., "1.2,1.5,2.0", default: {DEFAULT_C_PUCT})')
+                       help=f'Comma-separated PUCT exploration constants for MCTS strategies (e.g., "2.4,2.8,3.6", default: {DEFAULT_C_PUCT})')
     parser.add_argument('--enable-gumbel', type=str,
                        help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,

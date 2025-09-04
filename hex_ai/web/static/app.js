@@ -94,10 +94,10 @@ let state = {
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_num_simulations: 46,
-  red_num_simulations: 46,
-  blue_exploration_constant: 1.4,
-  red_exploration_constant: 1.4,
+  blue_num_simulations: 90,
+  red_num_simulations: 90,
+  blue_exploration_constant: 2.9,
+  red_exploration_constant: 2.9,
   // Gumbel settings
   blue_enable_gumbel: false,
   red_enable_gumbel: false,

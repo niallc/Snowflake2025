@@ -285,7 +285,7 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
     return None
 
 
-def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
+def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
                    temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
                    enable_gumbel=True, gumbel_max_sims=500):
     """Make one computer move using MCTS and return the new state with diagnostics."""
@@ -1068,7 +1068,7 @@ def api_mcts_move():
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     num_simulations = data.get("num_simulations", 200)
-    exploration_constant = data.get("exploration_constant", 1.4)
+    exploration_constant = data.get("exploration_constant", 2.8)
     temperature = data.get("temperature", 1.0)
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
