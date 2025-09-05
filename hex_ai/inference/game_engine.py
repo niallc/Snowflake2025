@@ -69,6 +69,9 @@ def _initialize_neighbors():
 # Initialize the neighbor lookup table
 _initialize_neighbors()
 
+# Performance instrumentation
+INIT_REBUILDS = 0
+
 def rowcol_to_index(r: int, c: int) -> int:
     """Convert (row, col) to DSU index."""
     return r * BOARD_SIZE + c
@@ -240,7 +243,8 @@ class HexGameState:
 
     def __init__(self, _current_player: Player, board: Optional[np.ndarray] = None,
                  move_history: Optional[List[Tuple[int, int]]] = None,
-                 game_over: bool = False, winner: Optional[WinnerEnum] = None):
+                 game_over: bool = False, winner: Optional[WinnerEnum] = None,
+                 *, skip_initial_connectivity: bool = False):
         # Initialize board
         self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
         # Initialize current player with compatibility for legacy int
@@ -257,8 +261,9 @@ class HexGameState:
         # Initialize DSUs for connectivity tracking
         self.red_dsu, self.blue_dsu = _create_dsu_pair()
         
-        # Build initial connectivity from board state
-        self._build_initial_connectivity()
+        # Build initial connectivity from board state (unless skipped for performance)
+        if not skip_initial_connectivity:
+            self._build_initial_connectivity()
     
     @property
     def board_2nxn(self) -> torch.Tensor:
@@ -346,8 +351,8 @@ class HexGameState:
         self.move_history.append((row, col))
         self._current_player = Player.RED if self._current_player == Player.BLUE else Player.BLUE
         
-        # Connect the new piece to its neighbors
-        self._connect_piece_to_neighbors(row, col)
+        # Connect only the new piece to its neighbors (optimized)
+        self._connect_new_piece_only(row, col, piece)
         
         # Check for winner using efficient connectivity
         winner = self._check_winner_efficient()
@@ -405,6 +410,9 @@ class HexGameState:
 
     def _build_initial_connectivity(self) -> None:
         """Build initial connectivity from the current board state."""
+        global INIT_REBUILDS
+        INIT_REBUILDS += 1
+        
         # Connect all existing pieces to their neighbors
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
@@ -415,6 +423,34 @@ class HexGameState:
         """Connect a piece to its same-color neighbors using efficient DSU."""
         piece_idx = rowcol_to_index(row, col)
         piece_color = self.board[row, col]
+        
+        # Choose the appropriate DSU
+        dsu = self.red_dsu if piece_color == PieceEnum.RED.value else self.blue_dsu
+        
+        # Connect to same-color neighbors
+        for neighbor_idx in NEIGHBORS[piece_idx]:
+            nr, nc = index_to_rowcol(neighbor_idx)
+            if self.board[nr, nc] == piece_color:
+                dsu.union(piece_idx, neighbor_idx)
+        
+        # Connect to edges if on board edge
+        for edge_idx in _get_edge_connections(row, col, piece_color):
+            dsu.union(piece_idx, edge_idx)
+    
+    def _connect_new_piece_only(self, row: int, col: int, piece: PieceEnum) -> None:
+        """
+        Connect only the new piece to its neighbors and edges.
+        
+        This is the optimized version that only connects the newly placed piece,
+        avoiding the expensive full board scan.
+        
+        Args:
+            row: Row index of the new piece
+            col: Column index of the new piece  
+            piece: The piece that was placed
+        """
+        piece_idx = rowcol_to_index(row, col)
+        piece_color = piece.value
         
         # Choose the appropriate DSU
         dsu = self.red_dsu if piece_color == PieceEnum.RED.value else self.blue_dsu
@@ -441,19 +477,35 @@ class HexGameState:
         
         return None
 
+    def fast_copy(self) -> 'HexGameState':
+        """Create a fast copy of the state without rebuilding connectivity."""
+        new_state = HexGameState(
+            _current_player=self._current_player,
+            board=self.board.copy(),
+            move_history=self.move_history.copy(),
+            game_over=self.game_over,
+            winner=self._winner,
+            skip_initial_connectivity=True  # Skip the expensive rebuild
+        )
+        # Copy DSUs from parent state
+        new_state.red_dsu = self.red_dsu.copy()
+        new_state.blue_dsu = self.blue_dsu.copy()
+        return new_state
+
     def _create_child_state(self, row: int, col: int) -> 'HexGameState':
-        """Create a child state with the given move applied."""
+        """Create a child state with the given move applied using fast copy."""
         piece = PieceEnum.BLUE if self._current_player == Player.BLUE else PieceEnum.RED
         new_board = place_piece(self.board, row, col, piece)
         new_move_history = self.move_history + [(row, col)]
         
-        # Create new state with copied DSUs
+        # Create new state using fast copy to avoid connectivity rebuild
         new_state = HexGameState(
             _current_player=Player.RED if self._current_player == Player.BLUE else Player.BLUE,
             board=new_board,
             move_history=new_move_history,
             game_over=False,
-            winner=None
+            winner=None,
+            skip_initial_connectivity=True  # Skip the expensive rebuild
         )
         
         # Copy DSUs from parent state
@@ -467,11 +519,12 @@ class HexGameState:
         if not self.is_valid_move(row, col):
             raise ValueError(f"Invalid move: ({row}, {col})")
         
-        # Create child state with the move applied
+        # Create child state with the move applied (no connectivity rebuild)
         new_state = self._create_child_state(row, col)
         
-        # Connect the new piece to its neighbors
-        new_state._connect_piece_to_neighbors(row, col)
+        # Connect only the new piece to its neighbors (optimized)
+        piece = PieceEnum.BLUE if self._current_player == Player.BLUE else PieceEnum.RED
+        new_state._connect_new_piece_only(row, col, piece)
         
         # Check for winner using efficient connectivity
         winner = new_state._check_winner_efficient()
