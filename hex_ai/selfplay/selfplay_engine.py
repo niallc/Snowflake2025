@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
 from hex_ai.enums import Winner
-from hex_ai.inference.game_engine import HexGameEngine, HexGameState
+from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty_hex_state
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
@@ -297,27 +297,23 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move if strategy provided
-                opening_move = None
-                if opening_strategy is not None:
-                    opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move if strategy provided
+            opening_move = None
+            if opening_strategy is not None:
+                opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
@@ -353,30 +349,26 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move if strategy provided
-                opening_move = None
-                if opening_strategy is not None:
-                    opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Save immediately to avoid data loss
-                self.save_game_to_stream(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move if strategy provided
+            opening_move = None
+            if opening_strategy is not None:
+                opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Save immediately to avoid data loss
+            self.save_game_to_stream(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
@@ -412,25 +404,21 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move from strategy
-                opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move from strategy
+            opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
