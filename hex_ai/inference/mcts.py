@@ -90,14 +90,12 @@ DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
-# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
 DEFAULT_TERMINAL_MOVE_BOOST = 2.0
 
 # Default virtual loss for non-terminal moves
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
-# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
 
 
@@ -426,7 +424,7 @@ class BaselineMCTSConfig:
     # Gumbel temperature control parameters
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
     temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
-    gumbel_temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Use same cutoff as vanilla MCTS
+    gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -2019,7 +2017,7 @@ def create_mcts_config(
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-        "gumbel_temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,  # Use same cutoff as vanilla MCTS
+        "gumbel_temperature_deterministic_cutoff": -1.0,  # Disable cutoff for Gumbel
     }
     
     # Only set parameters if not already provided in kwargs

@@ -16,6 +16,7 @@ from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import validate_trmph_winner
@@ -104,6 +105,7 @@ class SelfPlayEngine:
         if self.streaming_save:
             os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
             # Write header
+            git_info = get_git_commit_info()
             with open(self.streaming_file, 'w') as f:
                 f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
                 f.write(f"# Model: {model_path}\n")
@@ -111,6 +113,7 @@ class SelfPlayEngine:
                 f.write(f"# C_PUCT: {c_puct}\n")
                 f.write(f"# Gumbel root selection: {enable_gumbel}\n")
                 f.write(f"# Temperature: {temperature}\n")
+                f.write(f"# Git commit: {git_info['status']}\n")
                 f.write("# Format: trmph_string winner\n")
         
         # Logging
@@ -459,6 +462,18 @@ class SelfPlayEngine:
         
         # Save as TRMPH text file using the same format as streaming
         with open(trmph_file, 'w') as f:
+            # Write header with metadata
+            git_info = get_git_commit_info()
+            f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
+            f.write(f"# Model: {self.model_path}\n")
+            f.write(f"# MCTS simulations: {self.mcts_sims}\n")
+            f.write(f"# C_PUCT: {self.c_puct}\n")
+            f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
+            f.write(f"# Temperature: {self.temperature}\n")
+            f.write(f"# Git commit: {git_info['status']}\n")
+            f.write("# Format: trmph_string winner\n")
+            
+            # Write games
             for game in games:
                 self._validate_game_data(game)
                 f.write(f"{game['trmph']} {game['winner']}\n")
