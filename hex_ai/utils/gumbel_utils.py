@@ -283,7 +283,7 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Apply temperature scaling to Gumbel samples
+    # Apply temperature scaling to Gumbel samples (standard Gumbel behavior for tunable randomness)
     g = sample_gumbel(K, rng=rng) * temperature
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
@@ -342,9 +342,8 @@ def gumbel_alpha_zero_root_batched(
         for a in rng.permutation(arms_list)[:extra]:
             counts[a] += 1
         
-        # Flatten into one list for this round and shuffle
+        # Flatten into one list for this round (no shuffling - deterministic order)
         actions = [a for a in arms_list for _ in range(counts[a])]
-        rng.shuffle(actions)
         return actions
     
     # Round allocation and MCTS execution timing

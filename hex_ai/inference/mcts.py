@@ -91,14 +91,14 @@ TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
 # TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
-DEFAULT_TERMINAL_MOVE_BOOST = 1.0
+DEFAULT_TERMINAL_MOVE_BOOST = 2.0
 
 # Default virtual loss for non-terminal moves
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
 # TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
-DEFAULT_DEPTH_DISCOUNT_FACTOR = 1.00
+DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
 
 
 
@@ -426,7 +426,7 @@ class BaselineMCTSConfig:
     # Gumbel temperature control parameters
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
     temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
-    gumbel_temperature_deterministic_cutoff: float = -1.0  # TODO: TEMPORARY - Allow Gumbel to always run its algorithm
+    gumbel_temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Use same cutoff as vanilla MCTS
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -1076,10 +1076,14 @@ class BaselineMCTS:
         legal_mask = np.zeros(action_size, dtype=bool)
         legal_mask[root.legal_indices] = True
         
-        # Get priors with optional Dirichlet noise using helper method
-        # For self-play, apply Dirichlet noise; for evaluation, don't
-        is_self_play = self.cfg.add_root_noise  # Use add_root_noise as proxy for self-play
-        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=is_self_play)
+        # Get priors WITHOUT Dirichlet noise for Gumbel
+        # Gumbel has its own inherent randomness, so we don't add artificial Dirichlet noise
+        # From the Gumbel paper:
+        # In general, we use hyperparameters consistent with the newest MuZero experiments (Schrittwieser
+        # et al., 2021). MuZero’s pseudocode is available thanks to Schrittwieser et al. (2020). Gumbel
+        # MuZero does not need to set the Dirichlet noise hyperparameters, because Gumbel MuZero does
+        # not use Dirichlet noise.
+        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
         
         # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
         # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
@@ -1090,7 +1094,7 @@ class BaselineMCTS:
             selected_action = root.legal_indices.index(selected_tensor_action)
             self._gumbel_selected_action = selected_action
             if verbose >= 4:
-                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}, deterministic")
+                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
             return timing_tracker.get_final_stats()
         
         # Create helper functions for Q and N value access
@@ -1144,7 +1148,7 @@ class BaselineMCTS:
         
         # Optional verbose logging
         if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}")
+            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
         
         timing_tracker.end_timing("gumbel_algorithm")
         
@@ -2015,7 +2019,7 @@ def create_mcts_config(
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-        "gumbel_temperature_deterministic_cutoff": -1.0,  # TODO: TEMPORARY - Allow Gumbel to always run
+        "gumbel_temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,  # Use same cutoff as vanilla MCTS
     }
     
     # Only set parameters if not already provided in kwargs
