@@ -283,8 +283,8 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Apply temperature scaling to Gumbel samples (standard Gumbel behavior for tunable randomness)
-    g = sample_gumbel(K, rng=rng) * temperature
+    # Use fixed Gumbel(0,1) noise as per the paper - temperature should not scale the Gumbel noise
+    g = sample_gumbel(K, rng=rng)
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     

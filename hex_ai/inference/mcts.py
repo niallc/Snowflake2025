@@ -185,6 +185,9 @@ DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
 DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
 DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
 
+# Default top-k filtering for visit count sampling
+DEFAULT_VISIT_SAMPLING_TOP_K = 5
+
 # ------------------ Terminal Move Detector ------------------
 class TerminalMoveDetector:
     """Centralized terminal move detection with consistent behavior."""
@@ -406,11 +409,10 @@ class BaselineMCTSConfig:
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
-    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR  # Discount wins by this factor per depth level
-    # When enabled, wins found deeper in the search tree are discounted to encourage
-    # the algorithm to prefer shorter winning sequences. This helps avoid meandering
-    # when the position is already won. Only applies during MCTS search, not during
-    # high-confidence termination when using the policy network.
+    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR
+    
+    # Top-k filtering for visit count sampling
+    visit_sampling_top_k: int = DEFAULT_VISIT_SAMPLING_TOP_K  # Only consider top-k most visited moves for sampling
     
     # Gumbel-AlphaZero root selection parameters
     enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
@@ -1703,21 +1705,33 @@ class BaselineMCTS:
         move_count = len(root_state.move_history)
         temp = self._root_temperature(move_count)
         
-        # Log effective temperature if verbose
+        # Log effective temperature and top-k filtering if verbose
         if verbose >= 4:
-            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
+            top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
+            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
         
         if temp <= self.cfg.temperature_deterministic_cutoff:
             # Use deterministic selection for very low temperatures to avoid numerical issues
             a_idx = int(np.argmax(counts))
         else:
-            # Apply temperature scaling with validation
+            # Apply top-k filtering and temperature scaling with validation
             try:
-                pi = np.power(counts, 1.0 / temp)
+                # Apply top-k filtering: only consider the top-k most visited moves
+                if self.cfg.visit_sampling_top_k > 0 and len(counts) > self.cfg.visit_sampling_top_k:
+                    # Get indices of top-k moves
+                    top_k_indices = np.argpartition(counts, -self.cfg.visit_sampling_top_k)[-self.cfg.visit_sampling_top_k:]
+                    # Create filtered counts array (set non-top-k moves to 0)
+                    filtered_counts = np.zeros_like(counts)
+                    filtered_counts[top_k_indices] = counts[top_k_indices]
+                else:
+                    filtered_counts = counts
+                
+                # Apply temperature scaling to filtered counts
+                pi = np.power(filtered_counts, 1.0 / temp)
                 if not np.isfinite(pi).all():
-                    raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={counts}, temp={temp}")
+                    raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={filtered_counts}, temp={temp}")
                 if np.sum(pi) <= 0:
-                    raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={counts}, temp={temp}")
+                    raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={filtered_counts}, temp={temp}")
                 pi /= np.sum(pi)
                 a_idx = int(np.random.choice(len(pi), p=pi))
             except (OverflowError, ValueError) as e:
