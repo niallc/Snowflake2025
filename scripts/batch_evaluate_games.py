@@ -73,22 +73,32 @@ def parse_trmph_game(trmph_string: str) -> GameRecord:
     )
 
 
-def evaluate_single_game(game: GameRecord, model_path: str, config: EvaluatorConfig) -> Tuple[EvaluatorReport, Dict[str, Any]]:
+def evaluate_single_game(game: GameRecord, model_path: str, config: EvaluatorConfig) -> Tuple[EvaluatorReport, Dict[str, Any], float]:
     """Evaluate a single game."""
-    # Initialize components
+    # Initialize components (with reduced logging)
     engine = HexGameEngine()
-    model_wrapper = ModelWrapper(model_path)
     
-    # Create evaluator
-    evaluator = StrengthEvaluator(engine, model_wrapper, config)
+    # Temporarily reduce logging level for ModelWrapper
+    import logging
+    old_level = logging.getLogger().level
+    logging.getLogger().setLevel(logging.WARNING)
     
-    # Evaluate game
-    report = evaluator.evaluate_game(game)
-    
-    # Get phase detection stats
-    phase_stats = evaluator.get_phase_detection_stats()
-    
-    return report, phase_stats
+    try:
+        model_wrapper = ModelWrapper(model_path)
+        
+        # Create evaluator (with reduced logging)
+        evaluator = StrengthEvaluator(engine, model_wrapper, config)
+        
+        # Evaluate game
+        report = evaluator.evaluate_game(game)
+        
+        # Get phase detection stats
+        phase_stats = evaluator.get_phase_detection_stats()
+        
+        return report, phase_stats, evaluator.evaluation_time
+    finally:
+        # Restore original logging level
+        logging.getLogger().setLevel(old_level)
 
 
 def calculate_statistics(scores: List[float]) -> Dict[str, float]:
@@ -225,9 +235,6 @@ def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str,
     print(f"\n=== BATCH STRENGTH EVALUATION SUMMARY ===")
     print(f"Source: {metadata['source_file']}")
     print(f"Games evaluated: {metadata['total_games_evaluated']}")
-    print(f"Configuration: {'MCTS' if metadata['config']['use_mcts'] else 'Neural Network Only'}")
-    if metadata['config']['use_mcts']:
-        print(f"MCTS sims: {metadata['config']['mcts_sims']}, C_PUCT: {metadata['config']['mcts_c_puct']}")
     print()
     
     # Phase detection analysis
@@ -451,26 +458,43 @@ Examples:
             sampled_games = all_games
             logger.info(f"Using all {len(all_games)} games")
         
+        # Print configuration info once
+        logger.info(f"Configuration: {'MCTS' if config.use_mcts else 'Neural Network Only'}")
+        if config.use_mcts:
+            logger.info(f"MCTS sims: {config.mcts_sims}, C_PUCT: {config.mcts_c_puct}")
+        logger.info(f"Cache size: {config.cache_size}")
+        logger.info(f"Evaluating {len(sampled_games)} games...")
+        
         # Evaluate games
         all_summaries = []
         all_phase_stats = []
         for i, trmph_string in enumerate(sampled_games):
-            logger.info(f"Evaluating game {i+1}/{len(sampled_games)}")
-            
             try:
                 # Parse game
                 game = parse_trmph_game(trmph_string)
                 
                 # Evaluate game
-                report, phase_stats = evaluate_single_game(game, model_path, config)
+                report, phase_stats, eval_time = evaluate_single_game(game, model_path, config)
                 
                 # Create summary
                 summary = StrengthEvaluator.create_summary_report(report)
                 all_summaries.append(summary)
                 all_phase_stats.append(phase_stats)
                 
+                # Simple progress indicator
+                print(f"Game {i+1}/{len(sampled_games)}: {len(game.moves)} moves, {eval_time:.1f}s", end="")
+                if i < len(sampled_games) - 1:
+                    print(", ", end="", flush=True)
+                else:
+                    print()  # Final newline
+                
             except Exception as e:
                 logger.warning(f"Failed to evaluate game {i+1}: {e}")
+                print(f"Game {i+1}/{len(sampled_games)}: FAILED", end="")
+                if i < len(sampled_games) - 1:
+                    print(", ", end="", flush=True)
+                else:
+                    print()  # Final newline
                 continue
         
         if not all_summaries:
