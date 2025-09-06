@@ -34,7 +34,7 @@ from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 
 # Script imports (moved to top level)
-from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
+from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data, parse_shard_ranges
 from scripts.shuffle_processed_data import DataShuffler
 
 
@@ -58,7 +58,7 @@ class PipelineConfig:
     # Data directories
     base_data_dir: str = "data"
     data_sources: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])
-    skip_files: List[int] = field(default_factory=lambda: [0])
+    shard_ranges: List[str] = field(default_factory=lambda: ["all"])
     selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
     # Processing configuration
@@ -69,6 +69,7 @@ class PipelineConfig:
     
     # Training configuration
     max_samples: int = 35000000
+    max_validation_samples: int = 137000
     results_dir: str = "checkpoints/hyperparameter_tuning"
     
     # Pipeline control
@@ -435,7 +436,7 @@ class TrainingStep:
         
         self.logger.info(f"New data directory: {new_shuffled_dir}")
         self.logger.info(f"Existing data directories: {self.config.data_sources}")
-        self.logger.info(f"Skip files: {self.config.skip_files}")
+        self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
         self.logger.info(f"Results directory: {results_dir}")
         self.logger.info(f"Max samples: {self.config.max_samples}")
         self.logger.info(f"Resume from: {self.config.model_full_path}")
@@ -462,10 +463,10 @@ class TrainingStep:
         # Run training
         if new_shuffled_dir:
             all_data_dirs = [new_shuffled_dir] + self.config.data_sources
-            all_skip_files = [0] + self.config.skip_files  # 0 for new data
+            all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
         else:
             all_data_dirs = self.config.data_sources
-            all_skip_files = self.config.skip_files
+            all_shard_ranges = self.config.shard_ranges
         
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
@@ -476,12 +477,12 @@ class TrainingStep:
             early_stopping_patience=None,
             random_seed=42,
             max_examples_unaugmented=self.config.max_samples,
-            max_validation_examples=95000,  # Default from hyperparam_sweep
+            max_validation_examples=self.config.max_validation_samples,
             experiment_name=None,
             enable_augmentation=True,
             mini_epoch_samples=250000,  # Default from hyperparam_sweep
             resume_from=self.config.model_full_path,
-            skip_files=all_skip_files,
+            shard_ranges=all_shard_ranges,
             shutdown_handler=shutdown_handler,
             run_timestamp=self.config.run_timestamp,
             override_checkpoint_hyperparameters=False,
@@ -696,8 +697,8 @@ Examples:
   # Run with custom settings
   python scripts/training_pipeline.py --use-current-best-model --num-games 50000 --num-workers 5 --temperature 1.0
   
-  # Use multiple data sources (like original bash script)
-  python scripts/training_pipeline.py --use-current-best-model --data-sources data/processed/shuffled data/processed/jul_29_shuffled --skip-files 0 200
+  # Use multiple data directories with specific shard ranges
+  python scripts/training_pipeline.py --use-current-best-model --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
   
   # Use existing raw self-play data
   python scripts/training_pipeline.py --use-current-best-model --selfplay-dir data/sf25/aug_04 --no-selfplay
@@ -725,10 +726,10 @@ Examples:
     # Data configuration
     parser.add_argument("--base-data-dir", default="data", help="Base directory for data")
     parser.add_argument("--selfplay-dir", help="Use existing raw self-play directory (skip self-play generation)")
-    parser.add_argument("--data-sources", type=str, nargs='+', default=["data/processed/shuffled"], 
+    parser.add_argument("--data_dirs", type=str, nargs='+', default=["data/processed/shuffled"], 
                        help="Existing data directories to use for training")
-    parser.add_argument("--skip-files", type=int, nargs='+', default=[0], 
-                       help="Number of files to skip from each data directory (one value per directory)")
+    parser.add_argument("--shard_ranges", type=str, nargs='+',
+                       help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
@@ -736,6 +737,7 @@ Examples:
     
     # Training configuration
     parser.add_argument("--max-samples", type=int, default=35000000, help="Max training samples")
+    parser.add_argument("--max-validation-samples", type=int, default=137000, help="Max validation samples")
     parser.add_argument("--results-dir", default="checkpoints/hyperparameter_tuning", help="Results directory")
     
     # Pipeline control
@@ -792,10 +794,10 @@ def main():
         elif not args.model_path:
             raise ValueError("Must specify either --model-path or --use-current-best-model")
         
-        # Validate data sources and skip files
-        if len(args.data_sources) != len(args.skip_files):
-            raise ValueError(f"Number of data sources ({len(args.data_sources)}) must match number of skip files ({len(args.skip_files)})")
-        
+        # Validate data directories and shard ranges
+        if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
+            raise ValueError(f"Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
+
         # Create configuration
         config = PipelineConfig(
             model_path=args.model_path,
@@ -808,14 +810,15 @@ def main():
             batch_size=args.batch_size,
             cache_size=args.cache_size,
             base_data_dir=args.base_data_dir,
-            data_sources=args.data_sources,
-            skip_files=args.skip_files,
+            data_sources=args.data_dirs,
+            shard_ranges=args.shard_ranges,
             selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
             position_selector=args.position_selector,
             max_workers_trmph=args.max_workers_trmph,
             num_buckets_shuffle=args.num_buckets_shuffle,
             max_samples=args.max_samples,
+            max_validation_samples=args.max_validation_samples,
             results_dir=args.results_dir,
             run_game_collection=args.run_game_collection,
             run_selfplay=not args.no_selfplay and args.selfplay_dir is None,
@@ -835,10 +838,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
-        logger.error(f"Check log file for details: {log_file}")
-        sys.exit(1)
+    # Removed generic Exception handler to allow proper stack traces for debugging
 
 
 if __name__ == "__main__":

@@ -22,7 +22,16 @@ Examples:
      --mcts-sims=150 \
      --mcts-c-puct=1.5
 
-3. Compare models using fixed tree search:
+3. Compare models using MCTS with Gumbel-AlphaZero enabled:
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=50 \
+     --checkpoints="epoch1_mini201.pt.gz,epoch1_mini75.pt.gz" \
+     --strategy=mcts \
+     --mcts-sims=200 \
+     --enable-gumbel \
+     --gumbel-c-visit=50.0
+
+4. Compare models using fixed tree search:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
      --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
@@ -76,6 +85,9 @@ Examples:
   # Compare models using MCTS
   %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=mcts --mcts-sims=200
   
+  # Compare models using MCTS with Gumbel-AlphaZero
+  %(prog)s --num-games=50 --checkpoints="epoch2_mini201.pt.gz,epoch1_mini75.pt.gz" --strategy=mcts --mcts-sims=200 --enable-gumbel
+  
   # Compare models using fixed tree search
   %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=fixed_tree --search-widths="20,10,5"
         """
@@ -101,6 +113,16 @@ Examples:
                        help='Number of MCTS simulations (default: 200)')
     parser.add_argument('--mcts-c-puct', type=float, default=1.5,
                        help='MCTS c_puct parameter (default: 1.5)')
+    parser.add_argument('--enable-gumbel', action='store_true',
+                       help='Enable Gumbel-AlphaZero root selection for MCTS (default: False)')
+    parser.add_argument('--gumbel-sim-threshold', type=int, default=200,
+                       help='Use Gumbel selection when sims <= this threshold (default: 200)')
+    parser.add_argument('--gumbel-c-visit', type=float, default=50.0,
+                       help='Gumbel-AlphaZero c_visit parameter (default: 50.0)')
+    parser.add_argument('--gumbel-c-scale', type=float, default=1.0,
+                       help='Gumbel-AlphaZero c_scale parameter (default: 1.0)')
+    parser.add_argument('--gumbel-m-candidates', type=int,
+                       help='Number of candidates to consider for Gumbel (None for auto)')
     parser.add_argument('--search-widths', type=str,
                        help='Comma-separated search widths for fixed tree search (e.g., "20,10,5")')
     parser.add_argument('--seed', type=int, default=42,
@@ -191,7 +213,13 @@ if __name__ == "__main__":
         strategy_config.update({
             'mcts_sims': args.mcts_sims,
             'mcts_c_puct': args.mcts_c_puct,
+            'enable_gumbel_root_selection': args.enable_gumbel,
+            'gumbel_sim_threshold': args.gumbel_sim_threshold,
+            'gumbel_c_visit': args.gumbel_c_visit,
+            'gumbel_c_scale': args.gumbel_c_scale,
         })
+        if args.gumbel_m_candidates is not None:
+            strategy_config['gumbel_m_candidates'] = args.gumbel_m_candidates
     elif args.strategy == 'fixed_tree':
         if not search_widths:
             print("ERROR: --search-widths is required for fixed_tree strategy")

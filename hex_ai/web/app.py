@@ -491,6 +491,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
             app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
                            f"original_win_prob={algorithm_termination_info.win_prob}, converted={algorithm_win_prob}")
         
+        # Get temperature-scaled MCTS probabilities from tree data (calculated by MCTS core)
+        temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
+        
         mcts_debug_info = {
             "algorithm_info": {
                 "algorithm": algorithm,
@@ -604,40 +607,6 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
                 "efficiency_gain_percent": (1.0 - (stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)))) * 100,
             },
         }
-        
-        # Calculate temperature-scaled MCTS probabilities (what's actually used for move selection)
-        temperature_scaled_mcts_probs = {}
-        if tree_data["mcts_probabilities"] and not algorithm_termination_info:
-            # Get visit counts from tree data
-            visit_counts = tree_data["visit_counts"]
-            total_visits = sum(visit_counts.values())
-            
-            if total_visits > 0:
-                # Apply the same temperature scaling as used in _compute_move
-                move_count = len(state.move_history)
-                temp = temperature  # Use the same temperature as passed to the function
-                
-                if temp <= 0.02:  # Deterministic cutoff
-                    # Use raw visit counts (deterministic selection)
-                    for move_trmph, visits in visit_counts.items():
-                        temperature_scaled_mcts_probs[move_trmph] = visits / total_visits
-                else:
-                    # Apply temperature scaling
-                    try:
-                        counts_array = np.array([visit_counts.get(move_trmph, 0) for move_trmph in legal_move_probs.keys()])
-                        pi = np.power(counts_array, 1.0 / temp)
-                        if np.isfinite(pi).all() and np.sum(pi) > 0:
-                            pi /= np.sum(pi)
-                            for i, move_trmph in enumerate(legal_move_probs.keys()):
-                                temperature_scaled_mcts_probs[move_trmph] = float(pi[i])
-                        else:
-                            # Fall back to raw probabilities if temperature scaling fails
-                            for move_trmph in legal_move_probs.keys():
-                                temperature_scaled_mcts_probs[move_trmph] = visit_counts.get(move_trmph, 0) / total_visits
-                    except (OverflowError, ValueError):
-                        # Fall back to raw probabilities
-                        for move_trmph in legal_move_probs.keys():
-                            temperature_scaled_mcts_probs[move_trmph] = visit_counts.get(move_trmph, 0) / total_visits
         
         # Add comparison data
         mcts_probs = tree_data["mcts_probabilities"]

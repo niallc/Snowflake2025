@@ -210,3 +210,99 @@ def combine_and_clean_files(input_dir: Path, output_dir: Path, chunk_size: int =
             f.write(f"  cleaned_chunk_{i:03d}.trmph\n")
     
     logger.info(f"Processing complete! Summary written to {summary_path}")
+
+
+def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
+    """
+    Parse shard range string and return (start, end) tuple.
+    
+    Args:
+        range_str: Range string in format "start-end" or "all"
+        data_dir: Optional data directory for validation (not used in parsing)
+        
+    Returns:
+        Tuple of (start, end) where end=None means use all available shards
+        
+    Raises:
+        ValueError: If range format is invalid
+    """
+    if range_str.lower() == 'all':
+        return (0, None)  # None means use all available shards
+    
+    if '-' not in range_str:
+        raise ValueError(f"Invalid shard range format: {range_str}. Use 'start-end' or 'all'")
+    
+    try:
+        start, end = range_str.split('-', 1)
+        start = int(start)
+        end = int(end)
+        
+        if start < 0 or end < 0:
+            raise ValueError(f"Shard numbers must be non-negative: {range_str}")
+        if start > end:
+            raise ValueError(f"Start shard must be <= end shard: {range_str}")
+        
+        return (start, end)
+    except ValueError as e:
+        if "invalid literal" in str(e):
+            raise ValueError(f"Invalid shard range format: {range_str}. Use 'start-end' or 'all'")
+        raise
+
+
+def parse_shard_ranges(shard_ranges: list, data_dirs: list, logger=None) -> tuple:
+    """
+    Parse multiple shard ranges and convert to skip_files and max_files format.
+    
+    Args:
+        shard_ranges: List of shard range strings (e.g., ["251-300", "all"])
+        data_dirs: List of data directory paths for validation
+        logger: Optional logger for warnings
+        
+    Returns:
+        Tuple of (skip_files_list, max_files_list) - one value per data directory
+        
+    Raises:
+        ValueError: If parsing fails or validation fails
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    # Set default shard ranges if not provided
+    if not shard_ranges:
+        shard_ranges = ["all"] * len(data_dirs)
+        logger.info(f"Using default shard ranges: {shard_ranges}")
+    
+    # Validate lengths match
+    if len(shard_ranges) != len(data_dirs):
+        raise ValueError(f"Number of shard ranges ({len(shard_ranges)}) must match number of data directories ({len(data_dirs)})")
+    
+    # Parse shard ranges and convert to skip_files and max_files format
+    skip_files = []
+    max_files = []
+    for i, (range_str, data_dir) in enumerate(zip(shard_ranges, data_dirs)):
+        try:
+            start, end = parse_shard_range(range_str, data_dir)
+            
+            if end is None:  # 'all' case
+                skip_files.append(0)
+                max_files.append(None)  # No limit
+            else:
+                # For range start-end, we skip the first 'start' files and limit to 'end-start+1' files
+                skip_files.append(start)
+                max_files.append(end - start + 1)  # Number of files in the range
+                
+                # Check if the data directory has enough shards
+                data_path = Path(data_dir)
+                if data_path.exists():
+                    shard_files = list(data_path.glob("shuffled_*.pkl.gz"))
+                    max_shard = len(shard_files) - 1
+                    if end > max_shard:
+                        logger.warning(f"Data directory {data_dir} only has shards 0-{max_shard}, but range specifies up to {end}")
+                else:
+                    logger.warning(f"Data directory {data_dir} does not exist")
+                    
+        except ValueError as e:
+            raise ValueError(f"Error parsing shard range for {data_dir}: {e}")
+    
+    logger.info(f"Parsed shard ranges: {list(zip(data_dirs, shard_ranges, skip_files, max_files))}")
+    return skip_files, max_files

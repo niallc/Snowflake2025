@@ -7,7 +7,7 @@ separate from general value processing utilities.
 
 import math
 import numpy as np
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 # =============================
 # MCTS Tree Analysis Utilities
@@ -237,7 +237,7 @@ def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any],
     return tree_data
 
 
-def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10) -> dict:
+def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10, temperature_scaled_probs: Optional[Dict[str, float]] = None) -> dict:
     """
     Format MCTS tree data for API consumption.
     
@@ -322,7 +322,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
     # Get principal variation
     principal_variation = extract_principal_variation_from_tree(root_node, max_length=max_pv_length)
 
-    return {
+    result = {
         "visit_counts": visit_counts,
         "mcts_probabilities": mcts_probabilities,
         "v_ptm_ref_signed_root": v_ptm_ref_signed_root,
@@ -333,3 +333,151 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         "max_depth": max_depth,
         "principal_variation": principal_variation
     }
+    
+    # Add temperature-scaled probabilities if provided
+    if temperature_scaled_probs is not None:
+        result["temperature_scaled_probabilities"] = temperature_scaled_probs
+    
+    return result
+
+
+# =============================
+# Temperature Scaling Utilities
+# =============================
+
+def calculate_temperature_scaled_probs(root_node, root_state, cfg) -> Dict[str, float]:
+    """
+    Calculate temperature-scaled probabilities for all legal moves.
+    
+    This is the same logic used in MCTS move selection, extracted
+    into a reusable utility for debugging and analysis purposes.
+    
+    Args:
+        root_node: MCTS root node containing visit counts
+        root_state: Current game state for move count
+        cfg: MCTS configuration containing temperature parameters
+        
+    Returns:
+        Dictionary mapping move TRMPH strings to temperature-scaled probabilities
+    """
+    from hex_ai.utils.format_conversion import rowcol_to_trmph
+    
+    counts = root_node.N.astype(np.float64)
+    total_visits = counts.sum()
+    
+    if total_visits <= 0:
+        # No visits - return uniform probabilities
+        legal_moves = root_node.legal_moves
+        uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0.0
+        return {rowcol_to_trmph(row, col): uniform_prob for row, col in legal_moves}
+    
+    # Calculate temperature with decay
+    move_count = len(root_state.move_history)
+    temp = _calculate_root_temperature(move_count, cfg)
+    
+    temperature_scaled_probs = {}
+    
+    if temp <= cfg.temperature_deterministic_cutoff:
+        # Deterministic selection - use raw visit counts
+        for i, (row, col) in enumerate(root_node.legal_moves):
+            move_trmph = rowcol_to_trmph(row, col)
+            temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+    else:
+        # Apply temperature scaling using the same logic as move selection
+        try:
+            # Apply top-k filtering if configured
+            if cfg.visit_sampling_top_k > 0 and len(counts) > cfg.visit_sampling_top_k:
+                top_k_indices = np.argpartition(counts, -cfg.visit_sampling_top_k)[-cfg.visit_sampling_top_k:]
+                filtered_counts = np.zeros_like(counts)
+                filtered_counts[top_k_indices] = counts[top_k_indices]
+            else:
+                filtered_counts = counts
+            
+            # Apply temperature scaling
+            pi = np.power(filtered_counts, 1.0 / temp)
+            if np.isfinite(pi).all() and np.sum(pi) > 0:
+                pi /= np.sum(pi)
+                for i, (row, col) in enumerate(root_node.legal_moves):
+                    move_trmph = rowcol_to_trmph(row, col)
+                    temperature_scaled_probs[move_trmph] = float(pi[i])
+            else:
+                # Fall back to raw probabilities
+                for i, (row, col) in enumerate(root_node.legal_moves):
+                    move_trmph = rowcol_to_trmph(row, col)
+                    temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+        except (OverflowError, ValueError):
+            # Fall back to raw probabilities
+            for i, (row, col) in enumerate(root_node.legal_moves):
+                move_trmph = rowcol_to_trmph(row, col)
+                temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+    
+    return temperature_scaled_probs
+
+
+def select_move_index(counts: np.ndarray, temp: float, cfg) -> int:
+    """
+    Select a move index using temperature scaling and top-k filtering.
+    
+    This is the core move selection logic extracted for reuse.
+    
+    Args:
+        counts: Visit counts for all legal moves
+        temp: Current temperature value
+        cfg: MCTS configuration containing filtering parameters
+        
+    Returns:
+        Index of the selected move
+    """
+    if temp <= cfg.temperature_deterministic_cutoff:
+        # Use deterministic selection for very low temperatures to avoid numerical issues
+        return int(np.argmax(counts))
+    else:
+        # Apply top-k filtering and temperature scaling with validation
+        try:
+            # Apply top-k filtering: only consider the top-k most visited moves
+            if cfg.visit_sampling_top_k > 0 and len(counts) > cfg.visit_sampling_top_k:
+                # Get indices of top-k moves
+                top_k_indices = np.argpartition(counts, -cfg.visit_sampling_top_k)[-cfg.visit_sampling_top_k:]
+                # Create filtered counts array (set non-top-k moves to 0)
+                filtered_counts = np.zeros_like(counts)
+                filtered_counts[top_k_indices] = counts[top_k_indices]
+            else:
+                filtered_counts = counts
+            
+            # Apply temperature scaling to filtered counts
+            pi = np.power(filtered_counts, 1.0 / temp)
+            if not np.isfinite(pi).all():
+                raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={filtered_counts}, temp={temp}")
+            if np.sum(pi) <= 0:
+                raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={filtered_counts}, temp={temp}")
+            pi /= np.sum(pi)
+            return int(np.random.choice(len(pi), p=pi))
+        except (OverflowError, ValueError) as e:
+            # Fall back to deterministic selection if temperature scaling fails
+            print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
+            return int(np.argmax(counts))
+
+
+def _calculate_root_temperature(move_count: int, cfg) -> float:
+    """
+    Calculate the root temperature based on move count and configuration.
+    
+    This is a helper function that encapsulates the temperature decay logic.
+    """
+    if cfg.temperature_decay_type == 'exponential':
+        # Exponential decay: temp = start * (end/start)^(move_count/decay_moves)
+        if cfg.temperature_start <= 0 or cfg.temperature_end <= 0:
+            return cfg.temperature_start
+        decay_factor = cfg.temperature_end / cfg.temperature_start
+        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
+        return cfg.temperature_start * (decay_factor ** progress)
+    elif cfg.temperature_decay_type == 'step':
+        # Step decay: use thresholds and values
+        for threshold, value in zip(cfg.temperature_step_thresholds, cfg.temperature_step_values):
+            if move_count < threshold:
+                return value
+        return cfg.temperature_end
+    else:
+        # Linear decay or unknown type - fall back to linear
+        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
+        return cfg.temperature_start + (cfg.temperature_end - cfg.temperature_start) * progress

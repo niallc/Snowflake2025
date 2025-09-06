@@ -884,8 +884,8 @@ class BaselineMCTS:
         timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
         
         # Compute results directly
-        move = self._compute_move(root, root_state, verbose)
-        tree_data = self.get_tree_data(root)
+        move, temperature_scaled_probs = self._compute_move(root, root_state, verbose)
+        tree_data = self.get_tree_data(root, temperature_scaled_probs)
         win_probability = self.get_win_probability(root, root_state)
         
         # Create base stats
@@ -919,14 +919,18 @@ class BaselineMCTS:
 
     # ---------- Data Access (Getters) ----------
     
-    def get_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
+    def get_tree_data(self, root: MCTSNode, temperature_scaled_probs: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
         Get formatted tree data for API consumption.
+        
+        Args:
+            root: Root node of the MCTS tree
+            temperature_scaled_probs: Temperature-scaled probabilities for all legal moves
         
         Returns:
             Dictionary containing formatted tree data for API consumption
         """
-        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH)
+        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH, temperature_scaled_probs)
         
         # Add detailed exploration data if available
         tree_data = add_detailed_exploration_to_tree_data(
@@ -1677,7 +1681,7 @@ class BaselineMCTS:
         else:
             raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
 
-    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[int, int]:
+    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
         """Compute the selected move from the root node."""
         # Check if Gumbel selection was used and return the selected action
         if hasattr(self, '_gumbel_selected_action'):
@@ -1685,7 +1689,10 @@ class BaselineMCTS:
             selected_move = root.legal_moves[selected_action]
             if verbose >= 2:
                 print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
-            return selected_move
+            # For Gumbel selection, create temperature-scaled probabilities from visit counts
+            from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs
+            temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+            return selected_move, temperature_scaled_probs
         
         # Check if a terminal move was found during pre-check
         if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
@@ -1694,7 +1701,10 @@ class BaselineMCTS:
                 terminal_move = root.legal_moves[terminal_indices[0]]
                 if verbose >= 2:
                     print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
-                return terminal_move
+                # For terminal moves, create temperature-scaled probabilities from visit counts
+                from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs
+                temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+                return terminal_move, temperature_scaled_probs
 
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
@@ -1710,35 +1720,14 @@ class BaselineMCTS:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
         
-        if temp <= self.cfg.temperature_deterministic_cutoff:
-            # Use deterministic selection for very low temperatures to avoid numerical issues
-            a_idx = int(np.argmax(counts))
-        else:
-            # Apply top-k filtering and temperature scaling with validation
-            try:
-                # Apply top-k filtering: only consider the top-k most visited moves
-                if self.cfg.visit_sampling_top_k > 0 and len(counts) > self.cfg.visit_sampling_top_k:
-                    # Get indices of top-k moves
-                    top_k_indices = np.argpartition(counts, -self.cfg.visit_sampling_top_k)[-self.cfg.visit_sampling_top_k:]
-                    # Create filtered counts array (set non-top-k moves to 0)
-                    filtered_counts = np.zeros_like(counts)
-                    filtered_counts[top_k_indices] = counts[top_k_indices]
-                else:
-                    filtered_counts = counts
-                
-                # Apply temperature scaling to filtered counts
-                pi = np.power(filtered_counts, 1.0 / temp)
-                if not np.isfinite(pi).all():
-                    raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={filtered_counts}, temp={temp}")
-                if np.sum(pi) <= 0:
-                    raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={filtered_counts}, temp={temp}")
-                pi /= np.sum(pi)
-                a_idx = int(np.random.choice(len(pi), p=pi))
-            except (OverflowError, ValueError) as e:
-                # Fall back to deterministic selection if temperature scaling fails
-                print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
-                a_idx = int(np.argmax(counts))
-        return root.legal_moves[a_idx]
+        # Create temperature-scaled probabilities for all moves (for debugging/analysis)
+        from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs, select_move_index
+        temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+        
+        # Select move using the same logic as the utility function
+        a_idx = select_move_index(counts, temp, self.cfg)
+        return root.legal_moves[a_idx], temperature_scaled_probs
+
 
     # ---------- Internal Implementation ----------
     
