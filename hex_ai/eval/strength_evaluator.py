@@ -24,25 +24,12 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine, make_empty
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.value_utils import ValuePredictor, signed_to_prob, red_ref_signed_to_ptm_ref_signed
+from hex_ai.value_utils import ValuePredictor, red_ref_signed_to_ptm_ref_signed, policy_logits_to_probs
 from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
 from hex_ai.utils.state_utils import board_key
 from hex_ai.config import BOARD_SIZE
 
 logger = logging.getLogger(__name__)
-
-
-class PolicySource(Enum):
-    """Source for policy evaluation."""
-    POLICY_NET = "policy_net"
-    MCTS_PRIORS = "mcts_priors"
-
-
-class ValueSource(Enum):
-    """Source for value evaluation."""
-    VALUE_NET = "value_net"
-    MCTS_Q = "mcts_q"
-    MCTS_VALUE_AT_ROOT = "mcts_value_at_root"
 
 
 class AggregationMethod(Enum):
@@ -68,9 +55,7 @@ class EvaluatorConfig:
     endgame_streak: int = 3
     
     # Evaluation parameters
-    use_value_prob_space: bool = True
-    policy_source: PolicySource = PolicySource.MCTS_PRIORS
-    value_source: ValueSource = ValueSource.MCTS_Q
+    use_mcts: bool = True  # True = MCTS-based evaluation, False = neural network only
     
     # MCTS parameters
     mcts_sims: int = 200
@@ -182,8 +167,8 @@ class StrengthEvaluator:
             np.random.seed(cfg.rng_seed)
         
         # Initialize caches
-        self.policy_cache: OrderedDict[int, np.ndarray] = OrderedDict()
-        self.value_cache: OrderedDict[int, float] = OrderedDict()
+        self.policy_cache: OrderedDict[int, Dict[Tuple[int, int], float]] = OrderedDict()
+        self.value_cache: OrderedDict[int, Dict[Tuple[int, int], float]] = OrderedDict()
         self.mcts_cache: OrderedDict[int, Any] = OrderedDict()
         
         # Performance tracking
@@ -296,7 +281,7 @@ class StrengthEvaluator:
                 # Use value net for quick estimate
                 try:
                     _, value_signed = self.model_wrapper.predict(
-                        self._state_to_tensor(state)
+                        state.get_board_tensor()
                     )
                     # Convert to actor reference frame
                     actor = state.current_player_enum
@@ -371,8 +356,7 @@ class StrengthEvaluator:
                     evaluator_metadata={
                         "mcts_sims": self.cfg.mcts_sims,
                         "c_puct": self.cfg.mcts_c_puct,
-                        "policy_source": self.cfg.policy_source.value,
-                        "value_source": self.cfg.value_source.value
+                        "use_mcts": self.cfg.use_mcts
                     }
                 )
                 
@@ -397,12 +381,10 @@ class StrengthEvaluator:
         
         self.cache_misses += 1
         
-        if self.cfg.policy_source == PolicySource.POLICY_NET:
-            policy_dict = self._evaluate_policy_net(state)
-        elif self.cfg.policy_source == PolicySource.MCTS_PRIORS:
-            policy_dict = self._evaluate_policy_mcts(state)
+        if self.cfg.use_mcts:
+            policy_dict, _ = self._run_mcts_shared(state)
         else:
-            raise ValueError(f"Unknown policy source: {self.cfg.policy_source}")
+            policy_dict = self._evaluate_policy_neural_net(state)
         
         # Cache result
         if len(self.policy_cache) >= self.cfg.cache_size:
@@ -412,41 +394,75 @@ class StrengthEvaluator:
         m_best = max(policy_dict.keys(), key=lambda k: policy_dict[k])
         return policy_dict, m_best
     
-    def _evaluate_policy_net(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
-        """Evaluate policy using neural network."""
-        policy_logits, _ = self.model_wrapper.predict(self._state_to_tensor(state))
-        policy_probs = self._logits_to_probs(policy_logits.numpy())
+    def _evaluate_policy_neural_net(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
+        """Evaluate policy using neural network only."""
+        policy_logits, _ = self.model_wrapper.predict(state.get_board_tensor())
+        policy_logits_np = policy_logits.numpy()
         
         legal_moves = state.get_legal_moves()
-        policy_dict = {}
         
-        for row, col in legal_moves:
-            idx = row * BOARD_SIZE + col
-            policy_dict[(row, col)] = float(policy_probs[idx])
+        # Use utility function to properly mask illegal moves and get legal probabilities
+        from hex_ai.utils.math_utils import policy_logits_to_legal_probs
+        legal_probs = policy_logits_to_legal_probs(policy_logits_np, legal_moves, BOARD_SIZE)
+        
+        # Create dictionary mapping moves to probabilities
+        policy_dict = {}
+        for (row, col), prob in zip(legal_moves, legal_probs):
+            policy_dict[(row, col)] = float(prob)
         
         return policy_dict
     
-    def _evaluate_policy_mcts(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
-        """Evaluate policy using MCTS."""
+    def _run_mcts_shared(self, state: HexGameState) -> Tuple[Dict[Tuple[int, int], float], Dict[Tuple[int, int], float]]:
+        """
+        Run MCTS once and return both policy (visit counts) and value (Q-values) data.
+        
+        This avoids duplicate MCTS runs when both policy_source=MCTS_PRIORS and value_source=MCTS_Q.
+        
+        Returns:
+            Tuple of (policy_dict, value_dict) where both map moves to their respective scores
+        """
+        state_hash = board_key(state)
+        
+        # Check MCTS cache first
+        if state_hash in self.mcts_cache:
+            self.cache_hits += 1
+            return self.mcts_cache[state_hash]
+        
+        self.cache_misses += 1
+        
+        # Run MCTS once
         mcts = BaselineMCTS(self.engine, self.model_wrapper, self.mcts_config)
         result = mcts.run(state)
         root = result.root_node
         
-        legal_moves = state.get_legal_moves()
+        # Extract policy data (visit counts normalized to probabilities)
         policy_dict = {}
-        
-        # Use root visit counts as policy
         total_visits = sum(root.N)
         if total_visits > 0:
-            for i, (row, col) in enumerate(legal_moves):
+            for i, (row, col) in enumerate(root.legal_moves):
                 policy_dict[(row, col)] = float(root.N[i]) / total_visits
         else:
             # Fallback to uniform distribution
-            uniform_prob = 1.0 / len(legal_moves)
-            for row, col in legal_moves:
+            uniform_prob = 1.0 / len(root.legal_moves)
+            for row, col in root.legal_moves:
                 policy_dict[(row, col)] = uniform_prob
         
-        return policy_dict
+        # Extract value data (Q-values in [-1, 1] signed space)
+        value_dict = {}
+        for i, (row, col) in enumerate(root.legal_moves):
+            q_value = root.Q[i]  # Already in actor reference frame from MCTS
+            
+            # Always use [-1, 1] signed space for consistency
+            value_dict[(row, col)] = q_value
+        
+        # Cache the result
+        if len(self.mcts_cache) >= self.cfg.cache_size:
+            self.mcts_cache.popitem(last=False)
+        self.mcts_cache[state_hash] = (policy_dict, value_dict)
+        
+        return policy_dict, value_dict
+    
+# Removed _evaluate_policy_mcts - now handled by _run_mcts_shared
     
     def _evaluate_value(self, state: HexGameState) -> Tuple[Dict[Tuple[int, int], float], Tuple[int, int]]:
         """Evaluate value for a position."""
@@ -461,14 +477,10 @@ class StrengthEvaluator:
         
         self.cache_misses += 1
         
-        if self.cfg.value_source == ValueSource.VALUE_NET:
-            value_dict = self._evaluate_value_net(state)
-        elif self.cfg.value_source == ValueSource.MCTS_Q:
-            value_dict = self._evaluate_value_mcts(state)
-        elif self.cfg.value_source == ValueSource.MCTS_VALUE_AT_ROOT:
-            value_dict = self._evaluate_value_mcts_root(state)
+        if self.cfg.use_mcts:
+            _, value_dict = self._run_mcts_shared(state)
         else:
-            raise ValueError(f"Unknown value source: {self.cfg.value_source}")
+            value_dict = self._evaluate_value_neural_net(state)
         
         # Cache result
         if len(self.value_cache) >= self.cfg.cache_size:
@@ -478,68 +490,31 @@ class StrengthEvaluator:
         m_best = max(value_dict.keys(), key=lambda k: value_dict[k])
         return value_dict, m_best
     
-    def _evaluate_value_net(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
-        """Evaluate value using neural network for all legal moves."""
+    def _evaluate_value_neural_net(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
+        """Evaluate value using neural network for all legal moves with batching."""
         legal_moves = state.get_legal_moves()
-        value_dict = {}
         
+        # Prepare batch of board tensors for all legal moves
+        board_tensors = []
         for row, col in legal_moves:
-            # Apply move and evaluate
             new_state = state.make_move(row, col)
-            _, value_signed = self.model_wrapper.predict(self._state_to_tensor(new_state))
-            
-            # Convert to actor reference frame
-            actor = state.current_player_enum
+            board_tensors.append(new_state.get_board_tensor())
+        
+        # Use existing batched inference (much more efficient than individual calls)
+        batch_tensor = torch.stack(board_tensors, dim=0)
+        _, values_signed = self.model_wrapper.batch_predict(batch_tensor)
+        
+        # Convert from RED reference frame to actor reference frame and build result dict
+        actor = state.current_player_enum
+        value_dict = {}
+        for (row, col), value_signed in zip(legal_moves, values_signed):
             value_actor = red_ref_signed_to_ptm_ref_signed(value_signed.item(), actor)
-            
-            # Convert to probability if configured
-            if self.cfg.use_value_prob_space:
-                value_dict[(row, col)] = signed_to_prob(value_actor)
-            else:
-                value_dict[(row, col)] = value_actor
+            value_dict[(row, col)] = value_actor
         
         return value_dict
     
-    def _evaluate_value_mcts(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
-        """Evaluate value using MCTS Q-values."""
-        mcts = BaselineMCTS(self.engine, self.model_wrapper, self.mcts_config)
-        result = mcts.run(state)
-        root = result.root_node
-        
-        legal_moves = state.get_legal_moves()
-        value_dict = {}
-        
-        for i, (row, col) in enumerate(legal_moves):
-            q_value = root.Q[i]  # Already in actor reference frame
-            
-            # Convert to probability if configured
-            if self.cfg.use_value_prob_space:
-                value_dict[(row, col)] = signed_to_prob(q_value)
-            else:
-                value_dict[(row, col)] = q_value
-        
-        return value_dict
+# Removed _evaluate_value_mcts - now handled by _run_mcts_shared
     
-    def _evaluate_value_mcts_root(self, state: HexGameState) -> Dict[Tuple[int, int], float]:
-        """Evaluate value using MCTS root value."""
-        mcts = BaselineMCTS(self.engine, self.model_wrapper, self.mcts_config)
-        result = mcts.run(state)
-        root = result.root_node
-        
-        # Use root value for all moves (simplified approach)
-        root_value = root.W[0] / max(root.N[0], 1)  # Average value
-        
-        legal_moves = state.get_legal_moves()
-        value_dict = {}
-        
-        for row, col in legal_moves:
-            # Convert to probability if configured
-            if self.cfg.use_value_prob_space:
-                value_dict[(row, col)] = signed_to_prob(root_value)
-            else:
-                value_dict[(row, col)] = root_value
-        
-        return value_dict
     
     def _calculate_delta_policy(self, policy_dict: Dict[Tuple[int, int], float], 
                                chosen_move: Tuple[int, int]) -> float:
@@ -554,7 +529,11 @@ class StrengthEvaluator:
     
     def _calculate_delta_value(self, value_dict: Dict[Tuple[int, int], float], 
                               chosen_move: Tuple[int, int]) -> float:
-        """Calculate value delta for chosen move."""
+        """
+        Calculate value delta for chosen move.
+        
+        Note: This operates on [-1, 1] signed space values for consistency with MCTS.
+        """
         if chosen_move not in value_dict:
             return 0.0
         
@@ -699,28 +678,6 @@ class StrengthEvaluator:
             }
         }
     
-    def _state_to_tensor(self, state: HexGameState) -> torch.Tensor:
-        """Convert game state to tensor format for model inference."""
-        # Convert board to 3-channel tensor
-        board_tensor = torch.zeros(3, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
-        
-        for row in range(BOARD_SIZE):
-            for col in range(BOARD_SIZE):
-                piece = state.board[row, col]
-                if piece == Piece.BLUE.value:
-                    board_tensor[0, row, col] = 1.0
-                elif piece == Piece.RED.value:
-                    board_tensor[1, row, col] = 1.0
-        
-        # Set player-to-move channel
-        board_tensor[2, :, :] = float(state.current_player_enum.value)
-        
-        return board_tensor
-    
-    def _logits_to_probs(self, logits: np.ndarray) -> np.ndarray:
-        """Convert logits to probabilities using softmax."""
-        exp_logits = np.exp(logits - np.max(logits))  # Numerical stability
-        return exp_logits / np.sum(exp_logits)
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache performance statistics."""
