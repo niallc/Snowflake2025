@@ -18,6 +18,7 @@ from enum import Enum
 from collections import OrderedDict
 import numpy as np
 import torch
+from typing import Literal
 
 from hex_ai.enums import Player, Winner, Piece
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, make_empty_hex_state
@@ -32,11 +33,61 @@ from hex_ai.config import BOARD_SIZE
 logger = logging.getLogger(__name__)
 
 
+def discrete_score(score: float, close_enough_thresh: float, small_loss_thresh: float) -> int:
+    """
+    Convert continuous delta score to discrete category.
+    
+    Args:
+        score: Continuous delta value (0.0 to max_possible)
+        close_enough_thresh: Threshold below which score is considered "perfect" (0)
+        small_loss_thresh: Threshold below which score is considered "small loss" (1)
+        
+    Returns:
+        Discrete score: 0 (perfect), 1 (small loss), 2 (significant loss)
+        
+    Raises:
+        ValueError: If score is negative or unexpectedly large
+    """
+    if score < 0:
+        raise ValueError(f"Score cannot be negative: {score}")
+    if score > 1.0:
+        # Allow values > 1.0 for value deltas (which can go up to 2.0)
+        if score > 2.0:
+            raise ValueError(f"Score unexpectedly large: {score}")
+        # For values > 1.0, treat as significant loss
+        return 2
+    
+    if score <= close_enough_thresh:
+        return 0  # Perfect or close enough
+    elif score <= small_loss_thresh:
+        return 1  # Small loss
+    else:
+        return 2  # Significant loss
+
+
+def discrete_score_policy(score: float, close_enough_thresh: float = 0.02, 
+                         small_loss_thresh: float = 0.08) -> int:
+    """Convert policy delta to discrete score with policy-specific thresholds."""
+    return discrete_score(score, close_enough_thresh, small_loss_thresh)
+
+
+def discrete_score_value(score: float, close_enough_thresh: float = 0.01, 
+                        small_loss_thresh: float = 0.04) -> int:
+    """Convert value delta to discrete score with value-specific thresholds."""
+    return discrete_score(score, close_enough_thresh, small_loss_thresh)
+
+
 class AggregationMethod(Enum):
     """Method for aggregating scores across moves."""
     MEAN = "mean"
     MEDIAN = "median"
     TRIMMED_MEAN = "trimmed_mean"
+
+
+class ScoringMethod(Enum):
+    """Method for scoring individual moves."""
+    CONTINUOUS = "continuous"  # Use raw delta values
+    DISCRETE = "discrete"      # Use discrete categories
 
 
 class GamePhase(Enum):
@@ -66,6 +117,15 @@ class EvaluatorConfig:
     # Aggregation parameters
     aggregation: AggregationMethod = AggregationMethod.MEAN
     trimmed_fraction: float = 0.1
+    
+    # Scoring parameters
+    scoring_method: ScoringMethod = ScoringMethod.DISCRETE
+    
+    # Discrete scoring thresholds
+    policy_close_enough_thresh: float = 0.02
+    policy_small_loss_thresh: float = 0.08
+    value_close_enough_thresh: float = 0.01
+    value_small_loss_thresh: float = 0.04
     
     # Bucketing thresholds (small, big)
     bucket_policy_thresholds: Tuple[float, float] = (0.10, 0.30)
@@ -118,6 +178,10 @@ class MoveEval:
     
     # Metadata
     evaluator_metadata: Dict[str, Any]
+    
+    # Optional discrete scores
+    discrete_policy_score: Optional[int] = None  # 0, 1, or 2
+    discrete_value_score: Optional[int] = None  # 0, 1, or 2
 
 
 @dataclass
@@ -128,6 +192,8 @@ class PhaseResults:
     policy_bucket_counts: Dict[int, int]  # {-2: count, -1: count, 0: count}
     value_bucket_counts: Dict[int, int]
     n: int  # number of moves in this phase
+    discrete_policy_counts: Optional[Dict[int, int]] = None  # {0: count, 1: count, 2: count}
+    discrete_value_counts: Optional[Dict[int, int]] = None   # {0: count, 1: count, 2: count}
 
 
 @dataclass
@@ -352,6 +418,21 @@ class StrengthEvaluator:
                 bucket_policy = self._calculate_bucket(delta_policy, self.cfg.bucket_policy_thresholds)
                 bucket_value = self._calculate_bucket(delta_value, self.cfg.bucket_value_thresholds)
                 
+                # Calculate discrete scores if using discrete scoring
+                discrete_policy_score = None
+                discrete_value_score = None
+                if self.cfg.scoring_method == ScoringMethod.DISCRETE:
+                    discrete_policy_score = discrete_score_policy(
+                        delta_policy, 
+                        self.cfg.policy_close_enough_thresh, 
+                        self.cfg.policy_small_loss_thresh
+                    )
+                    discrete_value_score = discrete_score_value(
+                        delta_value,
+                        self.cfg.value_close_enough_thresh,
+                        self.cfg.value_small_loss_thresh
+                    )
+                
                 # Create move evaluation
                 move_eval = MoveEval(
                     ply_idx=i,
@@ -362,14 +443,17 @@ class StrengthEvaluator:
                     policy_prob_best=policy_dict.get(m_best_policy, 0.0),
                     delta_policy=delta_policy,
                     bucket_policy=bucket_policy,
+                    discrete_policy_score=discrete_policy_score,
                     value_prob_after_chosen=value_dict.get((row, col), 0.0),
                     value_prob_after_best=value_dict.get(m_best_value, 0.0),
                     delta_value=delta_value,
                     bucket_value=bucket_value,
+                    discrete_value_score=discrete_value_score,
                     evaluator_metadata={
                         "mcts_sims": self.cfg.mcts_sims,
                         "c_puct": self.cfg.mcts_c_puct,
-                        "use_mcts": self.cfg.use_mcts
+                        "use_mcts": self.cfg.use_mcts,
+                        "scoring_method": self.cfg.scoring_method.value
                     }
                 )
                 
@@ -578,7 +662,11 @@ class StrengthEvaluator:
                     'policy_deltas': [],
                     'value_deltas': [],
                     'policy_buckets': {0: 0, -1: 0, -2: 0},
-                    'value_buckets': {0: 0, -1: 0, -2: 0}
+                    'value_buckets': {0: 0, -1: 0, -2: 0},
+                    'discrete_policy_scores': [],
+                    'discrete_value_scores': [],
+                    'discrete_policy_counts': {0: 0, 1: 0, 2: 0},
+                    'discrete_value_counts': {0: 0, 1: 0, 2: 0}
                 }
             
             data = phase_player_data[key]
@@ -586,6 +674,14 @@ class StrengthEvaluator:
             data['value_deltas'].append(move_eval.delta_value)
             data['policy_buckets'][move_eval.bucket_policy] += 1
             data['value_buckets'][move_eval.bucket_value] += 1
+            
+            # Add discrete scores if available
+            if move_eval.discrete_policy_score is not None:
+                data['discrete_policy_scores'].append(move_eval.discrete_policy_score)
+                data['discrete_policy_counts'][move_eval.discrete_policy_score] += 1
+            if move_eval.discrete_value_score is not None:
+                data['discrete_value_scores'].append(move_eval.discrete_value_score)
+                data['discrete_value_counts'][move_eval.discrete_value_score] += 1
         
         # Calculate aggregated results
         per_phase_per_player = {}
@@ -593,11 +689,15 @@ class StrengthEvaluator:
         for (phase, player), data in phase_player_data.items():
             n = len(data['policy_deltas'])
             
-            # Aggregate policy scores
-            policy_score = self._aggregate_values(data['policy_deltas'])
-            
-            # Aggregate value scores
-            value_score = self._aggregate_values(data['value_deltas'])
+            # Aggregate scores based on scoring method
+            if self.cfg.scoring_method == ScoringMethod.DISCRETE:
+                # Use discrete scores for aggregation
+                policy_score = self._aggregate_discrete_scores(data['discrete_policy_scores'])
+                value_score = self._aggregate_discrete_scores(data['discrete_value_scores'])
+            else:
+                # Use continuous deltas for aggregation
+                policy_score = self._aggregate_values(data['policy_deltas'])
+                value_score = self._aggregate_values(data['value_deltas'])
             
             # Convert bucket counts to rates
             policy_bucket_rates = {
@@ -612,6 +712,8 @@ class StrengthEvaluator:
                 value_score=value_score,
                 policy_bucket_counts=data['policy_buckets'],
                 value_bucket_counts=data['value_buckets'],
+                discrete_policy_counts=data['discrete_policy_counts'] if data['discrete_policy_scores'] else None,
+                discrete_value_counts=data['discrete_value_counts'] if data['discrete_value_scores'] else None,
                 n=n
             )
         
@@ -635,6 +737,21 @@ class StrengthEvaluator:
             return np.median(values)
         elif self.cfg.aggregation == AggregationMethod.TRIMMED_MEAN:
             return self._trimmed_mean(values)
+        else:
+            raise ValueError(f"Unknown aggregation method: {self.cfg.aggregation}")
+    
+    def _aggregate_discrete_scores(self, scores: List[int]) -> float:
+        """Aggregate discrete scores (0, 1, 2) using configured method."""
+        if not scores:
+            return 0.0
+        
+        if self.cfg.aggregation == AggregationMethod.MEAN:
+            return np.mean(scores)
+        elif self.cfg.aggregation == AggregationMethod.MEDIAN:
+            return np.median(scores)
+        elif self.cfg.aggregation == AggregationMethod.TRIMMED_MEAN:
+            # For discrete scores, trimmed mean is less meaningful, so use regular mean
+            return np.mean(scores)
         else:
             raise ValueError(f"Unknown aggregation method: {self.cfg.aggregation}")
     

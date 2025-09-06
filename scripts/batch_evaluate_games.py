@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hex_ai.eval.strength_evaluator import (
     StrengthEvaluator, EvaluatorConfig, EvaluatorReport, GameRecord,
-    AggregationMethod, GamePhase
+    AggregationMethod, GamePhase, ScoringMethod
 )
 from hex_ai.inference.game_engine import HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -146,6 +146,11 @@ def create_batch_summary(all_summaries: List[Dict[str, Any]], config: EvaluatorC
                 "endgame_value_thresh": config.endgame_value_thresh,
                 "endgame_streak": config.endgame_streak,
                 "aggregation": config.aggregation.value,
+                "scoring_method": config.scoring_method.value,
+                "policy_close_enough_thresh": config.policy_close_enough_thresh,
+                "policy_small_loss_thresh": config.policy_small_loss_thresh,
+                "value_close_enough_thresh": config.value_close_enough_thresh,
+                "value_small_loss_thresh": config.value_small_loss_thresh,
                 "bucket_policy_thresholds": config.bucket_policy_thresholds,
                 "bucket_value_thresholds": config.bucket_value_thresholds,
                 "cache_size": config.cache_size
@@ -188,11 +193,8 @@ def analyze_phase_detection(all_phase_stats: List[Dict[str, Any]]) -> Dict[str, 
         result = {}
         for p in percentiles:
             if float(p) >= 0.1:  # Skip very small percentiles
-                # Handle decimal percentiles properly
-                if p < 1:
-                    key = f"p{int(p*100)}"
-                else:
-                    key = f"p{int(p)}"
+                # p is already in percentage form (0.2, 1, 5, etc.)
+                key = f"p{int(p)}"
                 result[key] = np.percentile(values_array, p)
         return result
     
@@ -254,12 +256,9 @@ def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str,
             print("Percentiles:")
             for p in [0.2, 1, 5, 10, 25, 50, 75, 90, 95, 99, 99.8]:
                 # Match the key generation logic from calc_percentiles
-                if p < 1:
-                    key = f"p{int(p*100)}"
-                else:
-                    key = f"p{int(p)}"
+                key = f"p{int(p)}"
                 if key in percentiles:
-                    print(f"  {p*100:4.1f}%: {percentiles[key]:6.3f}")
+                    print(f"  {p:4.1f}%: {percentiles[key]:6.3f}")
             
             # Extreme values
             if 'extreme_values' in phase_analysis:
@@ -383,13 +382,26 @@ Examples:
                        help="Aggregation method (default: mean)")
     parser.add_argument("--trimmed-fraction", type=float, default=0.1,
                        help="Trimmed mean fraction (default: 0.1)")
-    parser.add_argument("--policy-small-thresh", type=float, default=0.10,
+    
+    # Scoring parameters
+    parser.add_argument("--scoring-method", type=str, default="discrete",
+                       choices=["continuous", "discrete"],
+                       help="Scoring method (default: discrete)")
+    parser.add_argument("--policy-close-thresh", type=float, default=0.02,
+                       help="Policy close enough threshold (default: 0.02)")
+    parser.add_argument("--policy-small-thresh", type=float, default=0.08,
+                       help="Policy small loss threshold (default: 0.08)")
+    parser.add_argument("--value-close-thresh", type=float, default=0.01,
+                       help="Value close enough threshold (default: 0.01)")
+    parser.add_argument("--value-small-thresh", type=float, default=0.04,
+                       help="Value small loss threshold (default: 0.04)")
+    parser.add_argument("--policy-bucket-small-thresh", type=float, default=0.10,
                        help="Policy bucket small threshold (default: 0.10)")
-    parser.add_argument("--policy-big-thresh", type=float, default=0.30,
+    parser.add_argument("--policy-bucket-big-thresh", type=float, default=0.30,
                        help="Policy bucket big threshold (default: 0.30)")
-    parser.add_argument("--value-small-thresh", type=float, default=0.10,
+    parser.add_argument("--value-bucket-small-thresh", type=float, default=0.10,
                        help="Value bucket small threshold (default: 0.10)")
-    parser.add_argument("--value-big-thresh", type=float, default=0.30,
+    parser.add_argument("--value-bucket-big-thresh", type=float, default=0.30,
                        help="Value bucket big threshold (default: 0.30)")
     
     # Performance parameters
@@ -428,8 +440,13 @@ Examples:
             enable_gumbel_root=args.enable_gumbel,
             aggregation=AggregationMethod(args.aggregation),
             trimmed_fraction=args.trimmed_fraction,
-            bucket_policy_thresholds=(args.policy_small_thresh, args.policy_big_thresh),
-            bucket_value_thresholds=(args.value_small_thresh, args.value_big_thresh),
+            scoring_method=ScoringMethod(args.scoring_method),
+            policy_close_enough_thresh=args.policy_close_thresh,
+            policy_small_loss_thresh=args.policy_small_thresh,
+            value_close_enough_thresh=args.value_close_thresh,
+            value_small_loss_thresh=args.value_small_thresh,
+            bucket_policy_thresholds=(args.policy_bucket_small_thresh, args.policy_bucket_big_thresh),
+            bucket_value_thresholds=(args.value_bucket_small_thresh, args.value_bucket_big_thresh),
             rng_seed=args.seed,
             batch_nn=args.batch_nn,
             cache_size=args.cache_size
@@ -462,6 +479,10 @@ Examples:
         logger.info(f"Configuration: {'MCTS' if config.use_mcts else 'Neural Network Only'}")
         if config.use_mcts:
             logger.info(f"MCTS sims: {config.mcts_sims}, C_PUCT: {config.mcts_c_puct}")
+        logger.info(f"Scoring method: {config.scoring_method.value}")
+        if config.scoring_method.value == "discrete":
+            logger.info(f"Discrete thresholds - Policy: {config.policy_close_enough_thresh}/{config.policy_small_loss_thresh}, Value: {config.value_close_enough_thresh}/{config.value_small_loss_thresh}")
+        logger.info(f"Aggregation: {config.aggregation.value}")
         logger.info(f"Cache size: {config.cache_size}")
         logger.info(f"Evaluating {len(sampled_games)} games...")
         
