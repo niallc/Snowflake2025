@@ -291,6 +291,9 @@ class StrengthEvaluator:
                     values.append(0.0)
         
         # Assign phases
+        endgame_candidates = 0  # Count positions that meet value threshold
+        endgame_streaks = 0     # Count positions that meet streak requirement
+        
         for i, value in enumerate(values):
             if i < self.cfg.opening_plies:
                 phases.append(GamePhase.OPENING)
@@ -298,6 +301,7 @@ class StrengthEvaluator:
                 # Check for endgame streak
                 abs_value = abs(value) if value is not None else 0.0
                 if abs_value >= self.cfg.endgame_value_thresh:
+                    endgame_candidates += 1
                     # Check if we have a streak
                     streak_count = 1
                     for j in range(i - 1, max(0, i - self.cfg.endgame_streak), -1):
@@ -308,10 +312,23 @@ class StrengthEvaluator:
                     
                     if streak_count >= self.cfg.endgame_streak:
                         phases.append(GamePhase.END)
+                        endgame_streaks += 1
                     else:
                         phases.append(GamePhase.MIDDLE)
                 else:
                     phases.append(GamePhase.MIDDLE)
+        
+        # Store phase detection stats for diagnostics
+        self._phase_detection_stats = {
+            "total_positions": len(values),
+            "opening_positions": min(self.cfg.opening_plies, len(values)),
+            "endgame_candidates": endgame_candidates,
+            "endgame_streaks": endgame_streaks,
+            "endgame_threshold": self.cfg.endgame_value_thresh,
+            "endgame_streak_required": self.cfg.endgame_streak,
+            "all_values": values,  # Store all values for percentile analysis
+            "middle_values": [v for i, v in enumerate(values) if i >= self.cfg.opening_plies]  # Values in middle/end phases
+        }
         
         return phases
     
@@ -674,7 +691,8 @@ class StrengthEvaluator:
             }
         }
     
-    def create_summary_report(self, report: EvaluatorReport) -> Dict[str, Any]:
+    @staticmethod
+    def create_summary_report(report: EvaluatorReport) -> Dict[str, Any]:
         """
         Create a concise summary report with the 12 key scores.
         
@@ -719,3 +737,7 @@ class StrengthEvaluator:
             "value_cache_size": len(self.value_cache),
             "mcts_cache_size": len(self.mcts_cache)
         }
+    
+    def get_phase_detection_stats(self) -> Dict[str, Any]:
+        """Get phase detection statistics from the last evaluation."""
+        return getattr(self, '_phase_detection_stats', {})
