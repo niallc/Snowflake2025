@@ -59,7 +59,7 @@ class EvaluatorConfig:
     
     # MCTS parameters
     mcts_sims: int = 200
-    mcts_c_puct: float = 1.5
+    mcts_c_puct: float = 3.0
     mcts_batch_cap: Optional[int] = None
     enable_gumbel_root: bool = False
     
@@ -81,11 +81,10 @@ class EvaluatorConfig:
     # Performance and robustness
     rng_seed: Optional[int] = None
     batch_nn: bool = True
-    ignore_early_noise_until: int = 2 * BOARD_SIZE
     downweight_function: Optional[Callable[[int], float]] = None
     
     # Caching
-    cache_size: int = 10000
+    cache_size: int = 60000
 
 
 @dataclass
@@ -323,9 +322,6 @@ class StrengthEvaluator:
         
         for i, (state, phase, (row, col, player)) in enumerate(zip(states[:-1], phases, moves)):
             try:
-                # Skip early noise if configured
-                if hasattr(self.cfg, 'ignore_early_noise_until') and i < self.cfg.ignore_early_noise_until:
-                    continue
                 
                 # Evaluate policy and value
                 policy_dict, m_best_policy = self._evaluate_policy(state)
@@ -677,6 +673,40 @@ class StrengthEvaluator:
                 "avg_value_score": np.mean([s["value_score"] for s in player_scores.values()])
             }
         }
+    
+    def create_summary_report(self, report: EvaluatorReport) -> Dict[str, Any]:
+        """
+        Create a concise summary report with the 12 key scores.
+        
+        Returns:
+            Dictionary with 12 scores: 2 players × 2 metrics × 3 phases
+            Format: {
+                "player_0_opening_policy": 0.123,
+                "player_0_opening_value": 0.456,
+                "player_0_middle_policy": 0.789,
+                ...
+                "player_1_end_value": 0.321
+            }
+        """
+        summary = {}
+        
+        for player in [Player.BLUE, Player.RED]:
+            player_key = f"player_{player.value}"
+            
+            for phase in [GamePhase.OPENING, GamePhase.MIDDLE, GamePhase.END]:
+                phase_key = phase.value
+                key = (phase, player)
+                
+                if key in report.per_phase_per_player:
+                    results = report.per_phase_per_player[key]
+                    summary[f"{player_key}_{phase_key}_policy"] = results.policy_score
+                    summary[f"{player_key}_{phase_key}_value"] = results.value_score
+                else:
+                    # No moves in this phase for this player
+                    summary[f"{player_key}_{phase_key}_policy"] = 0.0
+                    summary[f"{player_key}_{phase_key}_value"] = 0.0
+        
+        return summary
     
     
     def get_cache_stats(self) -> Dict[str, Any]:
