@@ -181,17 +181,20 @@ if __name__ == "__main__":
         description="Run hyperparameter tuning with multiple data sources",
         epilog="""
 Examples:
-  # Single data directory (backward compatible)
+  # Single data directory (uses all shards by default)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
 
-  # Multiple data directories
+  # Multiple data directories (uses all shards from each by default)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
 
-  # Skip first 200 files from second directory
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled --skip_files 0 200
+  # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
 
   # Resume training from a specific checkpoint file
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz
+
+  # Use current best model from model_config.py
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --use_current_best_model
 
   # Use data shards in sorted order (no shuffling)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --no_shuffle_shards
@@ -203,10 +206,10 @@ Examples:
                        help="One or more directories containing processed data files")
     
     parser.add_argument(
-        '--skip_files',
-        type=int,
+        '--shard_ranges',
+        type=str,
         nargs='+',
-        help='Number of files to skip from the beginning of each data directory (one value per directory, e.g., --skip_files 0 200 to skip 0 from first dir, 200 from second)'
+        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
     )
     
     # Resume training arguments
@@ -214,6 +217,12 @@ Examples:
         '--resume_from', 
         type=str,
         help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
+    )
+    
+    parser.add_argument(
+        '--use_current_best_model',
+        action='store_true',
+        help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
     
     parser.add_argument(
@@ -242,6 +251,89 @@ Examples:
     parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
     args = parser.parse_args()
+
+    # Validate shard range arguments
+    if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
+        print(f"ERROR: Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
+        sys.exit(1)
+
+    # Parse shard ranges
+    def parse_shard_range(range_str: str, data_dir: str) -> tuple:
+        """Parse shard range string and return (start, end) tuple."""
+        if range_str.lower() == 'all':
+            return (0, None)  # None means use all available shards
+        
+        if '-' not in range_str:
+            raise ValueError(f"Invalid shard range format: {range_str}. Use 'start-end' or 'all'")
+        
+        try:
+            start, end = range_str.split('-', 1)
+            start = int(start)
+            end = int(end)
+            
+            if start < 0 or end < 0:
+                raise ValueError(f"Shard numbers must be non-negative: {range_str}")
+            if start > end:
+                raise ValueError(f"Start shard must be <= end shard: {range_str}")
+            
+            return (start, end)
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(f"Invalid shard range format: {range_str}. Use 'start-end' or 'all'")
+            raise
+
+    # Set default shard ranges if not provided
+    if not args.shard_ranges:
+        args.shard_ranges = ["all"] * len(args.data_dirs)
+        print(f"Using default shard ranges: {args.shard_ranges}")
+
+    # Parse shard ranges and convert to skip_files format
+    skip_files = []
+    for i, (range_str, data_dir) in enumerate(zip(args.shard_ranges, args.data_dirs)):
+        try:
+            start, end = parse_shard_range(range_str, data_dir)
+            
+            if end is None:  # 'all' case
+                skip_files.append(0)
+            else:
+                # For range start-end, we skip the first 'start' files
+                # and will need to limit to 'end' files total
+                skip_files.append(start)
+                
+                # Check if the data directory has enough shards
+                data_path = Path(data_dir)
+                if data_path.exists():
+                    shard_files = list(data_path.glob("shuffled_*.pkl.gz"))
+                    max_shard = len(shard_files) - 1
+                    if end > max_shard:
+                        print(f"WARNING: Data directory {data_dir} only has shards 0-{max_shard}, but range specifies up to {end}")
+                else:
+                    print(f"WARNING: Data directory {data_dir} does not exist")
+                    
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+    
+    # Set skip_files for backward compatibility with the training code
+    args.skip_files = skip_files
+    print(f"Parsed shard ranges: {list(zip(args.data_dirs, args.shard_ranges, args.skip_files))}")
+
+    # Handle current best model option
+    if args.use_current_best_model:
+        if args.resume_from:
+            print("ERROR: Cannot use both --resume_from and --use_current_best_model. Choose one.")
+            sys.exit(1)
+        
+        try:
+            from hex_ai.inference.model_config import get_model_path
+            args.resume_from = get_model_path("current_best")
+            print(f"Using current best model: {args.resume_from}")
+        except ImportError:
+            print("ERROR: Could not import hex_ai.inference.model_config")
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR: Could not get current best model path: {e}")
+            sys.exit(1)
 
     # Validate resume arguments
     if args.resume_from and not Path(args.resume_from).exists():

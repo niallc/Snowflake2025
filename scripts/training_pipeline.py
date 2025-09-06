@@ -684,30 +684,35 @@ Examples:
   # Run complete pipeline with default settings
   python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz
   
+  # Use current best model from model_config.py
+  python scripts/training_pipeline.py --use-current-best-model
+  
   # Run with game collection from multiple sources
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --run-game-collection --no-selfplay
+  python scripts/training_pipeline.py --use-current-best-model --run-game-collection --no-selfplay
   
   # Run only self-play and preprocessing
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --no-training --no-shuffling --no-trmph-processing
+  python scripts/training_pipeline.py --use-current-best-model --no-training --no-shuffling --no-trmph-processing
   
   # Run with custom settings
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --num-games 50000 --num-workers 5 --temperature 1.0
+  python scripts/training_pipeline.py --use-current-best-model --num-games 50000 --num-workers 5 --temperature 1.0
   
   # Use multiple data sources (like original bash script)
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --data-sources data/processed/shuffled data/processed/jul_29_shuffled --skip-files 0 200
+  python scripts/training_pipeline.py --use-current-best-model --data-sources data/processed/shuffled data/processed/jul_29_shuffled --skip-files 0 200
   
   # Use existing raw self-play data
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --selfplay-dir data/sf25/aug_04 --no-selfplay
+  python scripts/training_pipeline.py --use-current-best-model --selfplay-dir data/sf25/aug_04 --no-selfplay
   
   # Complete pipeline with game collection and training
-  python scripts/training_pipeline.py --model-path checkpoints/experiment/epoch4_mini1.pt.gz --run-game-collection --no-selfplay --no-preprocessing
+  python scripts/training_pipeline.py --use-current-best-model --run-game-collection --no-selfplay --no-preprocessing
         """
     )
     
     # Model configuration
-    parser.add_argument("--model-path", required=True, help="Path to model checkpoint directory")
+    parser.add_argument("--model-path", help="Path to model checkpoint directory")
     parser.add_argument("--model-epoch", type=int, default=4, help="Model epoch number")
     parser.add_argument("--model-mini", type=int, default=1, help="Model mini-epoch number")
+    parser.add_argument("--use-current-best-model", action="store_true", 
+                       help="Use current best model from hex_ai.inference.model_config")
     
     # Self-play configuration
     parser.add_argument("--num-games", type=int, default=100000, help="Number of games to generate")
@@ -754,6 +759,38 @@ def main():
     try:
         # Parse arguments
         args = parse_arguments()
+        
+        # Handle current best model option
+        if args.use_current_best_model:
+            if args.model_path:
+                raise ValueError("Cannot use both --model-path and --use-current-best-model. Choose one.")
+            
+            try:
+                from hex_ai.inference.model_config import get_model_path, get_model_dir
+                model_path = get_model_path("current_best")
+                args.model_path = get_model_dir("current_best")
+                
+                # Extract epoch and mini from the filename
+                import os
+                filename = os.path.basename(model_path)
+                # Expected format: epoch2_mini201.pt.gz
+                if 'epoch' in filename and 'mini' in filename:
+                    parts = filename.split('_')
+                    for part in parts:
+                        if part.startswith('epoch'):
+                            args.model_epoch = int(part[5:])
+                        elif part.startswith('mini'):
+                            args.model_mini = int(part[4:].split('.')[0])
+                
+                logger.info(f"Using current best model: {model_path}")
+                logger.info(f"Model directory: {args.model_path}")
+                logger.info(f"Model epoch: {args.model_epoch}, mini: {args.model_mini}")
+            except ImportError:
+                raise ValueError("Could not import hex_ai.inference.model_config")
+            except Exception as e:
+                raise ValueError(f"Could not get current best model path: {e}")
+        elif not args.model_path:
+            raise ValueError("Must specify either --model-path or --use-current-best-model")
         
         # Validate data sources and skip files
         if len(args.data_sources) != len(args.skip_files):
