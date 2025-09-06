@@ -229,7 +229,7 @@ def analyze_phase_detection(all_phase_stats: List[Dict[str, Any]]) -> Dict[str, 
     }
 
 
-def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str, Any]):
+def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str, Any], args):
     """Print a formatted summary of batch evaluation results."""
     stats = batch_summary["statistics"]
     metadata = batch_summary["metadata"]
@@ -249,8 +249,8 @@ def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str,
         print(f"Endgame streaks (streak >= {phase_analysis['endgame_streak_required']}): {phase_analysis['endgame_streaks']} ({phase_analysis['endgame_streak_fraction']:.1%} of middle)")
         print()
         
-        # Value distribution analysis
-        if 'value_percentiles_middle' in phase_analysis and phase_analysis['value_percentiles_middle']:
+        # Value distribution analysis (verbose only)
+        if args.verbose >= 3 and 'value_percentiles_middle' in phase_analysis and phase_analysis['value_percentiles_middle']:
             print("=== VALUE DISTRIBUTION (Middle/End Positions) ===")
             percentiles = phase_analysis['value_percentiles_middle']
             print("Percentiles:")
@@ -267,7 +267,7 @@ def print_batch_summary(batch_summary: Dict[str, Any], phase_analysis: Dict[str,
                 print(f"  Values >= 0.9:  {ext['high_ge_0.9']:4d} ({ext['fraction_high']:.1%})")
                 print(f"  Values <= -0.9: {ext['low_le_-0.9']:4d} ({ext['fraction_low']:.1%})")
                 print(f"  |Values| >= 0.9: {ext['abs_ge_0.9']:4d} ({ext['fraction_abs']:.1%})")
-        print()
+            print()
     
     print("Average loss per move with uncertainty (lower is better):")
     print("Format: mean (+- uncertainty)")
@@ -479,6 +479,8 @@ Examples:
         logger.info(f"Configuration: {'MCTS' if config.use_mcts else 'Neural Network Only'}")
         if config.use_mcts:
             logger.info(f"MCTS sims: {config.mcts_sims}, C_PUCT: {config.mcts_c_puct}")
+            if config.enable_gumbel_root:
+                logger.info("Gumbel AlphaZero root selection: ENABLED")
         logger.info(f"Scoring method: {config.scoring_method.value}")
         if config.scoring_method.value == "discrete":
             logger.info(f"Discrete thresholds - Policy: {config.policy_close_enough_thresh}/{config.policy_small_loss_thresh}, Value: {config.value_close_enough_thresh}/{config.value_small_loss_thresh}")
@@ -529,7 +531,7 @@ Examples:
         phase_analysis = analyze_phase_detection(all_phase_stats)
         
         # Print results
-        print_batch_summary(batch_summary, phase_analysis)
+        print_batch_summary(batch_summary, phase_analysis, args)
         
         # Save results
         output_dir = Path(args.output_dir)
