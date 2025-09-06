@@ -352,8 +352,8 @@ Examples:
                        help="Model to use for evaluation (default: current_best)")
     
     # Output options
-    parser.add_argument("--output-dir", type=str, default="analysis/game_evals",
-                       help="Directory to save results (default: analysis/game_evals)")
+    parser.add_argument("--output-dir", type=str, default="analysis/game_evals/results",
+                       help="Directory to save results (default: analysis/game_evals/results)")
     
     # Evaluation parameters
     parser.add_argument("--opening-plies", type=int, default=12,
