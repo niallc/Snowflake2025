@@ -62,6 +62,10 @@ from hex_ai.inference.tournament import (
     TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
 )
 from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
+from hex_ai.utils.tournament_utils import (
+    generate_player_labels, print_duplicate_checkpoint_info, validate_checkpoint_paths,
+    parse_temperature_configuration, print_tournament_configuration
+)
 
 # Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
@@ -176,81 +180,23 @@ if __name__ == "__main__":
         checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS]
 
     # Generate unique player labels for duplicate checkpoints
-    player_labels = []
-    label_to_checkpoint = {}
-    
-    # Track checkpoint usage to detect duplicates
-    checkpoint_usage = {}
-    for i, checkpoint_path in enumerate(checkpoint_paths):
-        if checkpoint_path in checkpoint_usage:
-            # This is a duplicate - create a unique player label
-            checkpoint_usage[checkpoint_path] += 1
-            player_label = f"Player{checkpoint_usage[checkpoint_path]}_{os.path.basename(checkpoint_path)}"
-        else:
-            # First occurrence - use just the filename for consistency
-            checkpoint_usage[checkpoint_path] = 1
-            player_label = os.path.basename(checkpoint_path)
-        
-        player_labels.append(player_label)
-        label_to_checkpoint[player_label] = checkpoint_path
+    player_labels, label_to_checkpoint = generate_player_labels(checkpoint_paths)
     
     # Check if we have duplicates and inform the user
-    unique_paths = list(dict.fromkeys(checkpoint_paths))
-    if len(unique_paths) != len(checkpoint_paths):
-        print("INFO: Duplicate checkpoints detected. Using unique player labels:")
-        for i, (label, path) in enumerate(zip(player_labels, checkpoint_paths)):
-            if label != path:
-                print(f"  {label} -> {os.path.basename(path)}")
-            else:
-                print(f"  {os.path.basename(path)}")
-        print()
+    print_duplicate_checkpoint_info(player_labels, checkpoint_paths)
 
-    # Validate that we have at least 2 checkpoints for a meaningful tournament
-    if len(checkpoint_paths) < 2:
-        print("ERROR: Need at least 2 unique checkpoints for a tournament.")
-        print(f"  Provided checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
-        sys.exit(1)
-
-    # Check that all checkpoint paths exist before proceeding
-    missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
-    if missing_paths:
-        print("\nERROR: The following checkpoint files do not exist:")
-        for p in missing_paths:
-            print(f"  {p}")
-        print("\nDebug info:")
-        if args.checkpoints:
-            checkpoint_names = [name.strip() for name in args.checkpoints.split(',')]
-            print(f"  Provided checkpoint names: {checkpoint_names}")
-            if args.checkpoint_dirs:
-                checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
-                print(f"  Provided checkpoint directories: {checkpoint_dirs}")
-        print(f"  Constructed checkpoint paths: {checkpoint_paths}")
-        print("\nPlease check that the checkpoint files exist and the paths are correct.")
-        sys.exit(1)
+    # Validate checkpoint paths
+    validate_checkpoint_paths(checkpoint_paths)
 
     # Parse search widths if provided
     search_widths = None
     if args.search_widths:
         search_widths = [int(w.strip()) for w in args.search_widths.split(',')]
     
-    # Parse temperature argument
-    temperature_values = [float(t.strip()) for t in args.temperature.split(',')]
-    
-    # Validate temperature configuration
-    if len(temperature_values) == 1:
-        # Single temperature for all participants
-        temperature_config = temperature_values[0]
-        participant_temperatures = None
-    elif len(temperature_values) == len(player_labels):
-        # Per-participant temperatures - use player labels as keys
-        temperature_config = temperature_values  # Keep as list for backward compatibility
-        participant_temperatures = {label: temp for label, temp in zip(player_labels, temperature_values)}
-    else:
-        print(f"ERROR: Temperature list length ({len(temperature_values)}) must be 1 or match the number of participants ({len(player_labels)})")
-        print(f"  Provided temperatures: {temperature_values}")
-        print(f"  Number of participants: {len(player_labels)}")
-        print(f"  Participants: {[os.path.basename(p) for p in checkpoint_paths]}")
-        sys.exit(1)
+    # Parse and validate temperature configuration
+    temperature_config, participant_temperatures = parse_temperature_configuration(
+        args.temperature, player_labels
+    )
     
     # Create strategy configuration
     strategy_config = {}
@@ -300,30 +246,16 @@ if __name__ == "__main__":
     # Ensure log directory exists
     os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
-    print(f"Tournament Configuration:")
-    print(f"  Participants: {len(player_labels)}")
-    for i, (label, path) in enumerate(zip(player_labels, checkpoint_paths)):
-        if label != path:
-            print(f"    {label} ({os.path.basename(path)})")
-        else:
-            print(f"    {os.path.basename(path)}")
+    # Print tournament configuration
+    checkpoint_dirs = None
     if args.checkpoints and args.checkpoint_dirs:
         checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
-        print(f"  Checkpoint directories: {checkpoint_dirs}")
-    else:
-        print(f"  Checkpoint directory: {DEFAULT_CHKPT_DIR}")
-    print(f"  Number of games per pair: {args.num_games}")
-    print(f"  Strategy: {play_config.strategy}")
-    print(f"  Strategy config: {play_config.strategy_config}")
-    if participant_temperatures:
-        print(f"  Temperature (per participant):")
-        for label, temp in participant_temperatures.items():
-            model_name = os.path.basename(label_to_checkpoint[label])
-            print(f"    {label} ({model_name}): {temp}")
-    else:
-        print(f"  Temperature: {play_config.temperature}")
-    print(f"  Pie rule: {play_config.pie_rule}")
-    print(f"  Random seed: {play_config.random_seed}")
+    
+    print_tournament_configuration(
+        player_labels, checkpoint_paths, args.num_games, play_config.strategy,
+        play_config.strategy_config, participant_temperatures, play_config.temperature,
+        play_config.pie_rule, play_config.random_seed, checkpoint_dirs, DEFAULT_CHKPT_DIR
+    )
     print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
@@ -342,4 +274,4 @@ if __name__ == "__main__":
     if actual_csv_file != CSV_FILE:
         print(f"Note: CSV results written to {actual_csv_file} (original filename was in use)")
     
-    print_comprehensive_tournament_analysis(result) 
+    print_comprehensive_tournament_analysis(result, participant_temperatures) 

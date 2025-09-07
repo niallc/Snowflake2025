@@ -25,6 +25,7 @@ from hex_ai.config import (
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.tournament_utils import get_player_label_for_checkpoint, extract_model_name_from_label, determine_winner_labels, determine_winner_labels_simple
 import random
 from datetime import datetime
 import csv
@@ -322,15 +323,11 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         
         # Extract model names from labels or use checkpoint paths
-        if model_1_label:
-            model_1_name = os.path.basename(model_1_label) if model_1_label != getattr(model_1, 'checkpoint_path', str(model_1)) else os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
-        else:
-            model_1_name = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
-            
-        if model_2_label:
-            model_2_name = os.path.basename(model_2_label) if model_2_label != getattr(model_2, 'checkpoint_path', str(model_2)) else os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
-        else:
-            model_2_name = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
+        model_1_path = getattr(model_1, 'checkpoint_path', str(model_1))
+        model_2_path = getattr(model_2, 'checkpoint_path', str(model_2))
+        
+        model_1_name = extract_model_name_from_label(model_1_label or model_1_path, model_1_path)
+        model_2_name = extract_model_name_from_label(model_2_label or model_2_path, model_2_path)
         
         row = {
             "timestamp": timestamp,
@@ -461,19 +458,30 @@ def play_games_with_each_first(
         model_b_label, model_a_label
     )
     
+    # Determine winner labels for both games
+    # Game 1: model_a goes first (blue), model_b second (red)
+    if model_a_path == model_b_path:
+        # Same model playing both sides - use simple approach
+        winner_1, loser_1 = determine_winner_labels_simple(result_1.winner, model_a_label, model_b_label)
+        winner_2, loser_2 = determine_winner_labels_simple(result_2.winner, model_b_label, model_a_label)
+    else:
+        # Different models - use color to determine winner
+        winner_1, loser_1 = determine_winner_labels(result_1.winner, model_a_path, model_b_path, model_a_label, model_b_label)
+        winner_2, loser_2 = determine_winner_labels(result_2.winner, model_b_path, model_a_path, model_b_label, model_a_label)
+    
     return {
         'model_a_first': {
             'winner_position': result_1.winner,  # Piece.BLUE or Piece.RED based on color
-            'winner_model': model_a_label if result_1.winner == Piece.BLUE else model_b_label,
-            'loser_model': model_b_label if result_1.winner == Piece.BLUE else model_a_label,
+            'winner_model': winner_1,
+            'loser_model': loser_1,
             'trmph_str': result_1.trmph_str,
             'winner_char': result_1.winner_char,
             'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
             'winner_position': result_2.winner,  # Piece.BLUE or Piece.RED based on color
-            'winner_model': model_b_label if result_2.winner == Piece.BLUE else model_a_label,
-            'loser_model': model_a_label if result_2.winner == Piece.BLUE else model_b_label,
+            'winner_model': winner_2,
+            'loser_model': loser_2,
             'trmph_str': result_2.trmph_str,
             'winner_char': result_2.winner_char,
             'swap_decision': result_2.swap_decision
@@ -513,10 +521,11 @@ def run_round_robin_tournament(
     models = {path: model_cache.get_simple_model(path) for path in config.checkpoint_paths}
     result = TournamentResult(config.player_labels)
     
-    for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
-        # Get player labels for this pair
-        model_a_label = config.player_labels[config.checkpoint_paths.index(model_a_path)]
-        model_b_label = config.player_labels[config.checkpoint_paths.index(model_b_path)]
+    # Use player labels for combinations to handle duplicates properly
+    for model_a_label, model_b_label in itertools.combinations(config.player_labels, 2):
+        # Get checkpoint paths for these player labels
+        model_a_path = config.label_to_checkpoint[model_a_label]
+        model_b_path = config.label_to_checkpoint[model_b_label]
         
         print(f"\nPlaying {config.num_games} games: {model_a_label} vs {model_b_label}")
         
