@@ -19,6 +19,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
 from hex_ai.utils.format_conversion import rowcol_to_trmph
+from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.value_utils import validate_trmph_winner
 
 
@@ -104,17 +105,15 @@ class SelfPlayEngine:
         
         if self.streaming_save:
             os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
-            # Write header
-            git_info = get_git_commit_info()
-            with open(self.streaming_file, 'w') as f:
-                f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
-                f.write(f"# Model: {model_path}\n")
-                f.write(f"# MCTS simulations: {mcts_sims}\n")
-                f.write(f"# C_PUCT: {c_puct}\n")
-                f.write(f"# Gumbel root selection: {enable_gumbel}\n")
-                f.write(f"# Temperature: {temperature}\n")
-                f.write(f"# Git commit: {git_info['status']}\n")
-                f.write("# Format: trmph_string winner\n")
+            # Write header using generic function
+            metadata = {
+                "Model": model_path,
+                "MCTS simulations": mcts_sims,
+                "C_PUCT": c_puct,
+                "Gumbel root selection": enable_gumbel,
+                "Temperature": temperature,
+            }
+            write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed)
         
         # Logging
         self.logger = logging.getLogger(__name__)

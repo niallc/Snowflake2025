@@ -125,8 +125,8 @@ Examples:
                        help='Number of candidates to consider for Gumbel (None for auto)')
     parser.add_argument('--search-widths', type=str,
                        help='Comma-separated search widths for fixed tree search (e.g., "20,10,5")')
-    parser.add_argument('--seed', type=int, default=42,
-                       help='Random seed (default: 42)')
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Random seed (default: auto-generated from time)')
     parser.add_argument('--no-pie-rule', action='store_true',
                        help='Disable pie rule (pie rule is enabled by default)')
     parser.add_argument('--verbose', type=int, default=1,
@@ -137,6 +137,12 @@ Examples:
 
 if __name__ == "__main__":
     args = parse_args()
+    
+    # Generate seed if none provided, or use provided seed
+    if args.seed is None:
+        import time
+        args.seed = int(time.time())
+        print(f"Auto-generated seed: {args.seed}")
     
     # Determine which checkpoints to use
     if args.checkpoints:

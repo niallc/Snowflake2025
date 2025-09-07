@@ -24,7 +24,7 @@ from hex_ai.config import (
     BOARD_SIZE,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
 )
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv, write_tournament_trmph_header
 import random
 from datetime import datetime
 import csv
@@ -438,6 +438,10 @@ def run_round_robin_tournament(
     # Preload models for efficiency
     from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
     preload_tournament_models(config.checkpoint_paths)
+    
+    # Write header to .trmph file if specified
+    if log_file:
+        write_tournament_trmph_header(log_file, config.checkpoint_paths, config.num_games, play_config, config.board_size)
     
     # Get cached models
     model_cache = get_model_cache()

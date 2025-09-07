@@ -15,7 +15,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
 CURRENT_BEST_MODEL_DIR = "sep6th_extraValueLayer/pipeline_20250906_182558/pipeline_sweep_exp0__99914b_20250906_182558"
-CURRENT_BEST_MODEL_FILE = "epoch3_mini45.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch4_mini56.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)

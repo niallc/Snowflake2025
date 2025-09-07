@@ -80,7 +80,7 @@ from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysi
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
-from hex_ai.utils.tournament_logging import append_trmph_winner_line
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.random_utils import set_deterministic_seeds
 
@@ -697,7 +697,8 @@ def run_deterministic_tournament(
     strategy_configs: List[StrategyConfig],
     openings: List[OpeningPosition],
     temperature: float = DEFAULT_TEMPERATURE,
-    verbose: int = DEFAULT_VERBOSE
+    verbose: int = DEFAULT_VERBOSE,
+    seed: Optional[int] = None
 ) -> DeterministicTournamentResult:
     """
     Run a deterministic tournament using pre-generated opening positions.
@@ -750,6 +751,16 @@ def run_deterministic_tournament(
         pair_name = f"{strategy_a.name}_vs_{strategy_b.name}"
         trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
         csv_file = os.path.join(output_dir, f"{pair_name}.csv")
+        
+        # Write header to .trmph file
+        from hex_ai.inference.tournament import TournamentPlayConfig
+        play_config = TournamentPlayConfig(
+            temperature=temperature,
+            random_seed=seed,
+            pie_rule=False,  # Deterministic tournaments don't use pie rule
+            strategy="deterministic"
+        )
+        write_tournament_trmph_header(trmph_file, [model_path], len(openings), play_config, BOARD_SIZE)
         
         # Reset tracking for this strategy pair
         current_pair_games = {}
@@ -1070,7 +1081,8 @@ def main():
         strategy_configs=strategy_configs,
         openings=openings,
         temperature=args.temperature,
-        verbose=args.verbose
+        verbose=args.verbose,
+        seed=args.seed
     )
     
     # Print results
