@@ -64,11 +64,17 @@ class TournamentConfig:
                  checkpoint_paths: List[str],
                  board_size: int = 13,
                  search_widths: Optional[List[int]] = None,
-                 num_games: int = 10):
+                 num_games: int = 10,
+                 player_labels: Optional[List[str]] = None,
+                 label_to_checkpoint: Optional[Dict[str, str]] = None):
         self.checkpoint_paths = checkpoint_paths
         self.board_size = board_size
         self.search_widths = search_widths
         self.num_games = num_games
+        # Player labels for unique identification (defaults to checkpoint paths)
+        self.player_labels = player_labels or checkpoint_paths
+        # Mapping from player labels to actual checkpoint paths
+        self.label_to_checkpoint = label_to_checkpoint or {path: path for path in checkpoint_paths}
 
 class TournamentResult:
     def __init__(self, participants: List[str]):
@@ -207,12 +213,13 @@ def select_move(state: HexGameState, model: SimpleModelInference,
 def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
                    verbose: int, model_1_path: Optional[str] = None, 
-                   model_2_path: Optional[str] = None) -> PieRuleResult:
+                   model_2_path: Optional[str] = None, model_1_label: Optional[str] = None,
+                   model_2_label: Optional[str] = None) -> PieRuleResult:
     """
     Handle pie rule logic: first move, evaluation, and potential swap.
     """
     # Always play the first move by model_1 (Blue) for consistency
-    move = select_move(state, model_1, play_config, model_1_path)
+    move = select_move(state, model_1, play_config, model_1_label)
     state = apply_move_to_state(state, *move)
     
     if not play_config.pie_rule:
@@ -240,7 +247,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
 def play_game_loop(state: HexGameState, model_1: SimpleModelInference, 
                   model_2: SimpleModelInference, play_config: TournamentPlayConfig, 
                   verbose: int, model_1_path: Optional[str] = None, 
-                  model_2_path: Optional[str] = None) -> List[Tuple[int, int]]:
+                  model_2_path: Optional[str] = None, model_1_label: Optional[str] = None,
+                  model_2_label: Optional[str] = None) -> List[Tuple[int, int]]:
     """
     Play the main game loop, returning the sequence of moves.
     """
@@ -251,13 +259,14 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
         current_player_enum = state.current_player_enum
         model = model_1 if current_player_enum == Player.BLUE else model_2
         model_path = model_1_path if current_player_enum == Player.BLUE else model_2_path
+        model_label = model_1_label if current_player_enum == Player.BLUE else model_2_label
         
         # Fail fast if there are no legal moves while not game over (shouldn't happen in Hex)
         if not state.get_legal_moves():
             raise ValueError("No legal moves available while game is not over. This indicates a bug.")
 
         # Select and apply move
-        move = select_move(state, model, play_config, model_path)
+        move = select_move(state, model, play_config, model_label)
         if move is None:
             raise ValueError("Move selection returned None. This indicates a model or selection failure.")
         
@@ -301,7 +310,8 @@ def determine_winner(state: HexGameState, model_1: SimpleModelInference,
 
 def log_game_result(result: GameResult, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
-                   log_file: Optional[str], csv_file: Optional[str]) -> None:
+                   log_file: Optional[str], csv_file: Optional[str],
+                   model_1_label: Optional[str] = None, model_2_label: Optional[str] = None) -> None:
     """
     Log the game result to files.
     """
@@ -310,10 +320,22 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
     
     if csv_file:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        
+        # Extract model names from labels or use checkpoint paths
+        if model_1_label:
+            model_1_name = os.path.basename(model_1_label) if model_1_label != getattr(model_1, 'checkpoint_path', str(model_1)) else os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
+        else:
+            model_1_name = os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1)))
+            
+        if model_2_label:
+            model_2_name = os.path.basename(model_2_label) if model_2_label != getattr(model_2, 'checkpoint_path', str(model_2)) else os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
+        else:
+            model_2_name = os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2)))
+        
         row = {
             "timestamp": timestamp,
-            "model_1": os.path.basename(getattr(model_1, 'checkpoint_path', str(model_1))),
-            "model_2": os.path.basename(getattr(model_2, 'checkpoint_path', str(model_2))),
+            "model_1": model_1_name,
+            "model_2": model_2_name,
             "color_1": "blue",
             "trmph": result.trmph_str,
             "winner": result.winner_char,
@@ -351,7 +373,9 @@ def play_single_game(model_1: SimpleModelInference,
                      csv_file: str = None, 
                      play_config: Optional[TournamentPlayConfig] = None,
                      model_1_path: Optional[str] = None,
-                     model_2_path: Optional[str] = None) -> GameResult:
+                     model_2_path: Optional[str] = None,
+                     model_1_label: Optional[str] = None,
+                     model_2_label: Optional[str] = None) -> GameResult:
     """
     Play a single game between model_1 (Blue, first) and model_2 (Red, second).
     Supports the pie rule, configurable temperature, and logging.
@@ -367,12 +391,12 @@ def play_single_game(model_1: SimpleModelInference,
     )
     
     # Handle pie rule
-    pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose, model_1_path, model_2_path)
+    pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose, model_1_path, model_2_path, model_1_label, model_2_label)
     model_1, model_2 = pie_result.model_1, pie_result.model_2
     
     # Play main game loop
     move_sequence, state = play_game_loop(
-        state, model_1, model_2, play_config, verbose, model_1_path, model_2_path
+        state, model_1, model_2, play_config, verbose, model_1_path, model_2_path, model_1_label, model_2_label
     )
     
     # Convert move sequence to TRMPH string
@@ -403,7 +427,7 @@ def play_single_game(model_1: SimpleModelInference,
     #     print(".", end="", flush=True)
 
     # Log results    
-    log_game_result(result, model_1, model_2, play_config, log_file, csv_file)
+    log_game_result(result, model_1, model_2, play_config, log_file, csv_file, model_1_label, model_2_label)
     
     return result
 
@@ -415,7 +439,9 @@ def play_games_with_each_first(
     play_config: TournamentPlayConfig, 
     verbose: int, 
     log_file: Optional[str], 
-    csv_file: Optional[str]
+    csv_file: Optional[str],
+    model_a_label: Optional[str] = None,
+    model_b_label: Optional[str] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Play two games between model_a and model_b, with each going first once.
@@ -424,28 +450,30 @@ def play_games_with_each_first(
     # Game 1: model_a goes first (blue), model_b second (red)
     result_1 = play_single_game(
         models[model_a_path], models[model_b_path], config.board_size,
-        verbose, log_file, csv_file, play_config, model_a_path, model_b_path
+        verbose, log_file, csv_file, play_config, model_a_path, model_b_path,
+        model_a_label, model_b_label
     )
     
     # Game 2: model_b goes first (blue), model_a second (red)  
     result_2 = play_single_game(
         models[model_b_path], models[model_a_path], config.board_size,
-        verbose, log_file, csv_file, play_config, model_b_path, model_a_path
+        verbose, log_file, csv_file, play_config, model_b_path, model_a_path,
+        model_b_label, model_a_label
     )
     
     return {
         'model_a_first': {
             'winner_position': result_1.winner,  # Piece.BLUE or Piece.RED based on color
-            'winner_model': model_a_path if result_1.winner == Piece.BLUE else model_b_path,
-            'loser_model': model_b_path if result_1.winner == Piece.BLUE else model_a_path,
+            'winner_model': model_a_label if result_1.winner == Piece.BLUE else model_b_label,
+            'loser_model': model_b_label if result_1.winner == Piece.BLUE else model_a_label,
             'trmph_str': result_1.trmph_str,
             'winner_char': result_1.winner_char,
             'swap_decision': result_1.swap_decision
         },
         'model_b_first': {
             'winner_position': result_2.winner,  # Piece.BLUE or Piece.RED based on color
-            'winner_model': model_b_path if result_2.winner == Piece.BLUE else model_a_path,
-            'loser_model': model_a_path if result_2.winner == Piece.BLUE else model_b_path,
+            'winner_model': model_b_label if result_2.winner == Piece.BLUE else model_a_label,
+            'loser_model': model_a_label if result_2.winner == Piece.BLUE else model_b_label,
             'trmph_str': result_2.trmph_str,
             'winner_char': result_2.winner_char,
             'swap_decision': result_2.swap_decision
@@ -483,19 +511,24 @@ def run_round_robin_tournament(
     # Get cached models
     model_cache = get_model_cache()
     models = {path: model_cache.get_simple_model(path) for path in config.checkpoint_paths}
-    result = TournamentResult(config.checkpoint_paths)
+    result = TournamentResult(config.player_labels)
     
     for model_a_path, model_b_path in itertools.combinations(config.checkpoint_paths, 2):
-        print(f"\nPlaying {config.num_games} games: {os.path.basename(model_a_path)} vs {os.path.basename(model_b_path)}")
+        # Get player labels for this pair
+        model_a_label = config.player_labels[config.checkpoint_paths.index(model_a_path)]
+        model_b_label = config.player_labels[config.checkpoint_paths.index(model_b_path)]
+        
+        print(f"\nPlaying {config.num_games} games: {model_a_label} vs {model_b_label}")
         
         for game_idx in range(config.num_games):
             # Play both games (each model goes first once)
             game_results = play_games_with_each_first(
                 model_a_path, model_b_path, models, config, play_config, 
-                verbose, actual_log_file, actual_csv_file
+                verbose, actual_log_file, actual_csv_file, model_a_label, model_b_label
             )
             
-            # Record results for both games
+            # Record results for both games using player labels
+            # The game results now return player labels directly
             result.record_game(
                 game_results['model_a_first']['winner_model'],
                 game_results['model_a_first']['loser_model']
@@ -506,11 +539,11 @@ def run_round_robin_tournament(
             )
             
             if verbose >= 2:
-                print(f"Game {game_idx+1} of {config.num_games} between {model_a_path} and {model_b_path} completed.")
+                print(f"Game {game_idx+1} of {config.num_games} between {model_a_label} and {model_b_label} completed.")
                 
                 # Print details for both games
-                for game_key, game_name in [('model_a_first', f'{model_a_path} first'), 
-                                          ('model_b_first', f'{model_b_path} first')]:
+                for game_key, game_name in [('model_a_first', f'{model_a_label} first'), 
+                                          ('model_b_first', f'{model_b_label} first')]:
                     game_data = game_results[game_key]
                     print(f"  {game_name}:")
                     print(f"    Trmph: {game_data['trmph_str']}")
@@ -529,12 +562,12 @@ def run_round_robin_tournament(
             print()  # New line after game numbers
             
             # Calculate head-to-head stats for this match
-            model_a_name = os.path.basename(model_a_path)
-            model_b_name = os.path.basename(model_b_path)
+            model_a_name = model_a_label
+            model_b_name = model_b_label
             
             # Get results for this specific pair
-            model_a_wins = result.results[model_a_path][model_b_path]['wins']
-            model_b_wins = result.results[model_b_path][model_a_path]['wins']
+            model_a_wins = result.results[model_a_label][model_b_label]['wins']
+            model_b_wins = result.results[model_b_label][model_a_label]['wins']
             total_games = model_a_wins + model_b_wins
             
             if total_games > 0:

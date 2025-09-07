@@ -70,6 +70,7 @@ write_ups/mcts_cleanup_analysis.md
 write_ups/web_app_model_loading_refactor.md
 scripts/evaluate_game_strength.py
 scripts/example_strength_evaluation.py
+write_ups/tournament_duplicate_models_design.md
 
 
 # VSCode
