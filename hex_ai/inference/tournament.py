@@ -24,7 +24,7 @@ from hex_ai.config import (
     BOARD_SIZE,
     TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
 )
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv, write_tournament_trmph_header
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv, write_tournament_trmph_header, find_available_csv_filename
 import random
 from datetime import datetime
 import csv
@@ -427,7 +427,7 @@ def run_round_robin_tournament(
     log_file: str = None,
     csv_file: str = None,
     play_config: Optional[TournamentPlayConfig] = None
-) -> TournamentResult:
+) -> Tuple[TournamentResult, str, str]:
     """
     For each pair of models, play num_games games with each color assignment.
     Passes play_config to each game for pie rule, temperature, and randomness.
@@ -440,8 +440,14 @@ def run_round_robin_tournament(
     preload_tournament_models(config.checkpoint_paths)
     
     # Write header to .trmph file if specified
+    actual_log_file = log_file
     if log_file:
-        write_tournament_trmph_header(log_file, config.checkpoint_paths, config.num_games, play_config, config.board_size)
+        actual_log_file = write_tournament_trmph_header(log_file, config.checkpoint_paths, config.num_games, play_config, config.board_size)
+    
+    # Find available CSV filename if specified
+    actual_csv_file = csv_file
+    if csv_file:
+        actual_csv_file = find_available_csv_filename(csv_file)
     
     # Get cached models
     model_cache = get_model_cache()
@@ -455,7 +461,7 @@ def run_round_robin_tournament(
             # Play both games (each model goes first once)
             game_results = play_games_with_each_first(
                 model_a_path, model_b_path, models, config, play_config, 
-                verbose, log_file, csv_file
+                verbose, actual_log_file, actual_csv_file
             )
             
             # Record results for both games
@@ -506,7 +512,7 @@ def run_round_robin_tournament(
                 print_head_to_head_stats(stats)
     
     print("\nDone.")
-    return result
+    return result, actual_log_file, actual_csv_file
 
 # Example usage (to be moved to CLI or script):
 if __name__ == "__main__":

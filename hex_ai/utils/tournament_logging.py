@@ -2,9 +2,42 @@ import os
 from pathlib import Path
 import csv
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from hex_ai.file_utils import validate_output_directory
 from hex_ai.system_utils import get_git_commit_info
+
+def find_available_filename(base_path: str) -> str:
+    """
+    Find an available filename by appending an index if the base path exists.
+    
+    Args:
+        base_path: The base file path to check
+        
+    Returns:
+        An available file path (either the original or with an index appended)
+        
+    Example:
+        If "tournament.trmph" exists, returns "tournament_2.trmph"
+        If "tournament_2.trmph" also exists, returns "tournament_3.trmph"
+        And so on...
+    """
+    if not os.path.exists(base_path):
+        return base_path
+    
+    # Split the path into directory, filename, and extension
+    path_obj = Path(base_path)
+    directory = path_obj.parent
+    stem = path_obj.stem  # filename without extension
+    suffix = path_obj.suffix  # extension including the dot
+    
+    # Find the first available index
+    index = 2
+    while True:
+        new_filename = f"{stem}_{index}{suffix}"
+        new_path = directory / new_filename
+        if not new_path.exists():
+            return str(new_path)
+        index += 1
 
 def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, Any], 
                       random_seed: Optional[int] = None):
@@ -59,7 +92,13 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         num_games: Number of games per pair
         play_config: TournamentPlayConfig object
         board_size: Board size (default 13)
+        
+    Returns:
+        The actual file path used (may be different from input if collision avoidance was needed)
     """
+    # Find an available filename to avoid collisions
+    actual_file_path = find_available_filename(trmph_file)
+    
     # Build metadata dictionary
     metadata = {
         "Board size": board_size,
@@ -76,7 +115,9 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
             metadata[key] = value
     
     # Use generic header writer
-    write_trmph_header(trmph_file, "Tournament games", metadata, play_config.random_seed)
+    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed)
+    
+    return actual_file_path
 
 def log_game_csv(row: dict, csv_file: str, headers: list = None):
     """
@@ -95,4 +136,11 @@ def log_game_csv(row: dict, csv_file: str, headers: list = None):
         writer = csv.DictWriter(f, fieldnames=headers)
         if write_header:
             writer.writeheader()
-        writer.writerow(row) 
+        writer.writerow(row)
+
+def find_available_csv_filename(base_path: str) -> str:
+    """
+    Find an available CSV filename by appending an index if the base path exists.
+    Similar to find_available_filename but specifically for CSV files.
+    """
+    return find_available_filename(base_path) 

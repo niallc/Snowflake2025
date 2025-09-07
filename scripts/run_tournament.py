@@ -271,7 +271,7 @@ if __name__ == "__main__":
     print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
-    result = run_round_robin_tournament(
+    result, actual_games_file, actual_csv_file = run_round_robin_tournament(
         config,
         verbose=args.verbose,
         log_file=GAMES_FILE,
@@ -279,4 +279,11 @@ if __name__ == "__main__":
         play_config=play_config
     )
     print("\nTournament complete!")
+    
+    # Print actual file paths used (in case collision avoidance changed them)
+    if actual_games_file != GAMES_FILE:
+        print(f"Note: Tournament results written to {actual_games_file} (original filename was in use)")
+    if actual_csv_file != CSV_FILE:
+        print(f"Note: CSV results written to {actual_csv_file} (original filename was in use)")
+    
     print_comprehensive_tournament_analysis(result) 

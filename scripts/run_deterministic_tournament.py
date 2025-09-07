@@ -80,7 +80,7 @@ from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysi
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.random_utils import set_deterministic_seeds
 
@@ -752,7 +752,7 @@ def run_deterministic_tournament(
         trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
         csv_file = os.path.join(output_dir, f"{pair_name}.csv")
         
-        # Write header to .trmph file
+        # Write header to .trmph file with collision avoidance
         from hex_ai.inference.tournament import TournamentPlayConfig
         play_config = TournamentPlayConfig(
             temperature=temperature,
@@ -760,7 +760,10 @@ def run_deterministic_tournament(
             pie_rule=False,  # Deterministic tournaments don't use pie rule
             strategy="deterministic"
         )
-        write_tournament_trmph_header(trmph_file, [model_path], len(openings), play_config, BOARD_SIZE)
+        actual_trmph_file = write_tournament_trmph_header(trmph_file, [model_path], len(openings), play_config, BOARD_SIZE)
+        
+        # Find available CSV filename
+        actual_csv_file = find_available_csv_filename(csv_file)
         
         # Reset tracking for this strategy pair
         current_pair_games = {}
@@ -815,8 +818,8 @@ def run_deterministic_tournament(
                         sys.exit(1)
             
             # Log TRMPH results
-            append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], trmph_file)
-            append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], trmph_file)
+            append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
+            append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
             
             # Log CSV results
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -857,7 +860,7 @@ def run_deterministic_tournament(
                 }
             ]
             
-            write_csv_results(rows, csv_file)
+            write_csv_results(rows, actual_csv_file)
             
             # Record results for tournament tracking with timing data
             # Game 1: Strategy A vs Strategy B
