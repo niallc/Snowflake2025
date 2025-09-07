@@ -90,7 +90,7 @@ let state = {
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
-  red_model_id: 'model2',  // Use different model for red by default
+  red_model_id: 'model1',  // Use current best model for both players by default
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings

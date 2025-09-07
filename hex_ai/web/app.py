@@ -88,6 +88,31 @@ DYNAMIC_MODELS = {}
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
 
+# Preload default models on startup to avoid first-move delays
+def preload_default_models():
+    """Preload the default models to avoid loading delays on first move."""
+    try:
+        app.logger.info("Preloading default models...")
+        default_models = ["model1", "model2"]  # Current and previous best models
+        
+        for model_id in default_models:
+            try:
+                model_path = get_model_path(model_id)
+                app.logger.info(f"Preloading {model_id} from {model_path}")
+                # Preload both simple and wrapper models
+                MODEL_CACHE.get_simple_model(model_path)
+                MODEL_CACHE.get_wrapper_model(model_path)
+                app.logger.info(f"Successfully preloaded {model_id}")
+            except Exception as e:
+                app.logger.warning(f"Failed to preload {model_id}: {e}")
+        
+        app.logger.info("Default model preloading complete")
+    except Exception as e:
+        app.logger.error(f"Error during model preloading: {e}")
+
+# Preload models on startup
+preload_default_models()
+
 # --- Model Management ---
 def get_model(model_id="model1"):
     """Get or create a model instance for the given model_id using centralized cache."""
@@ -1243,4 +1268,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.DEBUG)
+    app.logger.info("=" * 50)
+    app.logger.info("Hex AI Web Server Starting...")
+    app.logger.info("=" * 50)
     app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port) 

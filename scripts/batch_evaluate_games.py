@@ -32,8 +32,7 @@ from hex_ai.inference.game_engine import HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.enums import Player
-from hex_ai.utils.format_conversion import trmph_to_moves
-from hex_ai.data_utils import extract_games_from_file
+from hex_ai.data_processing import extract_games_from_file_flexible, parse_trmph_to_gamerecord
 from hex_ai.config import BOARD_SIZE
 
 # Set up logging
@@ -41,36 +40,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def parse_trmph_game(trmph_string: str) -> GameRecord:
-    """
-    Parse a TRMPH string into a GameRecord.
-    
-    Args:
-        trmph_string: TRMPH format game string (may include winner indicator at end)
-        
-    Returns:
-        GameRecord object
-    """
-    # Strip winner indicator if present (b, r, or other single character at end)
-    game_string = trmph_string.strip()
-    if len(game_string) > 0 and game_string[-1] in 'br' and game_string[-2] == ' ':
-        game_string = game_string[:-2].strip()
-    
-    # Parse moves
-    moves = trmph_to_moves(game_string, BOARD_SIZE)
-    
-    # Convert to GameRecord format
-    game_moves = []
-    for i, (row, col) in enumerate(moves):
-        player = Player.BLUE if i % 2 == 0 else Player.RED
-        game_moves.append((row, col, player))
-    
-    return GameRecord(
-        board_size=BOARD_SIZE,
-        moves=game_moves,
-        starting_player=Player.BLUE,
-        metadata={"source": "trmph", "trmph_string": trmph_string}
-    )
 
 
 def evaluate_single_game(game: GameRecord, model_path: str, config: EvaluatorConfig) -> Tuple[EvaluatorReport, Dict[str, Any], float]:
@@ -459,21 +428,21 @@ Examples:
         
         # Extract games from file
         logger.info(f"Extracting games from {args.file}")
-        all_games = extract_games_from_file(Path(args.file))
-        logger.info(f"Found {len(all_games)} games in file")
+        all_games_data = extract_games_from_file_flexible(Path(args.file))
+        logger.info(f"Found {len(all_games_data)} games in file")
         
-        if len(all_games) == 0:
+        if len(all_games_data) == 0:
             logger.error("No games found in file")
             return 1
         
         # Sample games
-        sample_size = min(args.sample_size, len(all_games))
-        if sample_size < len(all_games):
-            sampled_games = random.sample(all_games, sample_size)
-            logger.info(f"Sampled {sample_size} games from {len(all_games)} available")
+        sample_size = min(args.sample_size, len(all_games_data))
+        if sample_size < len(all_games_data):
+            sampled_games_data = random.sample(all_games_data, sample_size)
+            logger.info(f"Sampled {sample_size} games from {len(all_games_data)} available")
         else:
-            sampled_games = all_games
-            logger.info(f"Using all {len(all_games)} games")
+            sampled_games_data = all_games_data
+            logger.info(f"Using all {len(all_games_data)} games")
         
         # Print configuration info once
         logger.info(f"Configuration: {'MCTS' if config.use_mcts else 'Neural Network Only'}")
@@ -486,15 +455,15 @@ Examples:
             logger.info(f"Discrete thresholds - Policy: {config.policy_close_enough_thresh}/{config.policy_small_loss_thresh}, Value: {config.value_close_enough_thresh}/{config.value_small_loss_thresh}")
         logger.info(f"Aggregation: {config.aggregation.value}")
         logger.info(f"Cache size: {config.cache_size}")
-        logger.info(f"Evaluating {len(sampled_games)} games...")
+        logger.info(f"Evaluating {len(sampled_games_data)} games...")
         
         # Evaluate games
         all_summaries = []
         all_phase_stats = []
-        for i, trmph_string in enumerate(sampled_games):
+        for i, (trmph_string, winner_indicator) in enumerate(sampled_games_data):
             try:
-                # Parse game
-                game = parse_trmph_game(trmph_string)
+                # Parse game using unified function
+                game = parse_trmph_to_gamerecord(trmph_string, winner_indicator)
                 
                 # Evaluate game
                 report, phase_stats, eval_time = evaluate_single_game(game, model_path, config)
@@ -505,16 +474,16 @@ Examples:
                 all_phase_stats.append(phase_stats)
                 
                 # Simple progress indicator
-                print(f"Game {i+1}/{len(sampled_games)}: {len(game.moves)} moves, {eval_time:.1f}s", end="")
-                if i < len(sampled_games) - 1:
+                print(f"Game {i+1}/{len(sampled_games_data)}: {len(game.moves)} moves, {eval_time:.1f}s", end="")
+                if i < len(sampled_games_data) - 1:
                     print(", ", end="", flush=True)
                 else:
                     print()  # Final newline
                 
             except Exception as e:
                 logger.warning(f"Failed to evaluate game {i+1}: {e}")
-                print(f"Game {i+1}/{len(sampled_games)}: FAILED", end="")
-                if i < len(sampled_games) - 1:
+                print(f"Game {i+1}/{len(sampled_games_data)}: FAILED", end="")
+                if i < len(sampled_games_data) - 1:
                     print(", ", end="", flush=True)
                 else:
                     print()  # Final newline

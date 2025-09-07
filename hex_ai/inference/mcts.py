@@ -59,7 +59,9 @@ from hex_ai.inference.mcts_utils import (
     format_mcts_tree_data_for_api,
     should_enable_detailed_exploration,
     create_exploration_step_info,
-    add_detailed_exploration_to_tree_data
+    add_detailed_exploration_to_tree_data,
+    calculate_temperature_scaled_probs,
+    select_move_index
 )
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -1690,7 +1692,6 @@ class BaselineMCTS:
             if verbose >= 2:
                 print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
             # For Gumbel selection, create temperature-scaled probabilities from visit counts
-            from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs
             temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
             return selected_move, temperature_scaled_probs
         
@@ -1702,7 +1703,6 @@ class BaselineMCTS:
                 if verbose >= 2:
                     print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
                 # For terminal moves, create temperature-scaled probabilities from visit counts
-                from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs
                 temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
                 return terminal_move, temperature_scaled_probs
 
@@ -1721,7 +1721,6 @@ class BaselineMCTS:
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
         
         # Create temperature-scaled probabilities for all moves (for debugging/analysis)
-        from hex_ai.inference.mcts_utils import calculate_temperature_scaled_probs, select_move_index
         temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
         
         # Select move using the same logic as the utility function
