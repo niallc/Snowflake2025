@@ -104,8 +104,8 @@ Examples:
             '"loss_weight_sweep_exp0_bs256_98f719_20250724_233408,round2_training")'
         )
     )
-    parser.add_argument('--temperature', type=float, default=1.2,
-                       help='Temperature for move selection (default: 1.2)')
+    parser.add_argument('--temperature', type=str, default='1.2',
+                       help='Temperature for move selection. Can be a single number (e.g., "1.2") or comma-separated list (e.g., "0.3,0.6,1.0"). If a list, must match number of participants (default: 1.2)')
     parser.add_argument('--strategy', type=str, default='policy',
                        choices=['policy', 'fixed_tree', 'mcts'],
                        help='Move selection strategy (default: policy)')
@@ -213,6 +213,25 @@ if __name__ == "__main__":
     if args.search_widths:
         search_widths = [int(w.strip()) for w in args.search_widths.split(',')]
     
+    # Parse temperature argument
+    temperature_values = [float(t.strip()) for t in args.temperature.split(',')]
+    
+    # Validate temperature configuration
+    if len(temperature_values) == 1:
+        # Single temperature for all participants
+        temperature_config = temperature_values[0]
+        participant_temperatures = None
+    elif len(temperature_values) == len(checkpoint_paths):
+        # Per-participant temperatures
+        temperature_config = temperature_values  # Keep as list for backward compatibility
+        participant_temperatures = {path: temp for path, temp in zip(checkpoint_paths, temperature_values)}
+    else:
+        print(f"ERROR: Temperature list length ({len(temperature_values)}) must be 1 or match the number of participants ({len(checkpoint_paths)})")
+        print(f"  Provided temperatures: {temperature_values}")
+        print(f"  Number of participants: {len(checkpoint_paths)}")
+        print(f"  Participants: {[os.path.basename(p) for p in checkpoint_paths]}")
+        sys.exit(1)
+    
     # Create strategy configuration
     strategy_config = {}
     if args.strategy == 'mcts':
@@ -235,12 +254,13 @@ if __name__ == "__main__":
     # Create configs
     config = TournamentConfig(checkpoint_paths=checkpoint_paths, num_games=args.num_games)
     play_config = TournamentPlayConfig(
-        temperature=args.temperature, 
+        temperature=temperature_config, 
         random_seed=args.seed, 
         pie_rule=not args.no_pie_rule,
         strategy=args.strategy,
         strategy_config=strategy_config,
-        search_widths=search_widths  # Legacy support
+        search_widths=search_widths,  # Legacy support
+        participant_temperatures=participant_temperatures
     )
 
     # Create log files with descriptive names
@@ -265,7 +285,12 @@ if __name__ == "__main__":
     print(f"  Number of games per pair: {args.num_games}")
     print(f"  Strategy: {play_config.strategy}")
     print(f"  Strategy config: {play_config.strategy_config}")
-    print(f"  Temperature: {play_config.temperature}")
+    if participant_temperatures:
+        print(f"  Temperature (per participant):")
+        for path, temp in participant_temperatures.items():
+            print(f"    {os.path.basename(path)}: {temp}")
+    else:
+        print(f"  Temperature: {play_config.temperature}")
     print(f"  Pie rule: {play_config.pie_rule}")
     print(f"  Random seed: {play_config.random_seed}")
     print(f"  Results: {GAMES_FILE}, {CSV_FILE}")

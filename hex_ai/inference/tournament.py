@@ -1,6 +1,6 @@
 import os
 import itertools
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
@@ -137,18 +137,24 @@ class TournamentPlayConfig:
     """
     Configuration for tournament play, including randomness, temperature, pie rule, and reproducibility.
     If random_seed is None, use a time-based seed for uniqueness.
+    
+    Temperature can be either:
+    - A single float: applies to all participants
+    - A list of floats: applies to participants in order (must match number of participants)
     """
     def __init__(
         self,
-        temperature: float = 0.5,
+        temperature: Union[float, List[float]] = 0.5,
         random_seed: Optional[int] = None,
         pie_rule: bool = False,
         swap_threshold: float = 0.5,
         search_widths: Optional[list] = None,
         strategy: str = "policy",
-        strategy_config: Optional[Dict[str, Any]] = None
+        strategy_config: Optional[Dict[str, Any]] = None,
+        participant_temperatures: Optional[Dict[str, float]] = None
     ):
         self.temperature = temperature
+        self.participant_temperatures = participant_temperatures or {}
         if random_seed is None:
             # Use a time-based seed, but ensure it's in [0, 2**32 - 1] for np.random.seed
             random_seed = int(datetime.now().timestamp() * 1e6) % (2**32)
@@ -160,17 +166,37 @@ class TournamentPlayConfig:
         self.strategy_config = strategy_config or {}
         random.seed(random_seed)
         np.random.seed(random_seed)
+    
+    def get_temperature_for_participant(self, participant_path: str) -> float:
+        """
+        Get the temperature for a specific participant.
+        If participant_temperatures is set, use that. Otherwise, use the global temperature.
+        """
+        if participant_path in self.participant_temperatures:
+            return self.participant_temperatures[participant_path]
+        elif isinstance(self.temperature, list):
+            # This shouldn't happen if setup is correct, but provide fallback
+            return self.temperature[0] if self.temperature else 0.5
+        else:
+            return self.temperature
 
 def select_move(state: HexGameState, model: SimpleModelInference, 
-                play_config: TournamentPlayConfig) -> Optional[Tuple[int, int]]:
+                play_config: TournamentPlayConfig, model_path: Optional[str] = None) -> Optional[Tuple[int, int]]:
     """
     Select a move using the configured strategy.
     """
     from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
     
+    # Get temperature for this specific model
+    if model_path is not None:
+        temperature = play_config.get_temperature_for_participant(model_path)
+    else:
+        # Fallback to global temperature
+        temperature = play_config.temperature if isinstance(play_config.temperature, float) else 0.5
+    
     # Create strategy configuration
     strategy_config = MoveSelectionConfig(
-        temperature=play_config.temperature,
+        temperature=temperature,
         **play_config.strategy_config
     )
     
@@ -180,12 +206,13 @@ def select_move(state: HexGameState, model: SimpleModelInference,
 
 def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference, 
                    model_2: SimpleModelInference, play_config: TournamentPlayConfig,
-                   verbose: int) -> PieRuleResult:
+                   verbose: int, model_1_path: Optional[str] = None, 
+                   model_2_path: Optional[str] = None) -> PieRuleResult:
     """
     Handle pie rule logic: first move, evaluation, and potential swap.
     """
     # Always play the first move by model_1 (Blue) for consistency
-    move = select_move(state, model_1, play_config)
+    move = select_move(state, model_1, play_config, model_1_path)
     state = apply_move_to_state(state, *move)
     
     if not play_config.pie_rule:
@@ -212,7 +239,8 @@ def handle_pie_rule(state: HexGameState, model_1: SimpleModelInference,
 
 def play_game_loop(state: HexGameState, model_1: SimpleModelInference, 
                   model_2: SimpleModelInference, play_config: TournamentPlayConfig, 
-                  verbose: int) -> List[Tuple[int, int]]:
+                  verbose: int, model_1_path: Optional[str] = None, 
+                  model_2_path: Optional[str] = None) -> List[Tuple[int, int]]:
     """
     Play the main game loop, returning the sequence of moves.
     """
@@ -222,13 +250,14 @@ def play_game_loop(state: HexGameState, model_1: SimpleModelInference,
         # Determine which model to use using Player enum for safety
         current_player_enum = state.current_player_enum
         model = model_1 if current_player_enum == Player.BLUE else model_2
+        model_path = model_1_path if current_player_enum == Player.BLUE else model_2_path
         
         # Fail fast if there are no legal moves while not game over (shouldn't happen in Hex)
         if not state.get_legal_moves():
             raise ValueError("No legal moves available while game is not over. This indicates a bug.")
 
         # Select and apply move
-        move = select_move(state, model, play_config)
+        move = select_move(state, model, play_config, model_path)
         if move is None:
             raise ValueError("Move selection returned None. This indicates a model or selection failure.")
         
@@ -320,7 +349,9 @@ def play_single_game(model_1: SimpleModelInference,
                      verbose: int = 1, 
                      log_file: str = None, 
                      csv_file: str = None, 
-                     play_config: Optional[TournamentPlayConfig] = None) -> GameResult:
+                     play_config: Optional[TournamentPlayConfig] = None,
+                     model_1_path: Optional[str] = None,
+                     model_2_path: Optional[str] = None) -> GameResult:
     """
     Play a single game between model_1 (Blue, first) and model_2 (Red, second).
     Supports the pie rule, configurable temperature, and logging.
@@ -336,12 +367,12 @@ def play_single_game(model_1: SimpleModelInference,
     )
     
     # Handle pie rule
-    pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose)
+    pie_result = handle_pie_rule(state, model_1, model_2, play_config, verbose, model_1_path, model_2_path)
     model_1, model_2 = pie_result.model_1, pie_result.model_2
     
     # Play main game loop
     move_sequence, state = play_game_loop(
-        state, model_1, model_2, play_config, verbose
+        state, model_1, model_2, play_config, verbose, model_1_path, model_2_path
     )
     
     # Convert move sequence to TRMPH string
@@ -393,13 +424,13 @@ def play_games_with_each_first(
     # Game 1: model_a goes first (blue), model_b second (red)
     result_1 = play_single_game(
         models[model_a_path], models[model_b_path], config.board_size,
-        verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config, model_a_path, model_b_path
     )
     
     # Game 2: model_b goes first (blue), model_a second (red)  
     result_2 = play_single_game(
         models[model_b_path], models[model_a_path], config.board_size,
-        verbose, log_file, csv_file, play_config
+        verbose, log_file, csv_file, play_config, model_b_path, model_a_path
     )
     
     return {
