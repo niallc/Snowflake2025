@@ -343,13 +343,7 @@ class Trainer:
         # Compute validation averages
         val_avg = {key: np.mean(values) for key, values in val_metrics.items()}
         return val_avg
-    
-    # TODO: Remove the below redundant comments after clean up.
-    # NOTE: The train() method has been removed as it was dead code.
-    # The hyperparameter sweep uses train_on_batches() via MiniEpochOrchestrator.
-    # If you need epoch-based training, use MiniEpochOrchestrator or implement
-    # a new training loop that calls train_on_batches().
-    
+        
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict, compress: bool = True):
         """
         Save model checkpoint.
@@ -511,58 +505,10 @@ class Trainer:
         next_log_batch = 1
         log_interval_sec = 180  # 3 minutes
         last_time_log = start_time
-        # Only print device info the first time this method is called per Trainer instance
-        if not hasattr(self, '_train_on_batches_logged_device'):
-            print("[train_on_batches] Device info:")
-            print(f"  self.device = {self.device}")
-            print(f"  torch.cuda.is_available() = {torch.cuda.is_available()}")
-            if hasattr(torch.backends, 'mps'):
-                print(f"  torch.backends.mps.is_available() = {torch.backends.mps.is_available()}")
-                print(f"  torch.backends.mps.is_built() = {torch.backends.mps.is_built()}")
-            print(f"  Model device: {next(self.model.parameters()).device}")
-            self._train_on_batches_logged_device = True
         data_load_start = time.time()
         batch_data_times = []  # Track data loading times for each batch
         batch_times = [] # Initialize batch_times here
         for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
-            # --- DEBUG: Dump first batch of epoch 0, mini_epoch 0 ---
-            if (epoch == 0 and mini_epoch == 0 and batch_idx == 0):
-                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                now = datetime.now()
-                date_str = now.strftime("%Y-%m-%d")
-                time_str = now.strftime("%H-%M")
-                debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
-                # Save both device and cpu/numpy forms for debugging
-                batch_dict = {
-                    'boards': boards,
-                    'policies': policies,
-                    'values': values,
-                    'boards_cpu': boards.cpu(),
-                    'policies_cpu': policies.cpu(),
-                    'values_cpu': values.cpu(),
-                    'boards_np': boards.cpu().numpy(),
-                    'policies_np': policies.cpu().numpy(),
-                    'values_np': values.cpu().numpy(),
-                    'meta': {
-                        'epoch': epoch,
-                        'mini_epoch': mini_epoch,
-                        'batch_idx': batch_idx,
-                        'shape': {
-                            'boards': tuple(boards.shape),
-                            'policies': tuple(policies.shape),
-                            'values': tuple(values.shape),
-                        },
-                        'dtype': {
-                            'boards': str(boards.dtype),
-                            'policies': str(policies.dtype),
-                            'values': str(values.dtype),
-                        },
-                    }
-                }
-                with open(debug_filename, 'wb') as f:
-                    pickle.dump(batch_dict, f)
-                print(f"[DEBUG] Dumped first batch of epoch 0, mini_epoch 0 to {debug_filename}")
-                # TODO: Remove or refactor this debug dumping logic after value head debugging is complete.
             # Time data loading
             data_load_end = time.time()
             batch_data_time = data_load_end - data_load_start
@@ -664,44 +610,6 @@ class Trainer:
                     if batch_idx > 64:
                         exp_backoff = 1.5
                     next_log_batch *= math.floor(exp_backoff)  # Exponential backoff
-            # --- DUMP FINAL BATCH FOR DETAILED DEBUGGING ---
-            is_last_batch = (batch_idx == len(batch_iterable) - 1)
-            if (epoch == 0 and mini_epoch == 0 and is_last_batch):
-                os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                now = datetime.now()
-                date_str = now.strftime("%Y-%m-%d")
-                time_str = now.strftime("%H-%M")
-                debug_filename = f'analysis/debugging/value_head_performance/batch{batch_idx}_epoch{epoch}_mini{mini_epoch}_{date_str}_{time_str}_detailed.pkl'
-                batch_dict = {
-                    'boards': boards.cpu(),
-                    'policies': policies.cpu(),
-                    'values': values.cpu(),
-                    'policy_logits': policy_pred.detach().cpu(),
-                    'value_signed': value_pred.detach().cpu(),
-                    'policy_logits_np': policy_pred.detach().cpu().numpy(),
-                    'value_signed_np': value_pred.detach().cpu().numpy(),
-                    'policies_np': policies.cpu().numpy(),
-                    'values_np': values.cpu().numpy(),
-                    'meta': {
-                        'epoch': epoch,
-                        'mini_epoch': mini_epoch,
-                        'batch_idx': batch_idx,
-                        'shape': {
-                            'boards': tuple(boards.shape),
-                            'policies': tuple(policies.shape),
-                            'values': tuple(values.shape),
-                        },
-                        'dtype': {
-                            'boards': str(boards.dtype),
-                            'policies': str(policies.dtype),
-                            'values': str(values.dtype),
-                        },
-                        'loss_dict': loss_dict,
-                    }
-                }
-                with open(debug_filename, 'wb') as f:
-                    pickle.dump(batch_dict, f)
-                print(f"[DEBUG] Dumped detailed final batch to {debug_filename}")
             # Prepare for next batch data timing
             data_load_start = time.time()
             batch_end_time = time.time()

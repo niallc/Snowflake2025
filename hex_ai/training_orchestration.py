@@ -23,7 +23,7 @@ import random
 import re
 
 from .models import TwoHeadedResNet
-from .training import Trainer, EarlyStopping
+from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split, estimate_dataset_size
