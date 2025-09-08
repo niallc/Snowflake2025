@@ -167,58 +167,6 @@ class MixedPrecisionTrainer:
             self.scaler.update()
 
 
-class EarlyStopping:
-    """Early stopping to prevent overfitting."""
-    
-    def __init__(self, patience: int = 10, min_delta: float = 0.001, restore_best_weights: bool = True):
-        """
-        Initialize early stopping.
-        
-        Args:
-            patience: Number of epochs to wait before stopping
-            min_delta: Minimum change in validation loss to be considered an improvement
-            restore_best_weights: Whether to restore best weights when stopping
-        """
-        self.patience = patience
-        self.min_delta = min_delta
-        self.restore_best_weights = restore_best_weights
-        self.best_val_loss = float('inf')
-        self.counter = 0
-        self.best_weights = None
-        self.stopped_epoch = 0
-        
-    def __call__(self, val_loss: float, model: torch.nn.Module) -> bool:
-        """
-        Check if training should stop.
-        
-        Args:
-            val_loss: Current validation loss
-            model: Model to save weights from
-            
-        Returns:
-            True if training should stop, False otherwise
-        """
-        if val_loss < self.best_val_loss - self.min_delta:
-            self.best_val_loss = val_loss
-            self.counter = 0
-            if self.restore_best_weights:
-                self.best_weights = model.state_dict().copy()
-        else:
-            self.counter += 1
-            
-        if self.counter >= self.patience:
-            logger.info(f"Early stopping triggered after {self.counter} epochs without improvement")
-            if self.restore_best_weights and self.best_weights is not None:
-                model.load_state_dict(self.best_weights)
-                logger.info("Restored best model weights")
-            return True
-        return False
-    
-    def get_best_val_loss(self) -> float:
-        """Get the best validation loss achieved."""
-        return self.best_val_loss
-
-
 class Trainer:
     """Training manager for Hex AI models."""
     
@@ -360,214 +308,6 @@ class Trainer:
         except Exception as e:
             logger.warning(f"System analysis failed: {e}")
     
-    def train_epoch(self, batch_callback=None) -> Dict[str, float]:
-        print(f"Trainer.train_epoch() called")
-        print(f"self.current_epoch = {self.current_epoch}")
-        if(self.current_epoch == 0):
-            print(f"VERBOSE_LEVEL = {VERBOSE_LEVEL}")
-            print(f"self.max_grad_norm = {self.max_grad_norm}")
-            print(f"self.train_loader.batch_size = {self.train_loader.batch_size}")
-            print(f"self.train_loader.dataset = {self.train_loader.dataset}", flush=True)
-
-        # Enhanced logging setup
-        log_dir = Path('logs')
-        log_dir.mkdir(exist_ok=True)
-        
-        # Use timestamped filenames if run_timestamp is provided
-        if self.run_timestamp:
-            verbose_log_file = log_dir / f'run_training_verbose_{self.run_timestamp}.txt'
-            diagnostic_log_file = log_dir / f'training_diagnostics_{self.run_timestamp}.txt'
-        else:
-            print("WARNING: No run_timestamp found; using default log filenames.", flush=True)
-            verbose_log_file = log_dir / 'run_training_verbose.txt'
-            diagnostic_log_file = log_dir / 'training_diagnostics.txt'
-        
-        def log_and_print(msg):
-            print(msg)
-            with open(verbose_log_file, 'a') as f:
-                f.write(msg + '\n')
-        
-        def log_diagnostic(msg):
-            with open(diagnostic_log_file, 'a') as f:
-                f.write(f"[Epoch {self.current_epoch}] {msg}\n")
-
-        self.model.train()
-        epoch_losses = []
-        epoch_metrics = {
-            'policy_loss': [],
-            'value_loss': [],
-            'total_loss': []
-        }
-        
-        # Enhanced diagnostics tracking
-        gradient_norms = []
-        learning_rates = []
-        loss_spikes = []  # Track when loss increases significantly
-        batch_times = []
-        batch_data_times = []
-        epoch_start_time = time.time()
-        data_load_start = time.time()
-        n_batches = None  # Unknown for streaming datasets
-        # For streaming datasets, log every self.log_interval_batches batches
-        log_interval = self.log_interval_batches
-        special_batches = {0, 1, 3, 9, 29}  # 1st, 2nd, 4th, 10th, 30th (0-based)
-        
-        # Track previous loss for spike detection
-        prev_total_loss = None
-        
-        try:
-            for batch_idx, (boards, policies, values) in enumerate(self.train_loader):
-                # DEBUG: Dump first batch of epoch 0 for inspection
-                if self.current_epoch == 0 and batch_idx == 0:
-                    import pickle, os
-                    os.makedirs('analysis/debugging/value_head_performance', exist_ok=True)
-                    now = datetime.now()
-                    date_str = now.strftime("%Y-%m-%d")
-                    time_str = now.strftime("%H-%M")
-                    debug_filename = f'analysis/debugging/value_head_performance/batch0_epoch0_{date_str}_{time_str}.pkl'
-                    with open(debug_filename, 'wb') as f:
-                        pickle.dump({
-                            'boards': boards.cpu(),
-                            'policies': policies.cpu(),
-                            'values': values.cpu()
-                        }, f)
-                    print("[DEBUG] Dumped first batch of epoch 0 to analysis/debugging/value_head_performance/batch0_epoch0.pkl")
-                # Time data loading
-                data_load_end = time.time()
-                batch_data_time = data_load_end - data_load_start
-                batch_data_times.append(batch_data_time)
-                batch_start_time = time.time()
-                # Move to device
-                boards = boards.to(self.device)
-                policies = policies.to(self.device)
-                values = values.to(self.device)
-                # Forward pass with mixed precision
-                self.optimizer.zero_grad()
-                with self.mixed_precision.autocast_context():
-                    policy_pred, value_pred = self.model(boards)
-                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-                
-                # Enhanced loss spike detection
-                if prev_total_loss is not None:
-                    loss_change = total_loss.item() - prev_total_loss
-                    loss_change_ratio = abs(loss_change) / prev_total_loss if prev_total_loss > 0 else 0
-                    if loss_change_ratio > 0.5:  # 50% change threshold
-                        loss_spikes.append({
-                            'batch': batch_idx,
-                            'prev_loss': prev_total_loss,
-                            'current_loss': total_loss.item(),
-                            'change': loss_change,
-                            'change_ratio': loss_change_ratio
-                        })
-                        log_diagnostic(f"LOSS SPIKE: batch={batch_idx}, prev={prev_total_loss:.4f}, current={total_loss.item():.4f}, change={loss_change:.4f}, ratio={loss_change_ratio:.3f}")
-                
-                prev_total_loss = total_loss.item()
-                
-                # Backward pass with scaling
-                scaled_loss = self.mixed_precision.scale_loss(total_loss)
-                scaled_loss.backward()
-                if batch_callback is not None:
-                    batch_callback(self, batch_idx)
-                
-                # Enhanced gradient analysis
-                grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
-                gradient_norms.append(grad_norm_before_clip)
-                
-                # Gradient clipping (configurable)
-                if self.max_grad_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-                    grad_norm_after_clip = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
-                    if grad_norm_before_clip > self.max_grad_norm:
-                        log_diagnostic(f"GRADIENT CLIPPED: batch={batch_idx}, before={grad_norm_before_clip:.4f}, after={grad_norm_after_clip:.4f}, max_norm={self.max_grad_norm}")
-                
-                # Optimizer step with scaling
-                self.mixed_precision.step_optimizer(self.optimizer)
-                self.mixed_precision.update_scaler()
-                
-                # Track learning rates
-                current_lr = self.optimizer.param_groups[0]['lr']
-                learning_rates.append(current_lr)
-                
-                # Track metrics
-                epoch_losses.append(loss_dict['total_loss'])
-                for key in epoch_metrics:
-                    epoch_metrics[key].append(loss_dict[key])
-                
-                # Enhanced logging: print every k batches, and at special batches for epoch 0
-                should_log = (
-                    (batch_idx % log_interval == 0)
-                    or (
-                        self.current_epoch == 0
-                        and batch_idx in special_batches
-                    )
-                )
-                if should_log:
-                    cum_epoch_time = time.time() - epoch_start_time
-                    batch_size = boards.size(0) if hasattr(boards, 'size') else 'N/A'
-                    msg = (f"[Epoch {self.current_epoch}][Batch {batch_idx+1}/{n_batches}] "
-                           f"Total Loss: {loss_dict['total_loss']:.4f}, "
-                           f"Policy: {loss_dict['policy_loss']:.4f}, "
-                           f"Value: {loss_dict['value_loss']:.4f}, "
-                           f"Grad Norm: {grad_norm_before_clip:.4f}, "
-                           f"LR: {current_lr:.6f}, "
-                           f"Batch time ({batch_size}): {time.time() - batch_start_time:.3f}s, "
-                           f"Data load: {batch_data_time:.3f}s, "
-                           f"Cumulative epoch time: {cum_epoch_time:.1f}s")
-                    log_and_print(msg)
-                
-                # Prepare for next batch data timing
-                data_load_start = time.time()
-                batch_end_time = time.time()
-                batch_times.append(batch_end_time - batch_start_time)
-        except IndexError:
-            log_and_print("[INFO] No more data in dataset. Ending epoch early.")
-            pass
-        epoch_end_time = time.time()
-        epoch_time = epoch_end_time - epoch_start_time
-        # Compute epoch averages
-        epoch_avg = {key: np.mean(values) for key, values in epoch_metrics.items()}
-        # Add timing info to epoch_avg
-        epoch_avg['epoch_time'] = epoch_time
-        epoch_avg['batch_time_mean'] = np.mean(batch_times) if batch_times else 0
-        epoch_avg['batch_time_min'] = np.min(batch_times) if batch_times else 0
-        epoch_avg['batch_time_max'] = np.max(batch_times) if batch_times else 0
-        epoch_avg['data_load_time_mean'] = np.mean(batch_data_times) if batch_data_times else 0
-        
-        # Enhanced diagnostics summary
-        if gradient_norms:
-            epoch_avg['grad_norm_mean'] = np.mean(gradient_norms)
-            epoch_avg['grad_norm_max'] = np.max(gradient_norms)
-            epoch_avg['grad_norm_min'] = np.min(gradient_norms)
-            epoch_avg['grad_norm_std'] = np.std(gradient_norms)
-        
-        if learning_rates:
-            epoch_avg['lr_mean'] = np.mean(learning_rates)
-            epoch_avg['lr_min'] = np.min(learning_rates)
-            epoch_avg['lr_max'] = np.max(learning_rates)
-            epoch_avg['lr_std'] = np.std(learning_rates)
-        
-        epoch_avg['loss_spikes_count'] = len(loss_spikes)
-        
-        # Log timing summary
-        samples_per_sec = float('nan')  # Unknown for streaming datasets
-        summary_msg = (f"[Epoch {self.current_epoch}] DONE: epoch_time={epoch_time:.2f}s, "
-                       f"batch_time_mean={epoch_avg['batch_time_mean']:.3f}s, "
-                       f"batch_time_min={epoch_avg['batch_time_min']:.3f}s, "
-                       f"batch_time_max={epoch_avg['batch_time_max']:.3f}s, "
-                       f"data_load_time_mean={epoch_avg['data_load_time_mean']:.3f}s, "
-                       f"samples/sec={samples_per_sec:.1f}")
-        log_and_print(summary_msg)
-        
-        # Enhanced diagnostic summary
-        if gradient_norms:
-            diagnostic_summary = (f"DIAGNOSTICS: grad_norm_mean={epoch_avg['grad_norm_mean']:.4f}, "
-                                f"grad_norm_max={epoch_avg['grad_norm_max']:.4f}, "
-                                f"grad_norm_std={epoch_avg['grad_norm_std']:.4f}, "
-                                f"lr_mean={epoch_avg['lr_mean']:.6f}, "
-                                f"loss_spikes={epoch_avg['loss_spikes_count']}")
-            log_diagnostic(diagnostic_summary)
-        
-        return epoch_avg
     
     def validate(self) -> Dict[str, float]:
         """Validate the model."""
@@ -604,6 +344,7 @@ class Trainer:
         val_avg = {key: np.mean(values) for key, values in val_metrics.items()}
         return val_avg
     
+    # TODO: Remove the below redundant comments after clean up.
     # NOTE: The train() method has been removed as it was dead code.
     # The hyperparameter sweep uses train_on_batches() via MiniEpochOrchestrator.
     # If you need epoch-based training, use MiniEpochOrchestrator or implement
@@ -752,7 +493,6 @@ class Trainer:
             Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
 
         Usage:
-            # For standard training, use train() instead
             # For mini-epoch orchestration:
             orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500)
             orchestrator.run()
