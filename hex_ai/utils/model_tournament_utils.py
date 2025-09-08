@@ -4,6 +4,9 @@ Shared utilities for handling model paths and configurations in tournaments.
 This module provides utilities to resolve model paths from command line arguments,
 validate model configurations, and generate unique labels for tournament participants.
 These utilities are shared between different tournament types to maintain DRY principles.
+
+This module consolidates model-specific logic that was previously duplicated between
+tournament_utils.py and model_tournament_utils.py.
 """
 
 import os
@@ -96,9 +99,39 @@ def resolve_model_paths(
     return model_paths
 
 
+def validate_participant_paths(model_paths: List[str], participant_type: str = "model") -> None:
+    """
+    Validate that model paths exist and there are enough for a tournament.
+    
+    Args:
+        model_paths: List of model checkpoint file paths
+        participant_type: Type of participant for error messages (e.g., "model", "checkpoint")
+        
+    Raises:
+        SystemExit: If validation fails
+    """
+    # Validate that we have at least 2 models for a meaningful tournament
+    if len(model_paths) < 2:
+        print(f"ERROR: Need at least 2 unique {participant_type}s for a tournament.")
+        print(f"  Provided {participant_type}s: {[os.path.basename(p) for p in model_paths]}")
+        sys.exit(1)
+
+    # Check that all model paths exist before proceeding
+    missing_paths = [p for p in model_paths if not os.path.isfile(p)]
+    if missing_paths:
+        print(f"\nERROR: The following {participant_type} files do not exist:")
+        for p in missing_paths:
+            print(f"  {p}")
+        print(f"\nPlease check that the {participant_type} files exist and the paths are correct.")
+        sys.exit(1)
+
+
 def validate_model_paths(model_paths: List[str]) -> None:
     """
     Validate that model paths exist and there are enough for a tournament.
+    
+    This is a convenience wrapper around validate_participant_paths.
+    Maintained for backward compatibility.
     
     Args:
         model_paths: List of model checkpoint file paths
@@ -106,74 +139,93 @@ def validate_model_paths(model_paths: List[str]) -> None:
     Raises:
         SystemExit: If validation fails
     """
-    # Validate that we have at least 2 models for a meaningful tournament
-    if len(model_paths) < 2:
-        print("ERROR: Need at least 2 unique models for a tournament.")
-        print(f"  Provided models: {[os.path.basename(p) for p in model_paths]}")
-        sys.exit(1)
-
-    # Check that all model paths exist before proceeding
-    missing_paths = [p for p in model_paths if not os.path.isfile(p)]
-    if missing_paths:
-        print("\nERROR: The following model files do not exist:")
-        for p in missing_paths:
-            print(f"  {p}")
-        print("\nPlease check that the model files exist and the paths are correct.")
-        sys.exit(1)
+    validate_participant_paths(model_paths, "model")
 
 
-def generate_model_labels(model_paths: List[str]) -> Tuple[List[str], Dict[str, str]]:
+def generate_participant_labels(model_paths: List[str], label_prefix: str = "Model") -> Tuple[List[str], Dict[str, str]]:
     """
-    Generate unique model labels for model paths, handling duplicates.
+    Generate unique participant labels for model paths, handling duplicates.
     
     This function creates unique labels for each model to handle cases where
     the same model file might be used multiple times in a tournament.
     
     Args:
         model_paths: List of model checkpoint file paths
+        label_prefix: Prefix for duplicate labels (e.g., "Model", "Player")
         
     Returns:
-        Tuple of (model_labels, label_to_model_mapping)
-        - model_labels: List of unique labels for each participant
+        Tuple of (participant_labels, label_to_model_mapping)
+        - participant_labels: List of unique labels for each participant
         - label_to_model_mapping: Dict mapping labels to actual model paths
     """
-    model_labels = []
+    participant_labels = []
     label_to_model = {}
     model_usage = {}
     
     for model_path in model_paths:
         if model_path in model_usage:
-            # This is a duplicate - create a unique model label
+            # This is a duplicate - create a unique participant label
             model_usage[model_path] += 1
-            model_label = f"Model{model_usage[model_path]}_{os.path.basename(model_path)}"
+            participant_label = f"{label_prefix}{model_usage[model_path]}_{os.path.basename(model_path)}"
         else:
             # First occurrence - use just the filename for consistency
             model_usage[model_path] = 1
-            model_label = os.path.basename(model_path)
+            participant_label = os.path.basename(model_path)
         
-        model_labels.append(model_label)
-        label_to_model[model_label] = model_path
+        participant_labels.append(participant_label)
+        label_to_model[participant_label] = model_path
     
-    return model_labels, label_to_model
+    return participant_labels, label_to_model
+
+
+def generate_model_labels(model_paths: List[str]) -> Tuple[List[str], Dict[str, str]]:
+    """
+    Generate unique model labels for model paths, handling duplicates.
+    
+    This is a convenience wrapper around generate_participant_labels with "Model" prefix.
+    Maintained for backward compatibility.
+    
+    Args:
+        model_paths: List of model checkpoint file paths
+        
+    Returns:
+        Tuple of (model_labels, label_to_model_mapping)
+    """
+    return generate_participant_labels(model_paths, "Model")
+
+
+def print_duplicate_participant_info(participant_labels: List[str], model_paths: List[str], participant_type: str = "model") -> None:
+    """
+    Print information about duplicate participants and participant labels.
+    
+    Args:
+        participant_labels: List of participant labels
+        model_paths: List of model paths
+        participant_type: Type of participant for display (e.g., "model", "checkpoint")
+    """
+    unique_paths = list(dict.fromkeys(model_paths))
+    if len(unique_paths) != len(model_paths):
+        print(f"INFO: Duplicate {participant_type}s detected. Using unique {participant_type} labels:")
+        for label, path in zip(participant_labels, model_paths):
+            if label != path:
+                print(f"  {label} -> {os.path.basename(path)}")
+            else:
+                print(f"  {os.path.basename(path)}")
+        print()
 
 
 def print_duplicate_model_info(model_labels: List[str], model_paths: List[str]) -> None:
     """
     Print information about duplicate models and model labels.
     
+    This is a convenience wrapper around print_duplicate_participant_info.
+    Maintained for backward compatibility.
+    
     Args:
         model_labels: List of model labels
         model_paths: List of model paths
     """
-    unique_paths = list(dict.fromkeys(model_paths))
-    if len(unique_paths) != len(model_paths):
-        print("INFO: Duplicate models detected. Using unique model labels:")
-        for label, path in zip(model_labels, model_paths):
-            if label != path:
-                print(f"  {label} -> {os.path.basename(path)}")
-            else:
-                print(f"  {os.path.basename(path)}")
-        print()
+    print_duplicate_participant_info(model_labels, model_paths, "model")
 
 
 def print_model_tournament_configuration(

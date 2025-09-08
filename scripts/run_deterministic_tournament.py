@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Run a deterministic strategy tournament using pre-generated opening positions.
+Run a deterministic model tournament using pre-generated opening positions.
 
-This script compares different strategies using the same model and the same
+This script compares different models using the same strategy and the same
 set of opening positions, eliminating randomness as a confounding factor.
 
 The key insight is that by starting from the same opening positions,
-we can directly compare how different strategies perform from identical
+we can directly compare how different models perform from identical
 starting points, making the comparison much more robust.
 
 Different runs can use different opening sets by changing the --seed parameter,
@@ -529,13 +529,13 @@ def play_deterministic_game(
         model_a_path: Path to model A
         model_b_path: Path to model B
         models: Dictionary of loaded models keyed by path
-        strategy_a: Strategy configuration for player A
-        strategy_b: Strategy configuration for player B
+        strategy_a: Strategy configuration for model A
+        strategy_b: Strategy configuration for model B
         opening: Opening position to start from
         temperature: Temperature for move selection (0.0 = deterministic)
         board_size: Board size for the game
         verbose: Verbosity level
-        strategy_a_is_blue: Whether strategy_a plays as Blue (True) or Red (False)
+        strategy_a_is_blue: Whether strategy A plays as Blue (True) or Red (False)
     
     Returns:
         Dictionary with game results including timing information
@@ -611,6 +611,10 @@ def play_deterministic_game(
         
         logger.debug(f"Player {current_player.name} ({os.path.basename(model_path)}) plays move {move} in {move_time:.3f}s")
         
+        # Debug output to verify model selection
+        if verbose >= 3:
+            print(f"  Move {move_count}: {current_player.name} using {os.path.basename(model_path)} -> {move}")
+        
         # Apply move
         move_sequence.append(move)
         state = apply_move_to_state(state, *move)
@@ -678,13 +682,13 @@ def run_deterministic_tournament(
     seed: Optional[int] = None
 ) -> DeterministicTournamentResult:
     """
-    Run a deterministic tournament using pre-generated opening positions.
+    Run a deterministic model tournament using pre-generated opening positions.
     
     Args:
         model_paths: List of model checkpoint paths
         model_labels: List of unique model labels
         label_to_model: Mapping from labels to model paths
-        strategy_configs: List of strategy configurations
+        strategy_configs: List of strategy configurations (same strategy for all models)
         openings: List of opening positions to use
         temperature: Temperature for move selection (0.0 = deterministic)
         verbose: Verbosity level
@@ -694,9 +698,7 @@ def run_deterministic_tournament(
         TournamentResult with results
     """
     # TODO: Add progress tracking and resume functionality
-    # TODO: Add parallel processing for multiple strategy pairs
-    # TODO: Add memory usage monitoring for large tournaments
-    # TODO: Consider adding early termination if one strategy dominates
+    # TODO: Consider adding early termination if one model dominates
     
     # Create tournament result tracking model labels
     result = DeterministicTournamentResult(model_labels)
@@ -721,14 +723,16 @@ def run_deterministic_tournament(
     seen_games = set()  # All games across all strategy pairs and openings
     current_pair_games = {}  # Games from current strategy pair: {opening_idx: [game1_key, game2_key]}
     
-    # Run round-robin between all model pairs
-    for model_a_label, model_b_label in itertools.combinations(model_labels, 2):
-        model_a_path = label_to_model[model_a_label]
-        model_b_path = label_to_model[model_b_label]
+    # Run round-robin between all strategy pairs
+    for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
+        model_a_path = strategy_a.model_path
+        model_b_path = strategy_b.model_path
+        model_a_label = strategy_a.name
+        model_b_label = strategy_b.name
         
         logger.info(f"\nPlaying {len(openings)} games: {model_a_label} vs {model_b_label}")
         
-        # Create output files for this model pair
+        # Create output files for this strategy pair
         pair_name = f"{model_a_label}_vs_{model_b_label}"
         trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
         csv_file = os.path.join(output_dir, f"{pair_name}.csv")
@@ -763,7 +767,7 @@ def run_deterministic_tournament(
             # Game 1: Model A (Blue) vs Model B (Red)
             logger.debug(f"Playing game 1: {model_a_label} (Blue) vs {model_b_label} (Red) from opening {opening_idx + 1}")
             result_1 = play_deterministic_game(
-                model_a_path, model_b_path, models, strategy_config, strategy_config, 
+                model_a_path, model_b_path, models, strategy_a, strategy_b, 
                 opening, temperature, verbose=verbose, strategy_a_is_blue=True
             )
             game_results.append(result_1)
@@ -771,7 +775,7 @@ def run_deterministic_tournament(
             # Game 2: Model B (Blue) vs Model A (Red)
             logger.debug(f"Playing game 2: {model_b_label} (Blue) vs {model_a_label} (Red) from opening {opening_idx + 1}")
             result_2 = play_deterministic_game(
-                model_b_path, model_a_path, models, strategy_config, strategy_config, 
+                model_b_path, model_a_path, models, strategy_b, strategy_a, 
                 opening, temperature, verbose=verbose, strategy_a_is_blue=False
             )
             game_results.append(result_2)
@@ -917,12 +921,10 @@ Examples:
         """
     )
     
-    parser.add_argument('--models', type=str,
-                       help='Comma-separated list of model names (e.g., "current_best,previous_best")')
-    parser.add_argument('--model-dirs', type=str,
+    parser.add_argument('--strategies', type=str, required=True,
+                       help='Comma-separated list of model:strategy combinations (e.g., "epoch2_mini201.pt.gz:mcts_100,epoch4_mini126.pt.gz:policy")')
+    parser.add_argument('--model-dirs', type=str, required=True,
                        help='Comma-separated list of model directories')
-    parser.add_argument('--strategy', type=str, default='policy',
-                       help='Strategy to use for all models (default: policy)')
     parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
                        help=f'Number of opening positions to generate (default: {DEFAULT_NUM_OPENINGS})')
     parser.add_argument('--opening-length', type=int, default=DEFAULT_OPENING_LENGTH,
@@ -964,25 +966,9 @@ def main():
     # Set random seed for reproducible opening selection
     set_deterministic_seeds(args.seed)
     
-    # Resolve model paths
-    default_model_dir = get_model_dir("current_best")
-    default_models = ["current_best", "previous_best"]
-    
-    model_paths = resolve_model_paths(
-        args.models, args.model_dirs, default_model_dir, default_models
-    )
-    
-    # Validate model paths
-    validate_model_paths(model_paths)
-    
-    # Generate model labels
-    model_labels, label_to_model = generate_model_labels(model_paths)
-    
-    # Check if we have duplicates and inform the user
-    print_duplicate_model_info(model_labels, model_paths)
-    
-    # Parse strategy
-    strategy_name = args.strategy
+    # Parse model+strategy combinations
+    model_strategy_combinations = [s.strip() for s in args.strategies.split(',')]
+    model_dirs = [d.strip() for d in args.model_dirs.split(',')]
     
     # Parse optional parameters
     mcts_sims = None
@@ -1005,13 +991,25 @@ def main():
     if args.enable_gumbel:
         enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
     
-    # Parse strategy configuration (same strategy for all models)
+    # Create strategy configurations with model paths
     try:
-        # Create a single strategy config for all models
-        strategy_configs = parse_strategy_configs([strategy_name], mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
+        from hex_ai.inference.strategy_config import create_strategy_configs_with_models
+        strategy_configs = create_strategy_configs_with_models(
+            model_strategy_combinations, model_dirs, mcts_sims, search_widths,
+            batch_sizes, c_pucts, enable_gumbel
+        )
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
+    
+    # Extract model paths and labels for tournament logic
+    model_paths = [config.model_path for config in strategy_configs]
+    model_labels = [config.name for config in strategy_configs]
+    label_to_model = {label: path for label, path in zip(model_labels, model_paths)}
+    
+    # Validate model paths
+    from hex_ai.utils.model_tournament_utils import validate_model_paths
+    validate_model_paths(model_paths)
     
     # Generate or load opening positions
     if args.opening_file and os.path.exists(args.opening_file):
@@ -1049,9 +1047,9 @@ def main():
     
     # Print configuration
     print_model_tournament_configuration(
-        model_labels, model_paths, len(openings), strategy_name, 
+        model_labels, model_paths, len(openings), "mixed_strategies", 
         strategy_configs[0].config, args.temperature, args.seed,
-        args.model_dirs.split(',') if args.model_dirs else None, default_model_dir
+        args.model_dirs.split(',') if args.model_dirs else None, None
     )
     print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
     print(f"  Opening length: {args.opening_length} moves")
