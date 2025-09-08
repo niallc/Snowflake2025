@@ -240,6 +240,12 @@ def gumbel_alpha_zero_root_batched(
     if temperature < 0:
         raise ValueError(f"temperature must be non-negative, got {temperature}")
     
+    # Temperature scaling: scale logits by 1/tau to control exploration
+    # This is the standard "temperature before Gumbel" approach
+    t = max(temperature, 1e-6)  # avoid div-by-zero explosion
+    # Do NOT scale the Gumbel noise or the value bonus; only scale logits
+    scaled_policy_logits = policy_logits / t
+    
     K = policy_logits.shape[0]
     
     # Setup phase timing
@@ -268,14 +274,15 @@ def gumbel_alpha_zero_root_batched(
     mask = np.full(K, -np.inf)
     mask[legal_actions] = 0.0
     
-    # Apply mask to logits
-    logits = policy_logits + mask
+    # Apply mask to scaled logits
+    logits = scaled_policy_logits + mask
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # IMPROVEMENT: Cap candidates to prevent explosion in mid-game positions
-        # Good default: don't consider more actions than we can reasonably evaluate
-        m = min(len(legal_actions), total_sims, 32)  # Cap at 32 for k≈200-500
+        # Adaptive candidate count: small when sims are small, grows with sims,
+        # but never exceeds legal moves or sims, and caps at 48.
+        m_auto = int(min(48, max(8, 4 + total_sims // 8)))
+        m = min(len(legal_actions), total_sims, m_auto)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start
     
