@@ -14,6 +14,7 @@ from pathlib import Path
 CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
+# Temporary honourable mention model: sep6th.../epoch4_mini40.pt.gz, sep6th.../epoch4_mini126.pt.gz
 CURRENT_BEST_MODEL_DIR = "sep6th_extraValueLayer/pipeline_20250906_182558/pipeline_sweep_exp0__99914b_20250906_182558"
 CURRENT_BEST_MODEL_FILE = "epoch4_mini126.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
