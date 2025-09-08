@@ -82,7 +82,8 @@ def append_trmph_winner_line(trmph_sequence: str, winner: str, output_file: str)
         f.write(f"{trmph_sequence} {winner}\n")
 
 def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list, 
-                                 num_games: int, play_config, board_size: int = 13):
+                                 num_games: int, play_config, board_size: int = 13,
+                                 player_labels: list = None, participant_temperatures: dict = None):
     """
     Write header information to a tournament .trmph file.
     
@@ -92,6 +93,8 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         num_games: Number of games per pair
         play_config: TournamentPlayConfig object
         board_size: Board size (default 13)
+        player_labels: List of player labels (for duplicate model support)
+        participant_temperatures: Dict mapping player labels to their temperatures
         
     Returns:
         The actual file path used (may be different from input if collision avoidance was needed)
@@ -108,6 +111,15 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         "Temperature": play_config.temperature,
         "Pie rule": play_config.pie_rule,
     }
+    
+    # Add per-participant temperature information if available
+    if participant_temperatures and player_labels:
+        temp_info = []
+        for label in player_labels:
+            if label in participant_temperatures:
+                temp_info.append(f"{label}: {participant_temperatures[label]}")
+        if temp_info:
+            metadata["Temperature (per participant)"] = temp_info
     
     # Add strategy-specific config
     if play_config.strategy_config:

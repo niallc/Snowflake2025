@@ -329,6 +329,10 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
         model_1_name = extract_model_name_from_label(model_1_label or model_1_path, model_1_path)
         model_2_name = extract_model_name_from_label(model_2_label or model_2_path, model_2_path)
         
+        # Get temperatures for each player
+        temp_1 = play_config.get_temperature_for_participant(model_1_label or model_1_path)
+        temp_2 = play_config.get_temperature_for_participant(model_2_label or model_2_path)
+        
         row = {
             "timestamp": timestamp,
             "model_1": model_1_name,
@@ -338,7 +342,8 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
             "winner": result.winner_char,
             "pie_rule": play_config.pie_rule,
             "swap": result.swap_decision,
-            "temperature": play_config.temperature,
+            "temperature_1": temp_1,
+            "temperature_2": temp_2,
             "strategy": play_config.strategy,
             "strategy_config": str(play_config.strategy_config),
             "search_widths": str(play_config.search_widths),  # Legacy
@@ -509,7 +514,10 @@ def run_round_robin_tournament(
     # Write header to .trmph file if specified
     actual_log_file = log_file
     if log_file:
-        actual_log_file = write_tournament_trmph_header(log_file, config.checkpoint_paths, config.num_games, play_config, config.board_size)
+        actual_log_file = write_tournament_trmph_header(
+            log_file, config.checkpoint_paths, config.num_games, play_config, config.board_size,
+            config.player_labels, play_config.participant_temperatures
+        )
     
     # Find available CSV filename if specified
     actual_csv_file = csv_file
