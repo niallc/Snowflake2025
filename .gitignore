@@ -68,6 +68,8 @@ write_ups/performance_tracking_recommendations.md
 write_ups/validation_improvements_summary.md
 write_ups/mcts_cleanup_analysis.md
 write_ups/web_app_model_loading_refactor.md
+scripts/evaluate_game_strength.py
+write_ups/tournament_duplicate_models_design.md
 
 
 # VSCode
