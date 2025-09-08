@@ -7,7 +7,6 @@ scattered across multiple tournament scripts.
 
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-import os
 
 
 @dataclass
@@ -17,12 +16,8 @@ class StrategyConfig:
     name: str
     strategy_type: str
     config: Dict[str, Any]
-    model_path: Optional[str] = None  # Path to the model to use with this strategy
     
     def __str__(self) -> str:
-        if self.model_path:
-            model_name = os.path.basename(self.model_path)
-            return f"{self.name}({self.strategy_type})[{model_name}]"
         return f"{self.name}({self.strategy_type})"
 
 
@@ -145,72 +140,6 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 if enable_gumbel[gumbel_idx]:
                     config.name = f"{config.name}_gumbel"
                 gumbel_idx += 1
-    
-    return configs
-
-
-def create_strategy_configs_with_models(
-    model_strategy_combinations: List[str],
-    model_dirs: List[str],
-    mcts_sims: Optional[List[int]] = None,
-    search_widths: Optional[List[str]] = None,
-    batch_sizes: Optional[List[int]] = None,
-    c_pucts: Optional[List[float]] = None,
-    enable_gumbel: Optional[List[bool]] = None
-) -> List[StrategyConfig]:
-    """
-    Create strategy configurations with model paths from model+strategy combinations.
-    
-    Args:
-        model_strategy_combinations: List of "model_name:strategy_name" strings
-        model_dirs: List of model directories to search for models
-        mcts_sims: Optional list of MCTS simulation counts
-        search_widths: Optional list of search width strings
-        batch_sizes: Optional list of batch sizes
-        c_pucts: Optional list of PUCT exploration constants
-        enable_gumbel: Optional list of Gumbel enable flags
-    
-    Returns:
-        List of StrategyConfig objects with model_path set
-    
-    Example:
-        combinations = ["epoch2_mini201.pt.gz:mcts_100", "epoch4_mini126.pt.gz:policy"]
-        model_dirs = ["checkpoints/dir1", "checkpoints/dir2"]
-    """
-    from hex_ai.inference.model_config import get_model_path
-    
-    configs = []
-    
-    for combination in model_strategy_combinations:
-        if ':' not in combination:
-            raise ValueError(f"Invalid model+strategy combination: {combination}. Expected format: 'model_name:strategy_name'")
-        
-        model_name, strategy_name = combination.split(':', 1)
-        
-        # Find the model path
-        model_path = None
-        for model_dir in model_dirs:
-            potential_path = os.path.join(model_dir, model_name)
-            if os.path.exists(potential_path):
-                model_path = potential_path
-                break
-        
-        if model_path is None:
-            raise ValueError(f"Model not found: {model_name} in directories {model_dirs}")
-        
-        # Parse the strategy configuration
-        strategy_configs = parse_strategy_configs([strategy_name], mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
-        strategy_config = strategy_configs[0]
-        
-        # Create a new config with the model path
-        config_with_model = StrategyConfig(
-            name=f"{strategy_config.name}_{os.path.splitext(model_name)[0]}",
-            strategy_type=strategy_config.strategy_type,
-            config=strategy_config.config,
-            model_path=model_path
-        )
-        
-        configs.append(config_with_model)
     
     return configs
 
