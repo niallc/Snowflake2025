@@ -481,20 +481,7 @@ class Trainer:
                                 gpu_memory_mb: Optional[float], best_val_loss: Optional[float]) -> Dict:
         """Prepare data for CSV logging."""
         # Extract hyperparameters
-        hp = {
-            'learning_rate': self.optimizer.param_groups[0]['lr'],
-            'batch_size': self.train_loader.batch_size,
-            'dataset_size': 'N/A',
-            'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
-            'policy_weight': getattr(self.criterion, 'policy_weight', ''),
-            'value_weight': getattr(self.criterion, 'value_weight', ''),
-            'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
-            'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})).p if hasattr(self.model, 'dropout') else '',
-            'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
-            'max_grad_norm': getattr(self, 'max_grad_norm', ''),
-            'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
-            'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
-        }
+        hp = self._extract_hyperparameters_for_logging()
         
         epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
         mini_epoch_time = sum(batch_times)
@@ -605,6 +592,34 @@ class Trainer:
         
         return state
 
+    def _extract_hyperparameters_for_logging(self) -> Dict:
+        """Extract hyperparameters for CSV logging."""
+        return {
+            'learning_rate': self.optimizer.param_groups[0]['lr'],
+            'batch_size': self.train_loader.batch_size,
+            'dataset_size': 'N/A',
+            'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
+            'policy_weight': getattr(self.criterion, 'policy_weight', ''),
+            'value_weight': getattr(self.criterion, 'value_weight', ''),
+            'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
+            'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})).p if hasattr(self.model, 'dropout') else '',
+            'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
+            'max_grad_norm': getattr(self, 'max_grad_norm', ''),
+            'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
+            'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
+        }
+
+    def _calculate_statistics(self, values: List[float]) -> Dict[str, float]:
+        """Calculate mean, min, max, std statistics for a list of values."""
+        if not values:
+            return {}
+        return {
+            'mean': float(np.mean(values)),
+            'min': float(np.min(values)),
+            'max': float(np.max(values)),
+            'std': float(np.std(values))
+        }
+
     def _calculate_diagnostic_metrics(self, val_metrics: Optional[Dict], gradient_norms: List[float]) -> Dict:
         """Calculate diagnostic metrics for stability analysis."""
         gradient_norm = None
@@ -628,12 +643,7 @@ class Trainer:
         if gradient_norms:
             gradient_norm = gradient_norms[-1]  # Use the last gradient norm (post-clip)
             post_clip_gradient_norm = gradient_norm  # This is the post-clip value
-            gradient_stats = {
-                'mean': float(np.mean(gradient_norms)),
-                'min': float(np.min(gradient_norms)),
-                'max': float(np.max(gradient_norms)),
-                'std': float(np.std(gradient_norms))
-            }
+            gradient_stats = self._calculate_statistics(gradient_norms)
         
         # Calculate weight statistics
         weight_norms = []
@@ -649,19 +659,12 @@ class Trainer:
         # Calculate learning rate statistics
         lr_values = [group['lr'] for group in self.optimizer.param_groups if 'lr' in group]
         if lr_values:
-            lr_stats = {
-                'mean': float(np.mean(lr_values)),
-                'min': float(np.min(lr_values)),
-                'max': float(np.max(lr_values)),
-                'std': float(np.std(lr_values))
-            }
+            lr_stats = self._calculate_statistics(lr_values)
         
         # Calculate GPU memory usage
         if torch.cuda.is_available() and hasattr(torch.cuda, 'memory_allocated'):
             gpu_memory_mb = torch.cuda.memory_allocated() / (1024 * 1024)
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            # MPS doesn't have memory_allocated, so we'll skip this
-            pass
+
         
         return {
             'gradient_norm': gradient_norm,
