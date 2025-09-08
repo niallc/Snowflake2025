@@ -21,6 +21,7 @@ from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 import random
 from time import sleep
+import psutil
 from .models import TwoHeadedResNet
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
@@ -109,121 +110,310 @@ class ShardLogger:
         return self.shard_transitions
 
 
-class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
+class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     """
-    Streaming, strictly sequential dataset for pre-shuffled data shards.
-    Loads one shard (file) at a time into memory and yields examples sequentially.
-    Never holds more than one shard in memory at a time.
-    Designed for use with torch DataLoader (batch_size, shuffle=False, num_workers=0).
-    Augmentation is applied on-the-fly if enabled.
-    Fails loudly on any file error.
-
+    Streaming dataset that maintains a mixed pool of positions from multiple shards.
+    Loads shards proportionally from multiple directories and maintains a large in-memory pool
+    to eliminate blockwise learning. Designed for use with torch DataLoader.
+    
     Args:
-        data_files: List of Path objects for data shards (pre-shuffled files).
-        enable_augmentation: Whether to apply augmentation on-the-fly.
-        max_examples_unaugmented: Stop after yielding this many (unaugmented) examples (including augmentations).
-        verbose: If True, logs detailed progress at INFO level:
-            - When each shard is loaded (file name, number of examples, shard index/total).
-            - Running total of examples yielded after each shard.
-            - When max_examples_unaugmented is reached or dataset is exhausted.
-            - A summary at the end of iteration (total examples, total shards).
-        If False, only logs errors and critical events.
-        log_shard_transitions: If True, logs when each new shard starts being processed.
+        data_dirs: List of data directories to load from
+        shard_ranges: List of shard ranges for each directory (e.g., ["251-300", "all"])
+        pool_size: Target number of positions to maintain in memory (default: 2M)
+        refill_threshold: Refill pool when it drops below this many positions (default: 1.5M)
+        max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
+        enable_augmentation: Whether to apply augmentation on-the-fly
+        max_examples_unaugmented: Stop after yielding this many (unaugmented) examples
+        verbose: If True, logs detailed progress at INFO level
+        random_seed: Random seed for reproducible behavior
     """
-    def __init__(
-        self,
-        data_files: List[Path],
-        enable_augmentation: bool = True,
-        max_examples_unaugmented: Optional[int] = None,
-        verbose: bool = False,
-        log_shard_transitions: bool = True,
-        shuffle_shards: bool = True,
-        random_seed: Optional[int] = None
-    ):
+    
+    def __init__(self,
+                 data_dirs: List[str],
+                 shard_ranges: List[str],
+                 pool_size: int = 2_000_000,
+                 refill_threshold: int = 1_500_000,
+                 max_memory_gb: float = 5.0,
+                 enable_augmentation: bool = True,
+                 max_examples_unaugmented: Optional[int] = None,
+                 verbose: bool = False,
+                 random_seed: Optional[int] = None):
         super().__init__()
-        # Apply shuffling to data files if requested
-        self.data_files = shuffle_data_files(data_files, shuffle_shards, random_seed)
+        
+        # Validate inputs
+        if len(data_dirs) != len(shard_ranges):
+            raise ValueError(f"Number of data_dirs ({len(data_dirs)}) must match number of shard_ranges ({len(shard_ranges)})")
+        
+        if pool_size <= 0:
+            raise ValueError(f"pool_size must be positive, got {pool_size}")
+        
+        if refill_threshold >= pool_size:
+            raise ValueError(f"refill_threshold ({refill_threshold}) must be less than pool_size ({pool_size})")
+        
+        if max_memory_gb <= 0:
+            raise ValueError(f"max_memory_gb must be positive, got {max_memory_gb}")
+        
+        # Store configuration
+        self.data_dirs = data_dirs
+        self.shard_ranges = shard_ranges
+        self.pool_size = pool_size
+        self.refill_threshold = refill_threshold
+        self.max_memory_gb = max_memory_gb
         self.enable_augmentation = enable_augmentation
         self.max_examples_unaugmented = max_examples_unaugmented
         self.verbose = verbose
+        self.random_seed = random_seed
+        
+        # Set up random seed
+        if random_seed is not None:
+            random.seed(random_seed)
+            np.random.seed(random_seed)
+        
+        # Initialize data structures
         self.augmentation_factor = AUGMENTATION_FACTOR if enable_augmentation else 1
         self.logger = logging.getLogger(__name__)
         self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
-        self.shard_logger = ShardLogger(log_shard_transitions)
-        self.approx_batch_count = 0  # Track batch count for shard logging
-
-    def __iter__(self):
-        """
-        Sequentially iterate over all examples in all shards, applying augmentation if enabled.
-        Yields (board_tensor, policy_tensor, value_tensor) tuples.
-        """
-        # Reset batch count for each new iteration
+        
+        # Position pool and shard management
+        self.position_pool: List[Dict] = []
+        self.shard_queues: List[List[Path]] = []  # One queue per directory
+        self.loaded_shards: set = set()  # Track loaded shards to prevent duplicates
+        self.directory_weights: List[float] = []  # Proportional weights for each directory
+        
+        # Statistics and monitoring
+        self.total_positions_yielded = 0
+        self.total_shards_loaded = 0
         self.approx_batch_count = 0
         
-        total_yielded = 0
-        total_shards_loaded = 0
-        num_shards = len(self.data_files)
-        for file_idx, file_path in enumerate(self.data_files):
-            try:
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-            except Exception as e:
-                self.logger.error(f"Failed to load shard {file_path}: {e}")
-                raise RuntimeError(f"Failed to load shard {file_path}: {e}")
-            
-            file_examples = data['examples'] if 'examples' in data else []
-            total_shards_loaded += 1
-            
-            # Log shard start
-            self.shard_logger.log_shard_start(file_path, file_idx, num_shards, self.approx_batch_count)
-            
-            if self.verbose:
-                self.logger.info(f"[StreamingSequentialShardDataset] Loaded {len(file_examples)} examples from {file_path.name} (shard {file_idx+1}/{num_shards})")
-            
-            shard_yielded = 0
-            for ex_idx, ex in enumerate(file_examples):
-                for aug_idx in range(self.augmentation_factor):
-                    if self.max_examples_unaugmented is not None and total_yielded >= self.max_examples_unaugmented:
-                        if self.verbose:
-                            self.logger.info(f"[StreamingSequentialShardDataset] Reached max_examples_unaugmented ({self.max_examples_unaugmented}), stopping iteration.")
-                            self.logger.info(f"[StreamingSequentialShardDataset] Total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
-                        return
-                    error_tracker = get_board_state_error_tracker()
-                    error_tracker._current_file = str(file_path)
-                    error_tracker._current_sample = f"example_idx={ex_idx}"
-                    yield self._get_augmented_tensor_for_index(ex, aug_idx, error_tracker)
-                    total_yielded += 1
-                    shard_yielded += 1
-                    
-                    # Update batch count (assuming we know batch size from DataLoader)
-                    # This is approximate since we don't have direct access to batch size here
-                    if total_yielded % 256 == 0:  # Assuming batch_size=256
-                        self.approx_batch_count += 1
-            
-            if self.verbose:
-                self.logger.info(f"[StreamingSequentialShardDataset] Finished shard {file_idx+1}/{num_shards}: yielded {shard_yielded} examples (augmented), running total: {total_yielded}")
+        # Initialize shard discovery and weighting
+        self._discover_shards()
+        self._calculate_directory_weights()
         
         if self.verbose:
-            self.logger.info(f"[StreamingSequentialShardDataset] Iteration complete: total examples yielded: {total_yielded} from {total_shards_loaded} shards.")
-
-    def get_shard_logger(self):
-        """Get the shard logger instance."""
-        return self.shard_logger
-
-    def __len__(self):
-        # HACK: PyTorch DataLoader sometimes calls __len__ even for IterableDataset. Return a large dummy value.
-        import warnings
-        warnings.warn(
-            "__len__ called on StreamingSequentialShardDataset. Returning a large dummy value. This is a workaround for PyTorch DataLoader compatibility. Remove when possible.",
-            RuntimeWarning
-        )
-        return 10**12
-
-    def _get_augmented_tensor_for_index(self, ex, aug_idx, error_tracker):
-        board = ex['board']
-        policy = ex['policy']
-        value = ex['value']
-        player_to_move = ex.get('player_to_move', None)
+            self.logger.info(f"[StreamingMixedShardDataset] Initialized with {len(self.data_dirs)} directories, "
+                           f"pool_size={self.pool_size:,}, refill_threshold={self.refill_threshold:,}")
+            for i, (dir_path, weight, shard_count) in enumerate(zip(self.data_dirs, self.directory_weights, [len(q) for q in self.shard_queues])):
+                self.logger.info(f"  Directory {i+1}: {dir_path} (weight={weight:.3f}, {shard_count} shards)")
+    
+    def _discover_shards(self):
+        """Discover and organize shards from all directories."""
+        from hex_ai.data_collection import parse_shard_range
+        
+        self.shard_queues = []
+        
+        for i, (data_dir, shard_range) in enumerate(zip(self.data_dirs, self.shard_ranges)):
+            try:
+                # Parse shard range for this directory
+                start, end = parse_shard_range(shard_range, data_dir)
+                
+                if end is None:  # 'all' case
+                    skip_files = 0
+                    max_files = None
+                else:
+                    skip_files = start
+                    max_files = end - start + 1
+                
+                # Discover files in this directory
+                data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
+                
+                if not data_files:
+                    raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
+                
+                self.shard_queues.append(data_files)
+                
+                if self.verbose:
+                    self.logger.info(f"Directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to discover shards in {data_dir}: {e}")
+                raise RuntimeError(f"Failed to discover shards in {data_dir}: {e}")
+    
+    def _calculate_directory_weights(self):
+        """Calculate proportional weights for each directory based on shard counts."""
+        shard_counts = [len(queue) for queue in self.shard_queues]
+        total_shards = sum(shard_counts)
+        
+        if total_shards == 0:
+            raise RuntimeError("No shards found in any directory")
+        
+        self.directory_weights = [count / total_shards for count in shard_counts]
+        
+        if self.verbose:
+            self.logger.info(f"Directory weights: {[f'{w:.3f}' for w in self.directory_weights]}")
+    
+    def _monitor_memory(self) -> bool:
+        """
+        Monitor memory usage and return True if within limits, False if should shutdown.
+        """
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_gb = memory_info.rss / (1024**3)  # Convert bytes to GB
+            
+            if memory_gb > self.max_memory_gb:
+                self.logger.error(f"Memory usage ({memory_gb:.2f}GB) exceeds limit ({self.max_memory_gb}GB). Shutting down gracefully.")
+                return False
+            
+            if self.verbose and memory_gb > self.max_memory_gb * 0.8:
+                self.logger.warning(f"Memory usage is high: {memory_gb:.2f}GB (limit: {self.max_memory_gb}GB)")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to monitor memory: {e}")
+            raise RuntimeError(f"Memory monitoring failed: {e}")
+    
+    def __iter__(self):
+        """
+        Main iteration logic - yields positions from the mixed pool.
+        """
+        # Reset statistics
+        self.total_positions_yielded = 0
+        self.total_shards_loaded = 0
+        self.approx_batch_count = 0
+        
+        # Initial pool fill
+        self._refill_pool()
+        
+        # Main iteration loop
+        while self.position_pool and (self.max_examples_unaugmented is None or 
+                                    self.total_positions_yielded < self.max_examples_unaugmented):
+            
+            # Check memory limits
+            if not self._monitor_memory():
+                break
+            
+            # Refill pool if needed
+            if len(self.position_pool) < self.refill_threshold:
+                self._refill_pool()
+            
+            # Yield positions from pool
+            if self.position_pool:
+                position = self.position_pool.pop(0)  # Remove from front of pool
+                yield self._process_position(position)
+                self.total_positions_yielded += 1
+                
+                # Update batch count (approximate)
+                if self.total_positions_yielded % 256 == 0:
+                    self.approx_batch_count += 1
+        
+        if self.verbose:
+            self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
+                           f"yielded {self.total_positions_yielded:,} positions from {self.total_shards_loaded} shards")
+    
+    def _refill_pool(self):
+        """Load new shards and add positions to the pool."""
+        if self.verbose:
+            self.logger.info(f"[StreamingMixedShardDataset] Refilling pool (current size: {len(self.position_pool):,})")
+        
+        # Calculate how many positions we need to add
+        positions_needed = self.pool_size - len(self.position_pool)
+        if positions_needed <= 0:
+            return
+        
+        # Load shards proportionally until we have enough positions
+        positions_added = 0
+        shards_loaded_this_refill = 0
+        
+        while positions_added < positions_needed and self._has_available_shards():
+            # Select directory to load from based on weights
+            selected_dir_idx = self._select_directory_for_loading()
+            if selected_dir_idx is None:
+                break  # No more shards available
+            
+            # Load next shard from selected directory
+            shard_path = self.shard_queues[selected_dir_idx][0]  # Get first shard from queue
+            
+            try:
+                # Load shard data
+                with gzip.open(shard_path, 'rb') as f:
+                    data = pickle.load(f)
+                
+                file_examples = data['examples'] if 'examples' in data else []
+                
+                if not file_examples:
+                    self.logger.warning(f"Shard {shard_path} contains no examples, skipping")
+                    self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
+                    continue
+                
+                # Add positions to pool
+                for example in file_examples:
+                    if positions_added >= positions_needed:
+                        break
+                    self.position_pool.append(example)
+                    positions_added += 1
+                
+                # Mark shard as loaded and remove from queue
+                self.loaded_shards.add(str(shard_path))
+                self.shard_queues[selected_dir_idx].pop(0)
+                self.total_shards_loaded += 1
+                shards_loaded_this_refill += 1
+                
+                if self.verbose:
+                    self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
+                                   f"(added {min(positions_added, positions_needed)} to pool)")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to load shard {shard_path}: {e}")
+                raise RuntimeError(f"Failed to load shard {shard_path}: {e}")
+        
+        # Shuffle the entire pool after refilling
+        if positions_added > 0:
+            random.shuffle(self.position_pool)
+            if self.verbose:
+                self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
+                               f"(total pool size: {len(self.position_pool):,})")
+        
+        if self.verbose:
+            self.logger.info(f"Pool refill complete: added {positions_added:,} positions from {shards_loaded_this_refill} shards")
+    
+    def _has_available_shards(self) -> bool:
+        """Check if any directories still have unloaded shards."""
+        return any(len(queue) > 0 for queue in self.shard_queues)
+    
+    def _select_directory_for_loading(self) -> Optional[int]:
+        """
+        Select which directory to load the next shard from based on proportional weights.
+        Returns the directory index, or None if no directories have available shards.
+        """
+        available_dirs = [i for i, queue in enumerate(self.shard_queues) if len(queue) > 0]
+        
+        if not available_dirs:
+            return None
+        
+        # If only one directory has shards, use it
+        if len(available_dirs) == 1:
+            return available_dirs[0]
+        
+        # Calculate current loading ratios for available directories
+        current_ratios = []
+        for dir_idx in available_dirs:
+            # Count how many shards we've loaded from this directory
+            loaded_from_dir = sum(1 for shard_path in self.loaded_shards 
+                                if str(shard_path).startswith(self.data_dirs[dir_idx]))
+            total_shards_in_dir = len(self.shard_queues[dir_idx]) + loaded_from_dir
+            
+            if total_shards_in_dir > 0:
+                current_ratio = loaded_from_dir / total_shards_in_dir
+            else:
+                current_ratio = 0.0
+            
+            current_ratios.append(current_ratio)
+        
+        # Find directory that's furthest behind its target weight
+        target_ratios = [self.directory_weights[i] for i in available_dirs]
+        deficits = [target - current for target, current in zip(target_ratios, current_ratios)]
+        
+        # Select directory with largest deficit
+        max_deficit_idx = max(range(len(deficits)), key=lambda i: deficits[i])
+        return available_dirs[max_deficit_idx]
+    
+    def _process_position(self, position: Dict):
+        """Process a single position (augmentation, tensor conversion, etc.)."""
+        board = position['board']
+        policy = position['policy']
+        value = position['value']
+        player_to_move = position.get('player_to_move', None)
         
         # Convert integer player_to_move to Player enum if needed (for backward compatibility)
         if player_to_move is not None and isinstance(player_to_move, int):
@@ -231,22 +421,33 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
             player_to_move = Player(player_to_move)
         
         board_2ch = board[:PLAYER_CHANNEL] if board.shape[0] > 1 else board
+        
         if self.enable_augmentation:
+            # Apply augmentation
+            error_tracker = get_board_state_error_tracker()
+            error_tracker._current_file = "mixed_pool"
+            error_tracker._current_sample = f"pool_position_{self.total_positions_yielded}"
+            
             augmented_examples = create_augmented_example_with_player_to_move(
                 board_2ch, policy, value, error_tracker)
+            
+            # Select one augmentation randomly
+            aug_idx = random.randint(0, len(augmented_examples) - 1)
             aug = augmented_examples[aug_idx]
             return self._transform_example(*aug)
         else:
             if player_to_move is None:
                 raise ValueError("Missing 'player_to_move' in example during data loading. All examples must have this field.")
             return self._transform_example(board_2ch, policy, value, player_to_move)
-
+    
     def _normalize_policy(self, policy):
+        """Normalize policy tensor, handling None values."""
         if policy is None:
             return np.zeros(self.policy_shape, dtype=np.float32)
         return policy
-
+    
     def _transform_example(self, board_2ch, policy, value, player=None):
+        """Transform example data into tensors."""
         if player is not None:
             # Player should always be a Player enum
             if not hasattr(player, 'value'):
@@ -256,11 +457,22 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
             board_3ch = np.concatenate([board_2ch, player_channel[None, ...]], axis=0)
         else:
             board_3ch = board_2ch
+        
         board_tensor = torch.from_numpy(board_3ch).float()
         policy = self._normalize_policy(policy)
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])
         return board_tensor, policy_tensor, value_tensor
+    
+    def __len__(self):
+        # HACK: PyTorch DataLoader sometimes calls __len__ even for IterableDataset
+        import warnings
+        warnings.warn(
+            "__len__ called on StreamingMixedShardDataset. Returning a large dummy value. "
+            "This is a workaround for PyTorch DataLoader compatibility.",
+            RuntimeWarning
+        )
+        return 10**12
 
 
 def discover_processed_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None) -> List[Path]:
@@ -313,244 +525,5 @@ def discover_processed_files(data_dir: str = "data/processed", skip_files: int =
     return data_files
 
 
-def create_train_val_split(data_files: List[Path], 
-                          train_ratio: float = 0.8,
-                          random_seed: Optional[int] = None,
-                          max_files_per_split: Optional[int] = None,
-                          shuffle_shards: bool = True,
-                          data_source_info: Optional[List[Dict]] = None,
-                          max_validation_examples: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
-    """
-    Create train/validation split of data files.
-    
-    Args:
-        data_files: List of all data files
-        train_ratio: Ratio of files to use for training (0.0 to 1.0)
-        random_seed: Random seed for reproducible splits
-        max_files_per_split: Maximum number of files per split (for efficiency)
-        shuffle_shards: Whether to shuffle the data shards before splitting (default: True)
-        data_source_info: Optional information about data sources for stratified sampling
-        
-    Returns:
-        Tuple of (train_files, val_files)
-    """
-    if random_seed is not None:
-        random.seed(random_seed)
-    
-    # If we have data source information, use stratified sampling for better representation
-    if data_source_info and len(data_source_info) > 1:
-        logger.info("Using stratified sampling to ensure validation data represents all data sources")
-        return _create_stratified_train_val_split(
-            data_files, train_ratio, random_seed, max_files_per_split, 
-            shuffle_shards, data_source_info, max_validation_examples
-        )
-    else:
-        # Fall back to simple random split
-        return _create_simple_train_val_split(
-            data_files, train_ratio, random_seed, max_files_per_split, shuffle_shards
-        )
 
 
-def _create_stratified_train_val_split(data_files: List[Path], 
-                                      train_ratio: float,
-                                      random_seed: Optional[int],
-                                      max_files_per_split: Optional[int],
-                                      shuffle_shards: bool,
-                                      data_source_info: List[Dict],
-                                      max_validation_examples: Optional[int] = None) -> Tuple[List[Path], List[Path]]:
-    """
-    Create stratified train/validation split ensuring representation from all data sources.
-    Optimized to select only the minimum number of validation files needed.
-    """
-    train_files = []
-    val_files = []
-    
-    # Group files by their source directory
-    files_by_source = {}
-    current_file_idx = 0
-    
-    for source_info in data_source_info:
-        directory = source_info['directory']
-        files_count = source_info['files_count']
-        
-        # Get files for this source
-        source_files = data_files[current_file_idx:current_file_idx + files_count]
-        current_file_idx += files_count
-        
-        if source_files:
-            files_by_source[directory] = source_files
-    
-    # Estimate examples per file for validation size optimization
-    examples_per_file = None
-    if max_validation_examples is not None:
-        examples_per_file = _estimate_examples_per_file(data_files[:min(3, len(data_files))])
-        logger.info(f"Estimated {examples_per_file:,} examples per file for validation optimization")
-    
-    # Calculate target validation files per source
-    target_val_files_per_source = {}
-    if examples_per_file and max_validation_examples:
-        total_val_files_needed = max(1, max_validation_examples // examples_per_file)
-        logger.info(f"Target validation files needed: ~{total_val_files_needed} (for {max_validation_examples:,} examples)")
-        
-        # Distribute validation files proportionally across sources
-        total_files = sum(len(files) for files in files_by_source.values())
-        for directory, source_files in files_by_source.items():
-            source_ratio = len(source_files) / total_files
-            target_val_files = max(1, int(total_val_files_needed * source_ratio))
-            target_val_files_per_source[directory] = min(target_val_files, len(source_files))
-    else:
-        # Fall back to proportional split without size optimization
-        for directory, source_files in files_by_source.items():
-            target_val_files_per_source[directory] = max(1, int(len(source_files) * (1 - train_ratio)))
-    
-    # Create stratified split for each source
-    for directory, source_files in files_by_source.items():
-        if shuffle_shards:
-            shuffled_source_files = shuffle_data_files(source_files, True, random_seed)
-        else:
-            shuffled_source_files = source_files
-        
-        target_val_files = target_val_files_per_source[directory]
-        
-        # Split files for this source
-        if target_val_files < len(shuffled_source_files):
-            # Optimized split: only take the minimum validation files needed
-            source_train = shuffled_source_files[target_val_files:]
-            source_val = shuffled_source_files[:target_val_files]
-        else:
-            # Fall back to proportional split
-            split_idx = int(len(shuffled_source_files) * train_ratio)
-            source_train = shuffled_source_files[:split_idx]
-            source_val = shuffled_source_files[split_idx:]
-        
-        train_files.extend(source_train)
-        val_files.extend(source_val)
-        
-        logger.info(f"Stratified split for {directory}: {len(source_train)} train, {len(source_val)} validation files (target: {target_val_files})")
-    
-    # Apply max_files_per_split limit if specified
-    if max_files_per_split is not None:
-        train_files = train_files[:max_files_per_split]
-        val_files = val_files[:max_files_per_split]
-        logger.info(f"Limited to {max_files_per_split} files per split for efficiency")
-    
-    logger.info(f"Stratified split complete: {len(train_files)} train, {len(val_files)} validation files")
-    
-    return train_files, val_files
-
-
-def _estimate_examples_per_file(sample_files: List[Path]) -> int:
-    """
-    Estimate the number of examples per file by sampling a few files.
-    
-    Args:
-        sample_files: List of files to sample for estimation
-        
-    Returns:
-        Estimated examples per file
-    """
-    if not sample_files:
-        return 10000  # Default estimate
-    
-    total_examples = 0
-    files_checked = 0
-    
-    for file_path in sample_files:
-        try:
-            import gzip
-            import pickle
-            with gzip.open(file_path, 'rb') as f:
-                data = pickle.load(f)
-                examples = data.get('examples', [])
-                total_examples += len(examples)
-                files_checked += 1
-        except Exception as e:
-            logger.warning(f"Could not read {file_path} for estimation: {e}")
-            continue
-    
-    if files_checked == 0:
-        return 10000  # Default estimate
-    
-    avg_examples = total_examples // files_checked
-    logger.info(f"Estimated {avg_examples:,} examples per file from {files_checked} sample files")
-    
-    return avg_examples
-
-
-def _create_simple_train_val_split(data_files: List[Path], 
-                                  train_ratio: float,
-                                  random_seed: Optional[int],
-                                  max_files_per_split: Optional[int],
-                                  shuffle_shards: bool) -> Tuple[List[Path], List[Path]]:
-    """
-    Create simple random train/validation split (original method).
-    """
-    # Optionally shuffle files for random split
-    shuffled_files = shuffle_data_files(data_files, shuffle_shards, random_seed)
-    if shuffle_shards:
-        logger.info(f"Shuffled {len(data_files)} data shards before train/val split")
-    else:
-        logger.info(f"Using {len(data_files)} data shards in original order (no shuffling)")
-    
-    # Split files
-    split_idx = int(len(shuffled_files) * train_ratio)
-    train_files = shuffled_files[:split_idx]
-    val_files = shuffled_files[split_idx:]
-    
-    # Limit number of files if specified (for efficiency)
-    if max_files_per_split is not None:
-        train_files = train_files[:max_files_per_split]
-        val_files = val_files[:max_files_per_split]
-        logger.info(f"Limited to {max_files_per_split} files per split for efficiency")
-    
-    logger.info(f"Simple split {len(data_files)} files: {len(train_files)} train, {len(val_files)} validation")
-    
-    return train_files, val_files
-
-
-def estimate_dataset_size(data_files: List[Path], max_files: Optional[int] = None) -> int:
-    """
-    Estimate the total number of training examples across all files.
-    
-    Args:
-        data_files: List of data files to analyze
-        max_files: Maximum number of files to check (None for all files)
-        
-    Returns:
-        Estimated total number of examples
-    """
-    if not data_files:
-        return 0
-    
-    # Just read one sample file to get the examples per file
-    sample_file = data_files[0]
-    examples_per_file = 0
-    
-    try:
-        with gzip.open(sample_file, 'rb') as f:
-            data = pickle.load(f)
-        
-        if 'examples' in data:
-            examples_per_file = len(data['examples'])
-        elif 'processing_stats' in data:
-            # Fallback to processing stats if available
-            stats = data['processing_stats']
-            if 'examples_generated' in stats:
-                examples_per_file = stats['examples_generated']
-        else:
-            # If no metadata available, estimate based on file size
-            file_size = sample_file.stat().st_size
-            examples_per_file = max(1, file_size // 1024)  # Rough estimate: 1KB per example
-            
-    except Exception as e:
-        logger.warning(f"Could not read sample file {sample_file}: {e}")
-        # Fallback to file size estimation
-        file_size = sample_file.stat().st_size
-        examples_per_file = max(1, file_size // 1024)
-    
-    # Multiply by total number of files
-    total_examples = examples_per_file * len(data_files)
-    
-    logger.info(f"Estimated {total_examples:,} total examples from {len(data_files)} files ({examples_per_file:,} per file)")
-    
-    return total_examples

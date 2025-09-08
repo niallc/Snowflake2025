@@ -26,36 +26,53 @@ from .models import TwoHeadedResNet
 from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
-from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split, estimate_dataset_size
+from hex_ai.data_pipeline import discover_processed_files
 from hex_ai.error_handling import GracefulShutdownRequested
 
 logger = logging.getLogger(__name__)
 
 
-def create_datasets(train_files, val_files, max_examples_unaugmented,
-                    max_validation_examples, batch_size=256, log_shard_transitions=True,
-                    shuffle_shards: bool = True, random_seed: Optional[int] = None):
+def create_datasets(data_dirs: List[str], 
+                   shard_ranges: List[str],
+                   train_ratio: float = 0.8,
+                   max_examples_unaugmented: Optional[int] = None,
+                   max_validation_examples: Optional[int] = None,
+                   batch_size: int = 256,
+                   pool_size: int = 2_000_000,
+                   refill_threshold: int = 1_500_000,
+                   max_memory_gb: float = 5.0,
+                   random_seed: Optional[int] = None,
+                   verbose: bool = False):
     """
-    Create DataLoader objects from StreamingSequentialShardDataset for train and val sets.
+    Create DataLoader objects from StreamingMixedShardDataset for train and val sets.
     Returns (train_loader, val_loader).
     """
+    from hex_ai.data_pipeline import StreamingMixedShardDataset
+    
     try:
-        train_dataset = StreamingSequentialShardDataset(
-            train_files, 
-            enable_augmentation=True, 
+        train_dataset = StreamingMixedShardDataset(
+            data_dirs=data_dirs,
+            shard_ranges=shard_ranges,
+            pool_size=pool_size,
+            refill_threshold=refill_threshold,
+            max_memory_gb=max_memory_gb,
+            enable_augmentation=True,
             max_examples_unaugmented=max_examples_unaugmented,
-            log_shard_transitions=log_shard_transitions,
-            shuffle_shards=shuffle_shards,
+            verbose=verbose,
             random_seed=random_seed
         )
-        val_dataset = StreamingSequentialShardDataset(
-            val_files, 
-            enable_augmentation=False, # Validation dataset is not augmented
+        
+        val_dataset = StreamingMixedShardDataset(
+            data_dirs=data_dirs,
+            shard_ranges=shard_ranges,
+            pool_size=pool_size,
+            refill_threshold=refill_threshold,
+            max_memory_gb=max_memory_gb,
+            enable_augmentation=False,  # Validation dataset is not augmented
             max_examples_unaugmented=max_validation_examples,
-            log_shard_transitions=log_shard_transitions,
-            shuffle_shards=shuffle_shards,
+            verbose=verbose,
             random_seed=random_seed
-        ) if val_files else None
+        ) if max_validation_examples else None
         
         # Create DataLoaders from the datasets
         train_loader = torch.utils.data.DataLoader(
@@ -244,115 +261,20 @@ def prepare_experiment_config(exp_config, device, max_examples_unaugmented, max_
     exp_config['enable_augmentation'] = enable_augmentation
     return exp_config
 
-def discover_and_split_multiple_data(
-    data_dirs: List[str], 
-    train_ratio: float = 0.8, 
-    random_seed: Optional[int] = None,
-    shard_ranges: Optional[List[str]] = None,
-    shuffle_shards: bool = True,
-    max_validation_examples: Optional[int] = None
-) -> Tuple[List[Path], List[Path], List[Path], List[Dict]]:
-    """
-    Discover and split data from multiple directories.
-    
-    Args:
-        data_dirs: List of data directories
-        train_ratio: Ratio for train/val split
-        random_seed: Random seed for reproducible splits
-        shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
-        shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
-        max_validation_examples: Optional maximum number of validation examples
-        
-    Returns:
-        Tuple of (train_files, val_files, all_files, data_source_info)
-    """
-    
-    all_data_files = []
-    data_source_info = []
-    
-    # Validate shard_ranges if provided
-    if shard_ranges is not None:
-        if len(shard_ranges) != len(data_dirs):
-            raise ValueError(f"Number of shard_ranges values ({len(shard_ranges)}) must match number of data directories ({len(data_dirs)})")
-    else:
-        # Use "all" for all directories if not provided
-        shard_ranges = ["all"] * len(data_dirs)
-    
-    # Discover files from each directory
-    for i, data_dir in enumerate(data_dirs):
-        try:
-            # Convert shard range to skip_files and max_files for this directory
-            from hex_ai.data_collection import parse_shard_range
-            start, end = parse_shard_range(shard_ranges[i], data_dir)
-            
-            if end is None:  # 'all' case
-                skip_files = 0
-                max_files = None
-            else:
-                skip_files = start
-                max_files = end - start + 1
-            
-            # TODO: Consider migrating discover_processed_files to use parse_shard_ranges instead
-            data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
-        except Exception as e:
-            logger.error(f"Failed to discover data in {data_dir}: {e}")
-            raise
-        
-        if not data_files:
-            logger.warning(f"No data files found in {data_dir}")
-            continue
-        
-        # Estimate dataset size for this directory
-        try:
-            total_examples = estimate_dataset_size(data_files)
-        except Exception as e:
-            logger.warning(f"Failed to estimate dataset size for {data_dir}: {e}")
-            total_examples = 0
-        
-        # Add files to the combined list
-        all_data_files.extend(data_files)
-        
-        # Record data source information
-        data_source_info.append({
-            'directory': data_dir,
-            'files_count': len(data_files),
-            'total_examples': total_examples,
-            'shard_range': shard_ranges[i],
-            'skip_files': skip_files,
-            'max_files': max_files
-        })
-        
-        logger.info(f"Added {len(data_files)} files from {data_dir} (examples: {total_examples:,}, range: {shard_ranges[i]})")
-    
-    if not all_data_files:
-        raise ValueError("No data files found in any of the specified directories")
-    
-    # Create train/val split across all files with stratified sampling
-    train_files, val_files = create_train_val_split(
-        all_data_files, train_ratio, random_seed, max_files_per_split=None, 
-        shuffle_shards=shuffle_shards, data_source_info=data_source_info,
-        max_validation_examples=max_validation_examples
-    )
-    
-    logger.info(f"Final split: {len(train_files)} train files, {len(val_files)} validation files")
-    
-    return train_files, val_files, all_data_files, data_source_info
 
 
 def save_experiment_metadata(
     results_path: Path, 
     experiment_name: str, 
-    data_source_info: List[Dict], 
     hyperparameters: Dict, 
     training_config: Dict
 ) -> None:
     """
-    Save detailed metadata about the experiment including data sources.
+    Save detailed metadata about the experiment.
     
     Args:
         results_path: Path to results directory
         experiment_name: Name of the experiment
-        data_source_info: Information about data sources used
         hyperparameters: Model hyperparameters
         training_config: Training configuration
     """
@@ -362,9 +284,7 @@ def save_experiment_metadata(
         'experiment_name': experiment_name,
         'timestamp': datetime.now().isoformat(),
         'hyperparameters': hyperparameters,
-        'training_config': training_config,
-        'data_sources': data_source_info,
-        'total_examples': sum(src['total_examples'] for src in data_source_info)
+        'training_config': training_config
     }
     
     metadata_file = results_path / experiment_name / "experiment_metadata.json"
@@ -376,17 +296,14 @@ def save_experiment_metadata(
     logger.info(f"Saved experiment metadata to {metadata_file}")
 
 
-def save_overall_results(results_path, overall_results, data_source_info=None):
+def save_overall_results(results_path, overall_results):
     """
     Save the overall results dict to disk as overall_results.json.
     
     Args:
         results_path: Path to results directory
         overall_results: Results dictionary to save
-        data_source_info: Optional data source information to include
     """
-    if data_source_info:
-        overall_results['data_sources'] = data_source_info
     
     with open(results_path / "overall_results.json", "w") as f:
         json.dump(overall_results, f, indent=2, default=str)
@@ -409,6 +326,9 @@ def run_hyperparameter_tuning_current_data(
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     shard_ranges: Optional[List[str]] = None,  # New: Shard ranges for each directory (e.g., ["251-300", "all"])
     shuffle_shards: bool = True,  # New: Control whether to shuffle data shards
+    pool_size: int = 2_000_000,  # Pool size for mixed dataset
+    refill_threshold: int = 1_500_000,  # Refill threshold for mixed dataset
+    max_memory_gb: float = 5.0,  # Memory limit for mixed dataset
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
     override_checkpoint_hyperparameters: bool = False
@@ -430,8 +350,11 @@ def run_hyperparameter_tuning_current_data(
         enable_augmentation: Whether to enable data augmentation
         mini_epoch_samples: Number of samples per mini-epoch
         resume_from: Optional path to resume from (file or directory)
-        skip_files: Optional list of files to skip from each directory (one value per directory)
+        shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
+        pool_size: Target number of positions to maintain in memory (default: 2M)
+        refill_threshold: Refill pool when it drops below this many positions (default: 1.5M)
+        max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
         shutdown_handler: Shutdown handler for graceful termination
         run_timestamp: Optional timestamp for the run
         override_checkpoint_hyperparameters: Whether to override checkpoint hyperparameters
@@ -456,53 +379,58 @@ def run_hyperparameter_tuning_current_data(
     
     logger.info(f"\nGrabbing data from {len(data_dirs)} directories with random seed {random_seed}...")
     
-    # Use new multi-directory data discovery
-    train_files, val_files, data_files, data_source_info = discover_and_split_multiple_data(
-        data_dirs, train_ratio, random_seed, shard_ranges=shard_ranges, 
-        shuffle_shards=shuffle_shards, max_validation_examples=max_validation_examples
-    )
+    # Validate directories and shard ranges
+    if shard_ranges is None:
+        shard_ranges = ["all"] * len(data_dirs)
     
-    if train_files is None or val_files is None:
-        return {'error': 'Failed to discover or split data'}
+    # Validate that we have the right number of shard ranges
+    if len(shard_ranges) != len(data_dirs):
+        raise ValueError(f"Number of shard_ranges ({len(shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
+    
+    # Do a quick validation that the directories exist and have data
+    from hex_ai.data_collection import parse_shard_range
+    from hex_ai.data_pipeline import discover_processed_files
+    for i, (data_dir, shard_range) in enumerate(zip(data_dirs, shard_ranges)):
+        try:
+            start, end = parse_shard_range(shard_range, data_dir)
+            if end is None:
+                skip_files = 0
+                max_files = None
+            else:
+                skip_files = start
+                max_files = end - start + 1
+            
+            data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
+            if not data_files:
+                raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
+            
+            logger.info(f"Directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
+            
+        except Exception as e:
+            logger.error(f"Failed to validate data in {data_dir}: {e}")
+            raise RuntimeError(f"Failed to validate data in {data_dir}: {e}")
     
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
     
+    # Create datasets using the new mixed shard approach
+    logger.info(f"Using StreamingMixedShardDataset with pool_size={pool_size:,}, refill_threshold={refill_threshold:,}")
     train_loader, val_loader = create_datasets(
-        train_files, val_files, max_examples_unaugmented, max_validation_examples, batch_size, shuffle_shards=shuffle_shards, random_seed=random_seed)
+        data_dirs=data_dirs,
+        shard_ranges=shard_ranges,
+        train_ratio=train_ratio,
+        max_examples_unaugmented=max_examples_unaugmented,
+        max_validation_examples=max_validation_examples,
+        batch_size=batch_size,
+        pool_size=pool_size,
+        refill_threshold=refill_threshold,
+        max_memory_gb=max_memory_gb,
+        random_seed=random_seed,
+        verbose=True
+    )
     
-    # Estimate actual validation dataset size
-    def estimate_validation_size(val_files, max_validation_examples):
-        """Estimate the actual number of examples in the validation dataset."""
-        if not val_files:
-            return 0
-        
-        # Sample a few files to estimate average examples per file
-        sample_files = val_files[:min(5, len(val_files))]
-        total_examples = 0
-        for file_path in sample_files:
-            try:
-                import gzip
-                import pickle
-                with gzip.open(file_path, 'rb') as f:
-                    data = pickle.load(f)
-                    examples = data.get('examples', [])
-                    total_examples += len(examples)
-            except Exception as e:
-                logger.warning(f"Could not read {file_path}: {e}")
-                continue
-        
-        if sample_files:
-            avg_per_file = total_examples / len(sample_files)
-            estimated_total = avg_per_file * len(val_files)
-            actual_size = min(estimated_total, max_validation_examples) if max_validation_examples else estimated_total
-            return int(actual_size)
-        return 0
-    
-    actual_val_size = estimate_validation_size(val_files, max_validation_examples)
-    
-    # Remove or guard len() usage for streaming datasets
-    logger.info(f"\nStreaming training dataset: {len(train_files)} files, up to {max_examples_unaugmented} examples; validation: {len(val_files)} files, up to {max_validation_examples} examples (actual: {actual_val_size:,}).")
+    # Log dataset information
+    logger.info(f"\nStreaming mixed dataset: up to {max_examples_unaugmented} training examples, up to {max_validation_examples} validation examples.")
     
     if train_loader is None:
         return {'error': 'Failed to create datasets'}
@@ -540,7 +468,6 @@ def run_hyperparameter_tuning_current_data(
             save_experiment_metadata(
                 results_path,
                 exp_config['experiment_name'],
-                data_source_info,
                 exp_config['hyperparameters'],
                 {
                     'num_epochs': num_epochs,
@@ -575,7 +502,7 @@ def run_hyperparameter_tuning_current_data(
     }
     
     logger.info(f"\nSaving overall results to {results_path}...")
-    save_overall_results(results_path, overall_results, data_source_info)
+    save_overall_results(results_path, overall_results)
     logger.info(f"\nOverall results saved to {results_path}.")
     
     return overall_results 
