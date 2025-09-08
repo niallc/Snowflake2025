@@ -30,7 +30,7 @@ from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
 from hex_ai.data_pipeline import discover_processed_files
-from hex_ai.training_utils import get_device
+from hex_ai.training_utils import get_device, TrainingUtilities
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
 from hex_ai.error_handling import get_board_state_error_tracker
@@ -326,9 +326,7 @@ class Trainer:
             for boards, policies, values in self.val_loader:
                     
                 # Move to device
-                boards = boards.to(self.device)
-                policies = policies.to(self.device)
-                values = values.to(self.device)
+                boards, policies, values = TrainingUtilities.move_batch_to_device(boards, policies, values, self.device)
                 
                 # Forward pass with mixed precision
                 with self.mixed_precision.autocast_context():
@@ -415,17 +413,6 @@ class Trainer:
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
 
-    def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
-        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
-        keep = set()
-        if max_epoch < 4:
-            keep.update(range(1, max_epoch + 1))
-        else:
-            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
-            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
-                if k <= max_epoch:
-                    keep.add(k)
-        return keep
 
     def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
         # Find all checkpoint files except best_model.pt
@@ -439,7 +426,7 @@ class Trainer:
         if not epoch_nums:
             return
         max_epoch = max(e for e, _ in epoch_nums)
-        keep_epochs = self._get_checkpoints_to_keep(max_epoch, max_checkpoints)
+        keep_epochs = TrainingUtilities.get_checkpoints_to_keep(max_epoch, max_checkpoints)
         for e, fname in epoch_nums:
             if e not in keep_epochs:
                 try:
@@ -447,32 +434,107 @@ class Trainer:
                 except Exception:
                     pass
 
-    def _calculate_gradient_norm(self) -> float:
-        """Calculate gradient norm for all model parameters."""
-        total_norm = 0.0
-        param_count = 0
-        for p in self.model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                total_norm += param_norm.item() ** 2
-                param_count += 1
-        return total_norm ** (1. / 2) if param_count > 0 else 0.0
 
-    def _should_log_progress(self, batch_idx: int, epoch: int, mini_epoch: int, 
-                           next_log_batch: int, start_time: float, last_time_log: float) -> bool:
-        """Determine if we should log progress at this batch."""
-        now = time.time()
+
+    def _update_loss_metrics(self, state: Dict, loss_dict: Dict) -> None:
+        """Update loss metrics in the training state."""
+        for key in state['mini_epoch_metrics']:
+            state['mini_epoch_metrics'][key].append(loss_dict[key])
+
+    def _apply_gradient_clipping(self, state: Dict) -> None:
+        """Apply gradient clipping and track gradient norms."""
+        # Calculate gradient norm before clipping (for diagnostic purposes)
+        pre_clip_gradient_norm = None
+        try:
+            pre_clip_gradient_norm = TrainingUtilities.calculate_gradient_norm(self.model)
+            if pre_clip_gradient_norm > 0:
+                state['gradient_norms'].append(pre_clip_gradient_norm)
+        except Exception as e:
+            print(f"[train_on_batches] Warning: Failed to calculate pre-clip gradient norm: {e}")
         
-        # For first epoch, log for all powers of 2
-        if epoch == 0 and mini_epoch == 0:
-            return batch_idx + 1 == next_log_batch
-        
-        # For later epochs, only log for batch >= 64
-        if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
-            return True
+        # Clip gradients to avoid exploding gradients (if configured)
+        if self.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
             
-        # After 3 minutes, switch to time-based logging every 180 seconds
-        return now - last_time_log > 180
+            # Calculate gradient norm after clipping (to verify clipping worked)
+            post_clip_gradient_norm = None
+            try:
+                post_clip_gradient_norm = TrainingUtilities.calculate_gradient_norm(self.model)
+            except Exception as e:
+                print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
+            
+            # Store both values for logging
+            if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
+                state['gradient_norms'].append(post_clip_gradient_norm)  # Use post-clip for statistics
+                # Store both values for debugging
+                if not hasattr(self, 'gradient_clipping_debug'):
+                    self.gradient_clipping_debug = []
+                self.gradient_clipping_debug.append({
+                    'pre_clip': pre_clip_gradient_norm,
+                    'post_clip': post_clip_gradient_norm,
+                    'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
+                })
+
+    def _handle_progress_logging(self, batch_idx: int, epoch: int, mini_epoch: int, state: Dict) -> None:
+        """Handle progress logging for the current batch."""
+        now = time.time()
+        should_log = TrainingUtilities.should_log_progress(
+            batch_idx, epoch, mini_epoch, state['next_log_batch'], 
+            state['start_time'], state['last_time_log']
+        )
+        if should_log:
+            state['last_time_log'] = now
+            elapsed = now - state['start_time']
+            print(
+                f"[train_on_batches] Batch {batch_idx+1}: "
+                f"total_loss={state['mini_epoch_metrics']['total_loss'][-1]:.4f}, "
+                f"policy_loss={state['mini_epoch_metrics']['policy_loss'][-1]:.4f}, "
+                f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f} "
+                f"(elapsed {elapsed:.1f}s)"
+            )
+            if batch_idx + 1 == state['next_log_batch']:
+                exp_backoff = 2
+                if batch_idx > 64:
+                    exp_backoff = 1.5
+                state['next_log_batch'] *= math.floor(exp_backoff)  # Exponential backoff
+
+    def _log_csv_metrics(self, epoch: int, mini_epoch: int, state: Dict, val_metrics: Optional[Dict], 
+                        diagnostics: Dict, mini_epoch_avg: Dict) -> None:
+        """Log metrics to CSV with simplified parameter passing."""
+        if not self.csv_logger:
+            return
+            
+        csv_data = self._prepare_csv_logging_data(
+            epoch, mini_epoch, state['batch_times'], val_metrics,
+            diagnostics['gradient_norm'], diagnostics['post_clip_gradient_norm'],
+            diagnostics['weight_stats'], diagnostics['gradient_stats'], 
+            diagnostics['lr_stats'], diagnostics['gpu_memory_mb'], 
+            diagnostics['best_val_loss']
+        )
+        
+        # Create a single metrics dictionary for cleaner CSV logging
+        metrics_dict = {
+            'epoch': csv_data['epoch_id'],
+            'train_metrics': mini_epoch_avg,
+            'val_metrics': val_metrics,
+            'hyperparams': csv_data['hyperparams'],
+            'training_time': csv_data['training_time'],
+            'epoch_time': csv_data['epoch_time'],
+            'samples_per_second': csv_data['samples_per_second'],
+            'memory_usage_mb': csv_data['memory_usage_mb'],
+            'gpu_memory_mb': csv_data['gpu_memory_mb'],
+            'gradient_norm': csv_data['gradient_norm'],
+            'post_clip_gradient_norm': csv_data['post_clip_gradient_norm'],
+            'weight_stats': csv_data['weight_stats'],
+            'gradient_stats': csv_data['gradient_stats'],
+            'lr_stats': csv_data['lr_stats'],
+            'best_val_loss': csv_data['best_val_loss'],
+            'notes': csv_data['notes']
+        }
+        
+        self.csv_logger.log_mini_epoch(**metrics_dict)
+
+
 
     def _prepare_csv_logging_data(self, epoch: int, mini_epoch: int, batch_times: List[float], 
                                 val_metrics: Optional[Dict], gradient_norm: Optional[float],
@@ -523,16 +585,11 @@ class Trainer:
     def _process_single_batch(self, batch_idx: int, boards: torch.Tensor, policies: torch.Tensor, 
                             values: torch.Tensor, state: Dict) -> Dict:
         """Process a single batch and return updated state."""
-        # Time data loading
-        data_load_end = time.time()
-        batch_data_time = data_load_end - state['data_load_start']
-        state['batch_data_times'].append(batch_data_time)
-        batch_start_time = time.time()
+        # Calculate timing metrics
+        timing = TrainingUtilities.calculate_batch_timing(state)
         
         # Move to device
-        boards = boards.to(self.device)
-        policies = policies.to(self.device)
-        values = values.to(self.device)
+        boards, policies, values = TrainingUtilities.move_batch_to_device(boards, policies, values, self.device)
         
         # Forward pass with mixed precision
         self.optimizer.zero_grad()
@@ -544,37 +601,8 @@ class Trainer:
         scaled_loss = self.mixed_precision.scale_loss(total_loss)
         scaled_loss.backward()
         
-        # Calculate gradient norm before clipping (for diagnostic purposes)
-        pre_clip_gradient_norm = None
-        try:
-            pre_clip_gradient_norm = self._calculate_gradient_norm()
-            if pre_clip_gradient_norm > 0:
-                state['gradient_norms'].append(pre_clip_gradient_norm)
-        except Exception as e:
-            print(f"[train_on_batches] Warning: Failed to calculate pre-clip gradient norm: {e}")
-        
-        # Clip gradients to avoid exploding gradients (if configured)
-        if self.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-            
-            # Calculate gradient norm after clipping (to verify clipping worked)
-            post_clip_gradient_norm = None
-            try:
-                post_clip_gradient_norm = self._calculate_gradient_norm()
-            except Exception as e:
-                print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
-            
-            # Store both values for logging
-            if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
-                state['gradient_norms'].append(post_clip_gradient_norm)  # Use post-clip for statistics
-                # Store both values for debugging
-                if not hasattr(self, 'gradient_clipping_debug'):
-                    self.gradient_clipping_debug = []
-                self.gradient_clipping_debug.append({
-                    'pre_clip': pre_clip_gradient_norm,
-                    'post_clip': post_clip_gradient_norm,
-                    'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
-                })
+        # Apply gradient clipping and track norms
+        self._apply_gradient_clipping(state)
         
         # Optimizer step: update model parameters using accumulated gradients
         self.mixed_precision.step_optimizer(self.optimizer)
@@ -582,13 +610,12 @@ class Trainer:
         self.mixed_precision.update_scaler()
         
         # Track losses for this batch
-        for key in state['mini_epoch_metrics']:
-            state['mini_epoch_metrics'][key].append(loss_dict[key])
+        self._update_loss_metrics(state, loss_dict)
         
         # Prepare for next batch data timing
         state['data_load_start'] = time.time()
         batch_end_time = time.time()
-        state['batch_times'].append(batch_end_time - batch_start_time)
+        state['batch_times'].append(batch_end_time - timing['batch_start_time'])
         
         return state
 
@@ -609,16 +636,6 @@ class Trainer:
             'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
         }
 
-    def _calculate_statistics(self, values: List[float]) -> Dict[str, float]:
-        """Calculate mean, min, max, std statistics for a list of values."""
-        if not values:
-            return {}
-        return {
-            'mean': float(np.mean(values)),
-            'min': float(np.min(values)),
-            'max': float(np.max(values)),
-            'std': float(np.std(values))
-        }
 
     def _calculate_diagnostic_metrics(self, val_metrics: Optional[Dict], gradient_norms: List[float]) -> Dict:
         """Calculate diagnostic metrics for stability analysis."""
@@ -643,27 +660,16 @@ class Trainer:
         if gradient_norms:
             gradient_norm = gradient_norms[-1]  # Use the last gradient norm (post-clip)
             post_clip_gradient_norm = gradient_norm  # This is the post-clip value
-            gradient_stats = self._calculate_statistics(gradient_norms)
+            gradient_stats = TrainingUtilities.calculate_statistics(gradient_norms)
         
         # Calculate weight statistics
-        weight_norms = []
-        for p in self.model.parameters():
-            if p.data is not None:
-                weight_norms.append(p.data.norm(2).item())
-        if weight_norms:
-            weight_stats = {
-                'mean': float(np.mean(weight_norms)),
-                'std': float(np.std(weight_norms))
-            }
+        weight_stats = TrainingUtilities.calculate_weight_statistics(self.model)
         
         # Calculate learning rate statistics
-        lr_values = [group['lr'] for group in self.optimizer.param_groups if 'lr' in group]
-        if lr_values:
-            lr_stats = self._calculate_statistics(lr_values)
+        lr_stats = TrainingUtilities.calculate_learning_rate_statistics(self.optimizer)
         
         # Calculate GPU memory usage
-        if torch.cuda.is_available() and hasattr(torch.cuda, 'memory_allocated'):
-            gpu_memory_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+        gpu_memory_mb = TrainingUtilities.get_gpu_memory_usage()
 
         
         return {
@@ -716,26 +722,7 @@ class Trainer:
             state = self._process_single_batch(batch_idx, boards, policies, values, state)
             
             # Progress logging
-            now = time.time()
-            should_log = self._should_log_progress(
-                batch_idx, epoch, mini_epoch, state['next_log_batch'], 
-                state['start_time'], state['last_time_log']
-            )
-            if should_log:
-                state['last_time_log'] = now
-                elapsed = now - state['start_time']
-                print(
-                    f"[train_on_batches] Batch {batch_idx+1}: "
-                    f"total_loss={state['mini_epoch_metrics']['total_loss'][-1]:.4f}, "
-                    f"policy_loss={state['mini_epoch_metrics']['policy_loss'][-1]:.4f}, "
-                    f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f} "
-                    f"(elapsed {elapsed:.1f}s)"
-                )
-                if batch_idx + 1 == state['next_log_batch']:
-                    exp_backoff = 2
-                    if batch_idx > 64:
-                        exp_backoff = 1.5
-                    state['next_log_batch'] *= math.floor(exp_backoff)  # Exponential backoff
+            self._handle_progress_logging(batch_idx, epoch, mini_epoch, state)
         
         # Compute averages for the mini-epoch
         mini_epoch_avg = {
@@ -747,32 +734,6 @@ class Trainer:
         diagnostics = self._calculate_diagnostic_metrics(val_metrics, state['gradient_norms'])
         
         # CSV logging for mini-epoch
-        if self.csv_logger:
-            csv_data = self._prepare_csv_logging_data(
-                epoch, mini_epoch, state['batch_times'], val_metrics,
-                diagnostics['gradient_norm'], diagnostics['post_clip_gradient_norm'],
-                diagnostics['weight_stats'], diagnostics['gradient_stats'], 
-                diagnostics['lr_stats'], diagnostics['gpu_memory_mb'], 
-                diagnostics['best_val_loss']
-            )
-            
-            self.csv_logger.log_mini_epoch(
-                epoch=csv_data['epoch_id'],
-                train_metrics=mini_epoch_avg,
-                val_metrics=val_metrics,
-                hyperparams=csv_data['hyperparams'],
-                training_time=csv_data['training_time'],
-                epoch_time=csv_data['epoch_time'],
-                samples_per_second=csv_data['samples_per_second'],
-                memory_usage_mb=csv_data['memory_usage_mb'],
-                gpu_memory_mb=csv_data['gpu_memory_mb'],
-                gradient_norm=csv_data['gradient_norm'],
-                post_clip_gradient_norm=csv_data['post_clip_gradient_norm'],
-                weight_stats=csv_data['weight_stats'],
-                gradient_stats=csv_data['gradient_stats'],
-                lr_stats=csv_data['lr_stats'],
-                best_val_loss=csv_data['best_val_loss'],
-                notes=csv_data['notes']
-            )
+        self._log_csv_metrics(epoch, mini_epoch, state, val_metrics, diagnostics, mini_epoch_avg)
         
         return mini_epoch_avg

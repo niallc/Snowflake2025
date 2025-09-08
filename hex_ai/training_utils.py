@@ -7,8 +7,10 @@ and other common operations used throughout the project.
 
 import torch
 import numpy as np
+import time
+import math
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict
 import logging
 
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -396,3 +398,116 @@ class ValueHeadAnalyzer:
             board[0, 2, :, :] = 1.0  # Red to move
         
         return board.to(self.device)
+
+
+class TrainingUtilities:
+    """
+    Generic training utilities that can be used across different training frameworks.
+    
+    This class contains utility functions that are not specific to any particular
+    trainer implementation and can be reused in various training scenarios.
+    """
+    
+    @staticmethod
+    def move_batch_to_device(boards: torch.Tensor, policies: torch.Tensor, 
+                           values: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Move batch data to the specified device."""
+        return boards.to(device), policies.to(device), values.to(device)
+    
+    @staticmethod
+    def calculate_batch_timing(state: Dict) -> Dict:
+        """Calculate timing metrics for the current batch."""
+        data_load_end = time.time()
+        batch_data_time = data_load_end - state['data_load_start']
+        state['batch_data_times'].append(batch_data_time)
+        batch_start_time = time.time()
+        
+        return {
+            'data_load_end': data_load_end,
+            'batch_data_time': batch_data_time,
+            'batch_start_time': batch_start_time
+        }
+    
+    @staticmethod
+    def calculate_gradient_norm(model: torch.nn.Module) -> float:
+        """Calculate gradient norm for all model parameters."""
+        total_norm = 0.0
+        param_count = 0
+        for p in model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+                param_count += 1
+        return total_norm ** (1. / 2) if param_count > 0 else 0.0
+    
+    @staticmethod
+    def calculate_statistics(values: List[float]) -> Dict[str, float]:
+        """Calculate mean, min, max, std statistics for a list of values."""
+        if not values:
+            return {}
+        return {
+            'mean': float(np.mean(values)),
+            'min': float(np.min(values)),
+            'max': float(np.max(values)),
+            'std': float(np.std(values))
+        }
+    
+    @staticmethod
+    def should_log_progress(batch_idx: int, epoch: int, mini_epoch: int, 
+                          next_log_batch: int, start_time: float, last_time_log: float) -> bool:
+        """Determine if we should log progress at this batch."""
+        now = time.time()
+        
+        # For first epoch, log for all powers of 2
+        if epoch == 0 and mini_epoch == 0:
+            return batch_idx + 1 == next_log_batch
+        
+        # For later epochs, only log for batch >= 64
+        if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
+            return True
+            
+        # After 3 minutes, switch to time-based logging every 180 seconds
+        return now - last_time_log > 180
+    
+    @staticmethod
+    def calculate_weight_statistics(model: torch.nn.Module) -> Optional[Dict[str, float]]:
+        """Calculate weight statistics for a model."""
+        weight_norms = []
+        for p in model.parameters():
+            if p.data is not None:
+                weight_norms.append(p.data.norm(2).item())
+        if weight_norms:
+            return {
+                'mean': float(np.mean(weight_norms)),
+                'std': float(np.std(weight_norms))
+            }
+        return None
+    
+    @staticmethod
+    def calculate_learning_rate_statistics(optimizer: torch.optim.Optimizer) -> Optional[Dict[str, float]]:
+        """Calculate learning rate statistics from optimizer parameter groups."""
+        lr_values = [group['lr'] for group in optimizer.param_groups if 'lr' in group]
+        if lr_values:
+            return TrainingUtilities.calculate_statistics(lr_values)
+        return None
+    
+    @staticmethod
+    def get_gpu_memory_usage() -> Optional[float]:
+        """Get current GPU memory usage in MB."""
+        if torch.cuda.is_available() and hasattr(torch.cuda, 'memory_allocated'):
+            return torch.cuda.memory_allocated() / (1024 * 1024)
+        return None
+    
+    @staticmethod
+    def get_checkpoints_to_keep(max_epoch: int, max_checkpoints: int) -> set:
+        """Determine which checkpoints to keep based on epoch number."""
+        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
+        keep = set()
+        if max_epoch < 4:
+            keep.update(range(1, max_epoch + 1))
+        else:
+            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
+            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
+                if k <= max_epoch:
+                    keep.add(k)
+        return keep
