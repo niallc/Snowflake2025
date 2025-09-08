@@ -1,0 +1,271 @@
+HEX STRENGTH EVALUATOR - DESIGN SPECIFICATION (IMPLEMENTATION SCAFFOLD)
+
+GOAL
+Build a reproducible strength evaluator that consumes a complete Hex game and produces, for each player and for each game phase (opening, middlegame, endgame), two aggregate scores:
+(1) a POLICY-BASED score and (2) a VALUE-BASED score. Optionally, also produce coarse error buckets per move (-2 / -1 / 0) and summary statistics. The design must plug into the existing AlphaZero-style engine (policy/value nets + MCTS) and be robust to reference-frame subtleties and noisy evaluations.
+
+HIGH-LEVEL IDEA
+For every ply (move) in the game:
+- Reconstruct the position BEFORE the move.
+- Run an EVALUATION PROCEDURE that yields:
+  * a policy distribution over legal moves (from policy net, or MCTS root visit distribution or priors),
+  * a value estimate of the position under a chosen policy (value net or MCTS-derived),
+  * a policy/value view for the move actually played,
+  * a policy/value view for the evaluator's preferred move.
+- Convert raw outputs into DELTA METRICS and a COARSE BUCKET (-2, -1, 0).
+- Assign the ply to a GAME PHASE (opening, middlegame, endgame).
+- Aggregate per player x phase x metric.
+
+KEY OUTPUTS
+For each game, produce:
+- Per-player x phase (opening, middle, end):
+  * policy_score_mean (or median or trimmed mean),
+  * value_score_mean,
+  * policy_bucket_rates: fraction of moves in {-2, -1, 0},
+  * value_bucket_rates: fraction of moves in {-2, -1, 0},
+  * counts (number of plies by that player in phase).
+- Global summary (optionally): weighted combination across phases.
+- Per-move table (optional artifact for debugging): evaluator details for every ply.
+
+DEFINITIONS AND REFERENCE FRAMES
+- Value head in your code: red_ref_signed in [-1, 1] where +1 = Red win, -1 = Blue win. Internally MCTS stores values in player-to-move (PTM) frame.
+- To compare choices for the actor who moves at ply t:
+  1) Convert all value outputs to the ACTOR'S reference frame (actor_ref_signed). If the actor is Red, actor_ref_signed = red_ref_signed; if Blue, actor_ref_signed = -red_ref_signed.
+  2) When reporting probabilities (policy), use legal-move probabilities normalized over legal actions only.
+- Win-probability form: p = (signed + 1) / 2. Deltas can be measured either in signed space or probability space; probability space is more interpretable.
+
+CONFIGURATION (MAKE EVERYTHING PLUGGABLE)
+struct EvaluatorConfig:
+  opening_plies: int = 12
+  endgame_value_thresh: float = 0.90
+  endgame_streak: int = 3
+  use_value_prob_space: bool = True
+  policy_source: enum { POLICY_NET, MCTS_PRIORS }
+  value_source: enum { VALUE_NET, MCTS_Q, MCTS_VALUE_AT_ROOT }
+  mcts_sims: int = 200
+  mcts_c_puct: float = 1.5
+  mcts_batch_cap: Optional[int] = None
+  enable_gumbel_root: bool = False
+  gumbel_params: {...}
+  aggregation: enum { MEAN, MEDIAN, TRIMMED_MEAN } = MEAN
+  trimmed_fraction: float = 0.1
+  bucket_policy_thresholds: (float small, float big) = (0.10, 0.30)
+  bucket_value_thresholds: (float small, float big) = (0.10, 0.30)
+  phase_weighting: dict = {"opening":1, "middle":1, "end":1}
+  rng_seed: Optional[int] = None
+  batch_nn: bool = True
+  ignore_early_noise_until: int = 2*board_size
+  downweight_function: Optional[callable(move_idx)->float] = None
+
+INPUT AND OUTPUT INTERFACES
+Input:
+- GameRecord:
+  * board_size: int
+  * moves: List[(row:int, col:int, player:{RED, BLUE})] in chronological order.
+  * starting_player: enum
+  * metadata (optional)
+
+Output (machine-readable):
+- EvaluatorReport:
+  * per_phase_per_player: map[(phase, player)] -> { policy_score, value_score, policy_bucket_counts, value_bucket_counts, n }
+  * per_move_details (optional): List of MoveEval entries
+  * combined_summary: { per_player: {...}, overall: {...} }
+
+MoveEval entry:
+  * ply_idx, actor, phase
+  * chosen_move: (r,c)
+  * policy_prob_chosen, policy_prob_best, delta_policy := policy_prob_best - policy_prob_chosen
+  * value_prob_after_chosen, value_prob_after_best, delta_value := value_prob_after_best - value_prob_after_chosen
+  * bucket_policy in {-2,-1,0}, bucket_value in {-2,-1,0}
+  * evaluator_metadata: { mcts_sims, c_puct, timing, cache_hits, etc. }
+
+PIPELINE OVERVIEW
+1) Reconstruct Positions
+   - Start from an empty board with known starting_player.
+   - For each ply t in [0..T-1], snapshot the PREMOVE state S_t (player to move = actor_t).
+   - Also obtain the POSTMOVE state S_t+1 to evaluate value after chosen move.
+
+2) Phase Assignment Pass
+   - Opening: plies [0 .. opening_plies-1].
+   - Endgame: earliest ply k with a streak of endgame_streak plies where abs(value_actor_ref(S_i)) >= endgame_value_thresh. Once triggered, all subsequent plies are endgame.
+   - Middle: everything else.
+   - Practical: compute a quick value estimate at S_t for the pass (value net is fine), then reuse or recompute as needed.
+
+3) Per-Ply Evaluation Pass
+   For each S_t with actor A and chosen move m_chosen:
+
+   3.1) POLICY VIEW
+        - Obtain probability vector over LEGAL actions:
+          a) POLICY_NET: run policy head once on S_t, mask illegal, renormalize.
+          b) MCTS_PRIORS: expand MCTS root (or run full sims) and use root priors or normalized root visits.
+        - m_best_policy = argmax policy_prob.
+        - p_chosen = policy_prob(m_chosen), p_best = policy_prob(m_best_policy).
+        - delta_policy = max(0, p_best - p_chosen).
+        - bucket_policy from thresholds (small,big):
+            if delta_policy >= big -> -2
+            elif delta_policy >= small -> -1
+            else -> 0
+
+   3.2) VALUE VIEW
+        Choose a consistent value_source:
+        - VALUE_NET:
+            Evaluate value on POSTMOVE states:
+              v_chosen_red = V(S_t after m_chosen) in red_ref; v_best_red = max over a of V(S_t after a) converted to actor frame.
+            Convert to actor frame and optionally to probability p = (v_actor + 1)/2.
+            delta_value = max(0, p_best - p_chosen).
+        - MCTS_Q (recommended if you already run MCTS):
+            Run MCTS from S_t for mcts_sims.
+            Read child Qs (PTM frame = actor frame), optionally convert to probability.
+            m_best_value = argmax Q(a).
+            delta_value = max(0, Q_best - Q_chosen).
+        - MCTS_VALUE_AT_ROOT: keep definition consistent for chosen and best.
+
+        - bucket_value from thresholds (small,big) analogous to policy.
+
+   3.3) RECORD
+        - Store deltas, buckets, actor, phase, timings.
+
+4) Aggregation
+   - For each (player, phase):
+       policy_score = aggregate(delta_policy entries)
+       value_score  = aggregate(delta_value entries)
+       bucket histograms and n
+   - Optional combined summary per player via phase_weighting.
+
+ROBUSTNESS AND CALIBRATION
+- Use LRU caches for NN evals keyed by state hash. Separate caches for:
+  * S_t premove policy/value net
+  * S_t after child a value net
+  * MCTS root expansions keyed by (state hash, mcts config)
+- Prefer MEDIAN or TRIMMED mean if outliers dominate.
+- Optionally cap deltas at 0.80.
+- Early-move noise: downweight or ignore before ignore_early_noise_until.
+- Determinism: set seeds; set add_root_noise=False; fixed temperature.
+- Keep policy_source and value_source fixed across a run.
+
+PERFORMANCE
+- Batch net calls across plies.
+- If using MCTS for both policy and value, one MCTS per ply can provide both priors/visits and child Qs. Consider low-sims mode for speed.
+
+MAPPING TO EXISTING CODE
+- mcts.py (BaselineMCTS): after search, use root.N, root.Q, root.P in legal-move order. Q is in actor frame at root. Value head is red_ref; convert to actor frame when using VALUE_NET.
+- move_selection.py: use create_mcts_config with add_root_noise=False, fixed temperature, etc.
+
+DATA STRUCTURES
+class StrengthEvaluator:
+  def __init__(self, engine, model_wrapper, cfg: EvaluatorConfig)
+  def evaluate_game(self, game: GameRecord) -> EvaluatorReport
+
+Internal helpers:
+  _reconstruct_state_prefix(board_size, starting_player, moves[:t]) -> HexGameState
+  _phase_scan(values_at_S_t) -> List[phase]
+  _evaluate_policy(S_t) -> (policy_dict, m_best_policy)
+  _evaluate_value(S_t) -> (per_child_value_dict, m_best_value)
+  _delta_policy(policy_dict, m_chosen) -> float
+  _delta_value(value_dict, m_chosen) -> float
+  _bucket(delta, thresholds) -> int in {-2,-1,0}
+  _aggregate(per_move) -> per_phase_per_player + summaries
+
+PSEUDOCODE (value_source=MCTS_Q, policy_source=MCTS_PRIORS)
+evaluate_game(game):
+  states = []
+  for t in 0..T-1:
+    S_t = reconstruct_state(game, t)   # premove
+    states.append(S_t)
+
+  values_actor = []
+  for S_t in states:
+    v_red = value_net(S_t)                          # red_ref_signed
+    v_actor = v_red if actor(S_t)==RED else -v_red  # actor frame
+    p_actor = (v_actor+1)/2
+    values_actor.append(p_actor)
+  phases = assign_phases(values_actor, opening_plies, endgame_value_thresh, endgame_streak)
+
+  results = []
+  for t, S_t in enumerate(states):
+    actor = player_to_move(S_t)
+    m_chosen = game.moves[t].move
+
+    if value_source == MCTS_Q or policy_source == MCTS_PRIORS:
+      root = run_mcts_for_analysis(S_t, sims=mcts_sims, ...)
+      policy = priors_or_root_visits(root)  # dict (r,c)->prob
+      values = child_Q_probs(root)          # dict (r,c)->prob in actor frame
+    else:
+      policy = policy_net_distribution(S_t)
+      values = value_net_over_children(S_t)
+
+    m_best_policy = argmax(policy)
+    m_best_value  = argmax(values)
+
+    d_policy = max(0, policy[m_best_policy] - policy[m_chosen])
+    d_value  = max(0, values[m_best_value]  - values[m_chosen])
+
+    b_policy = bucket(d_policy, bucket_policy_thresholds)
+    b_value  = bucket(d_value,  bucket_value_thresholds)
+
+    results.append(MoveEval(ply=t, actor=actor, phase=phases[t], chosen=m_chosen,
+                            delta_policy=d_policy, delta_value=d_value,
+                            bucket_policy=b_policy, bucket_value=b_value))
+
+  report = aggregate(results, aggregation, trimmed_fraction, phase_weighting, downweight_function)
+  return report
+
+BUCKETING DETAILS
+- Policy deltas: thresholds small=0.10, big=0.30 by default.
+- Value deltas (probability space): small=0.10, big=0.30.
+
+EDGE CASES
+- Terminal states: mark N/A.
+- Illegal moves: fail fast.
+- NaN/inf: skip ply and record coverage.
+- opening_plies beyond game length: just truncate; phases may be empty.
+
+TESTING STRATEGY
+1) Unit tests:
+   - Reference-frame conversions.
+   - Phase boundary logic.
+   - Bucket function.
+2) Integration tests:
+   - Toy games with forced best moves.
+   - Determinism with fixed seeds, no Dirichlet noise.
+3) Performance tests:
+   - Batching effectiveness for 100+ plies.
+4) Sanity dashboards (optional):
+   - Histograms of deltas by phase.
+   - Scatter of delta_policy vs delta_value.
+
+IMPLEMENTATION NOTES
+- Separate caches for premove nets, postmove nets, and MCTS roots.
+- MCTS evaluator settings: add_root_noise=False, confidence termination off or conservative, fixed temperature.
+- Normalize visits to probabilities when using N as policy.
+
+EXAMPLE OUTPUT SHAPE (JSON-like)
+{
+  "per_phase_per_player": {
+    ("opening", "RED"): { "policy_score": 0.08, "value_score": 0.05,
+                          "policy_bucket_rates": {"-2":0.10,"-1":0.20,"0":0.70},
+                          "value_bucket_rates":  {"-2":0.06,"-1":0.18,"0":0.76},
+                          "n": 14 },
+    ("opening", "BLUE"): { ... },
+    ("middle",  "RED"):  { ... },
+    ("end",     "RED"):  { ... }
+  },
+  "combined_summary": {
+    "RED":  { "policy_score": 0.07, "value_score": 0.06 },
+    "BLUE": { "policy_score": 0.09, "value_score": 0.08 }
+  },
+  "coverage": { "evaluated_plies": 90, "total_plies": 92 }
+}
+
+TUNING AND EXTENSIONS
+- Swap VALUE_NET vs MCTS_Q for robustness.
+- Try delta of logit(p) instead of delta of p.
+- Importance weighting: weight by (1 - abs(value_actor(S_t))).
+- Output PV snippets for big (-2) mistakes.
+- Learn bucket thresholds from data.
+
+DELIVERABLES FOR CODING AGENT
+1) hex_ai/eval/strength_evaluator.py implementing StrengthEvaluator and EvaluatorConfig.
+2) tools/evaluate_game_strength.py CLI: consumes game JSON and prints JSON report; optional CSV per-move.
+3) tests/eval/test_strength_evaluator.py covering core logic.
+4) Optional plotting script for histograms.

@@ -90,17 +90,17 @@ let state = {
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
-  red_model_id: 'model2',  // Use different model for red by default
+  red_model_id: 'model1',  // Use current best model for both players by default
   blue_temperature: 0.2,
   red_temperature: 0.2,
   // MCTS settings
-  blue_num_simulations: 46,
-  red_num_simulations: 46,
-  blue_exploration_constant: 1.4,
-  red_exploration_constant: 1.4,
+  blue_num_simulations: 90,
+  red_num_simulations: 90,
+  blue_exploration_constant: 2.9,
+  red_exploration_constant: 2.9,
   // Gumbel settings
-  blue_enable_gumbel: false,
-  red_enable_gumbel: false,
+  blue_enable_gumbel: true,
+  red_enable_gumbel: true,
   blue_gumbel_max_sims: 500,
   red_gumbel_max_sims: 500,
   auto_step_active: false,

@@ -263,13 +263,14 @@ class StreamingSequentialShardDataset(torch.utils.data.IterableDataset):
         return board_tensor, policy_tensor, value_tensor
 
 
-def discover_processed_files(data_dir: str = "data/processed", skip_files: int = 0) -> List[Path]:
+def discover_processed_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None) -> List[Path]:
     """
     Discover all processed data files in the specified directory.
     
     Args:
         data_dir: Directory containing processed data files
         skip_files: Number of files to skip from the beginning (sorted by name)
+        max_files: Maximum number of files to use after skipping (None = use all remaining)
         
     Returns:
         List of paths to processed data files
@@ -302,6 +303,12 @@ def discover_processed_files(data_dir: str = "data/processed", skip_files: int =
             raise ValueError(f"Cannot skip {skip_files} files when only {len(data_files)} files exist in {data_dir}")
         data_files = data_files[skip_files:]
         logger.info(f"Skipped first {skip_files} files from {data_dir}, using {len(data_files)} remaining files")
+    
+    # Limit to max_files if requested
+    if max_files is not None and max_files > 0:
+        if max_files < len(data_files):
+            data_files = data_files[:max_files]
+            logger.info(f"Limited to first {max_files} files from {data_dir}, using {len(data_files)} files total")
     
     return data_files
 

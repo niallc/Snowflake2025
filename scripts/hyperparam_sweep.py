@@ -22,6 +22,7 @@ from pathlib import Path
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
+from hex_ai.data_collection import parse_shard_ranges
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 # Create timestamp for the entire run (without minutes/seconds)
@@ -181,17 +182,17 @@ if __name__ == "__main__":
         description="Run hyperparameter tuning with multiple data sources",
         epilog="""
 Examples:
-  # Single data directory (backward compatible)
+  # Single data directory (uses all shards by default)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
 
-  # Multiple data directories
+  # Multiple data directories (uses all shards from each by default)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
 
-  # Skip first 200 files from second directory
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled --skip_files 0 200
+  # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
 
-  # Resume training from a specific checkpoint file
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --resume_from checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz
+  # Use current best model from model_config.py
+  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --use_current_best_model
 
   # Use data shards in sorted order (no shuffling)
   python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --no_shuffle_shards
@@ -203,17 +204,17 @@ Examples:
                        help="One or more directories containing processed data files")
     
     parser.add_argument(
-        '--skip_files',
-        type=int,
+        '--shard_ranges',
+        type=str,
         nargs='+',
-        help='Number of files to skip from the beginning of each data directory (one value per directory, e.g., --skip_files 0 200 to skip 0 from first dir, 200 from second)'
+        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
     )
     
     # Resume training arguments
     parser.add_argument(
-        '--resume_from', 
-        type=str,
-        help='Resume training from a specific checkpoint file (e.g., checkpoints/hyperparameter_tuning/experiment_name/epoch2_mini36.pt.gz)'
+        '--use_current_best_model',
+        action='store_true',
+        help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
     
     parser.add_argument(
@@ -243,13 +244,32 @@ Examples:
     
     args = parser.parse_args()
 
+    # Validate shard range arguments
+    if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
+        print(f"ERROR: Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
+        sys.exit(1)
+
+    # Handle current best model option
+    resume_from = None
+    if args.use_current_best_model:
+        try:
+            from hex_ai.inference.model_config import get_model_path
+            resume_from = get_model_path("current_best")
+            print(f"Using current best model: {resume_from}")
+        except ImportError:
+            print("ERROR: Could not import hex_ai.inference.model_config")
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR: Could not get current best model path: {e}")
+            sys.exit(1)
+
     # Validate resume arguments
-    if args.resume_from and not Path(args.resume_from).exists():
-        print(f"ERROR: Resume path does not exist: {args.resume_from}")
+    if resume_from and not Path(resume_from).exists():
+        print(f"ERROR: Resume path does not exist: {resume_from}")
         sys.exit(1)
 
     # Check for potential hyperparameter conflicts when resuming
-    if args.resume_from and not args.override_checkpoint_hyperparameters:
+    if resume_from and not args.override_checkpoint_hyperparameters:
         # This is a simplified check - in practice, you might want to load the checkpoint
         # and compare actual values, but this gives a good warning
         varying_hyperparams = [k for k, v in SWEEP.items() if len(v) > 1]
@@ -324,8 +344,8 @@ Examples:
             experiment_name=None,
             enable_augmentation=not args.no_augmentation,
             mini_epoch_samples=mini_epoch_samples,
-            resume_from=args.resume_from,
-            skip_files=args.skip_files,
+            resume_from=resume_from,
+            shard_ranges=args.shard_ranges,
             shutdown_handler=shutdown_handler,
             run_timestamp=RUN_TIMESTAMP,
             override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters,

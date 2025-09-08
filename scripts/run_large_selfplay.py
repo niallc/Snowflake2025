@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
+from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
 
 
@@ -76,7 +77,9 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Timestamp: {timestamp}")
     
-
+    # Print git commit information
+    git_info = get_git_commit_info()
+    print(f"Git commit: {git_info['status']}")
     
     # Note about execution configuration
     if not args.no_batched_inference:

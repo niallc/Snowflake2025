@@ -23,7 +23,7 @@ import random
 import re
 
 from .models import TwoHeadedResNet
-from .training import Trainer, EarlyStopping
+from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
 from hex_ai.data_pipeline import StreamingSequentialShardDataset, discover_processed_files, create_train_val_split, estimate_dataset_size
@@ -248,8 +248,9 @@ def discover_and_split_multiple_data(
     data_dirs: List[str], 
     train_ratio: float = 0.8, 
     random_seed: Optional[int] = None,
-    skip_files: Optional[List[int]] = None,
-    shuffle_shards: bool = True
+    shard_ranges: Optional[List[str]] = None,
+    shuffle_shards: bool = True,
+    max_validation_examples: Optional[int] = None
 ) -> Tuple[List[Path], List[Path], List[Path], List[Dict]]:
     """
     Discover and split data from multiple directories.
@@ -258,8 +259,9 @@ def discover_and_split_multiple_data(
         data_dirs: List of data directories
         train_ratio: Ratio for train/val split
         random_seed: Random seed for reproducible splits
-        skip_files: Optional list of files to skip from each directory (one value per directory)
+        shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
+        max_validation_examples: Optional maximum number of validation examples
         
     Returns:
         Tuple of (train_files, val_files, all_files, data_source_info)
@@ -268,18 +270,30 @@ def discover_and_split_multiple_data(
     all_data_files = []
     data_source_info = []
     
-    # Validate skip_files if provided
-    if skip_files is not None:
-        if len(skip_files) != len(data_dirs):
-            raise ValueError(f"Number of skip_files values ({len(skip_files)}) must match number of data directories ({len(data_dirs)})")
+    # Validate shard_ranges if provided
+    if shard_ranges is not None:
+        if len(shard_ranges) != len(data_dirs):
+            raise ValueError(f"Number of shard_ranges values ({len(shard_ranges)}) must match number of data directories ({len(data_dirs)})")
     else:
-        # Use 0 skip files for all directories if not provided
-        skip_files = [0] * len(data_dirs)
+        # Use "all" for all directories if not provided
+        shard_ranges = ["all"] * len(data_dirs)
     
     # Discover files from each directory
     for i, data_dir in enumerate(data_dirs):
         try:
-            data_files = discover_processed_files(data_dir, skip_files=skip_files[i])
+            # Convert shard range to skip_files and max_files for this directory
+            from hex_ai.data_collection import parse_shard_range
+            start, end = parse_shard_range(shard_ranges[i], data_dir)
+            
+            if end is None:  # 'all' case
+                skip_files = 0
+                max_files = None
+            else:
+                skip_files = start
+                max_files = end - start + 1
+            
+            # TODO: Consider migrating discover_processed_files to use parse_shard_ranges instead
+            data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
         except Exception as e:
             logger.error(f"Failed to discover data in {data_dir}: {e}")
             raise
@@ -303,10 +317,12 @@ def discover_and_split_multiple_data(
             'directory': data_dir,
             'files_count': len(data_files),
             'total_examples': total_examples,
-            'skip_files': skip_files[i]
+            'shard_range': shard_ranges[i],
+            'skip_files': skip_files,
+            'max_files': max_files
         })
         
-        logger.info(f"Added {len(data_files)} files from {data_dir} (examples: {total_examples:,}, skipped: {skip_files[i]})")
+        logger.info(f"Added {len(data_files)} files from {data_dir} (examples: {total_examples:,}, range: {shard_ranges[i]})")
     
     if not all_data_files:
         raise ValueError("No data files found in any of the specified directories")
@@ -391,7 +407,7 @@ def run_hyperparameter_tuning_current_data(
     enable_augmentation: bool = True,
     mini_epoch_samples: int = 128000,
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
-    skip_files: Optional[List[int]] = None,  # New: Skip first N files from each directory
+    shard_ranges: Optional[List[str]] = None,  # New: Shard ranges for each directory (e.g., ["251-300", "all"])
     shuffle_shards: bool = True,  # New: Control whether to shuffle data shards
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
@@ -442,7 +458,8 @@ def run_hyperparameter_tuning_current_data(
     
     # Use new multi-directory data discovery
     train_files, val_files, data_files, data_source_info = discover_and_split_multiple_data(
-        data_dirs, train_ratio, random_seed, skip_files=skip_files, shuffle_shards=shuffle_shards
+        data_dirs, train_ratio, random_seed, shard_ranges=shard_ranges, 
+        shuffle_shards=shuffle_shards, max_validation_examples=max_validation_examples
     )
     
     if train_files is None or val_files is None:

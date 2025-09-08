@@ -213,6 +213,8 @@ def gumbel_alpha_zero_root_batched(
         ValueError: If parameters are invalid
         RuntimeError: If no legal actions available
     """
+    # print(f"GUMBEL FUNCTION CALLED: total_sims={total_sims}, legal_actions={len(legal_actions)}")
+    
     # Detailed timing instrumentation
     timing_data = {
         'setup_time': 0.0,
@@ -235,8 +237,14 @@ def gumbel_alpha_zero_root_batched(
     if total_sims <= 0:
         raise ValueError(f"total_sims must be positive, got {total_sims}")
     
-    if temperature <= 0:
-        raise ValueError(f"temperature must be positive, got {temperature}")
+    if temperature < 0:
+        raise ValueError(f"temperature must be non-negative, got {temperature}")
+    
+    # Temperature scaling: scale logits by 1/tau to control exploration
+    # This is the standard "temperature before Gumbel" approach
+    t = max(temperature, 1e-6)  # avoid div-by-zero explosion
+    # Do NOT scale the Gumbel noise or the value bonus; only scale logits
+    scaled_policy_logits = policy_logits / t
     
     K = policy_logits.shape[0]
     
@@ -251,9 +259,9 @@ def gumbel_alpha_zero_root_batched(
     if len(validated_legal_actions) != len(legal_actions):
         # Log the mismatch for debugging
         illegal_actions = [a for a in legal_actions if a not in current_legal_indices]
-        print(f"WARNING: Gumbel received {len(illegal_actions)} illegal actions: {illegal_actions}")
-        print(f"Current root legal indices: {sorted(current_legal_indices)}")
-        print(f"Original legal_actions: {sorted(legal_actions)}")
+        # print(f"WARNING: Gumbel received {len(illegal_actions)} illegal actions: {illegal_actions}")
+        # print(f"Current root legal indices: {sorted(current_legal_indices)}")
+        # print(f"Original legal_actions: {sorted(legal_actions)}")
         
         # If no actions remain valid, this is a critical error
         if not validated_legal_actions:
@@ -266,14 +274,15 @@ def gumbel_alpha_zero_root_batched(
     mask = np.full(K, -np.inf)
     mask[legal_actions] = 0.0
     
-    # Apply mask to logits
-    logits = policy_logits + mask
+    # Apply mask to scaled logits
+    logits = scaled_policy_logits + mask
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # IMPROVEMENT: Cap candidates to prevent explosion in mid-game positions
-        # Good default: don't consider more actions than we can reasonably evaluate
-        m = min(len(legal_actions), total_sims, 32)  # Cap at 32 for k≈200-500
+        # Adaptive candidate count: small when sims are small, grows with sims,
+        # but never exceeds legal moves or sims, and caps at 48.
+        m_auto = int(min(48, max(8, 4 + total_sims // 8)))
+        m = min(len(legal_actions), total_sims, m_auto)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start
     
@@ -281,8 +290,8 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Apply temperature scaling to Gumbel samples
-    g = sample_gumbel(K, rng=rng) * temperature
+    # Use fixed Gumbel(0,1) noise as per the paper - temperature should not scale the Gumbel noise
+    g = sample_gumbel(K, rng=rng)
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
@@ -301,6 +310,8 @@ def gumbel_alpha_zero_root_batched(
     R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
     sims_used = 0
     
+    # print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
+    
     # Performance tracking
     nn_calls_per_move = 0
     total_leaves_evaluated = 0
@@ -312,7 +323,12 @@ def gumbel_alpha_zero_root_batched(
         maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
         sigma = (c_visit + maxN) ** c_scale
         q_val = q_of_child(a)
+        n_val = n_of_child(a)
         score_val = g[a] + logits[a] + sigma * q_val
+        
+        # DEBUG: Print Q-values and visit counts
+        # print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+        
         return score_val
     
     def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
@@ -333,18 +349,13 @@ def gumbel_alpha_zero_root_batched(
         for a in rng.permutation(arms_list)[:extra]:
             counts[a] += 1
         
-        # Flatten into one list for this round and shuffle
+        # Flatten into one list for this round (no shuffling - deterministic order)
         actions = [a for a in arms_list for _ in range(counts[a])]
-        rng.shuffle(actions)
         return actions
     
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
     mcts_execution_start = time.perf_counter()
-    
-    # OPTIMIZATION: Collect all actions first, then execute MCTS once
-    all_actions = []
-    round_assignments = []  # Track which round each action belongs to
     
     for r in range(R):
         if not cand or sims_used >= total_sims:
@@ -361,9 +372,13 @@ def gumbel_alpha_zero_root_batched(
         )
         
         if actions_this_round:
-            # Collect actions for this round
-            all_actions.extend(actions_this_round)
-            round_assignments.extend([r] * len(actions_this_round))
+            # Track performance metrics from this round
+            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+            # Track batch metrics more accurately
+            nn_calls_per_move += stats.get("batch_count", 0)
+            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
+            # Note: unique_evals_total is not available in individual batch stats
+            # We'll track this separately by looking at the final MCTS metrics
             sims_used += len(actions_this_round)
         
         if arms <= 1 or sims_used >= total_sims:
@@ -373,12 +388,6 @@ def gumbel_alpha_zero_root_batched(
         cand.sort(key=rank_key, reverse=True)
         keep = max(1, (arms + 1) // 2)
         cand = cand[:keep]
-    
-    # Execute all MCTS simulations in one call
-    if all_actions:
-        stats = mcts.run_forced_root_actions(root, all_actions, verbose=0)
-        nn_calls_per_move = stats.get("batch_count", 0)
-        total_leaves_evaluated = len(all_actions)
     
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start

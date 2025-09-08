@@ -12,12 +12,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
 from hex_ai.enums import Winner
-from hex_ai.inference.game_engine import HexGameEngine, HexGameState
+from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty_hex_state
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
 from hex_ai.utils.format_conversion import rowcol_to_trmph
+from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.value_utils import validate_trmph_winner
 
 
@@ -103,15 +105,15 @@ class SelfPlayEngine:
         
         if self.streaming_save:
             os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
-            # Write header
-            with open(self.streaming_file, 'w') as f:
-                f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
-                f.write(f"# Model: {model_path}\n")
-                f.write(f"# MCTS simulations: {mcts_sims}\n")
-                f.write(f"# C_PUCT: {c_puct}\n")
-                f.write(f"# Gumbel root selection: {enable_gumbel}\n")
-                f.write(f"# Temperature: {temperature}\n")
-                f.write("# Format: trmph_string winner\n")
+            # Write header using generic function
+            metadata = {
+                "Model": model_path,
+                "MCTS simulations": mcts_sims,
+                "C_PUCT": c_puct,
+                "Gumbel root selection": enable_gumbel,
+                "Temperature": temperature,
+            }
+            write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed)
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -297,27 +299,23 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move if strategy provided
-                opening_move = None
-                if opening_strategy is not None:
-                    opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move if strategy provided
+            opening_move = None
+            if opening_strategy is not None:
+                opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
@@ -353,30 +351,26 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move if strategy provided
-                opening_move = None
-                if opening_strategy is not None:
-                    opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move, game_id=i)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Save immediately to avoid data loss
-                self.save_game_to_stream(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move if strategy provided
+            opening_move = None
+            if opening_strategy is not None:
+                opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Save immediately to avoid data loss
+            self.save_game_to_stream(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
@@ -412,25 +406,21 @@ class SelfPlayEngine:
         
         # Generate games sequentially (single-threaded)
         for i in range(num_games):
-            try:
-                # Get opening move from strategy
-                opening_move = opening_strategy.get_opening_move(i)
-                
-                game_data = self._generate_single_game(board_size, opening_move)
-                self._validate_game_data(game_data, i)
-                games.append(game_data)
-                
-                # Progress update
-                if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                    elapsed = time.time() - start_time
-                    games_per_sec = (i + 1) / elapsed
-                    if self.verbose >= 1:
-                        print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-                elif self.verbose >= 1:
-                    print(".", end="", flush=True)  # Progress dot for each game
-                    
-            except Exception as e:
-                self.logger.error(f"Error generating game {i}: {e}")
+            # Get opening move from strategy
+            opening_move = opening_strategy.get_opening_move(i)
+            
+            game_data = self._generate_single_game(board_size, opening_move)
+            self._validate_game_data(game_data, i)
+            games.append(game_data)
+            
+            # Progress update
+            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
+                elapsed = time.time() - start_time
+                games_per_sec = (i + 1) / elapsed
+                if self.verbose >= 1:
+                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+            elif self.verbose >= 1:
+                print(".", end="", flush=True)  # Progress dot for each game
         
         # Update statistics
         total_time = time.time() - start_time
@@ -471,6 +461,18 @@ class SelfPlayEngine:
         
         # Save as TRMPH text file using the same format as streaming
         with open(trmph_file, 'w') as f:
+            # Write header with metadata
+            git_info = get_git_commit_info()
+            f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
+            f.write(f"# Model: {self.model_path}\n")
+            f.write(f"# MCTS simulations: {self.mcts_sims}\n")
+            f.write(f"# C_PUCT: {self.c_puct}\n")
+            f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
+            f.write(f"# Temperature: {self.temperature}\n")
+            f.write(f"# Git commit: {git_info['status']}\n")
+            f.write("# Format: trmph_string winner\n")
+            
+            # Write games
             for game in games:
                 self._validate_game_data(game)
                 f.write(f"{game['trmph']} {game['winner']}\n")

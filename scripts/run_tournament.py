@@ -22,7 +22,16 @@ Examples:
      --mcts-sims=150 \
      --mcts-c-puct=1.5
 
-3. Compare models using fixed tree search:
+3. Compare models using MCTS with Gumbel-AlphaZero enabled:
+   PYTHONPATH=. python scripts/run_tournament.py \
+     --num-games=50 \
+     --checkpoints="epoch1_mini201.pt.gz,epoch1_mini75.pt.gz" \
+     --strategy=mcts \
+     --mcts-sims=200 \
+     --enable-gumbel \
+     --gumbel-c-visit=50.0
+
+4. Compare models using fixed tree search:
    PYTHONPATH=. python scripts/run_tournament.py \
      --num-games=50 \
      --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" \
@@ -53,6 +62,10 @@ from hex_ai.inference.tournament import (
     TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
 )
 from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
+from hex_ai.utils.tournament_utils import (
+    generate_player_labels, print_duplicate_checkpoint_info, validate_checkpoint_paths,
+    parse_temperature_configuration, print_tournament_configuration
+)
 
 # Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
@@ -76,6 +89,9 @@ Examples:
   # Compare models using MCTS
   %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=mcts --mcts-sims=200
   
+  # Compare models using MCTS with Gumbel-AlphaZero
+  %(prog)s --num-games=50 --checkpoints="epoch2_mini201.pt.gz,epoch1_mini75.pt.gz" --strategy=mcts --mcts-sims=200 --enable-gumbel
+  
   # Compare models using fixed tree search
   %(prog)s --num-games=50 --checkpoints="epoch1_mini50.pt.gz,epoch1_mini75.pt.gz" --strategy=fixed_tree --search-widths="20,10,5"
         """
@@ -92,8 +108,8 @@ Examples:
             '"loss_weight_sweep_exp0_bs256_98f719_20250724_233408,round2_training")'
         )
     )
-    parser.add_argument('--temperature', type=float, default=1.2,
-                       help='Temperature for move selection (default: 1.2)')
+    parser.add_argument('--temperature', type=str, default='1.2',
+                       help='Temperature for move selection. Can be a single number (e.g., "1.2") or comma-separated list (e.g., "0.3,0.6,1.0"). If a list, must match number of participants (default: 1.2)')
     parser.add_argument('--strategy', type=str, default='policy',
                        choices=['policy', 'fixed_tree', 'mcts'],
                        help='Move selection strategy (default: policy)')
@@ -101,10 +117,20 @@ Examples:
                        help='Number of MCTS simulations (default: 200)')
     parser.add_argument('--mcts-c-puct', type=float, default=1.5,
                        help='MCTS c_puct parameter (default: 1.5)')
+    parser.add_argument('--enable-gumbel', action='store_true',
+                       help='Enable Gumbel-AlphaZero root selection for MCTS (default: False)')
+    parser.add_argument('--gumbel-sim-threshold', type=int, default=200,
+                       help='Use Gumbel selection when sims <= this threshold (default: 200)')
+    parser.add_argument('--gumbel-c-visit', type=float, default=50.0,
+                       help='Gumbel-AlphaZero c_visit parameter (default: 50.0)')
+    parser.add_argument('--gumbel-c-scale', type=float, default=1.0,
+                       help='Gumbel-AlphaZero c_scale parameter (default: 1.0)')
+    parser.add_argument('--gumbel-m-candidates', type=int,
+                       help='Number of candidates to consider for Gumbel (None for auto)')
     parser.add_argument('--search-widths', type=str,
                        help='Comma-separated search widths for fixed tree search (e.g., "20,10,5")')
-    parser.add_argument('--seed', type=int, default=42,
-                       help='Random seed (default: 42)')
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Random seed (default: auto-generated from time)')
     parser.add_argument('--no-pie-rule', action='store_true',
                        help='Disable pie rule (pie rule is enabled by default)')
     parser.add_argument('--verbose', type=int, default=1,
@@ -115,6 +141,12 @@ Examples:
 
 if __name__ == "__main__":
     args = parse_args()
+    
+    # Generate seed if none provided, or use provided seed
+    if args.seed is None:
+        import time
+        args.seed = int(time.time())
+        print(f"Auto-generated seed: {args.seed}")
     
     # Determine which checkpoints to use
     if args.checkpoints:
@@ -147,43 +179,24 @@ if __name__ == "__main__":
         # Use defaults from the current best model directory
         checkpoint_paths = [os.path.join(DEFAULT_CHKPT_DIR, fname) for fname in DEFAULT_CHECKPOINTS]
 
-    # Validate that there are no duplicate checkpoints
-    unique_paths = list(dict.fromkeys(checkpoint_paths))
-    if len(unique_paths) != len(checkpoint_paths):
-        print("ERROR: Duplicate checkpoints detected in tournament configuration.")
-        print("  This will cause tournament recording errors and is not supported.")
-        print(f"  Provided checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
-        print(f"  Unique checkpoints: {[os.path.basename(p) for p in unique_paths]}")
-        print("  Please remove duplicates from your checkpoint list.")
-        sys.exit(1)
+    # Generate unique player labels for duplicate checkpoints
+    player_labels, label_to_checkpoint = generate_player_labels(checkpoint_paths)
+    
+    # Check if we have duplicates and inform the user
+    print_duplicate_checkpoint_info(player_labels, checkpoint_paths)
 
-    # Validate that we have at least 2 checkpoints for a meaningful tournament
-    if len(checkpoint_paths) < 2:
-        print("ERROR: Need at least 2 unique checkpoints for a tournament.")
-        print(f"  Provided checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
-        sys.exit(1)
-
-    # Check that all checkpoint paths exist before proceeding
-    missing_paths = [p for p in checkpoint_paths if not os.path.isfile(p)]
-    if missing_paths:
-        print("\nERROR: The following checkpoint files do not exist:")
-        for p in missing_paths:
-            print(f"  {p}")
-        print("\nDebug info:")
-        if args.checkpoints:
-            checkpoint_names = [name.strip() for name in args.checkpoints.split(',')]
-            print(f"  Provided checkpoint names: {checkpoint_names}")
-            if args.checkpoint_dirs:
-                checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
-                print(f"  Provided checkpoint directories: {checkpoint_dirs}")
-        print(f"  Constructed checkpoint paths: {checkpoint_paths}")
-        print("\nPlease check that the checkpoint files exist and the paths are correct.")
-        sys.exit(1)
+    # Validate checkpoint paths
+    validate_checkpoint_paths(checkpoint_paths)
 
     # Parse search widths if provided
     search_widths = None
     if args.search_widths:
         search_widths = [int(w.strip()) for w in args.search_widths.split(',')]
+    
+    # Parse and validate temperature configuration
+    temperature_config, participant_temperatures = parse_temperature_configuration(
+        args.temperature, player_labels
+    )
     
     # Create strategy configuration
     strategy_config = {}
@@ -191,7 +204,13 @@ if __name__ == "__main__":
         strategy_config.update({
             'mcts_sims': args.mcts_sims,
             'mcts_c_puct': args.mcts_c_puct,
+            'enable_gumbel_root_selection': args.enable_gumbel,
+            'gumbel_sim_threshold': args.gumbel_sim_threshold,
+            'gumbel_c_visit': args.gumbel_c_visit,
+            'gumbel_c_scale': args.gumbel_c_scale,
         })
+        if args.gumbel_m_candidates is not None:
+            strategy_config['gumbel_m_candidates'] = args.gumbel_m_candidates
     elif args.strategy == 'fixed_tree':
         if not search_widths:
             print("ERROR: --search-widths is required for fixed_tree strategy")
@@ -199,14 +218,20 @@ if __name__ == "__main__":
         strategy_config['search_widths'] = search_widths
     
     # Create configs
-    config = TournamentConfig(checkpoint_paths=checkpoint_paths, num_games=args.num_games)
+    config = TournamentConfig(
+        checkpoint_paths=checkpoint_paths, 
+        num_games=args.num_games,
+        player_labels=player_labels,
+        label_to_checkpoint=label_to_checkpoint
+    )
     play_config = TournamentPlayConfig(
-        temperature=args.temperature, 
+        temperature=temperature_config, 
         random_seed=args.seed, 
         pie_rule=not args.no_pie_rule,
         strategy=args.strategy,
         strategy_config=strategy_config,
-        search_widths=search_widths  # Legacy support
+        search_widths=search_widths,  # Legacy support
+        participant_temperatures=participant_temperatures
     )
 
     # Create log files with descriptive names
@@ -221,23 +246,20 @@ if __name__ == "__main__":
     # Ensure log directory exists
     os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
-    print(f"Tournament Configuration:")
-    print(f"  Checkpoints: {[os.path.basename(p) for p in checkpoint_paths]}")
+    # Print tournament configuration
+    checkpoint_dirs = None
     if args.checkpoints and args.checkpoint_dirs:
         checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
-        print(f"  Checkpoint directories: {checkpoint_dirs}")
-    else:
-        print(f"  Checkpoint directory: {DEFAULT_CHKPT_DIR}")
-    print(f"  Number of games per pair: {args.num_games}")
-    print(f"  Strategy: {play_config.strategy}")
-    print(f"  Strategy config: {play_config.strategy_config}")
-    print(f"  Temperature: {play_config.temperature}")
-    print(f"  Pie rule: {play_config.pie_rule}")
-    print(f"  Random seed: {play_config.random_seed}")
+    
+    print_tournament_configuration(
+        player_labels, checkpoint_paths, args.num_games, play_config.strategy,
+        play_config.strategy_config, participant_temperatures, play_config.temperature,
+        play_config.pie_rule, play_config.random_seed, checkpoint_dirs, DEFAULT_CHKPT_DIR
+    )
     print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
-    result = run_round_robin_tournament(
+    result, actual_games_file, actual_csv_file = run_round_robin_tournament(
         config,
         verbose=args.verbose,
         log_file=GAMES_FILE,
@@ -245,4 +267,11 @@ if __name__ == "__main__":
         play_config=play_config
     )
     print("\nTournament complete!")
-    print_comprehensive_tournament_analysis(result) 
+    
+    # Print actual file paths used (in case collision avoidance changed them)
+    if actual_games_file != GAMES_FILE:
+        print(f"Note: Tournament results written to {actual_games_file} (original filename was in use)")
+    if actual_csv_file != CSV_FILE:
+        print(f"Note: CSV results written to {actual_csv_file} (original filename was in use)")
+    
+    print_comprehensive_tournament_analysis(result, participant_temperatures) 

@@ -18,6 +18,37 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def get_git_commit_info() -> Dict[str, str]:
+    """
+    Get git commit information for tracking code versions.
+    
+    Returns:
+        Dictionary with git commit hash and status information
+    """
+    try:
+        # Get git commit hash
+        git_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD'], 
+                                         text=True, stderr=subprocess.DEVNULL).strip()[:8]
+        
+        # Check if there are uncommitted changes
+        git_status = subprocess.check_output(['git', 'status', '--porcelain'], 
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+        has_changes = bool(git_status)
+        
+        return {
+            'commit_hash': git_hash,
+            'has_uncommitted_changes': has_changes,
+            'status': f"{git_hash}{'+' if has_changes else ''}"
+        }
+    except subprocess.CalledProcessError:
+        # Not in a git repository or git not available
+        return {
+            'commit_hash': 'unknown',
+            'has_uncommitted_changes': False,
+            'status': 'unknown'
+        }
+
+
 def check_virtual_env(expected_env="hex_ai_env"):
     """
     DEPRECATED: Environment validation is now handled automatically in hex_ai/__init__.py

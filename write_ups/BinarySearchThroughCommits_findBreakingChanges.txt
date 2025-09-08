@@ -8,7 +8,11 @@ scripts/run_deterministic_tournament.py
 to evaluate performance of the two type of algorithm.
 
 Main issues I want to understand
-  1. MCTS with 150 sims used to be markedly better than pure policy play. By the time I had finished with Gumbel iterations on 31st August I realized that (Gumbel-off style) MCTS play had deteriorated to substantially below pure policy play.
+  1. FIXED
+   - in branch recreate_c70d_bug I identified the key line (commit history gives comments, final commit identifies it)
+   - It was the resulting scaling of Q in the PUCT formula, requiring a retuning of c_puct (from ~1.5 to ~3).
+  OLDER comments on hunting down the issue:
+  MCTS with 150 sims used to be markedly better than pure policy play. By the time I'd finished with Gumbel iterations on 31st August I realized that (Gumbel-off style) MCTS play had deteriorated to substantially below pure policy play.
   Update: We see that at >= d7106686ffaeb157ba4c7ef58474493661d8c932 (14:51, 31st), before Gumbel was added, MCTS was already doing badly.
   Hypothesis: Likely migrating from [0, 1] to [-1, 1] scores in MCTS caused the problem
   Update: MCTS works well at <= (11.58.32 on 31st Aug 2025) bca5dee54592b56fd5d27f1a5d65066563a112e7

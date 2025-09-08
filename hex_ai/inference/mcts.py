@@ -59,7 +59,9 @@ from hex_ai.inference.mcts_utils import (
     format_mcts_tree_data_for_api,
     should_enable_detailed_exploration,
     create_exploration_step_info,
-    add_detailed_exploration_to_tree_data
+    add_detailed_exploration_to_tree_data,
+    calculate_temperature_scaled_probs,
+    select_move_index
 )
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -90,15 +92,13 @@ DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
-# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
-DEFAULT_TERMINAL_MOVE_BOOST = 1.0
+DEFAULT_TERMINAL_MOVE_BOOST = 2.0
 
 # Default virtual loss for non-terminal moves
 DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
-# TODO: Exploratory tuning needed for this -- currently off while debugging MCTS performance issues.
-DEFAULT_DEPTH_DISCOUNT_FACTOR = 1.00
+DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
 
 
 
@@ -186,6 +186,9 @@ DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
 # Default Gumbel temperature control parameters
 DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
 DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
+
+# Default top-k filtering for visit count sampling
+DEFAULT_VISIT_SAMPLING_TOP_K = 5
 
 # ------------------ Terminal Move Detector ------------------
 class TerminalMoveDetector:
@@ -408,15 +411,14 @@ class BaselineMCTSConfig:
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
-    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR  # Discount wins by this factor per depth level
-    # When enabled, wins found deeper in the search tree are discounted to encourage
-    # the algorithm to prefer shorter winning sequences. This helps avoid meandering
-    # when the position is already won. Only applies during MCTS search, not during
-    # high-confidence termination when using the policy network.
+    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR
+    
+    # Top-k filtering for visit count sampling
+    visit_sampling_top_k: int = DEFAULT_VISIT_SAMPLING_TOP_K  # Only consider top-k most visited moves for sampling
     
     # Gumbel-AlphaZero root selection parameters
-    enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 200  # Use Gumbel selection when sims <= this threshold
+    enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
+    gumbel_sim_threshold: int = 750  # Use Gumbel selection when sims <= this threshold
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
@@ -425,7 +427,8 @@ class BaselineMCTSConfig:
     
     # Gumbel temperature control parameters
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
-    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Shared cutoff for both paths
+    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
+    gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -883,8 +886,8 @@ class BaselineMCTS:
         timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
         
         # Compute results directly
-        move = self._compute_move(root, root_state, verbose)
-        tree_data = self.get_tree_data(root)
+        move, temperature_scaled_probs = self._compute_move(root, root_state, verbose)
+        tree_data = self.get_tree_data(root, temperature_scaled_probs)
         win_probability = self.get_win_probability(root, root_state)
         
         # Create base stats
@@ -918,14 +921,18 @@ class BaselineMCTS:
 
     # ---------- Data Access (Getters) ----------
     
-    def get_tree_data(self, root: MCTSNode) -> Dict[str, Any]:
+    def get_tree_data(self, root: MCTSNode, temperature_scaled_probs: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
         Get formatted tree data for API consumption.
+        
+        Args:
+            root: Root node of the MCTS tree
+            temperature_scaled_probs: Temperature-scaled probabilities for all legal moves
         
         Returns:
             Dictionary containing formatted tree data for API consumption
         """
-        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH)
+        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH, temperature_scaled_probs)
         
         # Add detailed exploration data if available
         tree_data = add_detailed_exploration_to_tree_data(
@@ -1011,6 +1018,9 @@ class BaselineMCTS:
                      sims_remaining <= self.cfg.gumbel_sim_threshold and
                      root.is_expanded and not root.is_terminal)
         
+        # DEBUG: Print Gumbel decision
+        # print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
+        
         if use_gumbel:
             if verbose >= 1:
                 print(f"Using Gumbel-AlphaZero root selection for {sims_remaining} simulations")
@@ -1072,19 +1082,25 @@ class BaselineMCTS:
         legal_mask = np.zeros(action_size, dtype=bool)
         legal_mask[root.legal_indices] = True
         
-        # Get priors with optional Dirichlet noise using helper method
-        # For self-play, apply Dirichlet noise; for evaluation, don't
-        is_self_play = self.cfg.add_root_noise  # Use add_root_noise as proxy for self-play
-        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=is_self_play)
+        # Get priors WITHOUT Dirichlet noise for Gumbel
+        # Gumbel has its own inherent randomness, so we don't add artificial Dirichlet noise
+        # From the Gumbel paper:
+        # In general, we use hyperparameters consistent with the newest MuZero experiments (Schrittwieser
+        # et al., 2021). MuZero’s pseudocode is available thanks to Schrittwieser et al. (2020). Gumbel
+        # MuZero does not need to set the Dirichlet noise hyperparameters, because Gumbel MuZero does
+        # not use Dirichlet noise.
+        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
         
-        # Deterministic cutoff (same as non-Gumbel)
-        if tau <= self.cfg.temperature_deterministic_cutoff:
+        # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
+        # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
+        # print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
+        if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
             # Pick argmax over priors among legal actions
             selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
             selected_action = root.legal_indices.index(selected_tensor_action)
             self._gumbel_selected_action = selected_action
             if verbose >= 4:
-                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}, deterministic")
+                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
             return timing_tracker.get_final_stats()
         
         # Create helper functions for Q and N value access
@@ -1111,6 +1127,7 @@ class BaselineMCTS:
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
         
         # Run batched Gumbel-AlphaZero selection with temperature
+        # print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
@@ -1137,7 +1154,7 @@ class BaselineMCTS:
         
         # Optional verbose logging
         if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, dirichlet={is_self_play and self.cfg.add_root_noise}")
+            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
         
         timing_tracker.end_timing("gumbel_algorithm")
         
@@ -1345,27 +1362,13 @@ class BaselineMCTS:
                 if node is root and forced_a_full is not None:
                     # Map full action index -> local child idx
                     # (legal_indices aligns with stats arrays)
-                    
-                    # CRITICAL FIX: Validate forced action is legal instead of silent fallback
-                    # This exposes bugs instead of masking them with PUCT fallback
-                    if forced_a_full not in node.legal_indices:
-                        # Log detailed information about the mismatch
-                        print(f"ERROR: Gumbel forced action {forced_a_full} is illegal at root!")
-                        print(f"Root legal indices: {sorted(node.legal_indices)}")
-                        print(f"Root legal moves: {node.legal_moves}")
-                        print(f"Root state hash: {node.state_hash}")
-                        
-                        # CRASH instead of fallback to expose the bug
-                        raise RuntimeError(
-                            f"Gumbel forced action {forced_a_full} is illegal at root. "
-                            f"Legal indices: {sorted(node.legal_indices)}. "
-                            f"This indicates a desync between Gumbel's action list and the current root state."
-                        )
-                    
-                    # Fast path: use dictionary lookup for mapping
-                    if not hasattr(node, '_legal_indices_dict'):
-                        node._legal_indices_dict = {idx: i for i, idx in enumerate(node.legal_indices)}
-                    loc_idx = node._legal_indices_dict[forced_a_full]
+                    try:
+                        # Fast path: vectorized search
+                        li = np.asarray(node.legal_indices)
+                        loc_idx = int(np.where(li == forced_a_full)[0][0])
+                    except Exception:
+                        # Fallback if forced action is illegal: normal PUCT
+                        loc_idx = self._select_child_puct(node, node.depth)
                 else:
                     # Non-Gumbel code path
                     loc_idx = self._select_child_puct(node, node.depth)
@@ -1680,7 +1683,7 @@ class BaselineMCTS:
         else:
             raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
 
-    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[int, int]:
+    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
         """Compute the selected move from the root node."""
         # Check if Gumbel selection was used and return the selected action
         if hasattr(self, '_gumbel_selected_action'):
@@ -1688,7 +1691,9 @@ class BaselineMCTS:
             selected_move = root.legal_moves[selected_action]
             if verbose >= 2:
                 print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
-            return selected_move
+            # For Gumbel selection, create temperature-scaled probabilities from visit counts
+            temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+            return selected_move, temperature_scaled_probs
         
         # Check if a terminal move was found during pre-check
         if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
@@ -1697,7 +1702,9 @@ class BaselineMCTS:
                 terminal_move = root.legal_moves[terminal_indices[0]]
                 if verbose >= 2:
                     print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
-                return terminal_move
+                # For terminal moves, create temperature-scaled probabilities from visit counts
+                temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+                return terminal_move, temperature_scaled_probs
 
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
@@ -1708,28 +1715,18 @@ class BaselineMCTS:
         move_count = len(root_state.move_history)
         temp = self._root_temperature(move_count)
         
-        # Log effective temperature if verbose
+        # Log effective temperature and top-k filtering if verbose
         if verbose >= 4:
-            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}")
+            top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
+            print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
         
-        if temp <= self.cfg.temperature_deterministic_cutoff:
-            # Use deterministic selection for very low temperatures to avoid numerical issues
-            a_idx = int(np.argmax(counts))
-        else:
-            # Apply temperature scaling with validation
-            try:
-                pi = np.power(counts, 1.0 / temp)
-                if not np.isfinite(pi).all():
-                    raise ValueError(f"Temperature scaling produced non-finite values: pi={pi}, counts={counts}, temp={temp}")
-                if np.sum(pi) <= 0:
-                    raise ValueError(f"Temperature scaling produced non-positive sum: pi={pi}, counts={counts}, temp={temp}")
-                pi /= np.sum(pi)
-                a_idx = int(np.random.choice(len(pi), p=pi))
-            except (OverflowError, ValueError) as e:
-                # Fall back to deterministic selection if temperature scaling fails
-                print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
-                a_idx = int(np.argmax(counts))
-        return root.legal_moves[a_idx]
+        # Create temperature-scaled probabilities for all moves (for debugging/analysis)
+        temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+        
+        # Select move using the same logic as the utility function
+        a_idx = select_move_index(counts, temp, self.cfg)
+        return root.legal_moves[a_idx], temperature_scaled_probs
+
 
     # ---------- Internal Implementation ----------
     
@@ -2022,6 +2019,7 @@ def create_mcts_config(
         # Gumbel temperature control (always enabled)
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
+        "gumbel_temperature_deterministic_cutoff": -1.0,  # Disable cutoff for Gumbel
     }
     
     # Only set parameters if not already provided in kwargs

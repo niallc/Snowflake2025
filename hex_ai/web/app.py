@@ -88,6 +88,31 @@ DYNAMIC_MODELS = {}
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
 
+# Preload default models on startup to avoid first-move delays
+def preload_default_models():
+    """Preload the default models to avoid loading delays on first move."""
+    try:
+        app.logger.info("Preloading default models...")
+        default_models = ["model1", "model2"]  # Current and previous best models
+        
+        for model_id in default_models:
+            try:
+                model_path = get_model_path(model_id)
+                app.logger.info(f"Preloading {model_id} from {model_path}")
+                # Preload both simple and wrapper models
+                MODEL_CACHE.get_simple_model(model_path)
+                MODEL_CACHE.get_wrapper_model(model_path)
+                app.logger.info(f"Successfully preloaded {model_id}")
+            except Exception as e:
+                app.logger.warning(f"Failed to preload {model_id}: {e}")
+        
+        app.logger.info("Default model preloading complete")
+    except Exception as e:
+        app.logger.error(f"Error during model preloading: {e}")
+
+# Preload models on startup
+preload_default_models()
+
 # --- Model Management ---
 def get_model(model_id="model1"):
     """Get or create a model instance for the given model_id using centralized cache."""
@@ -285,7 +310,7 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
     return None
 
 
-def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.4, 
+def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
                    temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
                    enable_gumbel=True, gumbel_max_sims=500):
     """Make one computer move using MCTS and return the new state with diagnostics."""
@@ -452,7 +477,7 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         app.logger.info(f"Move applied. New state game_over: {state.game_over}")
         
         # Generate MCTS diagnostic info
-        # Determine algorithm type based on algorithm termination info
+        # Determine algorithm type based on algorithm termination info and Gumbel usage
         if algorithm_termination_info:
             if algorithm_termination_info.reason == "terminal_move":
                 algorithm = "Terminal Move Detection"
@@ -461,7 +486,12 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             else:
                 algorithm = "MCTS (Algorithm Termination)"
         else:
-            algorithm = "MCTS"
+            # Check if Gumbel was used based on MCTS stats
+            gumbel_used = stats.get('gumbel_candidates_m', 0) > 0
+            if gumbel_used:
+                algorithm = "MCTS (Gumbel on)"
+            else:
+                algorithm = "MCTS (Gumbel off)"
         
         # Use centralized utilities for value conversions and tree data
         
@@ -486,6 +516,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
                            f"original_win_prob={algorithm_termination_info.win_prob}, converted={algorithm_win_prob}")
         
+        # Get temperature-scaled MCTS probabilities from tree data (calculated by MCTS core)
+        temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
+        
         mcts_debug_info = {
             "algorithm_info": {
                 "algorithm": algorithm,
@@ -500,7 +533,9 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                     "simulations": num_simulations,
                     "exploration_constant": exploration_constant,
                     "temperature": temperature,
-                    "temperature_end": temperature_end
+                    "temperature_end": temperature_end,
+                    "gumbel_enabled": enable_gumbel,
+                    "gumbel_max_sims": gumbel_max_sims
                 }
             },
             "search_stats": {
@@ -526,7 +561,8 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
             "move_probabilities": {
                 "direct_policy": legal_move_probs,
                 "mcts_visits": tree_data["visit_counts"],
-                "mcts_probabilities": tree_data["mcts_probabilities"]
+                "mcts_probabilities": tree_data["mcts_probabilities"],
+                "mcts_temperature_scaled_probabilities": temperature_scaled_mcts_probs
             },
             "comparison": {
                 "mcts_vs_direct": {}
@@ -542,13 +578,27 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
                 "alternative_lines": [],  # Placeholder - would need more complex tree analysis
                 "pv_length": len(tree_data["principal_variation"])
             },
+            "gumbel_analysis": {
+                "gumbel_used": stats.get('gumbel_candidates_m', 0) > 0,
+                "gumbel_candidates_m": stats.get('gumbel_candidates_m', 0),
+                "gumbel_rounds_R": stats.get('gumbel_rounds_R', 0),
+                "gumbel_nn_calls_per_move": stats.get('gumbel_nn_calls_per_move', 0),
+                "gumbel_total_leaves_evaluated": stats.get('gumbel_total_leaves_evaluated', 0),
+                "gumbel_distinct_leaves_evaluated": stats.get('gumbel_distinct_leaves_evaluated', 0),
+                "gumbel_avg_nn_batch_size": stats.get('gumbel_avg_nn_batch_size', 0.0),
+                "gumbel_leaves_distinct_ratio": stats.get('gumbel_leaves_distinct_ratio', 0.0)
+            },
             "summary": {
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
                 "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
+                "top_mcts_move_temperature_scaled": max(temperature_scaled_mcts_probs.items(), key=lambda x: x[1])[0] if temperature_scaled_mcts_probs and len(temperature_scaled_mcts_probs) > 0 else None,
+                "top_mcts_move_raw_visits": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
                 "total_legal_moves": original_legal_moves_count,
                 "moves_explored": f"{tree_data['total_visits']}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
                 "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
-                "algorithm_summary": algorithm
+                "algorithm_summary": algorithm,
+                "gumbel_summary": f"Gumbel: {'ON' if stats.get('gumbel_candidates_m', 0) > 0 else 'OFF'} (candidates: {stats.get('gumbel_candidates_m', 0)}, rounds: {stats.get('gumbel_rounds_R', 0)})",
+                "move_selection_explanation": "Top MCTS Move shows raw visit counts. Top MCTS Move (Temperature Scaled) shows what's actually used for move selection."
             },
                     "profiling_summary": {
             "total_compute_ms": int(mcts_search_time * 1000.0),
@@ -588,9 +638,11 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=1.
         for move_trmph in legal_move_probs:
             direct_prob = legal_move_probs.get(move_trmph, 0)
             mcts_prob = mcts_probs.get(move_trmph, 0.0)
+            temp_scaled_prob = temperature_scaled_mcts_probs.get(move_trmph, 0.0)
             mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
                 "direct_probability": direct_prob,
                 "mcts_probability": mcts_prob,
+                "mcts_temperature_scaled_probability": temp_scaled_prob,
                 "difference": mcts_prob - direct_prob
             }
         
@@ -1068,7 +1120,7 @@ def api_mcts_move():
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     num_simulations = data.get("num_simulations", 200)
-    exploration_constant = data.get("exploration_constant", 1.4)
+    exploration_constant = data.get("exploration_constant", 2.8)
     temperature = data.get("temperature", 1.0)
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
@@ -1216,4 +1268,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.DEBUG)
+    app.logger.info("=" * 50)
+    app.logger.info("Hex AI Web Server Starting...")
+    app.logger.info("=" * 50)
     app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port) 

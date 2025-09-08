@@ -104,32 +104,45 @@ def print_all_head_to_head_results(tournament_result: 'TournamentResult') -> Non
     print("="*60)
 
 
-def print_win_rates(tournament_result: 'TournamentResult') -> None:
+def print_win_rates(tournament_result: 'TournamentResult', participant_temperatures: Dict[str, float] = None) -> None:
     """
     Print win rates for all participants.
     
     Args:
         tournament_result: TournamentResult object from hex_ai.inference.tournament
+        participant_temperatures: Optional dict mapping participant names to their temperatures
     """
     win_rates = tournament_result.win_rates()
     print("\nWin Rates:")
     for name, rate in sorted(win_rates.items(), key=lambda x: -x[1]):
         games_played = sum(tournament_result.results[name][op]['games'] for op in tournament_result.results[name])
         wins = sum(tournament_result.results[name][op]['wins'] for op in tournament_result.results[name])
-        print(f"  {name}: {rate*100:.1f}% ({wins}/{games_played} games)")
+        
+        # Add temperature info if available
+        temp_info = ""
+        if participant_temperatures and name in participant_temperatures:
+            temp_info = f" (T={participant_temperatures[name]})"
+        
+        print(f"  {name}: {rate*100:.1f}% ({wins}/{games_played} games){temp_info}")
 
 
-def print_elo_ratings(tournament_result: 'TournamentResult') -> None:
+def print_elo_ratings(tournament_result: 'TournamentResult', participant_temperatures: Dict[str, float] = None) -> None:
     """
     Print ELO ratings for all participants.
     
     Args:
         tournament_result: TournamentResult object from hex_ai.inference.tournament
+        participant_temperatures: Optional dict mapping participant names to their temperatures
     """
     elos = tournament_result.elo_ratings()
     print("\nElo Ratings (order-independent calculation):")
     for name, elo in sorted(elos.items(), key=lambda x: -x[1]):
-        print(f"  {name}: {elo:.1f}")
+        # Add temperature info if available
+        temp_info = ""
+        if participant_temperatures and name in participant_temperatures:
+            temp_info = f" (T={participant_temperatures[name]})"
+        
+        print(f"  {name}: {elo:.1f}{temp_info}")
 
 
 def print_detailed_head_to_head_matrix(tournament_result: 'TournamentResult') -> None:
@@ -152,19 +165,23 @@ def print_detailed_head_to_head_matrix(tournament_result: 'TournamentResult') ->
                     print(f"    {op}: {wins}-{losses} ({win_rate:.1f}%)")
 
 
-def print_comprehensive_tournament_analysis(tournament_result: 'TournamentResult') -> None:
+def print_comprehensive_tournament_analysis(
+    tournament_result: 'TournamentResult', 
+    participant_temperatures: Dict[str, float] = None
+) -> None:
     """
     Print comprehensive tournament analysis including all sections.
     
     Args:
         tournament_result: TournamentResult object from hex_ai.inference.tournament
+        participant_temperatures: Optional dict mapping participant names to their temperatures
     """
     print("\n" + "="*60)
     print("TOURNAMENT ANALYSIS")
     print("="*60)
     
-    print_win_rates(tournament_result)
-    print_elo_ratings(tournament_result)
+    print_win_rates(tournament_result, participant_temperatures)
+    print_elo_ratings(tournament_result, participant_temperatures)
     print_detailed_head_to_head_matrix(tournament_result)
     
     print("\n" + "="*60)

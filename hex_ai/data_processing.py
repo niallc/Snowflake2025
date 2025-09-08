@@ -16,10 +16,122 @@ from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from .data_utils import validate_game, extract_training_examples_from_game
-from hex_ai.utils.format_conversion import parse_trmph_game_record
+from hex_ai.utils.format_conversion import parse_trmph_game_record, trmph_to_moves
 from hex_ai.value_utils import trmph_winner_to_training_value
+from hex_ai.enums import Player
 
 logger = logging.getLogger(__name__)
+
+
+def parse_trmph_line_flexible(line: str) -> Tuple[str, Optional[str]]:
+    """
+    Parse a TRMPH line that can be in any of these formats:
+    1. Old format: "http://www.trmph.com/hex/board#13,moves b"
+    2. New format: "#13,moves" (no winner indicator)
+    3. Tournament format: "#13,moves winner" (with winner indicator)
+    
+    Args:
+        line: TRMPH line to parse
+        
+    Returns:
+        Tuple of (trmph_string, winner_indicator) where winner_indicator is None for new format
+        
+    Raises:
+        ValueError: If the line format is invalid
+    """
+    line = line.strip()
+    if not line:
+        raise ValueError("Empty line")
+    
+    # Handle new format: "#13,moves" (no winner indicator)
+    if line.startswith('#13,'):
+        # Remove any inline comments (everything after # that's not part of the game)
+        if ' # ' in line:
+            line = line.split(' # ')[0].strip()
+        
+        # Check if there's a winner indicator at the end
+        parts = line.split()
+        if len(parts) == 2:
+            # Tournament format: "#13,moves winner"
+            trmph_string, winner_indicator = parts
+            if winner_indicator in ['b', 'r']:
+                return trmph_string, winner_indicator
+            else:
+                raise ValueError(f"Invalid winner indicator '{winner_indicator}' in tournament format")
+        elif len(parts) == 1:
+            # New format: "#13,moves" (no winner indicator)
+            return line, None
+        else:
+            raise ValueError(f"Invalid #13 format: expected 1 or 2 parts, got {len(parts)}")
+    
+    # Handle old format: "http://www.trmph.com/hex/board#13,moves b"
+    elif line.startswith('http://www.trmph.com/hex/board#'):
+        try:
+            trmph_url, winner_indicator = parse_trmph_game_record(line)
+            return trmph_url, winner_indicator
+        except ValueError as e:
+            raise ValueError(f"Invalid old format TRMPH line: {e}")
+    
+    else:
+        raise ValueError(f"Unrecognized TRMPH format: {line}")
+
+
+def extract_games_from_file_flexible(file_path: Path) -> List[Tuple[str, Optional[str]]]:
+    """
+    Extract game lines from a TRMPH file, handling both old and new formats.
+    
+    Args:
+        file_path: Path to the TRMPH file
+        
+    Returns:
+        List of tuples (trmph_string, winner_indicator) where winner_indicator is None for new format
+    """
+    games = []
+    with open(file_path, 'r') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            
+            try:
+                trmph_string, winner_indicator = parse_trmph_line_flexible(line)
+                games.append((trmph_string, winner_indicator))
+            except ValueError as e:
+                logger.warning(f"Skipping invalid line {line_num}: {e}")
+                continue
+    
+    return games
+
+
+def parse_trmph_to_gamerecord(trmph_string: str, winner_indicator: Optional[str] = None):
+    """
+    Parse a TRMPH string into a GameRecord object.
+    
+    Args:
+        trmph_string: TRMPH format game string (with or without preamble)
+        winner_indicator: Optional winner indicator ('b' or 'r')
+        
+    Returns:
+        GameRecord object
+    """
+    # Import here to avoid circular imports
+    from hex_ai.eval.strength_evaluator import GameRecord
+    
+    # Parse moves from TRMPH string
+    moves = trmph_to_moves(trmph_string, BOARD_SIZE)
+    
+    # Convert to GameRecord format
+    game_moves = []
+    for i, (row, col) in enumerate(moves):
+        player = Player.BLUE if i % 2 == 0 else Player.RED
+        game_moves.append((row, col, player))
+    
+    return GameRecord(
+        board_size=BOARD_SIZE,
+        moves=game_moves,
+        starting_player=Player.BLUE,
+        metadata={"source": "trmph", "trmph_string": trmph_string, "winner_indicator": winner_indicator}
+    )
 
 
 class DataProcessor:
@@ -60,7 +172,7 @@ class DataProcessor:
         logger.info(f"Created {len(shard_files)} shards from {len(valid_games)} games")
         return shard_files
     
-    def _load_and_validate_games(self, file_path: Path) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, str]]]:
+    def _load_and_validate_games(self, file_path: Path) -> Tuple[List[Tuple[str, Optional[str]]], List[Tuple[str, Optional[str], str]]]:
         """Load and validate games from a .trmph file."""
         valid_games = []
         corrupted_games = []
@@ -71,29 +183,37 @@ class DataProcessor:
                 if not line:
                     continue
                 try:
-                    trmph_url, winner_indicator = parse_trmph_game_record(line)
+                    trmph_string, winner_indicator = parse_trmph_line_flexible(line)
                 except ValueError as e:
                     corrupted_games.append((line, "invalid_format", f"Invalid line format at line {line_num}: {e}"))
                     continue
-                # Validate trmph URL format
-                if not trmph_url.startswith("http://www.trmph.com/hex/board#"):
-                    corrupted_games.append((trmph_url, winner_indicator, f"Invalid trmph URL format at line {line_num}"))
-                    continue
-                # Validate game integrity
-                is_valid, error_msg = validate_game(trmph_url, winner_indicator, f"Line {line_num}")
-                if is_valid:
-                    valid_games.append((trmph_url, winner_indicator))
+                
+                # For old format, validate trmph URL format
+                if trmph_string.startswith("http://www.trmph.com/hex/board#") and winner_indicator is not None:
+                    # Validate game integrity for old format
+                    is_valid, error_msg = validate_game(trmph_string, winner_indicator, f"Line {line_num}")
+                    if is_valid:
+                        valid_games.append((trmph_string, winner_indicator))
+                    else:
+                        corrupted_games.append((trmph_string, winner_indicator, error_msg))
+                elif trmph_string.startswith('#13,'):
+                    # For new format, we can't validate without winner indicator, so just add it
+                    valid_games.append((trmph_string, None))
                 else:
-                    corrupted_games.append((trmph_url, winner_indicator, error_msg))
+                    corrupted_games.append((trmph_string, winner_indicator, f"Unrecognized trmph format at line {line_num}"))
         
         return valid_games, corrupted_games
     
-    def _convert_games_to_tensors(self, games: List[Tuple[str, str]], file_idx: int) -> List[Dict]:
+    def _convert_games_to_tensors(self, games: List[Tuple[str, Optional[str]]], file_idx: int) -> List[Dict]:
         """Convert games to dict format for training, including player_to_move."""
         processed_games = []
         for game_idx, (trmph_url, winner_indicator) in enumerate(tqdm(games, desc="Converting games to tensors")):
             try:
                 game_id = (file_idx, game_idx+1)
+                # Skip games without winner indicator (new format) for now
+                if winner_indicator is None:
+                    logger.warning(f"Skipping game {game_id} - no winner indicator available")
+                    continue
                 training_examples = extract_training_examples_from_game(trmph_url, winner_indicator, game_id)
                 value_override = trmph_winner_to_training_value(winner_indicator)
                 for example in training_examples:
