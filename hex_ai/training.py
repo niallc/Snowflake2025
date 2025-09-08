@@ -415,20 +415,6 @@ class Trainer:
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
 
-    def _save_checkpoint_smart(self, save_path: Path, epoch: int, 
-                              train_metrics: Dict, val_metrics: Dict,
-                              max_checkpoints: int, compress_checkpoints: bool):
-        # Save regular checkpoint
-        fname = f"epoch{epoch+1}_mini1.pt"
-        path = save_path / fname
-        self.save_checkpoint(path, train_metrics, val_metrics)
-        # Save best model if needed
-        if val_metrics and val_metrics['total_loss'] < self.best_val_loss:
-            best_path = save_path / "best_model.pt"
-            self.save_checkpoint(best_path, train_metrics, val_metrics)
-        # Cleanup old checkpoints
-        self._cleanup_old_checkpoints(save_path, max_checkpoints, compress_checkpoints)
-
     def _get_checkpoints_to_keep(self, max_epoch: int, max_checkpoints: int) -> set:
         # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
         keep = set()
@@ -461,163 +447,166 @@ class Trainer:
                 except Exception:
                     pass
 
-    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None, val_metrics=None) -> Dict[str, float]:
-        """
-        Train the model on a provided iterable of batches (mini-epoch).
+    def _calculate_gradient_norm(self) -> float:
+        """Calculate gradient norm for all model parameters."""
+        total_norm = 0.0
+        param_count = 0
+        for p in self.model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+                param_count += 1
+        return total_norm ** (1. / 2) if param_count > 0 else 0.0
 
-        This is a lower-level training method that processes a specific set of batches
-        without managing the overall training loop. It's designed for:
-        - Mini-epoch orchestration (see MiniEpochOrchestrator)
-        - Custom training loops that need fine-grained control
-        - Integration with external training frameworks
-        - Debugging and experimentation
+    def _should_log_progress(self, batch_idx: int, epoch: int, mini_epoch: int, 
+                           next_log_batch: int, start_time: float, last_time_log: float) -> bool:
+        """Determine if we should log progress at this batch."""
+        now = time.time()
+        
+        # For first epoch, log for all powers of 2
+        if epoch == 0 and mini_epoch == 0:
+            return batch_idx + 1 == next_log_batch
+        
+        # For later epochs, only log for batch >= 64
+        if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
+            return True
+            
+        # After 3 minutes, switch to time-based logging every 180 seconds
+        return now - last_time_log > 180
 
-        Unlike train(), this method:
-        - Does NOT manage epochs, checkpointing, or validation
-        - Does NOT reset model/optimizer state between calls
-        - Can be called multiple times within a single epoch
-        - Returns metrics for just the processed batches
-
-        Args:
-            batch_iterable: An iterable yielding (boards, policies, values) batches.
-            epoch: Current epoch number (int, optional, for debugging/dumping purposes)
-            mini_epoch: Current mini-epoch number (int, optional, for debugging/dumping purposes)
-
-        Returns:
-            Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
-
-        Usage:
-            # For mini-epoch orchestration:
-            orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500)
-            orchestrator.run()
-        """
-        self.model.train()
-        mini_epoch_metrics = {
-            'policy_loss': [],
-            'value_loss': [],
-            'total_loss': []
+    def _prepare_csv_logging_data(self, epoch: int, mini_epoch: int, batch_times: List[float], 
+                                val_metrics: Optional[Dict], gradient_norm: Optional[float],
+                                post_clip_gradient_norm: Optional[float], weight_stats: Optional[Dict],
+                                gradient_stats: Optional[Dict], lr_stats: Optional[Dict],
+                                gpu_memory_mb: Optional[float], best_val_loss: Optional[float]) -> Dict:
+        """Prepare data for CSV logging."""
+        # Extract hyperparameters
+        hp = {
+            'learning_rate': self.optimizer.param_groups[0]['lr'],
+            'batch_size': self.train_loader.batch_size,
+            'dataset_size': 'N/A',
+            'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
+            'policy_weight': getattr(self.criterion, 'policy_weight', ''),
+            'value_weight': getattr(self.criterion, 'value_weight', ''),
+            'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
+            'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})).p if hasattr(self.model, 'dropout') else '',
+            'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
+            'max_grad_norm': getattr(self, 'max_grad_norm', ''),
+            'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
+            'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
         }
-        # Track gradient norms for diagnostic purposes
-        gradient_norms = []
         
-        # --- Progress logging setup ---
-        start_time = time.time()
-        next_log_batch = 1
-        log_interval_sec = 180  # 3 minutes
-        last_time_log = start_time
-        data_load_start = time.time()
-        batch_data_times = []  # Track data loading times for each batch
-        batch_times = [] # Initialize batch_times here
-        for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
-            # Time data loading
-            data_load_end = time.time()
-            batch_data_time = data_load_end - data_load_start
-            batch_data_times.append(batch_data_time)
-            batch_start_time = time.time()
-            # Move to device
-            boards = boards.to(self.device)
-            policies = policies.to(self.device)
-            values = values.to(self.device)
-            # Forward pass with mixed precision
-            self.optimizer.zero_grad()
-            with self.mixed_precision.autocast_context():
-                policy_pred, value_pred = self.model(boards)
-                total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
-            # Backward pass: compute gradients for this batch
-            scaled_loss = self.mixed_precision.scale_loss(total_loss)
-            scaled_loss.backward()
+        epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
+        mini_epoch_time = sum(batch_times)
+        
+        return {
+            'epoch_id': epoch_id,
+            'hyperparams': hp,
+            'training_time': mini_epoch_time,
+            'epoch_time': mini_epoch_time,
+            'samples_per_second': 0.0,  # Would need to calculate based on samples processed
+            'memory_usage_mb': 0.0,  # Would need to calculate system memory usage
+            'gpu_memory_mb': gpu_memory_mb,
+            'gradient_norm': gradient_norm,
+            'post_clip_gradient_norm': post_clip_gradient_norm,
+            'weight_stats': weight_stats,
+            'gradient_stats': gradient_stats,
+            'lr_stats': lr_stats,
+            'best_val_loss': best_val_loss,
+            'notes': "train_on_batches"
+        }
+
+    def _initialize_training_state(self) -> Dict:
+        """Initialize training state variables and return them."""
+        return {
+            'mini_epoch_metrics': {
+                'policy_loss': [],
+                'value_loss': [],
+                'total_loss': []
+            },
+            'gradient_norms': [],
+            'start_time': time.time(),
+            'next_log_batch': 1,
+            'last_time_log': time.time(),
+            'data_load_start': time.time(),
+            'batch_data_times': [],
+            'batch_times': []
+        }
+
+    def _process_single_batch(self, batch_idx: int, boards: torch.Tensor, policies: torch.Tensor, 
+                            values: torch.Tensor, state: Dict) -> Dict:
+        """Process a single batch and return updated state."""
+        # Time data loading
+        data_load_end = time.time()
+        batch_data_time = data_load_end - state['data_load_start']
+        state['batch_data_times'].append(batch_data_time)
+        batch_start_time = time.time()
+        
+        # Move to device
+        boards = boards.to(self.device)
+        policies = policies.to(self.device)
+        values = values.to(self.device)
+        
+        # Forward pass with mixed precision
+        self.optimizer.zero_grad()
+        with self.mixed_precision.autocast_context():
+            policy_pred, value_pred = self.model(boards)
+            total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+        
+        # Backward pass: compute gradients for this batch
+        scaled_loss = self.mixed_precision.scale_loss(total_loss)
+        scaled_loss.backward()
+        
+        # Calculate gradient norm before clipping (for diagnostic purposes)
+        pre_clip_gradient_norm = None
+        try:
+            pre_clip_gradient_norm = self._calculate_gradient_norm()
+            if pre_clip_gradient_norm > 0:
+                state['gradient_norms'].append(pre_clip_gradient_norm)
+        except Exception as e:
+            print(f"[train_on_batches] Warning: Failed to calculate pre-clip gradient norm: {e}")
+        
+        # Clip gradients to avoid exploding gradients (if configured)
+        if self.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
             
-            # Calculate gradient norm before clipping (for diagnostic purposes)
-            pre_clip_gradient_norm = None
+            # Calculate gradient norm after clipping (to verify clipping worked)
+            post_clip_gradient_norm = None
             try:
-                total_norm = 0.0
-                param_count = 0
-                for p in self.model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_norm += param_norm.item() ** 2
-                        param_count += 1
-                if param_count > 0:
-                    pre_clip_gradient_norm = total_norm ** (1. / 2)
-                    gradient_norms.append(pre_clip_gradient_norm)
+                post_clip_gradient_norm = self._calculate_gradient_norm()
             except Exception as e:
-                print(f"[train_on_batches] Warning: Failed to calculate pre-clip gradient norm: {e}")
+                print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
             
-            # Clip gradients to avoid exploding gradients (if configured)
-            if self.max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-                
-                # Calculate gradient norm after clipping (to verify clipping worked)
-                post_clip_gradient_norm = None
-                try:
-                    total_norm = 0.0
-                    param_count = 0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                            param_count += 1
-                    if param_count > 0:
-                        post_clip_gradient_norm = total_norm ** (1. / 2)
-                except Exception as e:
-                    print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
-                
-                # Store both values for logging
-                if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
-                    gradient_norms.append(post_clip_gradient_norm)  # Use post-clip for statistics
-                    # Store both values for debugging
-                    if not hasattr(self, 'gradient_clipping_debug'):
-                        self.gradient_clipping_debug = []
-                    self.gradient_clipping_debug.append({
-                        'pre_clip': pre_clip_gradient_norm,
-                        'post_clip': post_clip_gradient_norm,
-                        'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
-                    })
-            
-            # Optimizer step: update model parameters using accumulated gradients
-            self.mixed_precision.step_optimizer(self.optimizer)
-            # Update mixed precision scaler (if used)
-            self.mixed_precision.update_scaler()
-            # Track losses for this batch
-            for key in mini_epoch_metrics:
-                mini_epoch_metrics[key].append(loss_dict[key])
-            # --- Progress logging ---
-            now = time.time()
-            should_log = False
-            if self.current_epoch == 0 and mini_epoch == 0:
-                # For first epoch, log for all powers of 2
-                if batch_idx + 1 == next_log_batch:
-                    should_log = True
-            else:
-                # For later epochs, only log for batch >= 64
-                if batch_idx + 1 >= 64 and batch_idx + 1 == next_log_batch:
-                    should_log = True
-            # After 3 minutes, switch to time-based logging every log_interval_sec
-            if not should_log and (now - last_time_log > log_interval_sec):
-                should_log = True
-                last_time_log = now
-            if should_log:
-                elapsed = now - start_time
-                print(
-                    f"[train_on_batches] Batch {batch_idx+1}: "
-                    f"total_loss={loss_dict['total_loss']:.4f}, "
-                    f"policy_loss={loss_dict['policy_loss']:.4f}, "
-                    f"value_loss={loss_dict['value_loss']:.4f} "
-                    f"(elapsed {elapsed:.1f}s)"
-                )
-                if batch_idx + 1 == next_log_batch:
-                    exp_backoff = 2
-                    if batch_idx > 64:
-                        exp_backoff = 1.5
-                    next_log_batch *= math.floor(exp_backoff)  # Exponential backoff
-            # Prepare for next batch data timing
-            data_load_start = time.time()
-            batch_end_time = time.time()
-            batch_times.append(batch_end_time - batch_start_time)
-        # Compute averages for the mini-epoch
-        mini_epoch_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in mini_epoch_metrics.items()}
+            # Store both values for logging
+            if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
+                state['gradient_norms'].append(post_clip_gradient_norm)  # Use post-clip for statistics
+                # Store both values for debugging
+                if not hasattr(self, 'gradient_clipping_debug'):
+                    self.gradient_clipping_debug = []
+                self.gradient_clipping_debug.append({
+                    'pre_clip': pre_clip_gradient_norm,
+                    'post_clip': post_clip_gradient_norm,
+                    'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
+                })
         
-        # Calculate diagnostic metrics for stability analysis
+        # Optimizer step: update model parameters using accumulated gradients
+        self.mixed_precision.step_optimizer(self.optimizer)
+        # Update mixed precision scaler (if used)
+        self.mixed_precision.update_scaler()
+        
+        # Track losses for this batch
+        for key in state['mini_epoch_metrics']:
+            state['mini_epoch_metrics'][key].append(loss_dict[key])
+        
+        # Prepare for next batch data timing
+        state['data_load_start'] = time.time()
+        batch_end_time = time.time()
+        state['batch_times'].append(batch_end_time - batch_start_time)
+        
+        return state
+
+    def _calculate_diagnostic_metrics(self, val_metrics: Optional[Dict], gradient_norms: List[float]) -> Dict:
+        """Calculate diagnostic metrics for stability analysis."""
         gradient_norm = None
         post_clip_gradient_norm = None
         gradient_stats = None
@@ -674,45 +663,113 @@ class Trainer:
             # MPS doesn't have memory_allocated, so we'll skip this
             pass
         
+        return {
+            'gradient_norm': gradient_norm,
+            'post_clip_gradient_norm': post_clip_gradient_norm,
+            'gradient_stats': gradient_stats,
+            'weight_stats': weight_stats,
+            'lr_stats': lr_stats,
+            'gpu_memory_mb': gpu_memory_mb,
+            'best_val_loss': best_val_loss
+        }
+
+    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None, val_metrics=None) -> Dict[str, float]:
+        """
+        Train the model on a provided iterable of batches (mini-epoch).
+
+        This is a lower-level training method that processes a specific set of batches
+        without managing the overall training loop. It's designed for:
+        - Mini-epoch orchestration (see MiniEpochOrchestrator)
+        - Custom training loops that need fine-grained control
+        - Integration with external training frameworks
+        - Debugging and experimentation
+
+        Unlike train(), this method:
+        - Does NOT manage epochs, checkpointing, or validation
+        - Does NOT reset model/optimizer state between calls
+        - Can be called multiple times within a single epoch
+        - Returns metrics for just the processed batches
+
+        Args:
+            batch_iterable: An iterable yielding (boards, policies, values) batches.
+            epoch: Current epoch number (int, optional, for debugging/dumping purposes)
+            mini_epoch: Current mini-epoch number (int, optional, for debugging/dumping purposes)
+
+        Returns:
+            Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
+
+        Usage:
+            # For mini-epoch orchestration:
+            orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_batches=500)
+            orchestrator.run()
+        """
+        self.model.train()
+        
+        # Initialize training state
+        state = self._initialize_training_state()
+        
+        # Process each batch
+        for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
+            state = self._process_single_batch(batch_idx, boards, policies, values, state)
+            
+            # Progress logging
+            now = time.time()
+            should_log = self._should_log_progress(
+                batch_idx, epoch, mini_epoch, state['next_log_batch'], 
+                state['start_time'], state['last_time_log']
+            )
+            if should_log:
+                state['last_time_log'] = now
+                elapsed = now - state['start_time']
+                print(
+                    f"[train_on_batches] Batch {batch_idx+1}: "
+                    f"total_loss={state['mini_epoch_metrics']['total_loss'][-1]:.4f}, "
+                    f"policy_loss={state['mini_epoch_metrics']['policy_loss'][-1]:.4f}, "
+                    f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f} "
+                    f"(elapsed {elapsed:.1f}s)"
+                )
+                if batch_idx + 1 == state['next_log_batch']:
+                    exp_backoff = 2
+                    if batch_idx > 64:
+                        exp_backoff = 1.5
+                    state['next_log_batch'] *= math.floor(exp_backoff)  # Exponential backoff
+        
+        # Compute averages for the mini-epoch
+        mini_epoch_avg = {
+            key: float(np.mean(values)) if values else float('nan') 
+            for key, values in state['mini_epoch_metrics'].items()
+        }
+        
+        # Calculate diagnostic metrics
+        diagnostics = self._calculate_diagnostic_metrics(val_metrics, state['gradient_norms'])
+        
         # CSV logging for mini-epoch
         if self.csv_logger:
-            # Extract hyperparameters as in MiniEpochOrchestrator
-            hp = {
-                'learning_rate': self.optimizer.param_groups[0]['lr'],
-                'batch_size': self.train_loader.batch_size,
-                'dataset_size': 'N/A',
-                'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
-                'policy_weight': getattr(self.criterion, 'policy_weight', ''),
-                'value_weight': getattr(self.criterion, 'value_weight', ''),
-                'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
-                'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})) .p if hasattr(self.model, 'dropout') else '',
-                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
-                'max_grad_norm': getattr(self, 'max_grad_norm', ''),
-                'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
-                'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
-            }
-            epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
-            
-            # Calculate training time for this mini-epoch
-            mini_epoch_time = sum(batch_times)
+            csv_data = self._prepare_csv_logging_data(
+                epoch, mini_epoch, state['batch_times'], val_metrics,
+                diagnostics['gradient_norm'], diagnostics['post_clip_gradient_norm'],
+                diagnostics['weight_stats'], diagnostics['gradient_stats'], 
+                diagnostics['lr_stats'], diagnostics['gpu_memory_mb'], 
+                diagnostics['best_val_loss']
+            )
             
             self.csv_logger.log_mini_epoch(
-                epoch=epoch_id,
+                epoch=csv_data['epoch_id'],
                 train_metrics=mini_epoch_avg,
-                val_metrics=val_metrics,  # Pass val_metrics here
-                hyperparams=hp,
-                training_time=mini_epoch_time,
-                epoch_time=mini_epoch_time,
-                samples_per_second=0.0,  # Would need to calculate based on samples processed
-                memory_usage_mb=0.0,  # Would need to calculate system memory usage
-                gpu_memory_mb=gpu_memory_mb,
-                gradient_norm=gradient_norm,
-                post_clip_gradient_norm=post_clip_gradient_norm,
-                weight_stats=weight_stats,
-                gradient_stats=gradient_stats,  # Add the missing parameter
-                lr_stats=lr_stats,  # Add the missing parameter
-                best_val_loss=best_val_loss,  # Add the best validation loss
-                notes="train_on_batches"
+                val_metrics=val_metrics,
+                hyperparams=csv_data['hyperparams'],
+                training_time=csv_data['training_time'],
+                epoch_time=csv_data['epoch_time'],
+                samples_per_second=csv_data['samples_per_second'],
+                memory_usage_mb=csv_data['memory_usage_mb'],
+                gpu_memory_mb=csv_data['gpu_memory_mb'],
+                gradient_norm=csv_data['gradient_norm'],
+                post_clip_gradient_norm=csv_data['post_clip_gradient_norm'],
+                weight_stats=csv_data['weight_stats'],
+                gradient_stats=csv_data['gradient_stats'],
+                lr_stats=csv_data['lr_stats'],
+                best_val_loss=csv_data['best_val_loss'],
+                notes=csv_data['notes']
             )
         
         return mini_epoch_avg
