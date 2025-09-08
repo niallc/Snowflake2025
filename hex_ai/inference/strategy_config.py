@@ -5,6 +5,7 @@ This module consolidates the duplicate strategy parsing code that was previously
 scattered across multiple tournament scripts.
 """
 
+import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -16,12 +17,13 @@ class StrategyConfig:
     name: str
     strategy_type: str
     config: Dict[str, Any]
+    model_path: str  # Model checkpoint path for this strategy
     
     def __str__(self) -> str:
         return f"{self.name}({self.strategy_type})"
 
 
-def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]] = None, 
+def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_sims: Optional[List[int]] = None, 
                           search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
                           c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None) -> List[StrategyConfig]:
     """
@@ -32,6 +34,7 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
     
     Args:
         strategies: List of strategy names (e.g., ["policy", "mcts_100", "fixed_tree_13_8"])
+        model_paths: List of model paths corresponding to each strategy
         mcts_sims: Optional list of MCTS simulation counts to override strategy names
         search_widths: Optional list of search width strings (e.g., ["13,8", "20,10"])
         batch_sizes: Optional list of batch sizes for MCTS strategies (e.g., [64, 128, 256])
@@ -43,12 +46,16 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
     Raises:
         ValueError: If strategy names are invalid or parameter counts don't match
     """
+    # Validate that we have the same number of strategies and model paths
+    if len(strategies) != len(model_paths):
+        raise ValueError(f"Number of strategies ({len(strategies)}) must match number of model paths ({len(model_paths)})")
+    
     configs = []
     
-    for strategy_name in strategies:
+    for strategy_name, model_path in zip(strategies, model_paths):
         # Parse strategy name to determine type and parameters
         if strategy_name == "policy":
-            configs.append(StrategyConfig("policy", "policy", {}))
+            configs.append(StrategyConfig("policy", "policy", {}, model_path))
         
         elif strategy_name.startswith("mcts_"):
             # Extract simulation count from name (e.g., "mcts_100" -> 100)
@@ -56,7 +63,7 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 sims = int(strategy_name.split("_")[1])
                 configs.append(StrategyConfig(
                     strategy_name, "mcts", 
-                    {"mcts_sims": sims, "mcts_c_puct": 1.5}
+                    {"mcts_sims": sims, "mcts_c_puct": 1.5}, model_path
                 ))
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid MCTS strategy name: {strategy_name}. Expected format: mcts_<sims>")
@@ -68,7 +75,7 @@ def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]]
                 widths = [int(w) for w in parts]
                 configs.append(StrategyConfig(
                     strategy_name, "fixed_tree", 
-                    {"search_widths": widths}
+                    {"search_widths": widths}, model_path
                 ))
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")
@@ -184,15 +191,15 @@ def get_strategy_summary(configs: List[StrategyConfig]) -> str:
     summaries = []
     for config in configs:
         if config.strategy_type == "policy":
-            summaries.append("policy")
+            summaries.append(f"policy({os.path.basename(config.model_path)})")
         elif config.strategy_type == "mcts":
             sims = config.config.get("mcts_sims", "unknown")
-            summaries.append(f"mcts_{sims}")
+            summaries.append(f"mcts_{sims}({os.path.basename(config.model_path)})")
         elif config.strategy_type == "fixed_tree":
             widths = config.config.get("search_widths", [])
             width_str = "_".join(str(w) for w in widths)
-            summaries.append(f"fixed_tree_{width_str}")
+            summaries.append(f"fixed_tree_{width_str}({os.path.basename(config.model_path)})")
         else:
-            summaries.append(str(config))
+            summaries.append(f"{config}({os.path.basename(config.model_path)})")
     
     return ", ".join(summaries)

@@ -506,7 +506,7 @@ def select_random_openings(openings: List[OpeningPosition], num_openings: int, s
 
 
 def play_deterministic_game(
-    model,
+    model_cache,
     strategy_a: StrategyConfig,
     strategy_b: StrategyConfig,
     opening: OpeningPosition,
@@ -519,7 +519,7 @@ def play_deterministic_game(
     Play a deterministic game from an opening position.
     
     Args:
-        model: The model to use for both strategies
+        model_cache: Model cache to get models for each strategy
         strategy_a: Strategy configuration for player A
         strategy_b: Strategy configuration for player B
         opening: Opening position to start from
@@ -607,19 +607,23 @@ def play_deterministic_game(
                 strategy_obj = strategy_a_obj
                 strategy_config = config_a
                 strategy_name = strategy_a.name
+                model = model_cache.get_simple_model(strategy_a.model_path)
             else:
                 strategy_obj = strategy_b_obj
                 strategy_config = config_b
                 strategy_name = strategy_b.name
+                model = model_cache.get_simple_model(strategy_b.model_path)
         else:  # Player.RED
             if strategy_a_is_blue:
                 strategy_obj = strategy_b_obj
                 strategy_config = config_b
                 strategy_name = strategy_b.name
+                model = model_cache.get_simple_model(strategy_b.model_path)
             else:
                 strategy_obj = strategy_a_obj
                 strategy_config = config_a
                 strategy_name = strategy_a.name
+                model = model_cache.get_simple_model(strategy_a.model_path)
     
         # Time the move selection
         start_time = time.perf_counter()
@@ -691,9 +695,66 @@ def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
             writer.writerow(row)
 
 
+def print_deterministic_tournament_analysis(result: DeterministicTournamentResult, strategy_configs: List[StrategyConfig]) -> None:
+    """
+    Print comprehensive tournament analysis with model information.
+    
+    Args:
+        result: Tournament result object
+        strategy_configs: List of strategy configurations with model information
+    """
+    # Create mapping from strategy name to model
+    strategy_to_model = {config.name: os.path.basename(config.model_path) for config in strategy_configs}
+    
+    print("\n" + "="*60)
+    print("DETERMINISTIC TOURNAMENT ANALYSIS")
+    print("="*60)
+    
+    # Print participants with their models
+    print("\nParticipants:")
+    for config in strategy_configs:
+        print(f"  {config.name} (model: {os.path.basename(config.model_path)})")
+    
+    # Print win rates with model information
+    print("\nWin Rates:")
+    win_rates = result.win_rates()
+    sorted_participants = sorted(win_rates.items(), key=lambda x: x[1], reverse=True)
+    
+    for name, win_rate in sorted_participants:
+        model_name = strategy_to_model.get(name, "unknown")
+        total_wins = sum(result.results[name][op]['wins'] for op in result.results[name])
+        total_games = sum(result.results[name][op]['games'] for op in result.results[name])
+        print(f"  {name} ({model_name}): {win_rate*100:.1f}% ({total_wins}/{total_games} games)")
+    
+    # Print Elo ratings with model information
+    print("\nElo Ratings:")
+    elo_ratings = result.elo_ratings()
+    sorted_elo = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
+    
+    for name, elo in sorted_elo:
+        model_name = strategy_to_model.get(name, "unknown")
+        print(f"  {name} ({model_name}): {elo:.1f}")
+    
+    # Print head-to-head results with model information
+    print("\nHead-to-Head Results:")
+    for name in sorted(result.participants):
+        model_name = strategy_to_model.get(name, "unknown")
+        print(f"\n  {name} ({model_name}) vs:")
+        for op in sorted(result.participants):
+            if op != name:
+                wins = result.results[name][op]['wins']
+                losses = result.results[name][op]['losses']
+                games = result.results[name][op]['games']
+                if games > 0:
+                    win_rate = (wins / games) * 100
+                    op_model = strategy_to_model.get(op, "unknown")
+                    print(f"    {op} ({op_model}): {wins}-{losses} ({win_rate:.1f}%)")
+    
+    print("\n" + "="*60)
+
+
 
 def run_deterministic_tournament(
-    model_path: str,
     strategy_configs: List[StrategyConfig],
     openings: List[OpeningPosition],
     temperature: float = DEFAULT_TEMPERATURE,
@@ -704,8 +765,7 @@ def run_deterministic_tournament(
     Run a deterministic tournament using pre-generated opening positions.
     
     Args:
-        model_path: Path to the model checkpoint
-        strategy_configs: List of strategy configurations
+        strategy_configs: List of strategy configurations (each with its own model)
         openings: List of opening positions to use
         temperature: Temperature for move selection (0.0 = deterministic)
         verbose: Verbosity level
@@ -722,11 +782,11 @@ def run_deterministic_tournament(
     strategy_names = [config.name for config in strategy_configs]
     result = DeterministicTournamentResult(strategy_names)
     
-    # Preload the model for efficiency
+    # Preload all models for efficiency
     from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
-    preload_tournament_models([model_path])
+    model_paths = [config.model_path for config in strategy_configs]
+    preload_tournament_models(model_paths)
     model_cache = get_model_cache()
-    model = model_cache.get_simple_model(model_path)
     
     # Create output directory and files
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
@@ -760,7 +820,9 @@ def run_deterministic_tournament(
             pie_rule=False,  # Deterministic tournaments don't use pie rule
             strategy="deterministic"
         )
-        actual_trmph_file = write_tournament_trmph_header(trmph_file, [model_path], len(openings), play_config, BOARD_SIZE)
+        # Include all model paths used in this tournament
+        pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
+        actual_trmph_file = write_tournament_trmph_header(trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE)
         
         # Find available CSV filename
         actual_csv_file = find_available_csv_filename(csv_file)
@@ -780,14 +842,14 @@ def run_deterministic_tournament(
             # Game 1: Strategy A (Blue) vs Strategy B (Red)
             logger.debug(f"Playing game 1: {strategy_a.name} (Blue) vs {strategy_b.name} (Red) from opening {opening_idx + 1}")
             result_1 = play_deterministic_game(
-                model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
+                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
             )
             game_results.append(result_1)
             
             # Game 2: Strategy B (Blue) vs Strategy A (Red)
             logger.debug(f"Playing game 2: {strategy_b.name} (Blue) vs {strategy_a.name} (Red) from opening {opening_idx + 1}")
             result_2 = play_deterministic_game(
-                model, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
+                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
             )
             game_results.append(result_2)
             
@@ -828,6 +890,8 @@ def run_deterministic_tournament(
                     "timestamp": timestamp,
                     "strategy_a": strategy_a.name,
                     "strategy_b": strategy_b.name,
+                    "model_a": os.path.basename(strategy_a.model_path),
+                    "model_b": os.path.basename(strategy_b.model_path),
                     "opening_idx": opening_idx,
                     "opening_source": opening.source_game,
                     "game": "A_first",
@@ -845,6 +909,8 @@ def run_deterministic_tournament(
                     "timestamp": timestamp,
                     "strategy_a": strategy_b.name,
                     "strategy_b": strategy_a.name,
+                    "model_a": os.path.basename(strategy_b.model_path),
+                    "model_b": os.path.basename(strategy_a.model_path),
                     "opening_idx": opening_idx,
                     "opening_source": opening.source_game,
                     "game": "B_first",
@@ -915,25 +981,25 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Compare strategies using 100 diverse openings
-  %(prog)s --model=current_best --strategies=policy,mcts_122,fixed_tree_13_8 --num-openings=100
+  # Compare strategies using different models
+  %(prog)s --models=current_best,model1,model2 --strategies=policy,mcts_122,fixed_tree_13_8 --num-openings=100
   
-  # Use specific opening file
-  %(prog)s --model=current_best --strategies=mcts_100,mcts_200 --opening-file=data/deterministic_openings.txt
+  # Compare same strategy with different models
+  %(prog)s --models=current_best,previous_best --strategies=mcts_100,mcts_100 --num-openings=50
+  
+  # Use specific opening file with different models
+  %(prog)s --models=current_best,model1 --strategies=mcts_100,mcts_200 --opening-file=data/deterministic_openings.txt
   
   # Compare with custom opening length and temperature
-  %(prog)s --model=current_best --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
+  %(prog)s --models=current_best,model1 --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
   
-  # Compare different batch sizes for MCTS
-  %(prog)s --model=current_best --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
-  
-  # Compare different PUCT exploration constants
-  %(prog)s --model=current_best --strategies=mcts_100,mcts_100,mcts_100 --c-puct=2.2,2.8,3.6 --num-openings=50
+  # Compare different batch sizes for MCTS with different models
+  %(prog)s --models=current_best,model1,model2 --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
         """
     )
     
-    parser.add_argument('--model', type=str, default='current_best',
-                       help='Model to use for all strategies (default: current_best)')
+    parser.add_argument('--models', type=str, required=True,
+                       help='Comma-separated list of models to use for each strategy (e.g., "current_best,model1,model2")')
     parser.add_argument('--strategies', type=str, required=True,
                        help='Comma-separated list of strategies to compare')
     parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
@@ -977,18 +1043,27 @@ def main():
     # Set random seed for reproducible opening selection
     set_deterministic_seeds(args.seed)
     
-    # Validate model path
-    try:
-        model_path = get_model_path(args.model)
-        if not validate_model_path(model_path):
-            print(f"ERROR: Model file does not exist: {model_path}")
-            sys.exit(1)
-    except ValueError as e:
-        print(f"ERROR: {e}")
+    # Parse models and strategies
+    model_names = [name.strip() for name in args.models.split(',')]
+    strategy_names = [name.strip() for name in args.strategies.split(',')]
+    
+    # Validate that we have the same number of models and strategies
+    if len(model_names) != len(strategy_names):
+        print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
         sys.exit(1)
     
-    # Parse strategies
-    strategy_names = [name.strip() for name in args.strategies.split(',')]
+    # Validate model paths
+    model_paths = []
+    for model_name in model_names:
+        try:
+            model_path = get_model_path(model_name)
+            if not validate_model_path(model_path):
+                print(f"ERROR: Model file does not exist: {model_path}")
+                sys.exit(1)
+            model_paths.append(model_path)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
     
     # Parse optional parameters
     mcts_sims = None
@@ -1013,7 +1088,7 @@ def main():
     
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
+        strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -1054,7 +1129,7 @@ def main():
     
     # Print configuration
     print("\nDeterministic Tournament Configuration:")
-    print(f"  Model: {args.model} ({os.path.basename(model_path)})")
+    print(f"  Models: {[os.path.basename(path) for path in model_paths]}")
     print(f"  Strategies: {[str(c) for c in strategy_configs]}")
     print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
     print(f"  Opening length: {args.opening_length} moves")
@@ -1080,7 +1155,6 @@ def main():
     
     # Run tournament
     result = run_deterministic_tournament(
-        model_path=model_path,
         strategy_configs=strategy_configs,
         openings=openings,
         temperature=args.temperature,
@@ -1090,7 +1164,7 @@ def main():
     
     # Print results
     print("\nDeterministic Tournament Complete!")
-    print_comprehensive_tournament_analysis(result)
+    print_deterministic_tournament_analysis(result, strategy_configs)
     
     # Print timing summary
     result.print_timing_summary()
