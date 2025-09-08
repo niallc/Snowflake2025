@@ -18,6 +18,11 @@ class StrategyConfig:
     strategy_type: str
     config: Dict[str, Any]
     model_path: str  # Model checkpoint path for this strategy
+    original_name: str = None  # Original name before parameter modifications
+    
+    def __post_init__(self):
+        if self.original_name is None:
+            self.original_name = self.name
     
     def __str__(self) -> str:
         return f"{self.name}({self.strategy_type})"
@@ -55,7 +60,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
     for strategy_name, model_path in zip(strategies, model_paths):
         # Parse strategy name to determine type and parameters
         if strategy_name == "policy":
-            configs.append(StrategyConfig("policy", "policy", {}, model_path))
+            configs.append(StrategyConfig("policy", "policy", {}, model_path, original_name="policy"))
         
         elif strategy_name.startswith("mcts_"):
             # Extract simulation count from name (e.g., "mcts_100" -> 100)
@@ -63,7 +68,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                 sims = int(strategy_name.split("_")[1])
                 configs.append(StrategyConfig(
                     strategy_name, "mcts", 
-                    {"mcts_sims": sims, "mcts_c_puct": 1.5}, model_path
+                    {"mcts_sims": sims, "mcts_c_puct": 1.5}, model_path, original_name=strategy_name
                 ))
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid MCTS strategy name: {strategy_name}. Expected format: mcts_<sims>")
@@ -75,7 +80,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                 widths = [int(w) for w in parts]
                 configs.append(StrategyConfig(
                     strategy_name, "fixed_tree", 
-                    {"search_widths": widths}, model_path
+                    {"search_widths": widths}, model_path, original_name=strategy_name
                 ))
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")

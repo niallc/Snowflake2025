@@ -657,10 +657,10 @@ def play_deterministic_game(
         raise ValueError("Game is not over or winner missing")
     
     if winner_enum.name == 'BLUE':
-        winner_strategy = strategy_a.name if strategy_a_is_blue else strategy_b.name
+        winner_strategy = strategy_a.original_name if strategy_a_is_blue else strategy_b.original_name
         winner_char = TRMPH_BLUE_WIN
     elif winner_enum.name == 'RED':
-        winner_strategy = strategy_b.name if strategy_a_is_blue else strategy_a.name
+        winner_strategy = strategy_b.original_name if strategy_a_is_blue else strategy_a.original_name
         winner_char = TRMPH_RED_WIN
     else:
         raise ValueError(f"Unknown winner enum: {winner_enum}")
@@ -779,8 +779,9 @@ def run_deterministic_tournament(
     # TODO: Consider adding early termination if one strategy dominates
     
     # Create tournament result tracking strategy names
-    strategy_names = [config.name for config in strategy_configs]
-    result = DeterministicTournamentResult(strategy_names)
+    # Use original strategy names for tournament tracking (before parameter modifications)
+    original_strategy_names = [config.original_name for config in strategy_configs]
+    result = DeterministicTournamentResult(original_strategy_names)
     
     # Preload all models for efficiency
     from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
@@ -930,13 +931,13 @@ def run_deterministic_tournament(
             
             # Record results for tournament tracking with timing data
             # Game 1: Strategy A vs Strategy B
-            winner_1 = result_1['winner_strategy']
-            loser_1 = strategy_b.name if winner_1 == strategy_a.name else strategy_a.name
+            winner_1 = result_1['winner_strategy']  # Already uses original names
+            loser_1 = strategy_b.original_name if winner_1 == strategy_a.original_name else strategy_a.original_name
             result.record_game_with_timing(winner_1, loser_1, result_1)
             
             # Game 2: Strategy B vs Strategy A
-            winner_2 = result_2['winner_strategy']
-            loser_2 = strategy_a.name if winner_2 == strategy_b.name else strategy_b.name
+            winner_2 = result_2['winner_strategy']  # Already uses original names
+            loser_2 = strategy_a.original_name if winner_2 == strategy_b.original_name else strategy_b.original_name
             result.record_game_with_timing(winner_2, loser_2, result_2)
             
             if verbose >= 1:
@@ -957,19 +958,19 @@ def run_deterministic_tournament(
         
         # Print statistics for the current strategy pair using shared utility
         # Extract head-to-head results for this specific pair
-        strategy_a_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_a.name)
-        strategy_b_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_b.name)
+        strategy_a_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_a.original_name)
+        strategy_b_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_b.original_name)
         total_games = len(game_results)
         
         if total_games > 0:
-            stats = calculate_head_to_head_stats(strategy_a.name, strategy_b.name, strategy_a_wins, strategy_b_wins, total_games)
+            stats = calculate_head_to_head_stats(strategy_a.original_name, strategy_b.original_name, strategy_a_wins, strategy_b_wins, total_games)
             print_head_to_head_stats(stats)
             
             # Print timing summary for this match
             total_time_a = sum(game['strategy_timings'].get(strategy_a.name, 0.0) for game in game_results)
             total_time_b = sum(game['strategy_timings'].get(strategy_b.name, 0.0) for game in game_results)
             
-            print(f"  Timing: {strategy_a.name}={total_time_a:.3f}s, {strategy_b.name}={total_time_b:.3f}s")
+            print(f"  Timing: {strategy_a.original_name}={total_time_a:.3f}s, {strategy_b.original_name}={total_time_b:.3f}s")
     
     logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
     return result
@@ -981,27 +982,29 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Compare strategies using different models
+  # Compare strategies using model registry names
   %(prog)s --models=current_best,model1,model2 --strategies=policy,mcts_122,fixed_tree_13_8 --num-openings=100
   
-  # Compare same strategy with different models
+  # Compare same strategy with different models from registry
   %(prog)s --models=current_best,previous_best --strategies=mcts_100,mcts_100 --num-openings=50
+  
+  # Compare strategies using direct checkpoint specification
+  %(prog)s --strategies="epoch2_mini201.pt.gz:mcts_120,epoch4_mini126.pt.gz:mcts_120" --model-dirs="checkpoints/aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718,checkpoints/sep6th_extraValueLayer/pipeline_20250906_182558/pipeline_sweep_exp0__99914b_20250906_182558" --num-openings=50
   
   # Use specific opening file with different models
   %(prog)s --models=current_best,model1 --strategies=mcts_100,mcts_200 --opening-file=data/deterministic_openings.txt
   
   # Compare with custom opening length and temperature
   %(prog)s --models=current_best,model1 --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
-  
-  # Compare different batch sizes for MCTS with different models
-  %(prog)s --models=current_best,model1,model2 --strategies=mcts_500,mcts_500,mcts_500 --batch-sizes=64,128,256 --num-openings=50
         """
     )
     
-    parser.add_argument('--models', type=str, required=True,
+    parser.add_argument('--models', type=str,
                        help='Comma-separated list of models to use for each strategy (e.g., "current_best,model1,model2")')
+    parser.add_argument('--model-dirs', type=str,
+                       help='Comma-separated list of model directories (used with --strategies when specifying checkpoint files)')
     parser.add_argument('--strategies', type=str, required=True,
-                       help='Comma-separated list of strategies to compare')
+                       help='Comma-separated list of strategies to compare. Can be "model_file:strategy" format for direct checkpoint specification')
     parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
                        help=f'Number of opening positions to generate (default: {DEFAULT_NUM_OPENINGS})')
     parser.add_argument('--opening-length', type=int, default=DEFAULT_OPENING_LENGTH,
@@ -1043,27 +1046,80 @@ def main():
     # Set random seed for reproducible opening selection
     set_deterministic_seeds(args.seed)
     
-    # Parse models and strategies
-    model_names = [name.strip() for name in args.models.split(',')]
-    strategy_names = [name.strip() for name in args.strategies.split(',')]
-    
-    # Validate that we have the same number of models and strategies
-    if len(model_names) != len(strategy_names):
-        print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
+    # Parse models and strategies - support both approaches
+    if args.models and args.model_dirs:
+        print("ERROR: Cannot specify both --models and --model-dirs. Use one or the other.")
         sys.exit(1)
     
-    # Validate model paths
+    if not args.models and not args.model_dirs:
+        print("ERROR: Must specify either --models or --model-dirs")
+        sys.exit(1)
+    
     model_paths = []
-    for model_name in model_names:
-        try:
-            model_path = get_model_path(model_name)
-            if not validate_model_path(model_path):
+    strategy_names = []
+    
+    if args.models:
+        # Approach 1: Use model registry names
+        model_names = [name.strip() for name in args.models.split(',')]
+        strategy_names = [name.strip() for name in args.strategies.split(',')]
+        
+        # Validate that we have the same number of models and strategies
+        if len(model_names) != len(strategy_names):
+            print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
+            sys.exit(1)
+        
+        # Validate model paths using registry
+        for model_name in model_names:
+            try:
+                model_path = get_model_path(model_name)
+                if not validate_model_path(model_path):
+                    print(f"ERROR: Model file does not exist: {model_path}")
+                    sys.exit(1)
+                model_paths.append(model_path)
+            except ValueError as e:
+                print(f"ERROR: {e}")
+                sys.exit(1)
+    
+    else:
+        # Approach 2: Direct checkpoint specification
+        model_dirs = [dir.strip() for dir in args.model_dirs.split(',')]
+        strategy_specs = [spec.strip() for spec in args.strategies.split(',')]
+        
+        # Validate that we have the same number of directories and strategy specs
+        if len(model_dirs) != len(strategy_specs):
+            print(f"ERROR: Number of model directories ({len(model_dirs)}) must match number of strategy specs ({len(strategy_specs)})")
+            sys.exit(1)
+        
+        # Parse strategy specs and build model paths
+        for model_dir, strategy_spec in zip(model_dirs, strategy_specs):
+            if ':' in strategy_spec:
+                # Format: "model_file:strategy"
+                model_file, strategy_name = strategy_spec.split(':', 1)
+                model_path = os.path.join(model_dir, model_file)
+                # Create unique strategy name by combining model file and strategy
+                unique_strategy_name = f"{os.path.splitext(model_file)[0]}_{strategy_name}"
+            else:
+                # Format: just strategy name (use directory name as model file)
+                strategy_name = strategy_spec
+                # Find the first .pt.gz file in the directory
+                import glob
+                pt_files = glob.glob(os.path.join(model_dir, "*.pt.gz"))
+                if not pt_files:
+                    print(f"ERROR: No .pt.gz files found in directory: {model_dir}")
+                    sys.exit(1)
+                model_path = pt_files[0]  # Use first .pt.gz file found
+                model_file = os.path.basename(model_path)
+                # Create unique strategy name by combining model file and strategy
+                unique_strategy_name = f"{os.path.splitext(model_file)[0]}_{strategy_name}"
+            
+            # Validate model path exists
+            if not os.path.exists(model_path):
                 print(f"ERROR: Model file does not exist: {model_path}")
                 sys.exit(1)
+            
             model_paths.append(model_path)
-        except ValueError as e:
-            print(f"ERROR: {e}")
-            sys.exit(1)
+            # Use the original strategy name for parsing, but we'll create unique names later
+            strategy_names.append(strategy_name)
     
     # Parse optional parameters
     mcts_sims = None
@@ -1081,14 +1137,32 @@ def main():
     c_pucts = None
     if args.c_puct:
         c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
+        # If only one value provided, apply it to all MCTS strategies
+        if len(c_pucts) == 1 and len([s for s in strategy_names if s.startswith('mcts_')]) > 1:
+            num_mcts = len([s for s in strategy_names if s.startswith('mcts_')])
+            c_pucts = c_pucts * num_mcts
     
     enable_gumbel = None
     if args.enable_gumbel:
         enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
+        # If only one value provided, apply it to all MCTS strategies
+        if len(enable_gumbel) == 1 and len([s for s in strategy_names if s.startswith('mcts_')]) > 1:
+            num_mcts = len([s for s in strategy_names if s.startswith('mcts_')])
+            enable_gumbel = enable_gumbel * num_mcts
     
     # Parse strategy configurations
     try:
         strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
+        
+        # If using direct checkpoint specification, create unique names
+        if args.model_dirs:
+            for i, config in enumerate(strategy_configs):
+                model_file = os.path.basename(model_paths[i])
+                model_name = os.path.splitext(model_file)[0]
+                # Update both name and original_name to be unique
+                config.name = f"{model_name}_{config.original_name}"
+                config.original_name = f"{model_name}_{config.original_name}"
+                
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
