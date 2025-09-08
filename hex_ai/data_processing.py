@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 
 def parse_trmph_line_flexible(line: str) -> Tuple[str, Optional[str]]:
     """
-    Parse a TRMPH line that can be in either format:
+    Parse a TRMPH line that can be in any of these formats:
     1. Old format: "http://www.trmph.com/hex/board#13,moves b"
     2. New format: "#13,moves" (no winner indicator)
+    3. Tournament format: "#13,moves winner" (with winner indicator)
     
     Args:
         line: TRMPH line to parse
@@ -47,7 +48,21 @@ def parse_trmph_line_flexible(line: str) -> Tuple[str, Optional[str]]:
         # Remove any inline comments (everything after # that's not part of the game)
         if ' # ' in line:
             line = line.split(' # ')[0].strip()
-        return line, None
+        
+        # Check if there's a winner indicator at the end
+        parts = line.split()
+        if len(parts) == 2:
+            # Tournament format: "#13,moves winner"
+            trmph_string, winner_indicator = parts
+            if winner_indicator in ['b', 'r']:
+                return trmph_string, winner_indicator
+            else:
+                raise ValueError(f"Invalid winner indicator '{winner_indicator}' in tournament format")
+        elif len(parts) == 1:
+            # New format: "#13,moves" (no winner indicator)
+            return line, None
+        else:
+            raise ValueError(f"Invalid #13 format: expected 1 or 2 parts, got {len(parts)}")
     
     # Handle old format: "http://www.trmph.com/hex/board#13,moves b"
     elif line.startswith('http://www.trmph.com/hex/board#'):
