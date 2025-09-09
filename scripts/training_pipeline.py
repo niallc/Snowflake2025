@@ -125,6 +125,14 @@ class PipelineConfig:
         # Validate shard ranges match processed data directories
         if self.shard_ranges and len(self.shard_ranges) != len(self.processed_data_dirs):
             raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of processed data directories ({len(self.processed_data_dirs)})")
+        
+        # Validate that collected data will be used for training
+        if self.run_game_collection and not self.run_preprocessing and not self.run_trmph_processing and not self.run_shuffling:
+            raise ValueError(
+                "Game collection enabled but all processing steps are disabled. "
+                "The collected data will not be used for training. "
+                "Either enable preprocessing steps or use --cleaned-trmph-data-dirs for already processed data."
+            )
 
 
 class GameCollectionStep:
@@ -543,9 +551,9 @@ class TrainingPipeline:
     
     def run(self):
         """Run the complete pipeline."""
-        self.logger.info("=" * 80)
+        self.logger.info("=" * 60)
         self.logger.info("HEX AI TRAINING PIPELINE")
-        self.logger.info("=" * 80)
+        self.logger.info("=" * 60)
         self.logger.info(f"Run timestamp: {self.config.run_timestamp}")
         self.logger.info(f"Model: {self.config.model_full_path}")
         self.logger.info(f"Configuration: {self.config}")

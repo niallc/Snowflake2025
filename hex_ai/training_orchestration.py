@@ -74,6 +74,17 @@ def create_datasets(data_dirs: List[str],
             random_seed=random_seed
         ) if max_validation_examples else None
         
+        # Log data summary after shard discovery
+        train_summary = train_dataset.get_data_summary()
+        logger.info("=" * 60)
+        logger.info("TRAINING DATA SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Estimated total positions: ~{train_summary['estimated_total_positions']:,}")
+        logger.info(f"Estimated total games: ~{train_summary['estimated_total_games']:,}")
+        logger.info(f"Total shards: {train_summary['total_shards']}")
+        logger.info(f"Data directories: {train_summary['directories']}")
+        logger.info("=" * 60)
+        
         # Create DataLoaders from the datasets
         train_loader = torch.utils.data.DataLoader(
             train_dataset, 

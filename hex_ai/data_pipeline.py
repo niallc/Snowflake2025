@@ -229,6 +229,79 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             except Exception as e:
                 self.logger.error(f"Failed to discover shards in {data_dir}: {e}")
                 raise RuntimeError(f"Failed to discover shards in {data_dir}: {e}")
+        
+        # Estimate total positions and games after shard discovery
+        self._estimate_total_data()
+    
+    def _estimate_total_data(self):
+        """Estimate total positions and games by sampling a few shards from each directory."""
+        import pickle
+        import gzip
+        import random
+        
+        total_estimated_positions = 0
+        total_estimated_games = 0
+        
+        for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
+            if not shard_queue:
+                continue
+                
+            # Sample up to 3 shards from this directory to estimate
+            sample_size = min(3, len(shard_queue))
+            sample_shards = random.sample(shard_queue, sample_size)
+            
+            dir_positions = 0
+            dir_games = 0
+            
+            for shard_path in sample_shards:
+                try:
+                    with gzip.open(shard_path, 'rb') as f:
+                        data = pickle.load(f)
+                        
+                    if isinstance(data, dict) and 'examples' in data:
+                        positions = len(data['examples'])
+                        dir_positions += positions
+                        
+                        # Estimate games from positions (rough estimate: 60-80 positions per game)
+                        # We'll use 70 as a middle ground
+                        estimated_games = positions // 70
+                        dir_games += estimated_games
+                        
+                except Exception as e:
+                    if self.verbose >= 2:
+                        self.logger.warning(f"Could not sample shard {shard_path}: {e}")
+                    continue
+            
+            if sample_size > 0:
+                # Average the sample and scale to total shards in this directory
+                avg_positions_per_shard = dir_positions / sample_size
+                avg_games_per_shard = dir_games / sample_size
+                
+                total_shards_in_dir = len(shard_queue)
+                estimated_dir_positions = int(avg_positions_per_shard * total_shards_in_dir)
+                estimated_dir_games = int(avg_games_per_shard * total_shards_in_dir)
+                
+                total_estimated_positions += estimated_dir_positions
+                total_estimated_games += estimated_dir_games
+                
+                if self.verbose:
+                    self.logger.info(f"Directory {i+1} ({data_dir}): ~{estimated_dir_positions:,} positions, ~{estimated_dir_games:,} games "
+                                   f"({total_shards_in_dir} shards, sampled {sample_size})")
+        
+        self.estimated_total_positions = total_estimated_positions
+        self.estimated_total_games = total_estimated_games
+        
+        if self.verbose:
+            self.logger.info(f"Estimated total training data: ~{total_estimated_positions:,} positions from ~{total_estimated_games:,} games")
+    
+    def get_data_summary(self) -> dict:
+        """Get a summary of the estimated training data."""
+        return {
+            'estimated_total_positions': getattr(self, 'estimated_total_positions', 0),
+            'estimated_total_games': getattr(self, 'estimated_total_games', 0),
+            'total_shards': sum(len(queue) for queue in self.shard_queues),
+            'directories': len(self.data_dirs)
+        }
     
     def _calculate_directory_weights(self):
         """Calculate proportional weights for each directory based on shard counts."""
@@ -306,7 +379,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 if self.total_positions_yielded % 256 == 0:
                         self.approx_batch_count += 1
             
-            if self.verbose:
+            if self.verbose >= 5:
                 self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
                                f"yielded {self.total_positions_yielded:,} positions from {self.total_shards_loaded} shards")
     

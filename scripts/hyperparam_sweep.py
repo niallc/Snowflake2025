@@ -28,25 +28,6 @@ from hex_ai.data_collection import parse_shard_ranges
 # Create timestamp for the entire run (without minutes/seconds)
 RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H")
 
-###### Logging setup ######
-log_dir = Path('logs')
-log_dir.mkdir(exist_ok=True)
-log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
-
-file_handler = logging.FileHandler(log_file, mode='a')
-formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
-file_handler.setFormatter(formatter)
-
-root_logger = logging.getLogger()
-root_logger.addHandler(file_handler)
-root_logger.setLevel(logging.INFO)  # Or whatever level you want
-
-# Optionally, also add a StreamHandler for terminal output:
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(formatter)
-root_logger.addHandler(stream_handler)
-###### End of logging setup ######
-
 # =============================================================
 #  Sweep Configuration and Parameter Processing
 # =============================================================
@@ -243,6 +224,24 @@ Examples:
     parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
     args = parser.parse_args()
+
+    # Setup logging only when running as main script
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
+
+    file_handler = logging.FileHandler(log_file, mode='a')
+    formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
+    file_handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    root_logger.setLevel(logging.INFO)  # Or whatever level you want
+
+    # Optionally, also add a StreamHandler for terminal output:
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
 
     # Validate shard range arguments
     if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
