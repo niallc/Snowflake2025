@@ -83,6 +83,11 @@ DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
 ROTATION_AUGMENTATION = True
 REFLECTION_AUGMENTATION = True
 
+# Dataset configuration
+DEFAULT_POOL_SIZE = 1_000_000  # Default number of positions to maintain in memory
+DEFAULT_REFILL_THRESHOLD = 750_000  # Refill pool when it drops below this many positions
+DEFAULT_MAX_MEMORY_GB = 14.0  # Maximum memory usage before graceful shutdown
+
 # Logging
 WANDB_PROJECT_NAME = "hex-ai-2025"
 LOG_INTERVAL = 100  # Log every N batches

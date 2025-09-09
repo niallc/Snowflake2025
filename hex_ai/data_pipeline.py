@@ -23,7 +23,7 @@ import random
 from time import sleep
 import psutil
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
 from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
 
@@ -119,8 +119,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     Args:
         data_dirs: List of data directories to load from
         shard_ranges: List of shard ranges for each directory (e.g., ["251-300", "all"])
-        pool_size: Target number of positions to maintain in memory (default: 2M)
-        refill_threshold: Refill pool when it drops below this many positions (default: 1.5M)
+        pool_size: Target number of positions to maintain in memory (default: 1M)
+        refill_threshold: Refill pool when it drops below this many positions (default: 750K)
         max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
         enable_augmentation: Whether to apply augmentation on-the-fly
         max_examples_unaugmented: Stop after yielding this many (unaugmented) examples
@@ -131,9 +131,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     def __init__(self,
                  data_dirs: List[str],
                  shard_ranges: List[str],
-                 pool_size: int = 2_000_000,
-                 refill_threshold: int = 1_500_000,
-                 max_memory_gb: float = 5.0,
+                 pool_size: int = DEFAULT_POOL_SIZE,
+                 refill_threshold: int = DEFAULT_REFILL_THRESHOLD,
+                 max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                  enable_augmentation: bool = True,
                  max_examples_unaugmented: Optional[int] = None,
                  verbose: bool = False,
@@ -184,6 +184,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.total_positions_yielded = 0
         self.total_shards_loaded = 0
         self.approx_batch_count = 0
+        self._memory_warning_logged = False  # Track if we've already logged the memory warning
         
         # Initialize shard discovery and weighting
         self._discover_shards()
@@ -254,8 +255,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.logger.error(f"Memory usage ({memory_gb:.2f}GB) exceeds limit ({self.max_memory_gb}GB). Shutting down gracefully.")
                 return False
             
-            if self.verbose and memory_gb > self.max_memory_gb * 0.8:
+            if self.verbose and memory_gb > self.max_memory_gb * 0.8 and not self._memory_warning_logged:
                 self.logger.warning(f"Memory usage is high: {memory_gb:.2f}GB (limit: {self.max_memory_gb}GB)")
+                self._memory_warning_logged = True
             
             return True
             

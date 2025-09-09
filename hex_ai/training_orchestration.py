@@ -24,7 +24,7 @@ import re
 
 from .models import TwoHeadedResNet
 from .training import Trainer
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
 from hex_ai.data_pipeline import discover_processed_files
 from hex_ai.error_handling import GracefulShutdownRequested
@@ -38,9 +38,9 @@ def create_datasets(data_dirs: List[str],
                    max_examples_unaugmented: Optional[int] = None,
                    max_validation_examples: Optional[int] = None,
                    batch_size: int = 256,
-                   pool_size: int = 2_000_000,
-                   refill_threshold: int = 1_500_000,
-                   max_memory_gb: float = 5.0,
+                   pool_size: int = DEFAULT_POOL_SIZE,
+                   refill_threshold: int = DEFAULT_REFILL_THRESHOLD,
+                   max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
                    verbose: bool = False):
     """
@@ -326,9 +326,9 @@ def run_hyperparameter_tuning_current_data(
     resume_from: Optional[str] = None,  # New: Resume from checkpoint file
     shard_ranges: Optional[List[str]] = None,  # New: Shard ranges for each directory (e.g., ["251-300", "all"])
     shuffle_shards: bool = True,  # New: Control whether to shuffle data shards
-    pool_size: int = 2_000_000,  # Pool size for mixed dataset
-    refill_threshold: int = 1_500_000,  # Refill threshold for mixed dataset
-    max_memory_gb: float = 5.0,  # Memory limit for mixed dataset
+    pool_size: int = DEFAULT_POOL_SIZE,  # Pool size for mixed dataset
+    refill_threshold: int = DEFAULT_REFILL_THRESHOLD,  # Refill threshold for mixed dataset
+    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,  # Memory limit for mixed dataset
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
     override_checkpoint_hyperparameters: bool = False
@@ -352,8 +352,8 @@ def run_hyperparameter_tuning_current_data(
         resume_from: Optional path to resume from (file or directory)
         shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
-        pool_size: Target number of positions to maintain in memory (default: 2M)
-        refill_threshold: Refill pool when it drops below this many positions (default: 1.5M)
+        pool_size: Target number of positions to maintain in memory (default: 1M)
+        refill_threshold: Refill pool when it drops below this many positions (default: 750K)
         max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
         shutdown_handler: Shutdown handler for graceful termination
         run_timestamp: Optional timestamp for the run
