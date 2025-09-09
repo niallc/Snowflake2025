@@ -42,7 +42,7 @@ def create_datasets(data_dirs: List[str],
                    refill_threshold: int = DEFAULT_REFILL_THRESHOLD,
                    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
-                   verbose: bool = False):
+                   verbose: int = 2):
     """
     Create DataLoader objects from StreamingMixedShardDataset for train and val sets.
     Returns (train_loader, val_loader).
@@ -329,6 +329,7 @@ def run_hyperparameter_tuning_current_data(
     pool_size: int = DEFAULT_POOL_SIZE,  # Pool size for mixed dataset
     refill_threshold: int = DEFAULT_REFILL_THRESHOLD,  # Refill threshold for mixed dataset
     max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,  # Memory limit for mixed dataset
+    verbose: int = 2,  # Verbose level (2=default, 3=detailed pool/shard info)
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
     override_checkpoint_hyperparameters: bool = False
@@ -355,6 +356,7 @@ def run_hyperparameter_tuning_current_data(
         pool_size: Target number of positions to maintain in memory (default: 1M)
         refill_threshold: Refill pool when it drops below this many positions (default: 750K)
         max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
+        verbose: Verbose level (2=default, 3=detailed pool/shard info)
         shutdown_handler: Shutdown handler for graceful termination
         run_timestamp: Optional timestamp for the run
         override_checkpoint_hyperparameters: Whether to override checkpoint hyperparameters
@@ -426,7 +428,7 @@ def run_hyperparameter_tuning_current_data(
         refill_threshold=refill_threshold,
         max_memory_gb=max_memory_gb,
         random_seed=random_seed,
-        verbose=True
+        verbose=verbose
     )
     
     # Log dataset information

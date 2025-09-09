@@ -115,7 +115,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     Streaming dataset that maintains a mixed pool of positions from multiple shards.
     Loads shards proportionally from multiple directories and maintains a large in-memory pool
     to eliminate blockwise learning. Designed for use with torch DataLoader.
-    
+
     Args:
         data_dirs: List of data directories to load from
         shard_ranges: List of shard ranges for each directory (e.g., ["251-300", "all"])
@@ -124,7 +124,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
         enable_augmentation: Whether to apply augmentation on-the-fly
         max_examples_unaugmented: Stop after yielding this many (unaugmented) examples
-        verbose: If True, logs detailed progress at INFO level
+        verbose: Verbose level (2=default, 3=detailed pool/shard info)
         random_seed: Random seed for reproducible behavior
     """
     
@@ -136,7 +136,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                  max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                  enable_augmentation: bool = True,
                  max_examples_unaugmented: Optional[int] = None,
-                 verbose: bool = False,
+                 verbose: int = 2,
                  random_seed: Optional[int] = None):
         super().__init__()
         
@@ -194,7 +194,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.logger.info(f"[StreamingMixedShardDataset] Initialized with {len(self.data_dirs)} directories, "
                            f"pool_size={self.pool_size:,}, refill_threshold={self.refill_threshold:,}")
             for i, (dir_path, weight, shard_count) in enumerate(zip(self.data_dirs, self.directory_weights, [len(q) for q in self.shard_queues])):
-                self.logger.info(f"  Directory {i+1}: {dir_path} (weight={weight:.3f}, {shard_count} shards)")
+                if self.verbose >= 3:
+                    self.logger.info(f"  Directory {i+1}: {dir_path} (weight={weight:.3f}, {shard_count} shards)")
     
     def _discover_shards(self):
         """Discover and organize shards from all directories."""
@@ -222,7 +223,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 
                 self.shard_queues.append(data_files)
                 
-                if self.verbose:
+                if self.verbose >= 3:
                     self.logger.info(f"Directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
                     
             except Exception as e:
@@ -255,7 +256,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.logger.error(f"Memory usage ({memory_gb:.2f}GB) exceeds limit ({self.max_memory_gb}GB). Shutting down gracefully.")
                 return False
             
-            if self.verbose and memory_gb > self.max_memory_gb * 0.8 and not self._memory_warning_logged:
+            if self.verbose >= 2 and memory_gb > self.max_memory_gb * 0.8 and not self._memory_warning_logged:
                 self.logger.warning(f"Memory usage is high: {memory_gb:.2f}GB (limit: {self.max_memory_gb}GB)")
                 self._memory_warning_logged = True
             
@@ -264,7 +265,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         except Exception as e:
             self.logger.error(f"Failed to monitor memory: {e}")
             raise RuntimeError(f"Memory monitoring failed: {e}")
-    
+
     def __iter__(self):
         """
         Main iteration logic - yields positions from the mixed pool.
@@ -297,15 +298,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 
                 # Update batch count (approximate)
                 if self.total_positions_yielded % 256 == 0:
-                    self.approx_batch_count += 1
-        
-        if self.verbose:
-            self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
-                           f"yielded {self.total_positions_yielded:,} positions from {self.total_shards_loaded} shards")
+                        self.approx_batch_count += 1
+            
+            if self.verbose:
+                self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
+                               f"yielded {self.total_positions_yielded:,} positions from {self.total_shards_loaded} shards")
     
     def _refill_pool(self):
         """Load new shards and add positions to the pool."""
-        if self.verbose:
+        if self.verbose >= 3:
             self.logger.info(f"[StreamingMixedShardDataset] Refilling pool (current size: {len(self.position_pool):,})")
         
         # Calculate how many positions we need to add
@@ -351,7 +352,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.total_shards_loaded += 1
                 shards_loaded_this_refill += 1
                 
-                if self.verbose:
+                if self.verbose >= 3:
                     self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
                                    f"(added {min(positions_added, positions_needed)} to pool)")
                 
@@ -362,11 +363,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Shuffle the entire pool after refilling
         if positions_added > 0:
             random.shuffle(self.position_pool)
-            if self.verbose:
+            if self.verbose >= 3:
                 self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
                                f"(total pool size: {len(self.position_pool):,})")
         
-        if self.verbose:
+        if self.verbose >= 3:
             self.logger.info(f"Pool refill complete: added {positions_added:,} positions from {shards_loaded_this_refill} shards")
     
     def _has_available_shards(self) -> bool:
@@ -441,13 +442,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if player_to_move is None:
                 raise ValueError("Missing 'player_to_move' in example during data loading. All examples must have this field.")
             return self._transform_example(board_2ch, policy, value, player_to_move)
-    
+
     def _normalize_policy(self, policy):
         """Normalize policy tensor, handling None values."""
         if policy is None:
             return np.zeros(self.policy_shape, dtype=np.float32)
         return policy
-    
+
     def _transform_example(self, board_2ch, policy, value, player=None):
         """Transform example data into tensors."""
         if player is not None:
