@@ -55,9 +55,11 @@ class PipelineConfig:
     batch_size: int = 128
     cache_size: int = 60000
     
-    # Data directories
+    # Data directories - explicit types to avoid confusion
     base_data_dir: str = "data"
-    data_sources: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])
+    raw_trmph_data_dirs: List[str] = field(default_factory=list)  # Raw .trmph files to collect
+    cleaned_trmph_data_dirs: List[str] = field(default_factory=list)  # Already cleaned .trmph files
+    processed_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])  # Existing processed data
     shard_ranges: List[str] = field(default_factory=lambda: ["all"])
     selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
@@ -107,11 +109,22 @@ class PipelineConfig:
         if check_model and not os.path.exists(self.model_full_path):
             raise FileNotFoundError(f"Model not found: {self.model_full_path}")
         
-        # Validate existing data directories
+        # Validate data directories exist
         if check_data:
-            for data_dir in self.data_sources:
+            for data_dir in self.processed_data_dirs:
                 if not os.path.exists(data_dir):
-                    raise FileNotFoundError(f"Data directory not found: {data_dir}")
+                    raise FileNotFoundError(f"Processed data directory not found: {data_dir}")
+        
+        # Validate data type consistency
+        if self.run_game_collection and not self.raw_trmph_data_dirs:
+            raise ValueError("Game collection enabled but no raw TRMPH data directories specified. Use --raw-trmph-data-dirs")
+        
+        if self.run_preprocessing and not self.cleaned_trmph_data_dirs and not self.selfplay_dir:
+            raise ValueError("Preprocessing enabled but no input data specified. Use --cleaned-trmph-data-dirs or provide selfplay data")
+        
+        # Validate shard ranges match processed data directories
+        if self.shard_ranges and len(self.shard_ranges) != len(self.processed_data_dirs):
+            raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of processed data directories ({len(self.processed_data_dirs)})")
 
 
 class GameCollectionStep:
@@ -127,9 +140,12 @@ class GameCollectionStep:
         self.logger.info("STEP 0: GAME COLLECTION FROM MULTIPLE SOURCES")
         self.logger.info("=" * 60)
         
-        # Use default source directories from config
-        source_dirs = [Path(d) for d in self.config.data_sources]
+        # Use raw TRMPH data directories for collection
+        source_dirs = [Path(d) for d in self.config.raw_trmph_data_dirs]
         output_dir = Path(self.config.selfplay_dir)
+        
+        if not source_dirs:
+            raise ValueError("No raw TRMPH data directories specified for game collection. Use --raw-trmph-data-dirs")
         
         self.logger.info(f"Source directories: {[str(d) for d in source_dirs]}")
         self.logger.info(f"Output directory: {output_dir}")
@@ -279,15 +295,25 @@ class PreprocessingStep:
         self.config = config
         self.logger = logging.getLogger(__name__)
     
-    def run(self, input_dir: str) -> str:
-        """Preprocess self-play data and return cleaned directory."""
+    def run(self, input_dir: Optional[str] = None) -> str:
+        """Preprocess data and return cleaned directory."""
         self.logger.info("=" * 60)
-        self.logger.info("STEP 2: SELF-PLAY DATA PREPROCESSING")
+        self.logger.info("STEP 2: DATA PREPROCESSING")
         self.logger.info("=" * 60)
         
-
+        # Determine input sources
+        input_sources = []
+        if input_dir:
+            input_sources.append(Path(input_dir))
         
-        self.logger.info(f"Input directory: {input_dir}")
+        # Add cleaned TRMPH data directories
+        for cleaned_dir in self.config.cleaned_trmph_data_dirs:
+            input_sources.append(Path(cleaned_dir))
+        
+        if not input_sources:
+            raise ValueError("No input data specified for preprocessing. Provide either selfplay data or use --cleaned-trmph-data-dirs")
+        
+        self.logger.info(f"Input sources: {[str(d) for d in input_sources]}")
         self.logger.info(f"Output directory: {self.config.cleaned_dir}")
         self.logger.info(f"Chunk size: {self.config.chunk_size}")
         
@@ -297,7 +323,7 @@ class PreprocessingStep:
                 f"Output directory already exists and contains data: {self.config.cleaned_dir}\n"
                 f"This suggests the data has already been processed. To avoid wasting compute time,\n"
                 f"either:\n"
-                f"1. Use a different --selfplay-dir\n"
+                f"1. Use a different output directory\n"
                 f"2. Remove the existing output directory\n"
                 f"3. Use --no-preprocessing to skip this step"
             )
@@ -305,12 +331,14 @@ class PreprocessingStep:
         # Create output directory
         Path(self.config.cleaned_dir).mkdir(parents=True, exist_ok=True)
         
-        # Run preprocessing
-        combine_and_clean_files(
-            input_dir=Path(input_dir),
-            output_dir=Path(self.config.cleaned_dir),
-            chunk_size=self.config.chunk_size
-        )
+        # Process each input source using the existing function
+        for source_dir in input_sources:
+            if source_dir.exists():
+                self.logger.info(f"Processing {source_dir}")
+                # Use the existing combine_and_clean_files function
+                combine_and_clean_files(source_dir, Path(self.config.cleaned_dir), self.config.chunk_size)
+            else:
+                self.logger.warning(f"Input source does not exist: {source_dir}")
         
         return self.config.cleaned_dir
 
@@ -435,7 +463,7 @@ class TrainingStep:
         Path(results_dir).mkdir(parents=True, exist_ok=True)
         
         self.logger.info(f"New data directory: {new_shuffled_dir}")
-        self.logger.info(f"Existing data directories: {self.config.data_sources}")
+        self.logger.info(f"Existing data directories: {self.config.processed_data_dirs}")
         self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
         self.logger.info(f"Results directory: {results_dir}")
         self.logger.info(f"Max samples: {self.config.max_samples}")
@@ -462,10 +490,10 @@ class TrainingStep:
         
         # Run training
         if new_shuffled_dir:
-            all_data_dirs = [new_shuffled_dir] + self.config.data_sources
+            all_data_dirs = [new_shuffled_dir] + self.config.processed_data_dirs
             all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
         else:
-            all_data_dirs = self.config.data_sources
+            all_data_dirs = self.config.processed_data_dirs
             all_shard_ranges = self.config.shard_ranges
         
         results = run_hyperparameter_tuning_current_data(
@@ -563,6 +591,8 @@ class TrainingPipeline:
                 cleaned_dir = self.preprocessing_step.run(selfplay_dir)
                 self.step_results['preprocessing'] = cleaned_dir
             else:
+                if selfplay_dir and not self.config.run_preprocessing:
+                    self.logger.warning("WARNING: Game collection completed but preprocessing is disabled. The collected data will not be used for training.")
                 self.logger.info("Skipping preprocessing (disabled or no self-play data)")
                 cleaned_dir = None
             
@@ -573,6 +603,8 @@ class TrainingPipeline:
                 processed_dir = self.trmph_step.run(cleaned_dir)
                 self.step_results['trmph_processing'] = processed_dir
             else:
+                if cleaned_dir and not self.config.run_trmph_processing:
+                    self.logger.warning("WARNING: Preprocessing completed but TRMPH processing is disabled. The cleaned data will not be converted to training positions.")
                 self.logger.info("Skipping TRMPH processing (disabled or no cleaned data)")
                 processed_dir = None
             
@@ -583,6 +615,8 @@ class TrainingPipeline:
                 shuffled_dir = self.shuffling_step.run(processed_dir)
                 self.step_results['shuffling'] = shuffled_dir
             else:
+                if processed_dir and not self.config.run_shuffling:
+                    self.logger.warning("WARNING: TRMPH processing completed but shuffling is disabled. The processed data will not be shuffled for training.")
                 self.logger.info("Skipping shuffling (disabled or no processed data)")
                 shuffled_dir = None
             
@@ -595,10 +629,10 @@ class TrainingPipeline:
                 if shuffled_dir:
                     training_data_dir = shuffled_dir
                     self.logger.info(f"Using newly shuffled data: {training_data_dir}")
-                elif self.config.data_sources:
-                    # When no new shuffled data, just use existing data sources (no duplication)
+                elif self.config.processed_data_dirs:
+                    # When no new shuffled data, just use existing processed data (no duplication)
                     training_data_dir = None
-                    self.logger.info(f"Using existing data sources: {self.config.data_sources}")
+                    self.logger.info(f"Using existing processed data: {self.config.processed_data_dirs}")
                 else:
                     self.logger.error("No training data available")
                     raise ValueError("No training data available - need either shuffled data or data sources")
@@ -688,8 +722,14 @@ Examples:
   # Use current best model from model_config.py
   python scripts/training_pipeline.py --use-current-best-model
   
-  # Run with game collection from multiple sources
-  python scripts/training_pipeline.py --use-current-best-model --run-game-collection --no-selfplay
+  # Collect raw data and train
+  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 data/tournament_play --run-game-collection --no-selfplay
+  
+  # Use existing cleaned data
+  python scripts/training_pipeline.py --use-current-best-model --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 data/collected/sep8_games --no-selfplay --no-preprocessing --no-trmph-processing --no-shuffling
+  
+  # Mix all data types
+  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 --processed-data-dirs data/processed/sf18_shuffled --shard-ranges "221-250" --run-game-collection --no-selfplay
   
   # Run only self-play and preprocessing
   python scripts/training_pipeline.py --use-current-best-model --no-training --no-shuffling --no-trmph-processing
@@ -697,14 +737,8 @@ Examples:
   # Run with custom settings
   python scripts/training_pipeline.py --use-current-best-model --num-games 50000 --num-workers 5 --temperature 1.0
   
-  # Use multiple data directories with specific shard ranges
-  python scripts/training_pipeline.py --use-current-best-model --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
-  
   # Use existing raw self-play data
   python scripts/training_pipeline.py --use-current-best-model --selfplay-dir data/sf25/aug_04 --no-selfplay
-  
-  # Complete pipeline with game collection and training
-  python scripts/training_pipeline.py --use-current-best-model --run-game-collection --no-selfplay --no-preprocessing
         """
     )
     
@@ -726,10 +760,17 @@ Examples:
     # Data configuration
     parser.add_argument("--base-data-dir", default="data", help="Base directory for data")
     parser.add_argument("--selfplay-dir", help="Use existing raw self-play directory (skip self-play generation)")
-    parser.add_argument("--data_dirs", type=str, nargs='+', default=["data/processed/shuffled"], 
-                       help="Existing data directories to use for training")
+    
+    # Explicit data type arguments
+    parser.add_argument("--raw-trmph-data-dirs", type=str, nargs='+', default=[],
+                       help="Raw .trmph files to collect and clean (for game collection step)")
+    parser.add_argument("--cleaned-trmph-data-dirs", type=str, nargs='+', default=[],
+                       help="Already cleaned .trmph files to process (for preprocessing step)")
+    parser.add_argument("--processed-data-dirs", type=str, nargs='+', 
+                       default=[str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS],
+                       help="Existing processed data directories for training")
     parser.add_argument("--shard_ranges", type=str, nargs='+',
-                       help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
+                       help='Shard ranges for processed data directories. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
@@ -794,9 +835,6 @@ def main():
         elif not args.model_path:
             raise ValueError("Must specify either --model-path or --use-current-best-model")
         
-        # Validate data directories and shard ranges
-        if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
-            raise ValueError(f"Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
 
         # Create configuration
         config = PipelineConfig(
@@ -810,7 +848,9 @@ def main():
             batch_size=args.batch_size,
             cache_size=args.cache_size,
             base_data_dir=args.base_data_dir,
-            data_sources=args.data_dirs,
+            raw_trmph_data_dirs=args.raw_trmph_data_dirs,
+            cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
+            processed_data_dirs=args.processed_data_dirs,
             shard_ranges=args.shard_ranges,
             selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
