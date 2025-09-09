@@ -98,7 +98,6 @@ class ShardLogger:
         if approx_batch_count is not None:
             log_msg += f" (batch {approx_batch_count})"
         
-        print(log_msg)  # Always print to console
         self.logger.info(log_msg)
     
     def get_current_shard_info(self):
@@ -185,6 +184,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.total_shards_loaded = 0
         self.approx_batch_count = 0
         self._memory_warning_logged = False  # Track if we've already logged the memory warning
+        self._shards_exhausted_logged = False  # Track if we've already logged that shards are exhausted
         
         # Initialize shard discovery and weighting
         self._discover_shards()
@@ -286,9 +286,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if not self._monitor_memory():
                 break
             
-            # Refill pool if needed
+            # Refill pool if needed and shards are available
             if len(self.position_pool) < self.refill_threshold:
-                self._refill_pool()
+                if self._has_available_shards():
+                    self._refill_pool()
+                else:
+                    # No more shards available - log this once
+                    if self.verbose >= 2 and not self._shards_exhausted_logged:
+                        self.logger.info(f"[StreamingMixedShardDataset] No more shards available, continuing with remaining {len(self.position_pool):,} positions")
+                        self._shards_exhausted_logged = True
             
             # Yield positions from pool
             if self.position_pool:

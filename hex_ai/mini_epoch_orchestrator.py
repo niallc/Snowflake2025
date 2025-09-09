@@ -99,7 +99,6 @@ class MiniEpochOrchestrator:
                             f"value={val_metrics.get('value_loss', float('nan')):.4f} "
                         )
                     msg += f"| Batches processed: {batch_count}"
-                    print(msg)
                     self.logger.info(msg)
                 mini_epoch_idx += 1
         
