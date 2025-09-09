@@ -24,10 +24,11 @@ Usage:
 import argparse
 import logging
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 import hex_ai
-from hex_ai.data_collection import collect_and_organize_data, combine_and_clean_files
+from hex_ai.data_collection import collect_and_organize_data, combine_and_clean_files, collect_tournament_data_since_date
 from hex_ai.data_config import (
     DEFAULT_SOURCE_DIRS, DEFAULT_CHUNK_SIZE,
     get_collected_dir_name, get_cleaned_dir_name
@@ -98,6 +99,46 @@ def process_mode(args):
         return 1
 
 
+def tournament_mode(args):
+    """Handle tournament data collection since a specific date."""
+    source_dirs = [Path(d) for d in args.source_dirs]
+    output_dir = Path(args.output_dir) if args.output_dir else get_collected_dir_name("tournament_data")
+    
+    # Parse since date
+    if args.since_days:
+        since_date = datetime.now() - timedelta(days=args.since_days)
+    elif args.since_date:
+        since_date = datetime.strptime(args.since_date, "%Y-%m-%d")
+    else:
+        # Default to 7 days ago
+        since_date = datetime.now() - timedelta(days=7)
+    
+    # Validate source directories
+    for source_dir in source_dirs:
+        if not source_dir.exists():
+            logging.error(f"Source directory {source_dir} does not exist")
+            return 1
+    
+    logging.info(f"Starting tournament data collection")
+    logging.info(f"Source directories: {[str(d) for d in source_dirs]}")
+    logging.info(f"Output directory: {output_dir}")
+    logging.info(f"Since date: {since_date}")
+    logging.info(f"Chunk size: {args.chunk_size}")
+    
+    try:
+        stats = collect_tournament_data_since_date(source_dirs, output_dir, since_date, args.chunk_size)
+        if "error" in stats:
+            return 1
+        
+        logging.info("Tournament data collection completed successfully!")
+        logging.info(f"Collected {stats['unique_games']} unique games from {stats['total_files']} files")
+        logging.info(f"Found {stats['total_tournament_dirs']} tournament directories")
+        return 0
+    except Exception as e:
+        logging.error(f"Tournament data collection failed: {e}")
+        return 1
+
+
 def main():
     """Main entry point."""
     # Setup logging
@@ -114,6 +155,15 @@ Examples:
   
   # Collect from multiple sources with custom output
   python scripts/collect_and_clean_games.py collect --output-dir data/collected/my_data
+  
+  # Collect tournament data since September 3rd
+  python scripts/collect_and_clean_games.py tournament --since-date 2025-09-03
+  
+  # Collect tournament data from last 7 days
+  python scripts/collect_and_clean_games.py tournament --since-days 7
+  
+  # Collect tournament data from specific source directory
+  python scripts/collect_and_clean_games.py tournament --source-dirs data/tournament_play --since-date 2025-09-03
   
   # Process single directory with default output
   python scripts/collect_and_clean_games.py process --input-dir data/sf25/jul29
@@ -142,6 +192,30 @@ Examples:
         help=f"Number of games per chunk (default: {DEFAULT_CHUNK_SIZE})"
     )
     
+    # Tournament mode parser
+    tournament_parser = subparsers.add_parser('tournament', help='Collect tournament data since a specific date')
+    tournament_parser.add_argument(
+        "--source-dirs", nargs="+", 
+        default=[str(d) for d in DEFAULT_SOURCE_DIRS],
+        help=f"Source directories to search for tournament data (default: {[str(d) for d in DEFAULT_SOURCE_DIRS]})"
+    )
+    tournament_parser.add_argument(
+        "--output-dir", 
+        help="Output directory for tournament data (default: auto-generated with today's date)"
+    )
+    tournament_parser.add_argument(
+        "--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
+        help=f"Number of games per chunk (default: {DEFAULT_CHUNK_SIZE})"
+    )
+    tournament_parser.add_argument(
+        "--since-date", 
+        help="Collect data since this date (format: YYYY-MM-DD)"
+    )
+    tournament_parser.add_argument(
+        "--since-days", type=int,
+        help="Collect data since N days ago (alternative to --since-date)"
+    )
+    
     # Process mode parser
     process_parser = subparsers.add_parser('process', help='Process a single directory')
     process_parser.add_argument(
@@ -166,6 +240,8 @@ Examples:
     # Route to appropriate mode
     if args.mode == 'collect':
         return collect_mode(args)
+    elif args.mode == 'tournament':
+        return tournament_mode(args)
     elif args.mode == 'process':
         return process_mode(args)
     else:
