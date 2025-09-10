@@ -339,7 +339,7 @@ class Trainer:
                     val_metrics[key].append(loss_dict[key])
         
         # Compute validation averages
-        val_avg = {key: np.mean(values) for key, values in val_metrics.items()}
+        val_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in val_metrics.items()}
         return val_avg
         
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict, compress: bool = True):
