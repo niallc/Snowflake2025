@@ -47,6 +47,11 @@ class MiniEpochOrchestrator:
         
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
+            
+            # Reset dataset for new epoch (if it has a reset method)
+            if hasattr(self.train_loader.dataset, 'reset'):
+                self.train_loader.dataset.reset()
+            
             batch_iter = iter(self.train_loader)
             mini_epoch_idx = 0
             while True:

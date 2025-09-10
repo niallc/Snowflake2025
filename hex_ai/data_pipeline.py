@@ -232,6 +232,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         # Estimate total positions and games after shard discovery
         self._estimate_total_data()
+        
+        # Store original state for reset functionality
+        self._original_shard_queues = [queue.copy() for queue in self.shard_queues]
     
     def _estimate_total_data(self):
         """Estimate total positions and games by sampling a few shards from each directory."""
@@ -302,6 +305,36 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             'total_shards': sum(len(queue) for queue in self.shard_queues),
             'directories': len(self.data_dirs)
         }
+    
+    def reset(self):
+        """Reset dataset for new epoch."""
+        if self.verbose >= 2:
+            self.logger.info(f"[StreamingMixedShardDataset] Resetting for new epoch...")
+        
+        # Restore original shard queues
+        self.shard_queues = [queue.copy() for queue in self._original_shard_queues]
+        
+        # Clear loaded shards tracking
+        self.loaded_shards = set()
+        
+        # Clear position pool and reset counters
+        self.position_pool = []
+        self.total_positions_yielded = 0
+        self.total_shards_loaded = 0
+        self.approx_batch_count = 0
+        self._memory_warning_logged = False
+        self._shards_exhausted_logged = False
+        
+        # Shuffle shard queues for this epoch (using same random seed for reproducibility)
+        for queue in self.shard_queues:
+            random.shuffle(queue)
+        
+        # Refill initial pool
+        self._refill_pool()
+        
+        if self.verbose >= 2:
+            total_shards = sum(len(queue) for queue in self.shard_queues)
+            self.logger.info(f"[StreamingMixedShardDataset] Reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
     
     def _calculate_directory_weights(self):
         """Calculate proportional weights for each directory based on shard counts."""
