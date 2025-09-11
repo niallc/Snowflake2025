@@ -205,9 +205,11 @@ class OpeningPosition:
         return f"Opening({len(self.moves)} moves from {self.source_game})"
 
 
-def get_move_config_for_strategy(strategy_config: StrategyConfig, temperature: float = DEFAULT_TEMPERATURE) -> MoveSelectionConfig:
+def get_move_config_for_strategy(strategy_config: StrategyConfig, global_temperature: float = DEFAULT_TEMPERATURE) -> MoveSelectionConfig:
     """Create a MoveSelectionConfig for a strategy with specified temperature."""
     config_dict = strategy_config.config.copy()
+    # Use strategy-specific temperature if available, otherwise use global temperature
+    temperature = strategy_config.temperature if strategy_config.temperature is not None else global_temperature
     config_dict['temperature'] = temperature
     return MoveSelectionConfig(**config_dict)
 
@@ -1038,6 +1040,9 @@ Examples:
   
   # Compare with custom opening length and temperature
   %(prog)s --models=current_best,model1 --strategies=policy,mcts_122 --num-openings=200 --opening-length=5 --temperature=0.1
+  
+  # Compare same strategy with different temperatures
+  %(prog)s --models=current_best,current_best --strategies=policy,policy --temperatures=0.1,1.0 --num-openings=100
         """
     )
     
@@ -1068,7 +1073,9 @@ Examples:
     parser.add_argument('--enable-gumbel', type=str,
                        help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
-                       help=f'Temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
+                       help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
+    parser.add_argument('--temperatures', type=str,
+                       help='Comma-separated temperatures for each strategy (e.g., "0.1,1.0,0.5"). Overrides --temperature.')
     parser.add_argument('--seed', type=int, default=DEFAULT_SEED,
                        help=f'Random seed for opening selection (different seeds produce different opening sets) (default: auto-generated from time)')
     parser.add_argument('--verbose', type=int, default=DEFAULT_VERBOSE,
@@ -1192,9 +1199,18 @@ def main():
             num_mcts = len([s for s in strategy_names if s.startswith('mcts_')])
             enable_gumbel = enable_gumbel * num_mcts
     
+    # Parse per-strategy temperatures
+    temperatures = None
+    if args.temperatures:
+        temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
+        # Validate that we have the right number of temperatures
+        if len(temperatures) != len(strategy_names):
+            print(f"ERROR: Number of temperatures ({len(temperatures)}) must match number of strategies ({len(strategy_names)})")
+            sys.exit(1)
+    
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
+        strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel, temperatures)
         
         # If using direct checkpoint specification, create unique names
         if args.model_dirs:
@@ -1273,7 +1289,10 @@ def main():
     print(f"  Strategies: {[str(c) for c in strategy_configs]}")
     print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
     print(f"  Opening length: {args.opening_length} moves")
-    print(f"  Temperature: {args.temperature}")
+    if args.temperatures:
+        print(f"  Temperatures: {args.temperatures}")
+    else:
+        print(f"  Temperature: {args.temperature}")
     if args.batch_sizes:
         print(f"  Batch sizes: {args.batch_sizes}")
     if args.c_puct:

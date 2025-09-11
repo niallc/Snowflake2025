@@ -19,6 +19,7 @@ class StrategyConfig:
     config: Dict[str, Any]
     model_path: str  # Model checkpoint path for this strategy
     original_name: str = None  # Original name before parameter modifications
+    temperature: float = None  # Strategy-specific temperature (None for global fallback)
     
     def __post_init__(self):
         if self.original_name is None:
@@ -30,7 +31,8 @@ class StrategyConfig:
 
 def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_sims: Optional[List[int]] = None, 
                           search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
-                          c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None) -> List[StrategyConfig]:
+                          c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None,
+                          temperatures: Optional[List[float]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -44,6 +46,8 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
         search_widths: Optional list of search width strings (e.g., ["13,8", "20,10"])
         batch_sizes: Optional list of batch sizes for MCTS strategies (e.g., [64, 128, 256])
         c_pucts: Optional list of PUCT exploration constants for MCTS strategies (e.g., [1.2, 1.5, 2.0])
+        enable_gumbel: Optional list of boolean values to enable Gumbel AlphaZero root selection
+        temperatures: Optional list of temperatures for each strategy (e.g., [0.1, 1.0, 0.5])
     
     Returns:
         List of StrategyConfig objects
@@ -156,6 +160,17 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                     config.original_name = f"{config.original_name}_gumbel"
                 gumbel_idx += 1
     
+    # Handle per-strategy temperatures
+    if temperatures:
+        if len(temperatures) != len(configs):
+            raise ValueError(f"Number of temperatures ({len(temperatures)}) must match number of strategies ({len(configs)})")
+        
+        for config, temperature in zip(configs, temperatures):
+            config.temperature = temperature
+            # Update strategy name to include temperature for unique identification
+            config.name = f"{config.name}_t{temperature}"
+            config.original_name = f"{config.original_name}_t{temperature}"
+    
     return configs
 
 
@@ -198,16 +213,18 @@ def get_strategy_summary(configs: List[StrategyConfig]) -> str:
     """
     summaries = []
     for config in configs:
+        temp_info = f", t={config.temperature}" if config.temperature is not None else ""
+        
         if config.strategy_type == "policy":
-            summaries.append(f"policy({os.path.basename(config.model_path)})")
+            summaries.append(f"policy({os.path.basename(config.model_path)}{temp_info})")
         elif config.strategy_type == "mcts":
             sims = config.config.get("mcts_sims", "unknown")
-            summaries.append(f"mcts_{sims}({os.path.basename(config.model_path)})")
+            summaries.append(f"mcts_{sims}({os.path.basename(config.model_path)}{temp_info})")
         elif config.strategy_type == "fixed_tree":
             widths = config.config.get("search_widths", [])
             width_str = "_".join(str(w) for w in widths)
-            summaries.append(f"fixed_tree_{width_str}({os.path.basename(config.model_path)})")
+            summaries.append(f"fixed_tree_{width_str}({os.path.basename(config.model_path)}{temp_info})")
         else:
-            summaries.append(f"{config}({os.path.basename(config.model_path)})")
+            summaries.append(f"{config}({os.path.basename(config.model_path)}{temp_info})")
     
     return ", ".join(summaries)
