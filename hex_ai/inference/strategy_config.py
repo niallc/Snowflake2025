@@ -124,6 +124,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                 config.config["batch_size"] = batch_sizes[batch_idx]
                 # Update strategy name to include batch size for unique identification
                 config.name = f"{config.name}_b{batch_sizes[batch_idx]}"
+                config.original_name = f"{config.original_name}_b{batch_sizes[batch_idx]}"
                 batch_idx += 1
     
     if c_pucts:
@@ -137,6 +138,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                 config.config["mcts_c_puct"] = c_pucts[c_puct_idx]
                 # Update strategy name to include c_puct for unique identification
                 config.name = f"{config.name}_cp{c_pucts[c_puct_idx]}"
+                config.original_name = f"{config.original_name}_cp{c_pucts[c_puct_idx]}"
                 c_puct_idx += 1
     
     if enable_gumbel:
@@ -151,6 +153,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                 # Update strategy name to include gumbel indicator for unique identification
                 if enable_gumbel[gumbel_idx]:
                     config.name = f"{config.name}_gumbel"
+                    config.original_name = f"{config.original_name}_gumbel"
                 gumbel_idx += 1
     
     return configs

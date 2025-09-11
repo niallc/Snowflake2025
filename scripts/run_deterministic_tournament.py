@@ -1204,6 +1204,30 @@ def main():
                 # Update both name and original_name to be unique
                 config.name = f"{model_name}_{config.original_name}"
                 config.original_name = f"{model_name}_{config.original_name}"
+        
+        # Validate that all strategy original names are unique after processing
+        # (original_name is used for tournament result tracking)
+        final_original_names = [config.original_name for config in strategy_configs]
+        if len(final_original_names) != len(set(final_original_names)):
+            # Find duplicates
+            from collections import Counter
+            name_counts = Counter(final_original_names)
+            duplicates = [name for name, count in name_counts.items() if count > 1]
+            
+            print("ERROR: Tournament requires unique strategy configurations.")
+            print(f"Duplicate strategy names found: {duplicates}")
+            print("Each strategy must differ in at least one of:")
+            print("  - Strategy type (policy, mcts, fixed_tree)")
+            print("  - Model checkpoint")
+            print("  - MCTS simulation count")
+            print("  - Search parameters (batch size, c_puct, etc.)")
+            print("  - Gumbel settings")
+            print()
+            print("Examples of valid configurations:")
+            print("  --strategies=policy,mcts_100  (different types)")
+            print("  --strategies=mcts_100,mcts_200  (different sim counts)")
+            print("  --strategies=mcts_100,mcts_100 --enable-gumbel=false,true  (different Gumbel settings)")
+            sys.exit(1)
                 
     except ValueError as e:
         print(f"ERROR: {e}")
