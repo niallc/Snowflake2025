@@ -54,7 +54,7 @@ def gumbel_alpha_zero_root_select(
     to allocate simulations efficiently among candidates.
     
     Args:
-        policy_logits: Policy logits [K] BEFORE softmax; illegal actions should be -inf
+        policy_logits: Log-probabilities [K] (log of softmax output); illegal actions should be -inf
         total_sims: Total number of simulations to allocate (n)
         run_one_sim: Function that runs one simulation with forced root action
         q_of_child: Function that returns current empirical mean value for root child a in [0,1]
@@ -175,7 +175,7 @@ def gumbel_alpha_zero_root_batched(
     *,
     mcts,                    # your BaselineMCTS instance
     root,                    # root node
-    policy_logits,           # np.array [K], BEFORE softmax; illegal set to -inf
+    policy_logits,           # np.array [K], log-probabilities (log of softmax output); illegal set to -inf
     total_sims: int,         # 50..500
     legal_actions: List[int],
     q_of_child: Callable[[int], float],  # returns Q in [0,1]
@@ -183,7 +183,8 @@ def gumbel_alpha_zero_root_batched(
     m: Optional[int] = None,
     c_visit: float = 50.0,
     c_scale: float = 1.0,
-    temperature: float = 1.0,  # Temperature for Gumbel sampling
+    temperature: float = 1.0,  # Noise scale for Gumbel sampling (beta)
+    verbose: int = 0,        # Verbosity level for debug output
     rng=np.random,
 ):
     """
@@ -195,7 +196,7 @@ def gumbel_alpha_zero_root_batched(
     Args:
         mcts: BaselineMCTS instance with run_forced_root_actions method
         root: Root MCTS node
-        policy_logits: Policy logits [K] BEFORE softmax; illegal actions should be -inf
+        policy_logits: Log-probabilities [K] (log of softmax output); illegal actions should be -inf
         total_sims: Total number of simulations to allocate
         legal_actions: List of legal action indices at root
         q_of_child: Function that returns current empirical mean value for root child a in [0,1]
@@ -203,7 +204,8 @@ def gumbel_alpha_zero_root_batched(
         m: Number of actions to consider via Top-m (None for auto)
         c_visit: Gumbel-AlphaZero parameter (default: 50.0)
         c_scale: Gumbel-AlphaZero parameter (default: 1.0)
-        temperature: Temperature for Gumbel sampling (default: 1.0)
+        temperature: Noise scale for Gumbel sampling (beta, default: 1.0)
+        verbose: Verbosity level for debug output (default: 0)
         rng: Random number generator (uses numpy.random if None)
         
     Returns:
@@ -240,11 +242,14 @@ def gumbel_alpha_zero_root_batched(
     if temperature < 0:
         raise ValueError(f"temperature must be non-negative, got {temperature}")
     
-    # Temperature scaling: scale logits by 1/tau to control exploration
-    # This is the standard "temperature before Gumbel" approach
-    t = max(temperature, 1e-6)  # avoid div-by-zero explosion
-    # Do NOT scale the Gumbel noise or the value bonus; only scale logits
-    scaled_policy_logits = policy_logits / t
+    # Interpret temperature as noise scale beta (no scaling of logits or value terms)
+    beta = float(temperature)
+    
+    # DEBUG: Log noise scaling effects
+    if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
+        print(f"GUMBEL NOISE SCALE DEBUG: beta={beta}")
+        print(f"  Original logits range: [{np.min(policy_logits):.3f}, {np.max(policy_logits):.3f}]")
+        print(f"  Noise scale: {beta}")
     
     K = policy_logits.shape[0]
     
@@ -274,8 +279,8 @@ def gumbel_alpha_zero_root_batched(
     mask = np.full(K, -np.inf)
     mask[legal_actions] = 0.0
     
-    # Apply mask to scaled logits
-    logits = scaled_policy_logits + mask
+    # Apply mask to logits (no temperature scaling)
+    logits = policy_logits + mask
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
@@ -290,8 +295,12 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Use fixed Gumbel(0,1) noise as per the paper - temperature should not scale the Gumbel noise
+    # Scale Gumbel noise by beta (temperature as noise scale)
     g = sample_gumbel(K, rng=rng)
+    if beta <= 0.0:
+        g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
+    else:
+        g *= beta
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
@@ -326,8 +335,10 @@ def gumbel_alpha_zero_root_batched(
         n_val = n_of_child(a)
         score_val = g[a] + logits[a] + sigma * q_val
         
-        # DEBUG: Print Q-values and visit counts
-        # print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+        # DEBUG: Print Q-values and visit counts for low temperatures
+        if beta <= 0.1 and verbose >= 5:
+            print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+            print(f"    Components: gumbel={g[a]:.3f}, prior={logits[a]:.3f}, value={sigma * q_val:.3f}")
         
         return score_val
     
@@ -398,6 +409,17 @@ def gumbel_alpha_zero_root_batched(
     # Final pick
     if len(cand) > 1:
         cand.sort(key=rank_key, reverse=True)
+    
+    # DEBUG: Compare final selection with top policy move
+    if beta <= 0.1 and verbose >= 5:
+        selected_action = cand[0]
+        top_policy_action = int(np.argmax(logits))
+        print(f"GUMBEL FINAL SELECTION DEBUG:")
+        print(f"  Selected action: {selected_action} (score: {rank_key(selected_action):.3f})")
+        print(f"  Top policy action: {top_policy_action} (score: {rank_key(top_policy_action):.3f})")
+        print(f"  Same as top policy: {selected_action == top_policy_action}")
+        if selected_action != top_policy_action:
+            print(f"  Difference in scores: {rank_key(selected_action) - rank_key(top_policy_action):.3f}")
     
     timing_data['ranking_time'] = time.perf_counter() - ranking_start
     timing_data['total_time'] = time.perf_counter() - total_start

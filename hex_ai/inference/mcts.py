@@ -1126,6 +1126,15 @@ class BaselineMCTS:
         # Pass log-priors and temperature to Gumbel
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
         
+        # DEBUG: Log Gumbel call parameters
+        if tau <= 0.1 and verbose >= 5:
+            print(f"MCTS GUMBEL CALL DEBUG:")
+            print(f"  Temperature: {tau}")
+            print(f"  Total sims: {total_sims}")
+            print(f"  Legal actions: {len(legal_actions)}")
+            print(f"  Logits range: [{np.min(logits_for_gumbel):.3f}, {np.max(logits_for_gumbel):.3f}]")
+            print(f"  Top policy action: {int(np.argmax(logits_for_gumbel))}")
+        
         # Run batched Gumbel-AlphaZero selection with temperature
         # print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
@@ -1139,7 +1148,8 @@ class BaselineMCTS:
             m=self.cfg.gumbel_m_candidates,
             c_visit=self.cfg.gumbel_c_visit,
             c_scale=self.cfg.gumbel_c_scale,
-            temperature=tau
+            temperature=tau,
+            verbose=verbose
         )
         
         # Record Gumbel performance metrics
@@ -1288,6 +1298,7 @@ class BaselineMCTS:
                             best_child_idx = int(np.argmax(current.N))
                             if best_child_idx < len(current.legal_moves):
                                 r, c = current.legal_moves[best_child_idx]
+                                # TODO: Investigate why we have this literal '97' (should we use move_to_index?)
                                 pv_moves.append(f"{chr(97 + c)}{r + 1}")
                                 current = current.children[best_child_idx]
                                 if current is None:
