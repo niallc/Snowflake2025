@@ -976,6 +976,48 @@ def run_deterministic_tournament(
     return result
 
 
+def generate_gumbel_summary(strategy_configs: List[StrategyConfig]) -> str:
+    """
+    Generate a concise summary of Gumbel configuration for tournament participants.
+    
+    Args:
+        strategy_configs: List of strategy configurations
+        
+    Returns:
+        String summary of Gumbel settings, or empty string if no MCTS strategies
+    """
+    mcts_configs = [c for c in strategy_configs if c.strategy_type == "mcts"]
+    
+    if not mcts_configs:
+        return ""
+    
+    # Get Gumbel settings from the first MCTS config (they should all be the same)
+    # Default values from move_selection.py
+    gumbel_enabled = any(c.config.get("enable_gumbel_root_selection", False) for c in mcts_configs)
+    gumbel_sim_threshold = mcts_configs[0].config.get("gumbel_sim_threshold", 200)  # Default from move_selection.py
+    
+    # Build summary
+    summary_parts = []
+    summary_parts.append(f"Gumbel: Flag = {'on' if gumbel_enabled else 'off'}")
+    summary_parts.append(f"sim threshold = {gumbel_sim_threshold}")
+    
+    # Add per-participant status
+    participant_status = []
+    for i, config in enumerate(strategy_configs):
+        if config.strategy_type == "mcts":
+            sims = config.config.get("mcts_sims", 0)
+            gumbel_enabled_for_this = config.config.get("enable_gumbel_root_selection", False)
+            will_use_gumbel = gumbel_enabled_for_this and sims <= gumbel_sim_threshold
+            status = "on" if will_use_gumbel else "off"
+            participant_status.append(f"s{i+1}: {status}")
+        else:
+            participant_status.append(f"s{i+1}: N/A")
+    
+    summary_parts.append(", ".join(participant_status))
+    
+    return ", ".join(summary_parts)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description='Run a deterministic strategy tournament using pre-generated opening positions',
@@ -1212,6 +1254,12 @@ def main():
         print(f"  Batch sizes: {args.batch_sizes}")
     if args.c_puct:
         print(f"  C_PUCT values: {args.c_puct}")
+    
+    # Print Gumbel configuration summary
+    gumbel_summary = generate_gumbel_summary(strategy_configs)
+    if gumbel_summary:
+        print(f"  {gumbel_summary}")
+    
     print(f"  Dirichlet noise: alpha=0.3, eps=0.25 (MCTS default)")
     print(f"  Root noise: disabled (add_root_noise=False)")
     print(f"  Random seed: {args.seed} (for opening selection)")
