@@ -418,7 +418,7 @@ class BaselineMCTSConfig:
     
     # Gumbel-AlphaZero root selection parameters
     enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 750  # Use Gumbel selection when sims <= this threshold
+    gumbel_sim_threshold: int = 99002  # Use Gumbel selection when sims <= this threshold
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)

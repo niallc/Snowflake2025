@@ -29,7 +29,7 @@ class MoveSelectionConfig:
     batch_size: Optional[int] = None  # Override default batch size for MCTS
     # For Gumbel AlphaZero root selection
     enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 200  # Use Gumbel selection when sims <= this threshold
+    gumbel_sim_threshold: int = 90003  # Use Gumbel selection when sims <= this threshold
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
@@ -44,7 +44,7 @@ class MoveSelectionStrategy(ABC):
     
     @abstractmethod
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         """Select a move for the given state and model."""
         pass
     
@@ -63,7 +63,7 @@ class PolicyBasedStrategy(MoveSelectionStrategy):
     """Move selection using direct policy sampling."""
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         return select_policy_move(state, model, config.temperature)
     
     def get_name(self) -> str:
@@ -77,7 +77,7 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
     """Move selection using fixed-width minimax search."""
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         if not config.search_widths:
             raise ValueError("FixedTreeSearchStrategy requires search_widths configuration")
         
@@ -146,7 +146,7 @@ class MCTSStrategy(MoveSelectionStrategy):
         if verbose >= 5:
             print(f"[MCTS DEBUG] add_root_noise={mcts_config.add_root_noise}, dirichlet_alpha={mcts_config.dirichlet_alpha}, dirichlet_eps={mcts_config.dirichlet_eps}")
         
-        result = mcts.run(state, verbose=0)  # Quiet mode for tournaments
+        result = mcts.run(state, verbose=verbose)  # Use passed verbose parameter
         return result.move
     
     def get_name(self) -> str:

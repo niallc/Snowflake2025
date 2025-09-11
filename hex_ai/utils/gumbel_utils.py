@@ -115,7 +115,12 @@ def gumbel_alpha_zero_root_select(
         sigma = (c_visit + maxN) ** c_scale
         q_val = q_of_child(a)
         score_val = g[a] + logits[a] + sigma * q_val
-        return score_val
+        
+        # Gate warning on legal_actions as a simple way to reduce flooding and only warn on early moves.
+        if legal_actions > 165:
+            print("WARNING: DEBUG: returning only logits to test against policy.")
+        return logits[a]
+        # return score_val
     
     for r in range(R):
         if not cand:

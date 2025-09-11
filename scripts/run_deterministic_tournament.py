@@ -627,7 +627,7 @@ def play_deterministic_game(
     
         # Time the move selection
         start_time = time.perf_counter()
-        move = strategy_obj.select_move(state, model, strategy_config)
+        move = strategy_obj.select_move(state, model, strategy_config, verbose=verbose)
         end_time = time.perf_counter()
         
         if move is None:
@@ -994,7 +994,7 @@ def generate_gumbel_summary(strategy_configs: List[StrategyConfig]) -> str:
     # Get Gumbel settings from the first MCTS config (they should all be the same)
     # Default values from move_selection.py
     gumbel_enabled = any(c.config.get("enable_gumbel_root_selection", False) for c in mcts_configs)
-    gumbel_sim_threshold = mcts_configs[0].config.get("gumbel_sim_threshold", 200)  # Default from move_selection.py
+    gumbel_sim_threshold = mcts_configs[0].config.get("gumbel_sim_threshold", 99001)  # Default from move_selection.py
     
     # Build summary
     summary_parts = []
