@@ -32,7 +32,7 @@ class StrategyConfig:
 def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_sims: Optional[List[int]] = None, 
                           search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
                           c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None,
-                          temperatures: Optional[List[float]] = None) -> List[StrategyConfig]:
+                          temperatures: Optional[List[float]] = None, gumbel_sim_thresholds: Optional[List[int]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -48,6 +48,7 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
         c_pucts: Optional list of PUCT exploration constants for MCTS strategies (e.g., [1.2, 1.5, 2.0])
         enable_gumbel: Optional list of boolean values to enable Gumbel AlphaZero root selection
         temperatures: Optional list of temperatures for each strategy (e.g., [0.1, 1.0, 0.5])
+        gumbel_sim_thresholds: Optional list of simulation thresholds for Gumbel AlphaZero root selection (e.g., [200, 500, 1000])
     
     Returns:
         List of StrategyConfig objects
@@ -159,6 +160,18 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
                     config.name = f"{config.name}_gumbel"
                     config.original_name = f"{config.original_name}_gumbel"
                 gumbel_idx += 1
+    
+    # Handle per-strategy gumbel simulation thresholds
+    if gumbel_sim_thresholds:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(gumbel_sim_thresholds) != len(mcts_configs):
+            raise ValueError(f"Number of gumbel_sim_thresholds ({len(gumbel_sim_thresholds)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        threshold_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["gumbel_sim_threshold"] = gumbel_sim_thresholds[threshold_idx]
+                threshold_idx += 1
     
     # Handle per-strategy temperatures
     if temperatures:

@@ -13,6 +13,8 @@ import numpy as np
 import time
 from typing import Callable, List, Optional, Tuple, Dict, Any
 
+from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD
+
 
 def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
     """
@@ -442,3 +444,98 @@ def gumbel_alpha_zero_root_batched(
     }
     
     return cand[0], performance_metrics
+
+
+# Configuration display utilities
+
+def generate_gumbel_summary_from_configs(strategy_configs: List[Any]) -> str:
+    """
+    Generate a concise summary of Gumbel configuration for strategy configurations.
+    
+    This function works with StrategyConfig objects from the tournament system.
+    
+    Args:
+        strategy_configs: List of strategy configurations with config dictionaries
+        
+    Returns:
+        String summary of Gumbel settings, or empty string if no MCTS strategies
+    """
+    mcts_configs = [c for c in strategy_configs if c.strategy_type == "mcts"]
+    
+    if not mcts_configs:
+        return ""
+    
+    # Get Gumbel settings from the first MCTS config (they should all be the same)
+    gumbel_enabled = any(c.config.get("enable_gumbel_root_selection", False) for c in mcts_configs)
+    gumbel_sim_threshold = mcts_configs[0].config.get("gumbel_sim_threshold", DEFAULT_GUMBEL_SIM_THRESHOLD)
+    
+    # Build summary
+    summary_parts = [
+        f"Gumbel: Flag = {'on' if gumbel_enabled else 'off'}",
+        f"sim threshold = {gumbel_sim_threshold}"
+    ]
+    
+    # Add per-participant status
+    participant_status = []
+    for i, config in enumerate(strategy_configs):
+        if config.strategy_type == "mcts":
+            sims = config.config.get("mcts_sims", 0)
+            gumbel_enabled_for_this = config.config.get("enable_gumbel_root_selection", False)
+            will_use_gumbel = gumbel_enabled_for_this and sims <= gumbel_sim_threshold
+            status = "on" if will_use_gumbel else "off"
+            participant_status.append(f"s{i+1}: {status}")
+        else:
+            participant_status.append(f"s{i+1}: N/A")
+    
+    summary_parts.append(", ".join(participant_status))
+    
+    return ", ".join(summary_parts)
+
+
+def generate_gumbel_summary_from_params(
+    mcts_sims: int,
+    enable_gumbel: bool,
+    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD,
+    strategy_name: str = "selfplay"
+) -> str:
+    """
+    Generate a concise summary of Gumbel configuration from individual parameters.
+    
+    This function works with individual parameters, suitable for selfplay scenarios.
+    
+    Args:
+        mcts_sims: Number of MCTS simulations
+        enable_gumbel: Whether Gumbel root selection is enabled
+        gumbel_sim_threshold: Simulation threshold for Gumbel (default: from config)
+        strategy_name: Name of the strategy (default: "selfplay")
+        
+    Returns:
+        String summary of Gumbel settings
+    """
+    will_use_gumbel = enable_gumbel and mcts_sims <= gumbel_sim_threshold
+    status = "on" if will_use_gumbel else "off"
+    
+    return f"Gumbel: Flag = {'on' if enable_gumbel else 'off'}, sim threshold = {gumbel_sim_threshold}, {strategy_name}: {status}"
+
+
+def generate_gumbel_summary_from_mcts_config(mcts_config: Any) -> str:
+    """
+    Generate a concise summary of Gumbel configuration from an MCTS config object.
+    
+    Args:
+        mcts_config: MCTS configuration object with Gumbel settings
+        
+    Returns:
+        String summary of Gumbel settings
+    """
+    # Extract Gumbel settings from MCTS config
+    enable_gumbel = getattr(mcts_config, 'enable_gumbel_root_selection', False)
+    gumbel_sim_threshold = getattr(mcts_config, 'gumbel_sim_threshold', DEFAULT_GUMBEL_SIM_THRESHOLD)
+    mcts_sims = getattr(mcts_config, 'sims', 0)
+    
+    return generate_gumbel_summary_from_params(
+        mcts_sims=mcts_sims,
+        enable_gumbel=enable_gumbel,
+        gumbel_sim_threshold=gumbel_sim_threshold,
+        strategy_name="selfplay"
+    )

@@ -72,7 +72,7 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
+from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT, DEFAULT_GUMBEL_SIM_THRESHOLD
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
 # ---- MCTS Constants ----
@@ -418,7 +418,7 @@ class BaselineMCTSConfig:
     
     # Gumbel-AlphaZero root selection parameters
     enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 99002  # Use Gumbel selection when sims <= this threshold
+    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
@@ -1022,7 +1022,7 @@ class BaselineMCTS:
         # print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
         
         if use_gumbel:
-            if verbose >= 1:
+            if verbose >= 5:
                 print(f"Using Gumbel-AlphaZero root selection for {sims_remaining} simulations")
             return self._run_gumbel_root_selection(root, sims_remaining, timing_tracker, verbose)
         

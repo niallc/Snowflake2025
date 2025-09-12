@@ -14,10 +14,12 @@ from datetime import datetime
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
+from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
 
 
 
@@ -77,20 +79,27 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Timestamp: {timestamp}")
     
+    # Print Gumbel configuration summary
+    gumbel_summary = generate_gumbel_summary_from_params(
+        mcts_sims=args.mcts_sims,
+        enable_gumbel=not args.disable_gumbel,
+        gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
+        strategy_name="selfplay"
+    )
+    print(f"Gumbel configuration: {gumbel_summary}")
+    
     # Print git commit information
     git_info = get_git_commit_info()
     print(f"Git commit: {git_info['status']}")
     
-    # Note about execution configuration
-    if not args.no_batched_inference:
-        print(f"\nNOTE: Using single-threaded execution with batched inference.")
-        print("This is the recommended configuration for optimal performance.")
-    else:
-        print(f"\nNOTE: Using individual inference calls.")
-        print("This configuration may provide better performance for non-batched inference.")
-    
-    print()
-    
+    # # Note about execution configuration
+    # if not args.no_batched_inference:
+    #     print(f"\nNOTE: Using single-threaded execution with batched inference.")
+    #     print("This is the recommended configuration for optimal performance.")
+    # else:
+    #     print(f"\nNOTE: Using individual inference calls.")
+    #     print("This configuration may provide better performance for non-batched inference.")
+        
     # Create opening strategy
     opening_strategy = None
     if args.opening_strategy != 'none':

@@ -78,6 +78,7 @@ CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 # MCTS inference defaults
 DEFAULT_BATCH_CAP = 64  # Default batch size for neural network evaluation
 DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
+DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel AlphaZero root selection
 
 # Data augmentation
 ROTATION_AUGMENTATION = True
