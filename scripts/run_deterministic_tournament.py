@@ -817,15 +817,29 @@ def run_deterministic_tournament(
         
         # Write header to .trmph file with collision avoidance
         from hex_ai.inference.tournament import TournamentPlayConfig
+        
+        # Create per-participant temperature mapping
+        participant_temperatures = {}
+        if strategy_a.temperature is not None:
+            participant_temperatures[strategy_a.name] = strategy_a.temperature
+        if strategy_b.temperature is not None:
+            participant_temperatures[strategy_b.name] = strategy_b.temperature
+        
+        # Use the first strategy's temperature as the global temperature for the play config
+        # (this is mainly for backward compatibility, the real temperatures are in participant_temperatures)
+        global_temp = strategy_a.temperature if strategy_a.temperature is not None else temperature
+        
         play_config = TournamentPlayConfig(
-            temperature=temperature,
+            temperature=global_temp,
             random_seed=seed,
             pie_rule=False,  # Deterministic tournaments don't use pie rule
-            strategy="deterministic"
+            strategy="deterministic",
+            participant_temperatures=participant_temperatures
         )
         # Include all model paths used in this tournament
         pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
-        actual_trmph_file = write_tournament_trmph_header(trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE)
+        pair_strategy_configs = [strategy_a, strategy_b]
+        actual_trmph_file = write_tournament_trmph_header(trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, strategy_configs=pair_strategy_configs)
         
         # Find available CSV filename
         actual_csv_file = find_available_csv_filename(csv_file)

@@ -83,7 +83,8 @@ def append_trmph_winner_line(trmph_sequence: str, winner: str, output_file: str)
 
 def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list, 
                                  num_games: int, play_config, board_size: int = 13,
-                                 player_labels: list = None, participant_temperatures: dict = None):
+                                 player_labels: list = None, participant_temperatures: dict = None,
+                                 strategy_configs: list = None):
     """
     Write header information to a tournament .trmph file.
     
@@ -95,6 +96,7 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         board_size: Board size (default 13)
         player_labels: List of player labels (for duplicate model support)
         participant_temperatures: Dict mapping player labels to their temperatures
+        strategy_configs: List of StrategyConfig objects for detailed strategy information
         
     Returns:
         The actual file path used (may be different from input if collision avoidance was needed)
@@ -111,6 +113,43 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         "Temperature": play_config.temperature,
         "Pie rule": play_config.pie_rule,
     }
+    
+    # Add detailed strategy information if available
+    if strategy_configs:
+        strategy_details = []
+        for i, config in enumerate(strategy_configs):
+            model_name = os.path.basename(checkpoint_paths[i]) if i < len(checkpoint_paths) else "unknown"
+            strategy_info = f"{model_name}: {config.strategy_type}"
+            
+            # Add strategy-specific parameters
+            if config.strategy_type.startswith('mcts_'):
+                # Extract simulation count from strategy type (e.g., "mcts_140" -> 140)
+                try:
+                    sims = int(config.strategy_type.split('_')[1])
+                    strategy_info += f" (sims={sims})"
+                except (IndexError, ValueError):
+                    pass
+                
+                # Add MCTS-specific config
+                if hasattr(config, 'config') and config.config:
+                    mcts_config = config.config
+                    if 'c_puct' in mcts_config:
+                        strategy_info += f" (c_puct={mcts_config['c_puct']})"
+                    if 'enable_gumbel' in mcts_config and mcts_config['enable_gumbel']:
+                        strategy_info += " (gumbel=True)"
+                        if 'gumbel_sim_threshold' in mcts_config:
+                            strategy_info += f" (gumbel_threshold={mcts_config['gumbel_sim_threshold']})"
+                    else:
+                        strategy_info += " (gumbel=False)"
+            
+            # Add temperature if different from global
+            if hasattr(config, 'temperature') and config.temperature is not None:
+                strategy_info += f" (temp={config.temperature})"
+            
+            strategy_details.append(strategy_info)
+        
+        if strategy_details:
+            metadata["Strategy details"] = strategy_details
     
     # Add per-participant temperature information if available
     if participant_temperatures and player_labels:
