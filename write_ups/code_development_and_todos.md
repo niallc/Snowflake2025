@@ -28,6 +28,9 @@
  - Return to code to provide detailed tree exploration guidance at low sims
  - Generate less detailed but statistics to describe the search tree at higher sims
 
+### 7. Dead Cells, virtual connections, and similar
+ - In training (auxillary heads)
+ - In MCTS (narrow the search space with very fast highly incomplete pattern matching)
 ### 12. Update on moves in winning games more?
  - Feature request rather than a bug: Do we want the policy head to update more on moves from the winning player?
 

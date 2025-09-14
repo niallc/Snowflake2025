@@ -17,6 +17,9 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # Temporary honourable mention models: sep6th.../epoch4_mini135.pt.gz, sep6th.../epoch4_mini40.pt.gz
 
 # # Temporary state for retraining:
+
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250913_064942/pipeline_sweep_exp0__99914b_20250913_065347/"
+# CURRENT_BEST_MODEL_FILE = "epoch9_mini9.pt.gz"
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250912_093351/pipeline_sweep_exp0__99914b_20250912_093858/"
 CURRENT_BEST_MODEL_FILE = "epoch7_mini4.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250910_080404/pipeline_sweep_exp0__99914b_20250910_080404/"

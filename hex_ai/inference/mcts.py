@@ -160,12 +160,6 @@ def safe_puct_denominator(n_sum: float) -> bool:
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
 
-# Default batch cap for neural network evaluation (imported from hex_ai.config)
-# DEFAULT_BATCH_CAP = 64
-
-# Default PUCT exploration constant (imported from hex_ai.config)
-# DEFAULT_C_PUCT = 1.5
-
 # Default cache size for LRU eviction
 DEFAULT_CACHE_SIZE = 100000  # 100k entries
 
@@ -429,6 +423,13 @@ class BaselineMCTSConfig:
     gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
     temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
     gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
+    
+    # Batch flushing control parameters
+    # DESIGN: Fixed values for consistent performance across simulation counts
+    # The original dynamic logic caused performance drops at higher simulation counts
+    # due to inconsistent batch flushing behavior as the tree became more explored.
+    distinct_target: int = 32  # Target number of distinct leaves before flushing batch (fixed for consistency)
+    enable_low_distinct_ratio_flush: bool = False  # Disabled by default to prevent performance drops
 
     # This makes actual terminal wins (immediate wins) even more attractive than
     # neural network evaluations, encouraging the algorithm to find and prefer them.
@@ -465,6 +466,12 @@ class BaselineMCTSConfig:
             raise ValueError(f"confidence_termination_threshold must be between 0 and 1 (represents distance from neutral), got {self.confidence_termination_threshold}")
         if not 0 < self.depth_discount_factor <= 1:
             raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
+        
+        # Validate batch flushing parameters
+        if self.distinct_target <= 0:
+            raise ValueError(f"distinct_target must be positive, got {self.distinct_target}")
+        if self.distinct_target > self.batch_cap:
+            raise ValueError(f"distinct_target ({self.distinct_target}) cannot exceed batch_cap ({self.batch_cap})")
 
         # Validate Gumbel-AlphaZero parameters
         if self.gumbel_sim_threshold <= 0:
@@ -1248,7 +1255,15 @@ class BaselineMCTS:
         timing_tracker: MCTSTimingTracker,
         forced_root_actions: Optional[List[int]] = None
     ) -> Tuple[List[MCTSNode], List[List[Tuple[MCTSNode, int]]]]:
-        """Select a batch of leaves for expansion with early flush triggers."""
+        """
+        Select a batch of leaves for expansion with consistent batch flushing behavior.
+        
+        Batch flushing strategy:
+        - Collect leaves until we have distinct_target distinct (uncached) leaves
+        - This ensures consistent neural network batch sizes for optimal GPU utilization
+        - Low distinct ratio flush is disabled by default to prevent performance drops
+        - Fixed distinct_target (32) provides consistent behavior across simulation counts
+        """
         timing_tracker.start_timing("select")
 
         leaves: List[MCTSNode] = []
@@ -1265,9 +1280,8 @@ class BaselineMCTS:
             force_q = deque()
             select_budget = min(self.cfg.batch_cap, sims_remaining)
 
-        # Distinct-leaf target: ~50% of budget, clamped to [16, budget]
-        distinct_target = max(16, int(round(select_budget * 0.5)))
-        distinct_target = min(distinct_target, select_budget)
+        # Use configured distinct target (fixed value for consistent performance)
+        distinct_target = self.cfg.distinct_target
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
@@ -1348,22 +1362,24 @@ class BaselineMCTS:
                             len(leaves), len(distinct_hashes), distinct_target
                         )
 
-                    # Flush triggers, U & T are helper variables to determnd when to call the network
-                    # (nothing to do with the PUCT formula) 
+                    # Batch flushing logic: determine when to call the neural network
+                    # U = number of distinct (uncached) leaves that need NN evaluation
+                    # T = total number of leaves collected so far
                     U = len(distinct_hashes)
                     T = len(leaves)
+                    
+                    # Primary flush condition: enough distinct leaves for efficient NN batch
                     if U >= distinct_target:
-                        # Record batch flush for detailed exploration
                         if self.detailed_exploration_enabled:
                             self._record_batch_flush("distinct_target_reached", T, U, distinct_target, select_budget)
-                        
                         timing_tracker.end_timing("select")
                         return leaves, paths
-                    if T >= 16 and U / max(1, T) < 0.5:
-                        # Record batch flush for detailed exploration
+                    
+                    # Secondary flush condition: low distinct ratio (disabled by default)
+                    # This was causing performance drops at higher simulation counts
+                    if self.cfg.enable_low_distinct_ratio_flush and T >= 16 and U / max(1, T) < 0.5:
                         if self.detailed_exploration_enabled:
                             self._record_batch_flush("low_distinct_ratio", T, U, distinct_target, select_budget)
-                        
                         timing_tracker.end_timing("select")
                         return leaves, paths
                     break
@@ -2031,6 +2047,9 @@ def create_mcts_config(
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
         "gumbel_temperature_deterministic_cutoff": -1.0,  # Disable cutoff for Gumbel
+        # Batch flushing control (fixed for consistent performance)
+        "distinct_target": 32,  # Fixed distinct target for consistent batch behavior
+        "enable_low_distinct_ratio_flush": False,  # Disabled to maintain consistent batch sizes
     }
     
     # Only set parameters if not already provided in kwargs
