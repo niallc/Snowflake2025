@@ -257,7 +257,8 @@ def print_script_results(
     script_type: str,
     results: Any,
     config: ScriptConfig,
-    output_files: Optional[Dict[str, str]] = None
+    output_files: Optional[Dict[str, str]] = None,
+    total_time: Optional[float] = None
 ) -> None:
     """
     Print unified results analysis for all script types.
@@ -267,9 +268,10 @@ def print_script_results(
         results: Results object (TournamentResult, DeterministicTournamentResult, or selfplay results)
         config: ScriptConfig object
         output_files: Optional dict of output file paths
+        total_time: Optional total execution time (mainly for selfplay)
     """
     if script_type == "selfplay":
-        _print_selfplay_results(results, config, output_files)
+        _print_selfplay_results(results, config, output_files, total_time)
     elif script_type in ["tournament", "deterministic_tournament"]:
         _print_tournament_results(results, config, output_files)
     else:
@@ -279,12 +281,18 @@ def print_script_results(
                 print(f"  {file_type.title()}: {file_path}")
 
 
-def _print_selfplay_results(results: Any, config: ScriptConfig, output_files: Optional[Dict[str, str]] = None) -> None:
+def _print_selfplay_results(results: Any, config: ScriptConfig, output_files: Optional[Dict[str, str]] = None, total_time: Optional[float] = None) -> None:
     """Print selfplay-specific results."""
     print(f"\n=== Generation Complete ===")
     
+    # Print timing information if available
+    if total_time is not None:
+        print(f"Total time: {total_time:.1f}s")
+        if hasattr(results, '__len__') and len(results) > 0:
+            print(f"Games per second: {len(results) / total_time:.1f}")
+    
+    # Winner distribution
     if hasattr(results, '__len__') and len(results) > 0:
-        # Winner distribution
         winners = [game.get('winner', 'unknown') for game in results]
         red_wins = winners.count('r')
         blue_wins = winners.count('b')

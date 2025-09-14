@@ -20,6 +20,7 @@ from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
+from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 
 
 
@@ -64,33 +65,36 @@ def main():
     # Generate timestamp for unique filenames
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    print(f"=== Large-Scale Self-Play Generation ===")
-    print(f"Model: {args.model_path}")
-    print(f"Games: {args.num_games}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"Search method: MCTS ({args.mcts_sims} simulations)")
-    print(f"C_PUCT: {args.c_puct}")
-    print(f"Gumbel root selection: {not args.disable_gumbel}")
-    print(f"Temperature: {args.temperature} -> {args.temperature_end}")
-    print(f"Opening strategy: {args.opening_strategy}")
-    if args.opening_strategy == 'pie_rule':
-        print(f"Bad move frequency: {args.bad_move_frequency}")
-    print(f"Batched inference: {not args.no_batched_inference}")
-    print(f"Output directory: {args.output_dir}")
-    print(f"Timestamp: {timestamp}")
-    
-    # Print Gumbel configuration summary
-    gumbel_summary = generate_gumbel_summary_from_params(
+    # Print configuration using unified logging
+    script_config = ScriptConfig(
+        script_type="selfplay",
+        models=[args.model_path],
+        strategies=[f"mcts_{args.mcts_sims}"],
+        num_games=args.num_games,
+        strategy_config={"mcts_sims": args.mcts_sims, "c_puct": args.c_puct},
+        temperatures=args.temperature,
+        random_seed=0,  # Selfplay doesn't use a fixed seed
+        pie_rule=False,  # Not applicable to selfplay
+        opening_strategy=args.opening_strategy,
+        batch_size=args.batch_size,
+        cache_size=args.cache_size,
         mcts_sims=args.mcts_sims,
+        c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
-        strategy_name="selfplay"
+        temperature_end=args.temperature_end,
+        no_batched_inference=args.no_batched_inference,
+        output_dir=args.output_dir
     )
-    print(f"Gumbel configuration: {gumbel_summary}")
     
-    # Print git commit information
-    git_info = get_git_commit_info()
-    print(f"Git commit: {git_info['status']}")
+    print_script_configuration(script_config)
+    
+    # Print additional selfplay specific info
+    if args.opening_strategy == 'pie_rule':
+        print(f"  Bad move frequency: {args.bad_move_frequency}")
+    print(f"  Output directory: {args.output_dir}")
+    print(f"  Timestamp: {timestamp}")
+    print()
     
     # # Note about execution configuration
     # if not args.no_batched_inference:
@@ -148,37 +152,22 @@ def main():
                 opening_strategy=opening_strategy
             )
         
-        # Save games
+        # Save games and prepare results
+        trmph_file = None
         if games:
             # Save as TRMPH text file
             base_filename = f"{args.output_dir}/selfplay_{timestamp}"
             trmph_file = engine.save_games_simple(games, base_filename)
-            print(f"\nSaved games:")
-            print(f"  TRMPH file: {trmph_file}")
         
-        # Print final statistics
+        # Calculate total time
         total_time = time.time() - start_time
-        print(f"\n=== Generation Complete ===")
-        print(f"Total time: {total_time:.1f}s")
-        print(f"Games per second: {len(games) / total_time:.1f}")
         
-        # Winner distribution
-        if games:
-            winners = [game.get('winner', 'unknown') for game in games]
-            red_wins = winners.count('r')
-            blue_wins = winners.count('b')
-            print(f"Winner distribution: Red {red_wins}, Blue {blue_wins}")
-            print(f"Red win rate: {red_wins / len(games):.1%}")
+        # Print results using unified analyzer
+        output_files = {}
+        if trmph_file:
+            output_files["trmph"] = trmph_file
         
-        # Performance statistics
-        stats = engine.get_performance_stats()
-        if 'model' in stats:
-            model_stats = stats['model']
-            print(f"\n=== Model Performance ===")
-            print(f"Total inferences: {model_stats.get('total_inferences', 0)}")
-            print(f"Cache hit rate: {model_stats.get('cache', {}).get('hit_rate', 0):.1%}")
-            print(f"Average batch size: {model_stats.get('avg_batch_size', 0):.1f}")
-            print(f"Throughput: {model_stats.get('throughput', 0):.1f} boards/s")
+        print_script_results("selfplay", games, script_config, output_files, total_time)
         
     except KeyboardInterrupt:
         print("\n\nGeneration interrupted by user.")

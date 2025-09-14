@@ -76,7 +76,6 @@ from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_configs
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
-from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis, calculate_head_to_head_stats, print_head_to_head_stats
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
 )
@@ -697,64 +696,6 @@ def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
             writer.writerow(row)
 
 
-def print_deterministic_tournament_analysis(result: DeterministicTournamentResult, strategy_configs: List[StrategyConfig]) -> None:
-    """
-    Print comprehensive tournament analysis with model information.
-    
-    Args:
-        result: Tournament result object
-        strategy_configs: List of strategy configurations with model information
-    """
-    # Create mapping from strategy name to model
-    strategy_to_model = {config.name: os.path.basename(config.model_path) for config in strategy_configs}
-    
-    print("\n" + "="*60)
-    print("DETERMINISTIC TOURNAMENT ANALYSIS")
-    print("="*60)
-    
-    # Print participants with their models
-    print("\nParticipants:")
-    for config in strategy_configs:
-        print(f"  {config.name} (model: {os.path.basename(config.model_path)})")
-    
-    # Print win rates with model information
-    print("\nWin Rates:")
-    win_rates = result.win_rates()
-    sorted_participants = sorted(win_rates.items(), key=lambda x: x[1], reverse=True)
-    
-    for name, win_rate in sorted_participants:
-        model_name = strategy_to_model.get(name, "unknown")
-        total_wins = sum(result.results[name][op]['wins'] for op in result.results[name])
-        total_games = sum(result.results[name][op]['games'] for op in result.results[name])
-        print(f"  {name} ({model_name}): {win_rate*100:.1f}% ({total_wins}/{total_games} games)")
-    
-    # Print Elo ratings with model information
-    print("\nElo Ratings:")
-    elo_ratings = result.elo_ratings()
-    sorted_elo = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
-    
-    for name, elo in sorted_elo:
-        model_name = strategy_to_model.get(name, "unknown")
-        print(f"  {name} ({model_name}): {elo:.1f}")
-    
-    # Print head-to-head results with model information
-    print("\nHead-to-Head Results:")
-    for name in sorted(result.participants):
-        model_name = strategy_to_model.get(name, "unknown")
-        print(f"\n  {name} ({model_name}) vs:")
-        for op in sorted(result.participants):
-            if op != name:
-                wins = result.results[name][op]['wins']
-                losses = result.results[name][op]['losses']
-                games = result.results[name][op]['games']
-                if games > 0:
-                    win_rate = (wins / games) * 100
-                    op_model = strategy_to_model.get(op, "unknown")
-                    print(f"    {op} ({op_model}): {wins}-{losses} ({win_rate:.1f}%)")
-    
-    print("\n" + "="*60)
-
-
 
 def run_deterministic_tournament(
     strategy_configs: List[StrategyConfig],
@@ -979,9 +920,6 @@ def run_deterministic_tournament(
         total_games = len(game_results)
         
         if total_games > 0:
-            stats = calculate_head_to_head_stats(strategy_a.original_name, strategy_b.original_name, strategy_a_wins, strategy_b_wins, total_games)
-            print_head_to_head_stats(stats)
-            
             # Print timing summary for this match
             total_time_a = sum(game['strategy_timings'].get(strategy_a.name, 0.0) for game in game_results)
             total_time_b = sum(game['strategy_timings'].get(strategy_b.name, 0.0) for game in game_results)
@@ -994,6 +932,7 @@ def run_deterministic_tournament(
 
 # Import the utility function
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_configs as generate_gumbel_summary
+from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 
 
 def parse_args():
@@ -1282,39 +1221,54 @@ def main():
     print(f"Randomly selecting {args.num_openings} openings from pool of {len(all_openings)}...")
     openings = select_random_openings(all_openings, args.num_openings, seed=args.seed)
     
-    # Print configuration
-    print("\nDeterministic Tournament Configuration:")
-    print(f"  Models: {[os.path.basename(path) for path in model_paths]}")
-    print(f"  Strategies: {[str(c) for c in strategy_configs]}")
+    # Print configuration using unified logging
+    # Extract strategy names and Gumbel parameters
+    strategy_names = [str(c) for c in strategy_configs]
+    
+    # Extract Gumbel parameters from strategy configs
+    enable_gumbel = any(c.config.get('enable_gumbel_root_selection', False) for c in strategy_configs)
+    gumbel_sim_threshold = None
+    gumbel_c_visit = None
+    gumbel_c_scale = None
+    gumbel_candidate_log_base = None
+    gumbel_candidate_log_offset = None
+    gumbel_m_candidates = None
+    
+    for config in strategy_configs:
+        if config.config.get('enable_gumbel_root_selection', False):
+            gumbel_sim_threshold = config.config.get('gumbel_sim_threshold', gumbel_sim_threshold)
+            gumbel_c_visit = config.config.get('gumbel_c_visit', gumbel_c_visit)
+            gumbel_c_scale = config.config.get('gumbel_c_scale', gumbel_c_scale)
+            gumbel_candidate_log_base = config.config.get('gumbel_candidate_log_base', gumbel_candidate_log_base)
+            gumbel_candidate_log_offset = config.config.get('gumbel_candidate_log_offset', gumbel_candidate_log_offset)
+            gumbel_m_candidates = config.config.get('gumbel_m_candidates', gumbel_m_candidates)
+    
+    # Create unified script config
+    script_config = ScriptConfig(
+        script_type="deterministic_tournament",
+        models=model_paths,
+        strategies=strategy_names,
+        num_games=len(openings),
+        strategy_config={},  # Strategy configs are handled individually
+        temperatures=args.temperatures if args.temperatures else args.temperature,
+        random_seed=args.seed,
+        pie_rule=False,  # Deterministic tournaments don't use pie rule
+        opening_length=args.opening_length,
+        batch_sizes=args.batch_sizes,
+        c_puct=args.c_puct,
+        enable_gumbel=enable_gumbel,
+        gumbel_sim_threshold=gumbel_sim_threshold,
+        gumbel_c_visit=gumbel_c_visit,
+        gumbel_c_scale=gumbel_c_scale,
+        gumbel_candidate_log_base=gumbel_candidate_log_base,
+        gumbel_candidate_log_offset=gumbel_candidate_log_offset,
+        gumbel_m_candidates=gumbel_m_candidates
+    )
+    
+    print_script_configuration(script_config)
+    
+    # Print additional deterministic tournament specific info
     print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
-    print(f"  Opening length: {args.opening_length} moves")
-    if args.temperatures:
-        print(f"  Temperatures: {args.temperatures}")
-    else:
-        print(f"  Temperature: {args.temperature}")
-    if args.batch_sizes:
-        print(f"  Batch sizes: {args.batch_sizes}")
-    if args.c_puct:
-        print(f"  C_PUCT values: {args.c_puct}")
-    
-    # Print Gumbel configuration summary
-    gumbel_summary = generate_gumbel_summary(strategy_configs)
-    if gumbel_summary:
-        print(f"  {gumbel_summary}")
-    
-    print(f"  Dirichlet noise: alpha=0.3, eps=0.25 (MCTS default)")
-    print(f"  Root noise: disabled (add_root_noise=False)")
-    print(f"  Random seed: {args.seed} (for opening selection)")
-    
-    # Print timestamp and git state
-    timestamp = datetime.now()
-    print(f"  Run time: {timestamp.strftime('%Y-%m-%d %H:%M')}")
-    
-    # Get git commit information
-    from hex_ai.system_utils import get_git_commit_info
-    git_info = get_git_commit_info()
-    print(f"  Git: {git_info['status']}")
-    
     print()
     
     # Run tournament
@@ -1326,17 +1280,15 @@ def main():
         seed=args.seed
     )
     
-    # Print results
-    print("\nDeterministic Tournament Complete!")
-    print_deterministic_tournament_analysis(result, strategy_configs)
-    
-    # Print timing summary
-    result.print_timing_summary()
-    
-    # Print output location
+    # Print results using unified analyzer
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
     output_dir = f"{OUTPUT_DIR_PREFIX}{timestamp}"
-    print(f"\nResults saved to: {output_dir}/")
+    
+    output_files = {
+        "directory": output_dir
+    }
+    
+    print_script_results("deterministic_tournament", result, script_config, output_files)
 
 
 if __name__ == "__main__":

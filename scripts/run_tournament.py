@@ -61,11 +61,11 @@ from hex_ai.inference.model_config import get_model_dir, get_model_path
 from hex_ai.inference.tournament import (
     TournamentConfig, TournamentPlayConfig, run_round_robin_tournament
 )
-from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
 from hex_ai.utils.tournament_utils import (
     generate_player_labels, print_duplicate_checkpoint_info, validate_checkpoint_paths,
-    parse_temperature_configuration, print_tournament_configuration
+    parse_temperature_configuration
 )
+from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 
 # Get the current best model directory from model config
 DEFAULT_CHKPT_DIR = get_model_dir("current_best")
@@ -246,16 +246,34 @@ if __name__ == "__main__":
     # Ensure log directory exists
     os.makedirs(os.path.dirname(GAMES_FILE), exist_ok=True)
 
-    # Print tournament configuration
+    # Print tournament configuration using unified logging
     checkpoint_dirs = None
     if args.checkpoints and args.checkpoint_dirs:
         checkpoint_dirs = [dir_name.strip() for dir_name in args.checkpoint_dirs.split(',')]
     
-    print_tournament_configuration(
-        player_labels, checkpoint_paths, args.num_games, play_config.strategy,
-        play_config.strategy_config, participant_temperatures, play_config.temperature,
-        play_config.pie_rule, play_config.random_seed, checkpoint_dirs, DEFAULT_CHKPT_DIR
+    # Create unified script config
+    script_config = ScriptConfig(
+        script_type="tournament",
+        models=checkpoint_paths,
+        strategies=player_labels,
+        num_games=args.num_games,
+        strategy_config=play_config.strategy_config,
+        temperatures=participant_temperatures if participant_temperatures else play_config.temperature,
+        random_seed=play_config.random_seed,
+        pie_rule=play_config.pie_rule,
+        checkpoint_dirs=checkpoint_dirs,
+        default_checkpoint_dir=DEFAULT_CHKPT_DIR,
+        # Add Gumbel parameters from strategy config
+        enable_gumbel=play_config.strategy_config.get('enable_gumbel_root_selection', False),
+        gumbel_sim_threshold=play_config.strategy_config.get('gumbel_sim_threshold', None),
+        gumbel_c_visit=play_config.strategy_config.get('gumbel_c_visit', None),
+        gumbel_c_scale=play_config.strategy_config.get('gumbel_c_scale', None),
+        gumbel_candidate_log_base=play_config.strategy_config.get('gumbel_candidate_log_base', None),
+        gumbel_candidate_log_offset=play_config.strategy_config.get('gumbel_candidate_log_offset', None),
+        gumbel_m_candidates=play_config.strategy_config.get('gumbel_m_candidates', None)
     )
+    
+    print_script_configuration(script_config)
     print(f"  Results: {GAMES_FILE}, {CSV_FILE}")
     print()
     
@@ -266,7 +284,12 @@ if __name__ == "__main__":
         csv_file=CSV_FILE,
         play_config=play_config
     )
-    print("\nTournament complete!")
+    
+    # Print results using unified analyzer
+    output_files = {
+        "games": actual_games_file,
+        "csv": actual_csv_file
+    }
     
     # Print actual file paths used (in case collision avoidance changed them)
     if actual_games_file != GAMES_FILE:
@@ -274,4 +297,4 @@ if __name__ == "__main__":
     if actual_csv_file != CSV_FILE:
         print(f"Note: CSV results written to {actual_csv_file} (original filename was in use)")
     
-    print_comprehensive_tournament_analysis(result, participant_temperatures) 
+    print_script_results("tournament", result, script_config, output_files) 
