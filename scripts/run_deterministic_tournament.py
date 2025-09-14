@@ -920,6 +920,13 @@ def run_deterministic_tournament(
         total_games = len(game_results)
         
         if total_games > 0:
+            # Print win rate summary for this match (like regular tournaments)
+            strategy_a_win_rate = strategy_a_wins / total_games
+            strategy_b_win_rate = strategy_b_wins / total_games
+            
+            print(f"  {strategy_a.original_name}: {strategy_a_wins}/{total_games} wins ({strategy_a_win_rate*100:.1f}%)")
+            print(f"  {strategy_b.original_name}: {strategy_b_wins}/{total_games} wins ({strategy_b_win_rate*100:.1f}%)")
+            
             # Print timing summary for this match
             total_time_a = sum(game['strategy_timings'].get(strategy_a.name, 0.0) for game in game_results)
             total_time_b = sum(game['strategy_timings'].get(strategy_b.name, 0.0) for game in game_results)
