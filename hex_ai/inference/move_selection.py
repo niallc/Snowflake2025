@@ -33,6 +33,11 @@ class MoveSelectionConfig:
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
+    # Gumbel candidate scaling parameters (for auto candidate selection)
+    gumbel_candidate_log_base: float = 1.7  # Base for logarithmic candidate scaling
+    gumbel_candidate_log_offset: float = -2.0  # Offset for logarithmic candidate scaling
+    gumbel_candidate_min: int = 2  # Minimum number of candidates
+    gumbel_candidate_max: int = 48  # Maximum number of candidates
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -133,6 +138,11 @@ class MCTSStrategy(MoveSelectionStrategy):
             mcts_config.gumbel_c_visit = config.gumbel_c_visit
             mcts_config.gumbel_c_scale = config.gumbel_c_scale
             mcts_config.gumbel_m_candidates = config.gumbel_m_candidates
+            # Configure Gumbel candidate scaling parameters
+            mcts_config.gumbel_candidate_log_base = config.gumbel_candidate_log_base
+            mcts_config.gumbel_candidate_log_offset = config.gumbel_candidate_log_offset
+            mcts_config.gumbel_candidate_min = config.gumbel_candidate_min
+            mcts_config.gumbel_candidate_max = config.gumbel_candidate_max
         
         # Create required components
         engine = HexGameEngine()

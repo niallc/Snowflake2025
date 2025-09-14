@@ -197,10 +197,11 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
         base_idx = 0
         for config in configs:
             if config.strategy_type == "mcts":
-                config.config["gumbel_candidate_log_base"] = gumbel_candidate_log_bases[base_idx]
-                # Update strategy name to include log base for unique identification
-                config.name = f"{config.name}_log{base_idx}"
-                config.original_name = f"{config.original_name}_log{base_idx}"
+                log_base_value = gumbel_candidate_log_bases[base_idx]
+                config.config["gumbel_candidate_log_base"] = log_base_value
+                # Update strategy name to include actual log base value for unique identification
+                config.name = f"{config.name}_log{log_base_value}"
+                config.original_name = f"{config.original_name}_log{log_base_value}"
                 base_idx += 1
     
     # Handle per-strategy Gumbel candidate log offsets
@@ -212,10 +213,11 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
         offset_idx = 0
         for config in configs:
             if config.strategy_type == "mcts":
-                config.config["gumbel_candidate_log_offset"] = gumbel_candidate_log_offsets[offset_idx]
-                # Update strategy name to include log offset for unique identification
-                config.name = f"{config.name}_off{offset_idx}"
-                config.original_name = f"{config.original_name}_off{offset_idx}"
+                log_offset_value = gumbel_candidate_log_offsets[offset_idx]
+                config.config["gumbel_candidate_log_offset"] = log_offset_value
+                # Update strategy name to include actual log offset value for unique identification
+                config.name = f"{config.name}_off{log_offset_value}"
+                config.original_name = f"{config.original_name}_off{log_offset_value}"
                 offset_idx += 1
     
     return configs
