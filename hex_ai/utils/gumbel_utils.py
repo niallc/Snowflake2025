@@ -13,7 +13,13 @@ import numpy as np
 import time
 from typing import Callable, List, Optional, Tuple, Dict, Any
 
-from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD
+from hex_ai.config import (
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX
+)
 
 
 def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
@@ -193,6 +199,11 @@ def gumbel_alpha_zero_root_batched(
     temperature: float = 1.0,  # Noise scale for Gumbel sampling (beta)
     verbose: int = 0,        # Verbosity level for debug output
     rng=np.random,
+    # Configurable candidate scaling parameters (use config defaults)
+    candidate_log_base: float = DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
+    candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
+    candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
 ):
     """
     Batched Gumbel-AlphaZero root selection that reuses existing MCTS batching infrastructure.
@@ -291,9 +302,9 @@ def gumbel_alpha_zero_root_batched(
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # Adaptive candidate count: small when sims are small, grows with sims,
-        # but never exceeds legal moves or sims, and caps at 48.
-        m_auto = int(min(48, max(8, 4 + total_sims // 8)))
+        # Configurable logarithmic candidate scaling: grows slowly with simulation count
+        # Formula: m = min(max, max(min, log_base(total_sims) + offset))
+        m_auto = int(min(candidate_max, max(candidate_min, math.log(total_sims, candidate_log_base) + candidate_log_offset)))
         m = min(len(legal_actions), total_sims, m_auto)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start

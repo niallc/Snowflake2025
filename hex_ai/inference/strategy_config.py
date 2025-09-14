@@ -32,7 +32,9 @@ class StrategyConfig:
 def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_sims: Optional[List[int]] = None, 
                           search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
                           c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None,
-                          temperatures: Optional[List[float]] = None, gumbel_sim_thresholds: Optional[List[int]] = None) -> List[StrategyConfig]:
+                          temperatures: Optional[List[float]] = None, gumbel_sim_thresholds: Optional[List[int]] = None,
+                          gumbel_candidate_log_bases: Optional[List[float]] = None, 
+                          gumbel_candidate_log_offsets: Optional[List[float]] = None) -> List[StrategyConfig]:
     """
     Parse strategy configurations from command line arguments.
     
@@ -49,6 +51,8 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
         enable_gumbel: Optional list of boolean values to enable Gumbel AlphaZero root selection
         temperatures: Optional list of temperatures for each strategy (e.g., [0.1, 1.0, 0.5])
         gumbel_sim_thresholds: Optional list of simulation thresholds for Gumbel AlphaZero root selection (e.g., [200, 500, 1000])
+        gumbel_candidate_log_bases: Optional list of Gumbel candidate log bases for MCTS strategies (e.g., [1.5, 1.7, 2.0])
+        gumbel_candidate_log_offsets: Optional list of Gumbel candidate log offsets for MCTS strategies (e.g., [-1.5, -2.0, -2.5])
     
     Returns:
         List of StrategyConfig objects
@@ -183,6 +187,36 @@ def parse_strategy_configs(strategies: List[str], model_paths: List[str], mcts_s
             # Update strategy name to include temperature for unique identification
             config.name = f"{config.name}_t{temperature}"
             config.original_name = f"{config.original_name}_t{temperature}"
+    
+    # Handle per-strategy Gumbel candidate log bases
+    if gumbel_candidate_log_bases:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(gumbel_candidate_log_bases) != len(mcts_configs):
+            raise ValueError(f"Number of gumbel_candidate_log_bases ({len(gumbel_candidate_log_bases)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        base_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["gumbel_candidate_log_base"] = gumbel_candidate_log_bases[base_idx]
+                # Update strategy name to include log base for unique identification
+                config.name = f"{config.name}_log{base_idx}"
+                config.original_name = f"{config.original_name}_log{base_idx}"
+                base_idx += 1
+    
+    # Handle per-strategy Gumbel candidate log offsets
+    if gumbel_candidate_log_offsets:
+        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
+        if len(gumbel_candidate_log_offsets) != len(mcts_configs):
+            raise ValueError(f"Number of gumbel_candidate_log_offsets ({len(gumbel_candidate_log_offsets)}) must match number of MCTS strategies ({len(mcts_configs)})")
+        
+        offset_idx = 0
+        for config in configs:
+            if config.strategy_type == "mcts":
+                config.config["gumbel_candidate_log_offset"] = gumbel_candidate_log_offsets[offset_idx]
+                # Update strategy name to include log offset for unique identification
+                config.name = f"{config.name}_off{offset_idx}"
+                config.original_name = f"{config.original_name}_off{offset_idx}"
+                offset_idx += 1
     
     return configs
 

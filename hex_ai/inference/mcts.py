@@ -72,7 +72,17 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE, POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, DEFAULT_BATCH_CAP, DEFAULT_C_PUCT, DEFAULT_GUMBEL_SIM_THRESHOLD
+from hex_ai.config import (
+    BOARD_SIZE as CFG_BOARD_SIZE, 
+    POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, 
+    DEFAULT_BATCH_CAP, 
+    DEFAULT_C_PUCT, 
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX
+)
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
 # ---- MCTS Constants ----
@@ -416,6 +426,12 @@ class BaselineMCTSConfig:
     gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
     gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
+    
+    # Gumbel candidate scaling parameters (for auto candidate selection)
+    gumbel_candidate_log_base: float = DEFAULT_GUMBEL_CANDIDATE_LOG_BASE  # Base for logarithmic candidate scaling
+    gumbel_candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET  # Offset for logarithmic candidate scaling
+    gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
+    gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
     # NOTE: Gumbel now validates legal actions and crashes on illegal forced actions instead of falling back to PUCT
     # This exposes desync bugs between the action list and root state rather than masking them
     
@@ -482,6 +498,16 @@ class BaselineMCTSConfig:
             raise ValueError(f"gumbel_c_scale must be positive, got {self.gumbel_c_scale}")
         if self.gumbel_m_candidates is not None and self.gumbel_m_candidates <= 0:
             raise ValueError(f"gumbel_m_candidates must be positive, got {self.gumbel_m_candidates}")
+        
+        # Validate Gumbel candidate scaling parameters
+        if self.gumbel_candidate_log_base <= 1.0:
+            raise ValueError(f"gumbel_candidate_log_base must be > 1.0, got {self.gumbel_candidate_log_base}")
+        if self.gumbel_candidate_min <= 0:
+            raise ValueError(f"gumbel_candidate_min must be positive, got {self.gumbel_candidate_min}")
+        if self.gumbel_candidate_max <= 0:
+            raise ValueError(f"gumbel_candidate_max must be positive, got {self.gumbel_candidate_max}")
+        if self.gumbel_candidate_min > self.gumbel_candidate_max:
+            raise ValueError(f"gumbel_candidate_min ({self.gumbel_candidate_min}) cannot exceed gumbel_candidate_max ({self.gumbel_candidate_max})")
         
         # Validate Gumbel temperature control parameters
         if self.temperature_deterministic_cutoff <= 0:
@@ -1156,7 +1182,11 @@ class BaselineMCTS:
             c_visit=self.cfg.gumbel_c_visit,
             c_scale=self.cfg.gumbel_c_scale,
             temperature=tau,
-            verbose=verbose
+            verbose=verbose,
+            candidate_log_base=self.cfg.gumbel_candidate_log_base,
+            candidate_log_offset=self.cfg.gumbel_candidate_log_offset,
+            candidate_min=self.cfg.gumbel_candidate_min,
+            candidate_max=self.cfg.gumbel_candidate_max
         )
         
         # Record Gumbel performance metrics

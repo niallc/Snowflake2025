@@ -1050,6 +1050,10 @@ Examples:
                        help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
     parser.add_argument('--gumbel-sim-threshold', type=str,
                        help='Comma-separated simulation thresholds for Gumbel AlphaZero root selection (e.g., "200,500,1000")')
+    parser.add_argument('--gumbel-candidate-log-base', type=str,
+                       help='Comma-separated log bases for Gumbel candidate scaling (e.g., "1.5,1.7,2.0")')
+    parser.add_argument('--gumbel-candidate-log-offset', type=str,
+                       help='Comma-separated log offsets for Gumbel candidate scaling (e.g., "-1.5,-2.0,-2.5")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -1129,7 +1133,6 @@ def main():
                 # Format: just strategy name (use directory name as model file)
                 strategy_name = strategy_spec
                 # Find the first .pt.gz file in the directory
-                import glob
                 pt_files = glob.glob(os.path.join(model_dir, "*.pt.gz"))
                 if not pt_files:
                     print(f"ERROR: No .pt.gz files found in directory: {model_dir}")
@@ -1194,9 +1197,19 @@ def main():
             print(f"ERROR: Number of temperatures ({len(temperatures)}) must match number of strategies ({len(strategy_names)})")
             sys.exit(1)
     
+    # Parse Gumbel candidate log bases
+    gumbel_candidate_log_bases = None
+    if args.gumbel_candidate_log_base:
+        gumbel_candidate_log_bases = [float(s.strip()) for s in args.gumbel_candidate_log_base.split(',')]
+    
+    # Parse Gumbel candidate log offsets
+    gumbel_candidate_log_offsets = None
+    if args.gumbel_candidate_log_offset:
+        gumbel_candidate_log_offsets = [float(s.strip()) for s in args.gumbel_candidate_log_offset.split(',')]
+    
     # Parse strategy configurations
     try:
-        strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel, temperatures, gumbel_sim_thresholds)
+        strategy_configs = parse_strategy_configs(strategy_names, model_paths, mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel, temperatures, gumbel_sim_thresholds, gumbel_candidate_log_bases, gumbel_candidate_log_offsets)
         
         # If using direct checkpoint specification, create unique names
         if args.model_dirs:
