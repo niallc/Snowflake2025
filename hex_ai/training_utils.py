@@ -195,7 +195,7 @@ class GradientMonitor:
             if param.grad is not None:
                 norm = param.grad.norm().item()
                 
-                if 'policy_head' in name:
+                if any(policy_component in name for policy_component in ['policy_conv1', 'policy_bn1', 'policy_conv2']):
                     policy_norms.append(norm)
                 elif 'value_head' in name:
                     value_norms.append(norm)
@@ -272,7 +272,7 @@ class ActivationMonitor:
         
         # Register hooks for key layers
         for name, module in self.model.named_modules():
-            if any(key in name for key in ['value_head', 'policy_head', 'layer4', 'global_pool']):
+            if any(key in name for key in ['value_head', 'policy_conv1', 'policy_bn1', 'policy_conv2', 'layer4', 'global_pool']):
                 hook = module.register_forward_hook(hook_fn(name))
                 self.activation_hooks.append(hook)
     

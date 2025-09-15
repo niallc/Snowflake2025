@@ -74,8 +74,9 @@ class TwoHeadedResNet(nn.Module):
     The output is a value in [-1, 1] range with tanh activation that should be converted to [0, 1] probability.
     
     The architecture follows modern best practices with:
-    - Global average pooling after the ResNet body
-    - Separate linear layers for policy and value heads
+    - No downsampling in the ResNet trunk (preserves 13x13 spatial dimensions)
+    - Convolutional policy head (1x1 convs) that maintains spatial structure
+    - Global average pooling only for the value head
     - Batch normalization and proper initialization
     - Mixed precision support
     - Enhanced value head with hidden layer and optional bottleneck
@@ -93,24 +94,26 @@ class TwoHeadedResNet(nn.Module):
                                    kernel_size=5, stride=1, padding=2, bias=False)
         self.input_bn = nn.BatchNorm2d(INITIAL_CHANNELS)
         
-        # ResNet body: 4 stages with different channel counts
+        # ResNet body: 4 stages with different channel counts (no downsampling)
         self.layer1 = self._make_layer(INITIAL_CHANNELS, CHANNEL_PROGRESSION[0], 
                                      blocks=2, stride=1)  # 64 channels
         self.layer2 = self._make_layer(CHANNEL_PROGRESSION[0], CHANNEL_PROGRESSION[1], 
-                                     blocks=2, stride=2)  # 128 channels
+                                     blocks=2, stride=1)  # 128 channels
         self.layer3 = self._make_layer(CHANNEL_PROGRESSION[1], CHANNEL_PROGRESSION[2], 
-                                     blocks=2, stride=2)  # 256 channels
+                                     blocks=2, stride=1)  # 256 channels
         self.layer4 = self._make_layer(CHANNEL_PROGRESSION[2], CHANNEL_PROGRESSION[3], 
-                                     blocks=2, stride=2)  # 512 channels
+                                     blocks=2, stride=1)  # 512 channels
         
         # Global average pooling
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         
-        # Dropout layer
+        # Dropout layer (kept for value path only)
         self.dropout = nn.Dropout(p=dropout_prob)
         
-        # Policy head: Predict move probabilities
-        self.policy_head = nn.Linear(CHANNEL_PROGRESSION[3], POLICY_OUTPUT_SIZE)
+        # Policy head: 1x1 convs over the 13x13 map
+        self.policy_conv1 = nn.Conv2d(CHANNEL_PROGRESSION[3], 2, kernel_size=1, bias=False)
+        self.policy_bn1 = nn.BatchNorm2d(2)
+        self.policy_conv2 = nn.Conv2d(2, 1, kernel_size=1, bias=False)
         
         # Enhanced value head with hidden layer and optional bottleneck
         if use_value_bottleneck:
@@ -192,11 +195,10 @@ class TwoHeadedResNet(nn.Module):
         # Shared trunk
         features = self.forward_shared(x)
         
-        # Policy head path
-        policy_features = self.global_pool(features)
-        policy_features = policy_features.view(policy_features.size(0), -1)
-        policy_features = self.dropout(policy_features)
-        policy_logits = self.policy_head(policy_features)  # (batch_size, 169)
+        # Policy head path (no GAP; keep spatial structure)
+        p = F.relu(self.policy_bn1(self.policy_conv1(features)))  # (B,2,13,13)
+        p = self.policy_conv2(p)                                  # (B,1,13,13)
+        policy_logits = p.flatten(1)                              # (B, 169)
         
         # Value head path
         if self.use_value_bottleneck:
@@ -282,13 +284,12 @@ Model Type: {model.__class__.__name__}
 
 Architecture:
 - Input: (batch_size, 3, 13, 13)
-- ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels
-- Global Average Pooling
-- Policy Head: {POLICY_OUTPUT_SIZE} outputs
-- Value Head: {value_head_desc} ({VALUE_OUTPUT_SIZE} outputs)
+- ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels (no downsampling)
+- Policy Head: Convolutional (1x1 convs) preserving 13x13 spatial structure
+- Value Head: {value_head_desc} with GAP ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
-- Policy Logits: (batch_size, 169)
+- Policy Logits: (batch_size, 169) - row-major flattened from 13x13
 - Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 """
     return summary 
