@@ -340,14 +340,25 @@ class PreprocessingStep:
         Path(self.config.cleaned_dir).mkdir(parents=True, exist_ok=True)
         
         # Process each input source using the existing function
+        processed_any = False
         for source_dir in input_sources:
             if source_dir.exists():
                 self.logger.info(f"Processing {source_dir}")
                 # Use the existing combine_and_clean_files function
                 combine_and_clean_files(source_dir, Path(self.config.cleaned_dir), self.config.chunk_size)
+                processed_any = True
             else:
                 self.logger.warning(f"Input source does not exist: {source_dir}")
         
+        # Verify output was created
+        output_files = list(Path(self.config.cleaned_dir).glob("*.trmph"))
+        if not processed_any:
+            raise ValueError("No input sources were processed - all sources were missing or empty")
+        
+        if not output_files:
+            raise RuntimeError(f"Preprocessing failed: No output files created in {self.config.cleaned_dir}")
+        
+        self.logger.info(f"Preprocessing completed: {len(output_files)} output files created")
         return self.config.cleaned_dir
 
 
@@ -397,7 +408,13 @@ class TRMPHProcessingStep:
         # Process files
         results = process_files(config)
         
-        self.logger.info(f"TRMPH processing completed: {results}")
+        # Verify output was created
+        output_files = list(Path(self.config.processed_dir).glob("*.pkl.gz"))
+        if not output_files:
+            raise RuntimeError(f"TRMPH processing failed: No output files created in {self.config.processed_dir}")
+        
+        self.logger.info(f"TRMPH processing completed: {len(output_files)} output files created")
+        self.logger.info(f"Results: {results}")
         
         return self.config.processed_dir
 
@@ -449,6 +466,13 @@ class ShufflingStep:
         
         # Run shuffling
         shuffler.shuffle_data()
+        
+        # Verify output was created
+        output_files = list(Path(self.config.shuffled_dir).glob("*.pkl.gz"))
+        if not output_files:
+            raise RuntimeError(f"Shuffling failed: No output files created in {self.config.shuffled_dir}")
+        
+        self.logger.info(f"Shuffling completed: {len(output_files)} output files created")
         
         return self.config.shuffled_dir
 
