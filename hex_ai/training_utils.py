@@ -187,20 +187,34 @@ class GradientMonitor:
     
     def compute_gradient_norms(self):
         """Compute gradient norms for different parts of the model."""
+        # Get parameter groups using the model's proper methods
+        try:
+            policy_params = set(self.model.get_policy_head_parameters())
+            value_params = set(self.model.get_value_head_parameters())
+            shared_params = set(self.model.get_shared_parameters())
+        except AttributeError as e:
+            raise RuntimeError(f"Model does not support parameter grouping: {e}. "
+                             f"Expected model to have get_policy_head_parameters(), get_value_head_parameters(), "
+                             f"and get_shared_parameters() methods.")
+        
         policy_norms = []
         value_norms = []
         shared_norms = []
         
-        for name, param in self.model.named_parameters():
+        for param in self.model.parameters():
             if param.grad is not None:
                 norm = param.grad.norm().item()
                 
-                if any(policy_component in name for policy_component in ['policy_conv1', 'policy_bn1', 'policy_conv2']):
+                if param in policy_params:
                     policy_norms.append(norm)
-                elif 'value_head' in name:
+                elif param in value_params:
                     value_norms.append(norm)
-                else:
+                elif param in shared_params:
                     shared_norms.append(norm)
+                else:
+                    # This should never happen if the model's parameter grouping is correct
+                    raise RuntimeError(f"Parameter {param} not found in any expected group. "
+                                     f"This indicates a bug in the model's parameter grouping methods.")
         
         return {
             'policy_head': np.mean(policy_norms) if policy_norms else 0.0,
@@ -270,11 +284,45 @@ class ActivationMonitor:
                             })
             return hook
         
-        # Register hooks for key layers
+        # Register hooks for key layers using proper module identification
+        # We'll hook specific important modules rather than using string matching
+        modules_to_hook = []
+        
+        # Get policy head modules
+        try:
+            policy_params = self.model.get_policy_head_parameters()
+            # Find modules that contain these parameters
+            for name, module in self.model.named_modules():
+                if any(param in module.parameters() for param in policy_params):
+                    modules_to_hook.append((name, module))
+        except AttributeError:
+            # Fallback: hook modules with policy-related names (but this is fragile)
+            print("Warning: Using fallback activation monitoring (string matching)")
+            for name, module in self.model.named_modules():
+                if any(key in name for key in ['policy_conv1', 'policy_bn1', 'policy_conv2', 'policy_head']):
+                    modules_to_hook.append((name, module))
+        
+        # Get value head modules
+        try:
+            value_params = self.model.get_value_head_parameters()
+            for name, module in self.model.named_modules():
+                if any(param in module.parameters() for param in value_params):
+                    modules_to_hook.append((name, module))
+        except AttributeError:
+            # Fallback: hook modules with value-related names
+            for name, module in self.model.named_modules():
+                if 'value_head' in name or 'value_pre' in name:
+                    modules_to_hook.append((name, module))
+        
+        # Hook important shared layers (layer4, global_pool)
         for name, module in self.model.named_modules():
-            if any(key in name for key in ['value_head', 'policy_conv1', 'policy_bn1', 'policy_conv2', 'layer4', 'global_pool']):
-                hook = module.register_forward_hook(hook_fn(name))
-                self.activation_hooks.append(hook)
+            if name.endswith('layer4') or name.endswith('global_pool'):
+                modules_to_hook.append((name, module))
+        
+        # Register hooks
+        for name, module in modules_to_hook:
+            hook = module.register_forward_hook(hook_fn(name))
+            self.activation_hooks.append(hook)
     
     def log_activations(self, batch_idx):
         """Log activation statistics if it's time to do so."""

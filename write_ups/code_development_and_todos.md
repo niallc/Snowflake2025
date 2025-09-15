@@ -20,7 +20,7 @@
  - Approach 1: To comparae performance, findout the best temperature for the algorithm where at least k of n games are unique using self play.
  - Approach 2: Gumbel can't effectively use low temperatures using schemes I've tried. What about network output scaling (e.g. policy preds ^ (1/temp) & renormalize, accounting for P vs. Q disparity, e.g. by doing something similar to value preds)?
 
-### 5. Techniacl debt:
+### 5. Technical debt:
  - There's tonnes of bloat: Duplicated code, verbose code, overly completionish code
  - Too many scripts and MDs in write_ups/
 
@@ -31,6 +31,13 @@
 ### 7. Dead Cells, virtual connections, and similar
  - In training (auxillary heads)
  - In MCTS (narrow the search space with very fast highly incomplete pattern matching)
+
+### 8. Profile MCTS for very large numbers of readouts -- it's super linearly slow
+
+### 9. Retune Gumbel, now performing less well than non-Gumbel MCTS
+ - Need broader search?
+
+### 10. Bigger / wider / deeper network?
+
 ### 12. Update on moves in winning games more?
  - Feature request rather than a bug: Do we want the policy head to update more on moves from the winning player?
-

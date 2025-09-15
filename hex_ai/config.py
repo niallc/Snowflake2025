@@ -63,12 +63,12 @@ TRMPH_PREFIX = "#13,"
 
 # Default hyperparameters
 LEARNING_RATE = 0.001
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 NUM_EPOCHS = 10
 
 # Loss weights for standardized comparison
-POLICY_LOSS_WEIGHT = 0.14
-VALUE_LOSS_WEIGHT = 0.86
+POLICY_LOSS_WEIGHT = 0.8
+VALUE_LOSS_WEIGHT = 0.2
 
 # Model architecture
 RESNET_DEPTH = 18  # ResNet-18 for initial implementation
