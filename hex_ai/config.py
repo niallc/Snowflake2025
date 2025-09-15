@@ -81,10 +81,10 @@ DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
 DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel AlphaZero root selection
 
 # Gumbel candidate scaling defaults
-DEFAULT_GUMBEL_CANDIDATE_LOG_BASE = 1.35  # Base for logarithmic candidate scaling
-DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET = 0.0  # Offset for logarithmic candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_LOG_BASE = 1.30  # Base for logarithmic candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET = 1.0  # Offset for logarithmic candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
-DEFAULT_GUMBEL_CANDIDATE_MAX = 48  # Maximum number of candidates
+DEFAULT_GUMBEL_CANDIDATE_MAX = 64  # Maximum number of candidates
 
 # Data augmentation
 ROTATION_AUGMENTATION = True

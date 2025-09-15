@@ -311,12 +311,15 @@ class PreprocessingStep:
         
         # Determine input sources
         input_sources = []
-        if input_dir:
-            input_sources.append(Path(input_dir))
         
-        # Add cleaned TRMPH data directories
-        for cleaned_dir in self.config.cleaned_trmph_data_dirs:
-            input_sources.append(Path(cleaned_dir))
+        # If we have cleaned TRMPH data directories, only process those (don't mix with selfplay data)
+        if self.config.cleaned_trmph_data_dirs:
+            for cleaned_dir in self.config.cleaned_trmph_data_dirs:
+                input_sources.append(Path(cleaned_dir))
+        else:
+            # Only use selfplay input if we don't have cleaned data directories
+            if input_dir:
+                input_sources.append(Path(input_dir))
         
         if not input_sources:
             raise ValueError("No input data specified for preprocessing. Provide either selfplay data or use --cleaned-trmph-data-dirs")
