@@ -292,6 +292,44 @@ class Trainer:
         # Create parameter groups for different learning rates and weight decay
         # Use the model's built-in policy head stability mechanisms
         
+        def separate_params_by_weight_decay(params):
+            """
+            Separate parameters into those that should and shouldn't have weight decay.
+            
+            Weight decay should NOT be applied to:
+            - BatchNorm/LayerNorm weight and bias parameters
+            - All bias parameters (including Linear layer biases)
+            
+            Weight decay SHOULD be applied to:
+            - Conv2d weight parameters
+            - Linear weight parameters
+            """
+            weight_decay_params = []
+            no_weight_decay_params = []
+            
+            for param in params:
+                # Get the parameter name to check its type
+                param_name = None
+                for name, p in model.named_parameters():
+                    if id(p) == id(param):
+                        param_name = name
+                        break
+                
+                if param_name is None:
+                    # Fallback: assume it should have weight decay
+                    weight_decay_params.append(param)
+                    continue
+                
+                # Check if this is a norm layer parameter or bias
+                if any(norm_type in param_name for norm_type in ['bn', 'norm', 'batch_norm', 'layer_norm']):
+                    no_weight_decay_params.append(param)
+                elif param_name.endswith('.bias'):
+                    no_weight_decay_params.append(param)
+                else:
+                    weight_decay_params.append(param)
+            
+            return weight_decay_params, no_weight_decay_params
+        
         # Get policy head parameter groups (with higher weight decay for final layer)
         policy_final_params = model.get_policy_head_final_layer_params()
         policy_other_params = model.get_policy_head_other_params()
@@ -304,29 +342,70 @@ class Trainer:
         other_param_ids = {id(p) for p in policy_final_params + policy_other_params + value_head_params}
         trunk_params = [p for p in model.parameters() if id(p) not in other_param_ids]
         
-        # Create parameter groups with proper weight decay for policy head final layer
-        param_groups = [
-            {
-                'params': trunk_params,
+        # Separate each parameter group by weight decay eligibility
+        trunk_weight_decay, trunk_no_weight_decay = separate_params_by_weight_decay(trunk_params)
+        policy_other_weight_decay, policy_other_no_weight_decay = separate_params_by_weight_decay(policy_other_params)
+        policy_final_weight_decay, policy_final_no_weight_decay = separate_params_by_weight_decay(policy_final_params)
+        value_head_weight_decay, value_head_no_weight_decay = separate_params_by_weight_decay(value_head_params)
+        
+        # Create parameter groups with proper weight decay separation
+        param_groups = []
+        
+        # Trunk parameters
+        if trunk_weight_decay:
+            param_groups.append({
+                'params': trunk_weight_decay,
                 'lr': learning_rate,
                 'weight_decay': weight_decay
-            },
-            {
-                'params': policy_other_params,
+            })
+        if trunk_no_weight_decay:
+            param_groups.append({
+                'params': trunk_no_weight_decay,
+                'lr': learning_rate,
+                'weight_decay': 0.0
+            })
+        
+        # Policy head other parameters
+        if policy_other_weight_decay:
+            param_groups.append({
+                'params': policy_other_weight_decay,
                 'lr': learning_rate,
                 'weight_decay': weight_decay
-            },
-            {
-                'params': policy_final_params,
+            })
+        if policy_other_no_weight_decay:
+            param_groups.append({
+                'params': policy_other_no_weight_decay,
+                'lr': learning_rate,
+                'weight_decay': 0.0
+            })
+        
+        # Policy head final layer parameters (higher weight decay)
+        if policy_final_weight_decay:
+            param_groups.append({
+                'params': policy_final_weight_decay,
                 'lr': learning_rate,
                 'weight_decay': weight_decay * 2.0  # Higher weight decay for policy final layer
-            },
-            {
-                'params': value_head_params,
+            })
+        if policy_final_no_weight_decay:
+            param_groups.append({
+                'params': policy_final_no_weight_decay,
+                'lr': learning_rate,
+                'weight_decay': 0.0
+            })
+        
+        # Value head parameters
+        if value_head_weight_decay:
+            param_groups.append({
+                'params': value_head_weight_decay,
                 'lr': learning_rate * value_learning_rate_factor,
                 'weight_decay': weight_decay * value_weight_decay_factor
-            }
-        ]
+            })
+        if value_head_no_weight_decay:
+            param_groups.append({
+                'params': value_head_no_weight_decay,
+                'lr': learning_rate * value_learning_rate_factor,
+                'weight_decay': 0.0
+            })
         
         # Optimizer and loss
         self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
