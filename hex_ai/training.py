@@ -23,6 +23,8 @@ import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
+from hex_ai.models import compute_move_stage, compute_value_loss
+
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
 from .config import (
@@ -58,7 +60,7 @@ class PolicyValueLoss(nn.Module):
         self.policy_weight = policy_weight
         self.value_weight = value_weight
         self.policy_loss = nn.CrossEntropyLoss()
-        self.value_loss = nn.MSELoss()
+        # Value loss is now handled by the new compute_value_loss function
     
     def forward(self, policy_pred: torch.Tensor, value_pred: torch.Tensor,
                 policy_target: torch.Tensor, value_target: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
@@ -73,19 +75,16 @@ class PolicyValueLoss(nn.Module):
         
         Args:
             policy_pred: Predicted policy logits (batch_size, policy_output_size)
-            value_pred: Predicted value (batch_size, 1)
+            value_pred: Predicted value (batch_size, 1) in [-1,1] range
             policy_target: Target policy probabilities (batch_size, policy_output_size) or None
-            value_target: Target value (batch_size, 1)
+            value_target: Target value (batch_size, 1) in [-1,1] range (signed)
             
         Returns:
             total_loss: Combined loss
             loss_dict: Dictionary with individual losses
         """
-        # Value loss is computed on the raw value predictions
-        # The value head now outputs values in [-1, 1] range with tanh activation
-        # We need to convert to [0, 1] range for comparison with targets
-        value_prob = ValuePredictor.model_output_to_probability_tensor(value_pred.squeeze())
-        value_loss = self.value_loss(value_prob, value_target.squeeze())
+        # Value loss using new log-cosh loss with label smoothing
+        value_loss = compute_value_loss(value_pred, value_target, smooth=0.95)
         
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:
@@ -583,18 +582,19 @@ class Trainer:
         }
 
     def _process_single_batch(self, batch_idx: int, boards: torch.Tensor, policies: torch.Tensor, 
-                            values: torch.Tensor, state: Dict) -> Dict:
+                            values: torch.Tensor, state: Dict, move_stage: torch.Tensor) -> Dict:
         """Process a single batch and return updated state."""
         # Calculate timing metrics
         timing = TrainingUtilities.calculate_batch_timing(state)
         
         # Move to device
         boards, policies, values = TrainingUtilities.move_batch_to_device(boards, policies, values, self.device)
+        move_stage = move_stage.to(self.device)
         
         # Forward pass with mixed precision
         self.optimizer.zero_grad()
         with self.mixed_precision.autocast_context():
-            policy_pred, value_pred = self.model(boards)
+            policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
         
         # Backward pass: compute gradients for this batch
@@ -718,8 +718,17 @@ class Trainer:
         state = self._initialize_training_state()
         
         # Process each batch
-        for batch_idx, (boards, policies, values) in enumerate(batch_iterable):
-            state = self._process_single_batch(batch_idx, boards, policies, values, state)
+        for batch_idx, batch_data in enumerate(batch_iterable):
+            # Validate batch format - should always be 4 elements now
+            if len(batch_data) != 4:
+                raise ValueError(
+                    f"Invalid batch format: expected 4 elements (boards, policies, values, move_stage), "
+                    f"got {len(batch_data)}. This suggests the data pipeline is not providing move_stage. "
+                    f"Check that StreamingMixedShardDataset._transform_example() returns 4 elements."
+                )
+            
+            boards, policies, values, move_stage = batch_data
+            state = self._process_single_batch(batch_idx, boards, policies, values, state, move_stage)
             
             # Progress logging
             self._handle_progress_logging(batch_idx, epoch, mini_epoch, state)

@@ -8,76 +8,30 @@ The architecture follows a two-headed design:
 - Policy head: Predicts move probabilities for each board position
 - Value head: Predicts the probability of winning from the current position
 
-TODO: API Changes and Required Updates
-=====================================
+TODO: Remaining Updates Needed
+==============================
 
-The model architecture has been updated with KataGo-inspired improvements that require
-changes throughout the codebase. Here are the key updates needed:
+The KataGo-inspired architecture is now implemented. Remaining tasks:
 
-1. MODEL FORWARD API CHANGES:
-   - TwoHeadedResNet.forward() now requires move_stage parameter
-   - TwoHeadedResNet.forward_value_only() now requires move_stage parameter
-   - Old signature: model(board) -> (policy, value)
-   - New signature: model(board, move_stage) -> (policy, value)
-   - move_stage: torch.Tensor of shape (batch_size,) in [0,1] range
+1. CHECKPOINT COMPATIBILITY:
+   - Old checkpoints are not compatible with new architecture
+   - Need migration strategy or version handling for existing checkpoints
+   - New model has different parameter count and structure
 
-2. MOVE_STAGE COMPUTATION:
-   - Need to compute move_stage from board state: stones_on_board / (BOARD_SIZE * BOARD_SIZE)
-   - stones_on_board = (board[:, 0] + board[:, 1]).sum(dim=(1, 2))  # Count non-empty cells
-   - move_stage should be float32 tensor on same device as model
+2. TESTING UPDATES:
+   - Update existing model tests to provide move_stage parameter
+   - Add tests for move_stage computation edge cases
+   - Test checkpoint loading/saving with new architecture
 
-3. TRAINING PIPELINE UPDATES:
-   - Data loaders must provide move_stage for each sample
-   - Training loops must pass move_stage to model.forward()
-   - Loss computation should use new compute_value_loss() function
-   - Value loss now uses log-cosh instead of MSE with label smoothing
-
-4. INFERENCE WRAPPER UPDATES:
-   - Model wrappers must compute move_stage internally
-   - External API should remain unchanged for backward compatibility
-   - Internal calls: model(board, move_stage) -> (policy, value)
-   - External calls: wrapper(board) -> (policy, value)
-
-5. CHECKPOINT COMPATIBILITY:
-   - Old checkpoints may not be compatible with new architecture
-   - Need migration strategy or version handling
-   - New model has different parameter count (3,175,306 vs 3,141,825)
-
-6. CONFIG UPDATES:
-   - Remove use_value_bottleneck parameter from create_model()
-   - Update default model type to "katago_inspired"
-   - Consider adding move_stage computation utilities
-
-7. TESTING UPDATES:
-   - All model tests need to provide move_stage parameter
-   - Update test fixtures and mock data
-   - Add tests for move_stage computation
-   - Test backward compatibility with old model types
-
-8. DOCUMENTATION UPDATES:
+3. DOCUMENTATION UPDATES:
    - Update model documentation with new API
-   - Document move_stage computation
+   - Document move_stage computation and value ranges
    - Update training guides with new loss functions
-   - Add migration guide for existing code
 
-9. UTILITY FUNCTIONS:
-   - Add move_stage computation utility function
-   - Add model compatibility checking
-   - Add checkpoint migration utilities
-
-10. PERFORMANCE CONSIDERATIONS:
-    - New model has slightly more parameters
-    - Value head computation is more complex
-    - Consider benchmarking performance impact
-    - Monitor memory usage changes
-
-FILES LIKELY TO NEED UPDATES:
-- hex_ai/training.py (training loops)
-- hex_ai/inference/ (model wrappers)
-- hex_ai/data_pipeline.py (data loading)
-- scripts/ (training scripts)
-- tests/ (model tests)
-- Any code that calls model.forward() or model.forward_value_only()
+4. PERFORMANCE MONITORING:
+   - Benchmark performance impact of new architecture
+   - Monitor memory usage changes in production
+   - Compare training stability with new loss functions
 """
 
 import torch
@@ -421,7 +375,7 @@ def create_model(model_type: str = "katago_inspired",
     Factory function to create a model instance.
     
     Args:
-        model_type: Type of model to create ("katago_inspired" or "resnet18" for backward compatibility)
+        model_type: Type of model to create (only "katago_inspired" supported)
         num_blocks: Number of residual blocks in the trunk
         trunk_channels: Number of channels in the trunk (constant throughout)
         
@@ -430,11 +384,11 @@ def create_model(model_type: str = "katago_inspired",
     """
     if model_type == "katago_inspired":
         return TwoHeadedResNet(num_blocks=num_blocks, trunk_channels=trunk_channels)
-    elif model_type == "resnet18":
-        # Backward compatibility - use old parameters
-        return TwoHeadedResNet(num_blocks=8, trunk_channels=128)
     else:
-        raise ValueError(f"Unknown model type: {model_type}")
+        raise ValueError(
+            f"Unknown model type: {model_type}. Only 'katago_inspired' is supported. "
+            f"Legacy model types are no longer supported. Please update your code to use 'katago_inspired'."
+        )
 
 
 def count_parameters(model: nn.Module) -> int:

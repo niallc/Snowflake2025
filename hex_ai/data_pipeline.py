@@ -573,11 +573,22 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         else:
             board_3ch = board_2ch
         
+        # Compute move_stage from board state
+        # Count stones from both player planes (channels 0 and 1)
+        stones_plane = (board_3ch[0] > 0).astype(np.int32) + (board_3ch[1] > 0).astype(np.int32)
+        stones_on_board = int(stones_plane.sum())
+        
+        # Normalize by board area
+        board_area = board_3ch.shape[1] * board_3ch.shape[2]  # height * width
+        move_stage = stones_on_board / float(board_area)  # Python float in [0,1]
+        
         board_tensor = torch.from_numpy(board_3ch).float()
         policy = self._normalize_policy(policy)
         policy_tensor = torch.FloatTensor(policy)
         value_tensor = torch.FloatTensor([value])
-        return board_tensor, policy_tensor, value_tensor
+        move_stage_tensor = torch.tensor(move_stage, dtype=torch.float32)
+        
+        return board_tensor, policy_tensor, value_tensor, move_stage_tensor
     
     def __len__(self):
         # HACK: PyTorch DataLoader sometimes calls __len__ even for IterableDataset
