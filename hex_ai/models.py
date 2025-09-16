@@ -143,6 +143,11 @@ class GlobalPoolingResidualBlock(nn.Module):
     but also computes global features through pooling and reinjects them
     as a bias to all spatial locations. This allows the network to propagate
     global board knowledge to all locations.
+    
+    Key stability improvements:
+    - Learnable gate g_alpha starts at 0, making the block identity at initialization
+    - No ReLU before global pooling to keep pooled vector zero-mean
+    - BN in global path ensures zero-mean at initialization
     """
     
     def __init__(self, channels: int, gpool_channels: int = 16):
@@ -158,19 +163,22 @@ class GlobalPoolingResidualBlock(nn.Module):
         self.gconv = nn.Conv2d(channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, channels)
+        
+        # NEW: learnable gate, starts closed (initialized to 0)
+        self.g_alpha = nn.Parameter(torch.zeros(1))
             
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local path
         local = F.relu(self.bn1(self.conv1(x)))
         local = self.bn2(self.conv2(local))
         
-        # Global pooling path
-        g = F.relu(self.gbn(self.gconv(x)))   # (B, gpool_channels, H, W)
-        g = g.mean(dim=(2, 3))                # (B, gpool_channels)
+        # Global path (NOTE: no ReLU here to keep zero-mean)
+        g = self.gbn(self.gconv(x))                 # (B, gpool_channels, H, W)
+        g = g.mean(dim=(2, 3))                      # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
         
-        # Combine: residual connection + global bias
-        out = F.relu(local + x + g)
+        # Combine: residual + gated global bias
+        out = F.relu(x + local + self.g_alpha * g)
         return out
 
 
