@@ -7,6 +7,77 @@ including the main TwoHeadedResNet model and supporting components.
 The architecture follows a two-headed design:
 - Policy head: Predicts move probabilities for each board position
 - Value head: Predicts the probability of winning from the current position
+
+TODO: API Changes and Required Updates
+=====================================
+
+The model architecture has been updated with KataGo-inspired improvements that require
+changes throughout the codebase. Here are the key updates needed:
+
+1. MODEL FORWARD API CHANGES:
+   - TwoHeadedResNet.forward() now requires move_stage parameter
+   - TwoHeadedResNet.forward_value_only() now requires move_stage parameter
+   - Old signature: model(board) -> (policy, value)
+   - New signature: model(board, move_stage) -> (policy, value)
+   - move_stage: torch.Tensor of shape (batch_size,) in [0,1] range
+
+2. MOVE_STAGE COMPUTATION:
+   - Need to compute move_stage from board state: stones_on_board / (BOARD_SIZE * BOARD_SIZE)
+   - stones_on_board = (board[:, 0] + board[:, 1]).sum(dim=(1, 2))  # Count non-empty cells
+   - move_stage should be float32 tensor on same device as model
+
+3. TRAINING PIPELINE UPDATES:
+   - Data loaders must provide move_stage for each sample
+   - Training loops must pass move_stage to model.forward()
+   - Loss computation should use new compute_value_loss() function
+   - Value loss now uses log-cosh instead of MSE with label smoothing
+
+4. INFERENCE WRAPPER UPDATES:
+   - Model wrappers must compute move_stage internally
+   - External API should remain unchanged for backward compatibility
+   - Internal calls: model(board, move_stage) -> (policy, value)
+   - External calls: wrapper(board) -> (policy, value)
+
+5. CHECKPOINT COMPATIBILITY:
+   - Old checkpoints may not be compatible with new architecture
+   - Need migration strategy or version handling
+   - New model has different parameter count (3,175,306 vs 3,141,825)
+
+6. CONFIG UPDATES:
+   - Remove use_value_bottleneck parameter from create_model()
+   - Update default model type to "katago_inspired"
+   - Consider adding move_stage computation utilities
+
+7. TESTING UPDATES:
+   - All model tests need to provide move_stage parameter
+   - Update test fixtures and mock data
+   - Add tests for move_stage computation
+   - Test backward compatibility with old model types
+
+8. DOCUMENTATION UPDATES:
+   - Update model documentation with new API
+   - Document move_stage computation
+   - Update training guides with new loss functions
+   - Add migration guide for existing code
+
+9. UTILITY FUNCTIONS:
+   - Add move_stage computation utility function
+   - Add model compatibility checking
+   - Add checkpoint migration utilities
+
+10. PERFORMANCE CONSIDERATIONS:
+    - New model has slightly more parameters
+    - Value head computation is more complex
+    - Consider benchmarking performance impact
+    - Monitor memory usage changes
+
+FILES LIKELY TO NEED UPDATES:
+- hex_ai/training.py (training loops)
+- hex_ai/inference/ (model wrappers)
+- hex_ai/data_pipeline.py (data loading)
+- scripts/ (training scripts)
+- tests/ (model tests)
+- Any code that calls model.forward() or model.forward_value_only()
 """
 
 import torch
@@ -147,6 +218,77 @@ class PolicyHead(nn.Module):
         return p.flatten(1)    # (B, H*W)
 
 
+class ValueHead(nn.Module):
+    """
+    KataGo-inspired value head with stage conditioning and multi-output ensemble:
+    - 1x1 bottleneck (32 ch) -> GAP
+    - concat move_stage scalar
+    - LayerNorm on pooled vector
+    - MLP: FC -> ReLU -> FC -> ReLU
+    - K parallel scalars -> learned linear combination -> tanh
+    
+    This design helps with value head saturation by:
+    1. Conditioning on game stage to reduce end-game noise in early positions
+    2. Using K parallel outputs with learned combination (cheap ensemble effect)
+    3. LayerNorm and extra hidden layer for stability and expressiveness
+    4. Initialization to produce ~0 at start (avoid early tanh saturation)
+    """
+    
+    def __init__(self, in_channels: int, bottleneck_channels: int = 32,
+                 hidden_dim: int = 256, k_outputs: int = 4):
+        super().__init__()
+        self.k_outputs = k_outputs
+        
+        # 1x1 bottleneck convolution
+        self.pre = nn.Sequential(
+            nn.Conv2d(in_channels, bottleneck_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(bottleneck_channels),
+            nn.ReLU(inplace=True),
+        )
+        
+        # After GAP we concat move_stage -> dim = bottleneck_channels + 1
+        self.norm = nn.LayerNorm(bottleneck_channels + 1)
+        
+        # MLP with two hidden layers
+        self.mlp = nn.Sequential(
+            nn.Linear(bottleneck_channels + 1, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(inplace=True),
+        )
+        
+        # K parallel outputs and learned linear combination
+        self.out_k = nn.Linear(hidden_dim // 2, k_outputs)  # pre-tanh K scalars
+        self.comb = nn.Linear(k_outputs, 1, bias=False)     # learned linear comb
+        
+        # Initialize to start with ~average and near-zero outputs
+        nn.init.constant_(self.out_k.weight, 0.0)
+        nn.init.constant_(self.out_k.bias, 0.0)
+        with torch.no_grad():
+            self.comb.weight.fill_(1.0 / k_outputs)
+    
+    def forward(self, trunk_feats: torch.Tensor, move_stage: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the value head.
+        
+        Args:
+            trunk_feats: (B, C, H, W) - trunk features
+            move_stage: (B,) - normalized move number in [0,1] range
+            
+        Returns:
+            torch.Tensor: (B, 1) - value prediction in [-1,1] range
+        """
+        # trunk_feats: (B,C,H,W), move_stage: (B,) in [0,1]
+        x = self.pre(trunk_feats)         # (B, Bn, H, W)
+        x = x.mean(dim=(2, 3))            # GAP -> (B, Bn)
+        x = torch.cat([x, move_stage.unsqueeze(1)], dim=1)  # (B, Bn+1)
+        x = self.norm(x)
+        h = self.mlp(x)                   # (B, hidden/2)
+        k_vals = self.out_k(h)            # (B, K)
+        v = self.comb(k_vals)             # (B, 1)
+        return torch.tanh(v)              # (B, 1)
+
+
 class TwoHeadedResNet(nn.Module):
     """
     Two-headed ResNet architecture for Hex AI, inspired by KataGo.
@@ -166,11 +308,10 @@ class TwoHeadedResNet(nn.Module):
     """
     
     def __init__(self, num_blocks: int = 10, trunk_channels: int = 128, 
-                 dropout_prob: float = 0.1, use_value_bottleneck: bool = True):
+                 dropout_prob: float = 0.1):
         super().__init__()
         self.num_blocks = num_blocks
         self.trunk_channels = trunk_channels
-        self.use_value_bottleneck = use_value_bottleneck
         
         # Input layer: Convert board representation to initial features
         # Input shape: (batch_size, 3, 13, 13) for two players + player-to-move channel
@@ -196,29 +337,13 @@ class TwoHeadedResNet(nn.Module):
         # Policy head with global pooling bias injection
         self.policy_head = PolicyHead(trunk_channels, BOARD_SIZE)
         
-        # Enhanced value head with hidden layer and optional bottleneck
-        if use_value_bottleneck:
-            # 1x1 bottleneck convolution to reduce channels before pooling
-            self.value_pre = nn.Sequential(
-                nn.Conv2d(trunk_channels, 32, kernel_size=1, bias=False),
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True)
-            )
-            # Value head with hidden layer
-            self.value_head = nn.Sequential(
-                nn.Linear(32, 256),
-                nn.ReLU(inplace=True),
-                nn.Dropout(p=0.1),  # Light regularization
-                nn.Linear(256, 1)
-            )
-        else:
-            # Value head with hidden layer (no bottleneck)
-            self.value_head = nn.Sequential(
-                nn.Linear(trunk_channels, 256),
-                nn.ReLU(inplace=True),
-                nn.Dropout(p=0.1),  # Light regularization
-                nn.Linear(256, 1)
-            )
+        # New KataGo-inspired value head with stage conditioning
+        self.value_head = ValueHead(
+            in_channels=trunk_channels,
+            bottleneck_channels=32,
+            hidden_dim=256,
+            k_outputs=4,
+        )
         
         # Initialize weights using modern best practices
         self._initialize_weights()
@@ -237,6 +362,11 @@ class TwoHeadedResNet(nn.Module):
             elif isinstance(m, nn.Linear):
                 # Xavier initialization for linear layers
                 nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                # Initialize layer norm layers
+                nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
     
     def forward_shared(self, x: torch.Tensor) -> torch.Tensor:
@@ -245,12 +375,13 @@ class TwoHeadedResNet(nn.Module):
         trunk_out = self.trunk(x)
         return trunk_out
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, move_stage: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through the two-headed ResNet.
         
         Args:
             x: Input tensor of shape (batch_size, 3, 13, 13)
+            move_stage: Normalized move number tensor of shape (batch_size,) in [0,1] range
             
         Returns:
             Tuple of (policy_logits, value_signed):
@@ -263,44 +394,34 @@ class TwoHeadedResNet(nn.Module):
         # Policy head with global pooling bias injection
         policy_logits = self.policy_head(trunk_out)
         
-        # Value head path
-        if self.use_value_bottleneck:
-            # Apply 1x1 bottleneck convolution
-            value_features = self.value_pre(trunk_out)
-            # Global average pooling
-            value_features = value_features.mean(dim=(2, 3))  # GAP
-        else:
-            # Standard global average pooling
-            value_features = self.global_pool(trunk_out)
-            value_features = value_features.view(value_features.size(0), -1)
-        
-        value_signed = torch.tanh(self.value_head(value_features))  # (batch_size, 1)
+        # Value head with stage conditioning
+        value_signed = self.value_head(trunk_out, move_stage)
         
         return policy_logits, value_signed
 
     @torch.no_grad()
-    def forward_value_only(self, x: torch.Tensor) -> torch.Tensor:
-        """Value-only inference path for faster leaf evaluation."""
+    def forward_value_only(self, x: torch.Tensor, move_stage: torch.Tensor) -> torch.Tensor:
+        """
+        Value-only inference path for faster leaf evaluation.
+        
+        Args:
+            x: Input tensor of shape (batch_size, 3, 13, 13)
+            move_stage: Normalized move number tensor of shape (batch_size,) in [0,1] range
+            
+        Returns:
+            torch.Tensor: Value prediction of shape (batch_size, 1) in [-1,1] range
+        """
         trunk_out = self.forward_shared(x)
-        
-        if self.use_value_bottleneck:
-            value_features = self.value_pre(trunk_out)
-            value_features = value_features.mean(dim=(2, 3))  # GAP
-        else:
-            value_features = self.global_pool(trunk_out)
-            value_features = value_features.view(value_features.size(0), -1)
-        
-        return torch.tanh(self.value_head(value_features))
+        return self.value_head(trunk_out, move_stage)
 
 
-def create_model(model_type: str = "katago_inspired", use_value_bottleneck: bool = True, 
+def create_model(model_type: str = "katago_inspired", 
                 num_blocks: int = 10, trunk_channels: int = 128) -> TwoHeadedResNet:
     """
     Factory function to create a model instance.
     
     Args:
         model_type: Type of model to create ("katago_inspired" or "resnet18" for backward compatibility)
-        use_value_bottleneck: Whether to use 1x1 bottleneck in value head
         num_blocks: Number of residual blocks in the trunk
         trunk_channels: Number of channels in the trunk (constant throughout)
         
@@ -308,12 +429,10 @@ def create_model(model_type: str = "katago_inspired", use_value_bottleneck: bool
         Initialized model instance
     """
     if model_type == "katago_inspired":
-        return TwoHeadedResNet(num_blocks=num_blocks, trunk_channels=trunk_channels, 
-                              use_value_bottleneck=use_value_bottleneck)
+        return TwoHeadedResNet(num_blocks=num_blocks, trunk_channels=trunk_channels)
     elif model_type == "resnet18":
         # Backward compatibility - use old parameters
-        return TwoHeadedResNet(num_blocks=8, trunk_channels=128, 
-                              use_value_bottleneck=use_value_bottleneck)
+        return TwoHeadedResNet(num_blocks=8, trunk_channels=128)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -344,13 +463,37 @@ def get_model_summary(model: nn.Module) -> str:
     total_params = count_parameters(model)
     
     # Check if model has the new architecture
-    has_bottleneck = hasattr(model, 'use_value_bottleneck') and model.use_value_bottleneck
     has_trunk_channels = hasattr(model, 'trunk_channels')
     has_num_blocks = hasattr(model, 'num_blocks')
+    has_value_head = hasattr(model, 'value_head') and hasattr(model.value_head, 'k_outputs')
     
-    if has_trunk_channels and has_num_blocks:
-        # New KataGo-inspired architecture
-        value_head_desc = "Enhanced (bottleneck + hidden layer)" if has_bottleneck else "Enhanced (hidden layer only)"
+    if has_trunk_channels and has_num_blocks and has_value_head:
+        # New KataGo-inspired architecture with enhanced value head
+        gpool_blocks = model.num_blocks // 3
+        plain_blocks = model.num_blocks - gpool_blocks
+        k_outputs = model.value_head.k_outputs
+        
+        summary = f"""
+Model Summary:
+==============
+Total Parameters: {total_params:,}
+Model Type: {model.__class__.__name__} (KataGo-inspired)
+
+Architecture:
+- Input: (batch_size, 3, 13, 13)
+- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels
+  * {plain_blocks} plain ResNet blocks
+  * {gpool_blocks} global pooling blocks (every 3rd block)
+- Policy Head: Global pooling bias injection preserving 13x13 spatial structure
+- Value Head: Stage-conditioned multi-output ensemble ({k_outputs} outputs) with LayerNorm
+
+Output:
+- Policy Logits: (batch_size, 169) - row-major flattened from 13x13
+- Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
+- Requires move_stage input: (batch_size,) in [0,1] range
+"""
+    elif has_trunk_channels and has_num_blocks:
+        # KataGo-inspired architecture without enhanced value head
         gpool_blocks = model.num_blocks // 3
         plain_blocks = model.num_blocks - gpool_blocks
         
@@ -366,7 +509,7 @@ Architecture:
   * {plain_blocks} plain ResNet blocks
   * {gpool_blocks} global pooling blocks (every 3rd block)
 - Policy Head: Global pooling bias injection preserving 13x13 spatial structure
-- Value Head: {value_head_desc} with GAP ({VALUE_OUTPUT_SIZE} outputs)
+- Value Head: Standard with GAP ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
 - Policy Logits: (batch_size, 169) - row-major flattened from 13x13
@@ -374,8 +517,6 @@ Output:
 """
     else:
         # Legacy architecture
-        value_head_desc = "Enhanced (bottleneck + hidden layer)" if has_bottleneck else "Enhanced (hidden layer only)"
-        
         summary = f"""
 Model Summary:
 ==============
@@ -386,10 +527,86 @@ Architecture:
 - Input: (batch_size, 3, 13, 13)
 - ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels (no downsampling)
 - Policy Head: Convolutional (1x1 convs) preserving 13x13 spatial structure
-- Value Head: {value_head_desc} with GAP ({VALUE_OUTPUT_SIZE} outputs)
+- Value Head: Standard with GAP ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
 - Policy Logits: (batch_size, 169) - row-major flattened from 13x13
 - Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 """
-    return summary 
+    return summary
+
+
+def log_cosh_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """
+    Log-cosh loss function for value head training.
+    
+    This loss function is more robust to outliers than MSE and provides
+    better gradient behavior for value prediction tasks.
+    
+    Args:
+        pred: Predicted values of shape (batch_size, 1)
+        target: Target values of shape (batch_size, 1)
+        
+    Returns:
+        torch.Tensor: Scalar loss value
+    """
+    x = pred - target
+    return torch.mean(torch.log(torch.cosh(x + 1e-12)))
+
+
+def compute_value_loss(pred: torch.Tensor, target: torch.Tensor, 
+                      smooth: float = 0.95) -> torch.Tensor:
+    """
+    Compute value loss with label smoothing using log-cosh loss.
+    
+    Args:
+        pred: Predicted values of shape (batch_size, 1) in [-1,1] range
+        target: Target values of shape (batch_size, 1) in [-1,1] range
+        smooth: Label smoothing factor (0.95 means clamp to [-0.95, 0.95])
+        
+    Returns:
+        torch.Tensor: Scalar loss value
+    """
+    # Apply label smoothing: clamp target values to reduce noise
+    z = torch.clamp(target, -smooth, smooth)
+    return log_cosh_loss(pred, z)
+
+
+def compute_move_stage(board: torch.Tensor) -> torch.Tensor:
+    """
+    Compute move_stage from board state for the new value head.
+    
+    Move stage represents the normalized number of stones on the board,
+    ranging from 0.0 (empty board) to 1.0 (full board).
+    
+    Args:
+        board: Board tensor of shape (batch_size, 3, height, width)
+               where channels are [blue_channel, red_channel, player_channel]
+               
+    Returns:
+        torch.Tensor: Move stage tensor of shape (batch_size,) in [0,1] range
+    """
+    # Count non-empty cells (blue + red stones)
+    stones_on_board = (board[:, 0] + board[:, 1]).sum(dim=(1, 2))
+    
+    # Normalize by total board size
+    board_size = board.shape[2] * board.shape[3]  # height * width
+    move_stage = stones_on_board.float() / board_size
+    
+    return move_stage
+
+
+def is_new_architecture(model: nn.Module) -> bool:
+    """
+    Check if a model uses the new KataGo-inspired architecture.
+    
+    Args:
+        model: PyTorch model to check
+        
+    Returns:
+        bool: True if model uses new architecture, False otherwise
+    """
+    return (hasattr(model, 'value_head') and 
+            hasattr(model.value_head, 'k_outputs') and
+            hasattr(model, 'trunk_channels') and
+            hasattr(model, 'num_blocks')) 
