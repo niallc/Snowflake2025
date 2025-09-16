@@ -227,6 +227,7 @@ class DataProcessor:
                     if policy_target is not None:
                         policy_tensor = torch.FloatTensor(policy_target)
                     else:
+                        # Terminal moves: use zero vectors (original approach)
                         policy_tensor = torch.zeros(POLICY_OUTPUT_SIZE, dtype=torch.float32)
                     value_tensor = torch.FloatTensor([value_target])
                     # Store as dict to include player_to_move

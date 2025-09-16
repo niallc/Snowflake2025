@@ -429,91 +429,35 @@ class PolicyValueLoss(nn.Module):
         logits_l2 = (centered_logits.pow(2).mean())  # scalar
         logits_l2_loss = self.logits_l2_lambda * logits_l2
         
-        # Policy loss: handle None targets by using constant loss (zero gradient)
-        if policy_target is None:
-            # Create a zero tensor with no gradients - this is cleaner than creating
-            # a standalone tensor with requires_grad=True that's disconnected from the graph
-            policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
-            entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
-        else:
-            
-            # ----- Get legal moves mask -----
-            legal_mask = None
-            if board is not None:
-                legal_mask = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
-            
-            # ----- Apply legal mask to logits -----
-            logits = policy_pred
-            if legal_mask is not None:
-                # Use -1e4 instead of -1e9 to avoid overflow in float16 (Half precision)
-                # float16 range is approximately -65504 to 65504
-                logits = logits.masked_fill(~legal_mask.bool(), -1e4)
-            
-            # ----- Policy loss with label smoothing over legal moves -----
-            B, V = logits.shape
-            target_indices = policy_target.argmax(dim=1)  # (batch_size,)
-            
-            # CRITICAL: Check for target-mask mismatch and handle illegal targets
-            if legal_mask is not None:
-                batch = torch.arange(B, device=logits.device)
-                target_is_legal = legal_mask[batch, target_indices]  # (B,)
-                bad_count = int((~target_is_legal).sum().item())
+        # Policy loss: handle terminal moves by detecting zero vectors (original approach)
+        # Terminal moves are represented as zero vectors in the data pipeline
+        
+        # Simple validation: check for zero vectors (terminal moves)
+        batch_size = policy_target.shape[0]
+        zero_vectors = (policy_target.sum(dim=1) == 0.0)  # (batch_size,)
+        terminal_count = zero_vectors.sum().item()
+        
+        if terminal_count > 0:
+            # Log terminal move statistics for debugging
+            print(f"TERMINAL MOVE DETECTED: {terminal_count}/{batch_size} samples are terminal moves (zero vectors)")
+            # Mixed batch - process only non-terminal moves
+            non_terminal_indices = ~zero_vectors
+            if non_terminal_indices.any():
+                # Process only non-terminal moves
+                non_terminal_policy_pred = policy_pred[non_terminal_indices]
+                non_terminal_policy_target = policy_target[non_terminal_indices]
+                non_terminal_board = board[non_terminal_indices] if board is not None else None
                 
-                if bad_count > 0:
-                    # CRITICAL: This is a bug that needs to be found and fixed!
-                    # Don't mask the error - fail immediately with detailed debugging info
-                    self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
-                    raise RuntimeError(
-                        f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
-                        f"This indicates a data pipeline issue where policy targets point to illegal moves. "
-                        f"Training stopped to prevent silent failures. Check debug output above for details."
-                    )
-                else:
-                    # All targets are legal - proceed with normal computation
-                    if self.label_smoothing > 0:
-                        # Build smoothed targets strictly over legal moves
-                        target = torch.zeros_like(logits)
-                        target[batch, target_indices] = 1.0
-                        
-                        legal_counts = legal_mask.sum(dim=1).clamp_min(1)
-                        epsilon = self.label_smoothing
-                        # Zero out illegal mass before smoothing
-                        target = target * legal_mask.float()
-                        # Renormalize the one-hot in case target was illegal (becomes all-zeros row)
-                        row_sum = target.sum(dim=1, keepdim=True).clamp_min(1.0)
-                        target = target / row_sum  # stays one-hot if legal, becomes 0-row if illegal
-                        # Uniform over legal moves
-                        uniform = legal_mask.float() / legal_counts.unsqueeze(1)
-                        # Final smoothed distribution
-                        target = (1 - epsilon) * target + epsilon * uniform
-                        
-                        logp = torch.log_softmax(logits, dim=1)
-                        policy_loss = -(target * logp).sum(dim=1).mean()
-                    else:
-                        policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+                policy_loss, entropy_loss = self._compute_policy_loss(
+                    non_terminal_policy_pred, non_terminal_policy_target, non_terminal_board
+                )
             else:
-                # No legal mask - proceed with original logic
-                if self.label_smoothing > 0:
-                    # Build smoothed targets over all moves
-                    target = torch.zeros_like(logits)
-                    target[batch, target_indices] = 1.0
-                    uniform = torch.full_like(logits, 1.0 / V)
-                    target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
-                    
-                    logp = torch.log_softmax(logits, dim=1)
-                    policy_loss = -(target * logp).sum(dim=1).mean()
-                else:
-                    policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
-            
-            # ----- Entropy bonus (encourages spread) -----
-            if self.entropy_weight > 0:
-                p = torch.softmax(logits, dim=1)
-                # Use a larger minimum value for float16 compatibility
-                min_val = 1e-6 if p.dtype == torch.float16 else 1e-12
-                entropy = -(p * torch.log(p.clamp_min(min_val))).sum(dim=1).mean()
-                entropy_loss = -self.entropy_weight * entropy
-            else:
+                # All samples are terminal moves (terminal_count == batch_size)
+                policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
                 entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
+        else:
+            # No terminal moves - process normally
+            policy_loss, entropy_loss = self._compute_policy_loss(policy_pred, policy_target, board)
         
         # ----- Total loss -----
         total_loss = (self.policy_weight * policy_loss + 
@@ -551,6 +495,93 @@ class PolicyValueLoss(nn.Module):
         }
         
         return total_loss, loss_dict
+
+    def _compute_policy_loss(self, policy_pred: torch.Tensor, policy_target: torch.Tensor, board: torch.Tensor = None):
+        """
+        Compute policy loss for non-terminal moves.
+        
+        Args:
+            policy_pred: Policy predictions from model
+            policy_target: Policy targets (should not contain terminal moves)
+            board: Board state for legal move masking
+            
+        Returns:
+            Tuple of (policy_loss, entropy_loss)
+        """
+        # ----- Get legal moves mask -----
+        legal_mask = None
+        if board is not None:
+            legal_mask = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
+        
+        # ----- Apply legal mask to logits -----
+        logits = policy_pred
+        if legal_mask is not None:
+            # Use -1e4 instead of -1e9 to avoid overflow in float16 (Half precision)
+            # float16 range is approximately -65504 to 65504
+            logits = logits.masked_fill(~legal_mask.bool(), -1e4)
+        
+        # ----- Policy loss with label smoothing over legal moves -----
+        B, V = logits.shape
+        target_indices = policy_target.argmax(dim=1)  # (batch_size,)
+        
+        # CRITICAL: Check for target-mask mismatch and handle illegal targets
+        if legal_mask is not None:
+            batch = torch.arange(B, device=logits.device)
+            target_is_legal = legal_mask[batch, target_indices]  # (B,)
+            bad_count = int((~target_is_legal).sum().item())
+            
+            if bad_count > 0:
+                # CRITICAL: This is a bug that needs to be found and fixed!
+                # Don't mask the error - fail immediately with detailed debugging info
+                self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
+                raise RuntimeError(
+                    f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
+                    f"This indicates a data pipeline issue where policy targets point to illegal moves. "
+                    f"Training stopped to prevent silent failures. Check debug output above for details."
+                )
+            else:
+                # All targets are legal - proceed with normal computation
+                if self.label_smoothing > 0:
+                    # Build smoothed targets strictly over legal moves
+                    target = torch.zeros_like(logits)
+                    target[batch, target_indices] = 1.0
+                    
+                    legal_counts = legal_mask.sum(dim=1).clamp_min(1)
+                    epsilon = self.label_smoothing
+                    # Uniform over legal moves
+                    uniform = legal_mask.float() / legal_counts.unsqueeze(1)
+                    # Final smoothed distribution
+                    target = (1 - epsilon) * target + epsilon * uniform
+                    
+                    logp = torch.log_softmax(logits, dim=1)
+                    policy_loss = -(target * logp).sum(dim=1).mean()
+                else:
+                    policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+        else:
+            # No legal mask - proceed with original logic
+            if self.label_smoothing > 0:
+                # Build smoothed targets over all moves
+                target = torch.zeros_like(logits)
+                target[batch, target_indices] = 1.0
+                uniform = torch.full_like(logits, 1.0 / V)
+                target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
+                
+                logp = torch.log_softmax(logits, dim=1)
+                policy_loss = -(target * logp).sum(dim=1).mean()
+            else:
+                policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+        
+        # ----- Entropy bonus (encourages spread) -----
+        if self.entropy_weight > 0:
+            p = torch.softmax(logits, dim=1)
+            # Use a larger minimum value for float16 compatibility
+            min_val = 1e-6 if p.dtype == torch.float16 else 1e-12
+            entropy = -(p * torch.log(p.clamp_min(min_val))).sum(dim=1).mean()
+            entropy_loss = -self.entropy_weight * entropy
+        else:
+            entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
+        
+        return policy_loss, entropy_loss
 
 
 class MixedPrecisionTrainer:
