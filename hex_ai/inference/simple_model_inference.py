@@ -77,7 +77,7 @@ class SimpleModelInference:
         self,
         checkpoint_path: str,
         device: str = None,
-        model_type: str = "resnet18",
+        model_type: str = "katago_inspired",
         cache_size: int = 30000,
         max_batch_size: int = 1000,
         enable_caching: bool = True

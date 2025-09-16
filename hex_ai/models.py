@@ -377,7 +377,7 @@ class TwoHeadedResNet(nn.Module):
     - Enhanced value head with hidden layer and optional bottleneck
     """
     
-    def __init__(self, num_blocks: int = 10, trunk_channels: int = 128):
+    def __init__(self, num_blocks: int = 7, trunk_channels: int = 128):
         super().__init__()
         self.num_blocks = num_blocks
         self.trunk_channels = trunk_channels
@@ -542,7 +542,7 @@ class TwoHeadedResNet(nn.Module):
 
 
 def create_model(model_type: str = "katago_inspired", 
-                num_blocks: int = 10, trunk_channels: int = 128) -> TwoHeadedResNet:
+                num_blocks: int = 7, trunk_channels: int = 128) -> TwoHeadedResNet:
     """
     Factory function to create a model instance.
     

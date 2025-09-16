@@ -19,13 +19,13 @@ class ModelWrapper:
         self,
         checkpoint_path: str,
         device: Optional[str] = None,
-        model_type: str = "resnet18"
+        model_type: str = "katago_inspired"
     ):
         """
         Args:
             checkpoint_path: Path to the model checkpoint (.pt or .pth file, possibly .gz)
             device: 'cpu', 'cuda', 'mps', or None for auto-detect
-            model_type: Model architecture type (default: 'resnet18')
+            model_type: Model architecture type (default: 'katago_inspired')
         """
         self.device = self._detect_device(device)
         self.model = self._load_model(checkpoint_path, model_type)

@@ -23,7 +23,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250915_082202/pipeline_sweep_exp0__99914b_20250915_082629/"
 # CURRENT_BEST_MODEL_FILE = "epoch10_mini11.pt.gz"
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250916_231047"
-CURRENT_BEST_MODEL_FILE = "epoch1_mini5.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch1_mini6.pt.gz"
 
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250914_164612/"
 # CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
@@ -38,8 +38,10 @@ CURRENT_BEST_MODEL_FILE = "epoch1_mini5.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-PREVIOUS_BEST_MODEL_FILE = "epoch2_mini201.pt.gz"
+PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250916_231047"
+PREVIOUS_BEST_MODEL_FILE = "epoch1_mini4.pt.gz"
+# PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
+# PREVIOUS_BEST_MODEL_FILE = "epoch2_mini201.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)
