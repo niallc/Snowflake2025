@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -89,15 +90,92 @@ NUMERICAL_STABILITY_WARMUP_BATCHES = 20
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
     
-    def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT):
+    def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT, 
+                 entropy_weight: float = 1e-3, label_smoothing: float = 0.1):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
+        self.entropy_weight = entropy_weight
+        self.label_smoothing = label_smoothing
         self.policy_loss = nn.CrossEntropyLoss()
         # Value loss is now handled by the new compute_value_loss function
     
+    def _get_legal_moves_from_board(self, board: torch.Tensor) -> torch.Tensor:
+        """
+        Determine legal moves from board state.
+        
+        In Hex, legal moves are simply any position that doesn't already have a piece on it.
+        
+        Args:
+            board: Board tensor of shape (batch_size, 3, height, width) where channels are [blue_channel, red_channel, player_channel]
+            
+        Returns:
+            Legal moves mask of shape (batch_size, height * width) where True indicates legal moves
+        """
+        # Extract blue and red channels (ignore player channel)
+        blue_channel = board[:, 0]  # (batch_size, height, width)
+        red_channel = board[:, 1]   # (batch_size, height, width)
+        
+        # A position is legal if both blue and red channels are 0 (empty)
+        empty_positions = (blue_channel == 0) & (red_channel == 0)  # (batch_size, height, width)
+        
+        # Flatten to match policy output shape
+        legal_moves = empty_positions.view(board.shape[0], -1)  # (batch_size, height * width)
+        
+        return legal_moves
+    
+    def _apply_label_smoothing(self, policy_target: torch.Tensor, board: torch.Tensor) -> torch.Tensor:
+        """
+        Apply label smoothing over legal moves.
+        
+        Args:
+            policy_target: Original one-hot policy target of shape (batch_size, policy_output_size)
+            board: Board tensor of shape (batch_size, 3, height, width)
+            
+        Returns:
+            Smoothed policy target of shape (batch_size, policy_output_size)
+        """
+        if self.label_smoothing <= 0:
+            return policy_target
+        
+        # Get legal moves mask
+        legal_moves = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
+        
+        # Count legal moves per batch
+        num_legal_moves = legal_moves.sum(dim=1, keepdim=True)  # (batch_size, 1)
+        
+        # Create smoothed targets
+        smoothed_target = torch.zeros_like(policy_target)
+        
+        # For each batch
+        for batch_idx in range(policy_target.shape[0]):
+            batch_legal = legal_moves[batch_idx]  # (height * width,)
+            batch_target = policy_target[batch_idx]  # (height * width,)
+            batch_num_legal = num_legal_moves[batch_idx].item()
+            
+            if batch_num_legal == 0:
+                # No legal moves (shouldn't happen in normal training)
+                continue
+            
+            # Find the chosen move (where target is 1.0)
+            chosen_move_idx = batch_target.argmax().item()
+            
+            # Apply label smoothing: (1-ε) for chosen move, ε/num_legal for other legal moves
+            epsilon = self.label_smoothing
+            smoothed_target[batch_idx, chosen_move_idx] = 1.0 - epsilon
+            
+            # Distribute epsilon evenly among all legal moves
+            epsilon_per_legal = epsilon / batch_num_legal
+            smoothed_target[batch_idx, batch_legal] += epsilon_per_legal
+            
+            # Ensure the chosen move gets the correct total probability
+            smoothed_target[batch_idx, chosen_move_idx] = 1.0 - epsilon + epsilon_per_legal
+        
+        return smoothed_target
+    
     def forward(self, policy_pred: torch.Tensor, value_pred: torch.Tensor,
-                policy_target: torch.Tensor, value_target: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+                policy_target: torch.Tensor, value_target: torch.Tensor, 
+                board: torch.Tensor = None) -> Tuple[torch.Tensor, Dict]:
         """
         Compute combined policy and value loss.
         
@@ -125,21 +203,42 @@ class PolicyValueLoss(nn.Module):
             # Create a zero tensor with no gradients - this is cleaner than creating
             # a standalone tensor with requires_grad=True that's disconnected from the graph
             policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
+            entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         else:
-            # Convert one-hot policy targets to class indices for CrossEntropyLoss
-            # CrossEntropyLoss expects class indices, not one-hot vectors
-            policy_class_target = policy_target.argmax(dim=1)
-            policy_loss = self.policy_loss(policy_pred, policy_class_target)
+            # Apply label smoothing if board is provided
+            if board is not None and self.label_smoothing > 0:
+                policy_target = self._apply_label_smoothing(policy_target, board)
+            
+            # Use appropriate loss function based on whether label smoothing is applied
+            if board is not None and self.label_smoothing > 0:
+                # Use KL divergence loss for smoothed targets (probability distributions)
+                policy_log_probs = F.log_softmax(policy_pred, dim=1)
+                policy_loss = F.kl_div(policy_log_probs, policy_target, reduction='batchmean')
+            else:
+                # Use CrossEntropyLoss for one-hot targets (class indices)
+                policy_class_target = policy_target.argmax(dim=1)
+                policy_loss = self.policy_loss(policy_pred, policy_class_target)
+            
+            # Compute policy entropy regularization to prevent logit explosion
+            # This encourages the policy to maintain uncertainty and prevents overconfidence
+            if self.entropy_weight > 0:
+                policy_probs = F.softmax(policy_pred, dim=1)
+                policy_log_probs = F.log_softmax(policy_pred, dim=1)
+                entropy = -(policy_probs * policy_log_probs).sum(dim=1).mean()
+                entropy_loss = -entropy  # Negative entropy to encourage higher entropy (more uncertainty)
+            else:
+                entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         
         # Combine losses with weights
         total_loss = (self.policy_weight * policy_loss + 
-                     self.value_weight * value_loss)
+                     self.value_weight * value_loss +
+                     self.entropy_weight * entropy_loss)
         
         # CRITICAL: Check for NaN values and fail fast
-        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss):
+        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy_loss):
             raise RuntimeError(
                 f"NaN detected in loss computation! "
-                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}. "
+                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}, entropy_loss={entropy_loss.item()}. "
                 f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
             )
         
@@ -151,7 +250,7 @@ class PolicyValueLoss(nn.Module):
             abs(value_loss.item()) > MAX_VALUE_LOSS_ABS):
             raise RuntimeError(
                 f"Extreme loss values detected! "
-                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}. "
+                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}, entropy_loss={entropy_loss.item():.6f}. "
                 f"These values are unusually high and may indicate numerical instability. "
                 f"Check learning rate, gradient clipping, and model architecture."
             )
@@ -159,7 +258,8 @@ class PolicyValueLoss(nn.Module):
         loss_dict = {
             'total_loss': total_loss.item(),
             'policy_loss': policy_loss.item(),
-            'value_loss': value_loss.item()
+            'value_loss': value_loss.item(),
+            'entropy_loss': entropy_loss.item()
         }
         
         return total_loss, loss_dict
@@ -234,6 +334,8 @@ class Trainer:
                  experiment_name: Optional[str] = None,
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
+                 entropy_weight: float = 1e-3,
+                 label_smoothing: float = 0.1,
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 1.0,
@@ -255,6 +357,8 @@ class Trainer:
             experiment_name: Optional name for the experiment.
             policy_weight: Weight for the policy loss.
             value_weight: Weight for the value loss.
+            entropy_weight: Weight for the policy entropy regularization (default: 1e-3).
+            label_smoothing: Label smoothing factor for policy targets over legal moves (default: 0.1).
             weight_decay: Weight decay for the optimizer.
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 1.0, no effect)
@@ -409,7 +513,8 @@ class Trainer:
         
         # Optimizer and loss
         self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
-        self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
+        self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight, 
+                                        entropy_weight=entropy_weight, label_smoothing=label_smoothing)
         
         # Learning rate scheduler (ReduceLROnPlateau)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -480,7 +585,8 @@ class Trainer:
         val_metrics = {
             'policy_loss': [],
             'value_loss': [],
-            'total_loss': []
+            'total_loss': [],
+            'entropy_loss': []
         }
         
         with torch.no_grad():
@@ -492,7 +598,7 @@ class Trainer:
                 # Forward pass with mixed precision
                 with self.mixed_precision.autocast_context():
                     policy_pred, value_pred = self.model(boards, move_stage)
-                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                    total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
                 # CRITICAL: Check for NaN in validation
                 if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any() or torch.isnan(total_loss):
@@ -680,7 +786,8 @@ class Trainer:
                 f"[train_on_batches] Batch {batch_idx+1}: "
                 f"total_loss={state['mini_epoch_metrics']['total_loss'][-1]:.4f}, "
                 f"policy_loss={state['mini_epoch_metrics']['policy_loss'][-1]:.4f}, "
-                f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f} "
+                f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f}, "
+                f"entropy_loss={state['mini_epoch_metrics']['entropy_loss'][-1]:.4f} "
                 f"(elapsed {elapsed:.1f}s)"
             )
             if batch_idx + 1 == state['next_log_batch']:
@@ -762,7 +869,8 @@ class Trainer:
             'mini_epoch_metrics': {
                 'policy_loss': [],
                 'value_loss': [],
-                'total_loss': []
+                'total_loss': [],
+                'entropy_loss': []
             },
             'gradient_norms': [],
             'start_time': time.time(),
@@ -789,7 +897,7 @@ class Trainer:
         self.optimizer.zero_grad()
         with self.mixed_precision.autocast_context():
             policy_pred, value_pred = self.model(boards, move_stage)
-            total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+            total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
         # CRITICAL: Check for NaN and extreme values in model outputs
         if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any():
