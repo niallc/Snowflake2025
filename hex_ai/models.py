@@ -217,6 +217,9 @@ class PolicyHead(nn.Module):
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, trunk_channels)
         
+        # Learnable gate for global bias, starts closed (initialized to 0)
+        self.g_alpha = nn.Parameter(torch.zeros(1))
+        
         # Initialize the final conv layer with conservative scaling
         self._initialize_final_layer()
             
@@ -263,8 +266,8 @@ class PolicyHead(nn.Module):
         g = g.mean(dim=(2, 3))                   # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, trunk_channels, 1, 1)
         
-        # Inject global bias
-        local = local + g
+        # Inject gated global bias
+        local = local + self.g_alpha * g
         
         # Apply layer normalization to prevent magnitude growth
         # Reshape for layer norm: (B, C, H, W) -> (B, H, W, C) -> (B*H*W, C)

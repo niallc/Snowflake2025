@@ -122,9 +122,9 @@ class PolicyValueLoss(nn.Module):
         
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:
-            # Create a constant tensor with zero gradient for policy loss
-            # This ensures no gradients flow to the policy head when there's no target
-            policy_loss = torch.tensor(0.0, device=policy_pred.device, requires_grad=True)
+            # Create a zero tensor with no gradients - this is cleaner than creating
+            # a standalone tensor with requires_grad=True that's disconnected from the graph
+            policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         else:
             # Convert one-hot policy targets to class indices for CrossEntropyLoss
             # CrossEntropyLoss expects class indices, not one-hot vectors
@@ -1113,5 +1113,9 @@ class Trainer:
         
         # CSV logging for mini-epoch
         self._log_csv_metrics(epoch, mini_epoch, state, val_metrics, diagnostics, mini_epoch_avg)
+        
+        # Learning rate scheduler step (ReduceLROnPlateau)
+        if val_metrics and 'total_loss' in val_metrics:
+            self.scheduler.step(val_metrics['total_loss'])
         
         return mini_epoch_avg
