@@ -116,15 +116,7 @@ class GlobalPoolingResidualBlock(nn.Module):
         self.gconv = nn.Conv2d(channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, channels)
-        
-        # Initialize weights to prevent extreme values
-        self._initialize_weights()
-    
-    def _initialize_weights(self):
-        """Initialize weights using standard practices."""
-        # Let the main model's initialization handle this - no custom initialization needed
-        pass
-    
+            
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local path
         out = F.relu(self.bn1(self.conv1(x)))
@@ -135,8 +127,8 @@ class GlobalPoolingResidualBlock(nn.Module):
         g = g.mean(dim=(2, 3))                # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
         
-        # Inject global bias with proper scaling to prevent extreme values
-        out = out + 0.1 * g
+        # Inject global bias
+        out = out + g
         
         # Residual connection
         out = F.relu(out + x)
@@ -167,16 +159,7 @@ class PolicyHead(nn.Module):
         self.gconv = nn.Conv2d(trunk_channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, trunk_channels)
-        
-        # Initialize weights to prevent extreme values
-        self._initialize_weights()
-    
-    def _initialize_weights(self):
-        """Initialize weights to prevent extreme logit values."""
-        # Use Xavier initialization for the final conv layer to prevent extreme logits
-        # Kaiming initialization is too aggressive for the final layer in deep networks
-        nn.init.xavier_normal_(self.conv2.weight)
-    
+            
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local features
         local = F.relu(self.bn1(self.conv1(x)))
@@ -186,8 +169,8 @@ class PolicyHead(nn.Module):
         g = g.mean(dim=(2, 3))                   # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, trunk_channels, 1, 1)
         
-        # Inject global bias with proper scaling to prevent extreme values
-        local = local + 0.1 * g
+        # Inject global bias
+        local = local + g
         
         # Final conv → logits
         p = self.conv2(local)  # (B, 1, H, W)

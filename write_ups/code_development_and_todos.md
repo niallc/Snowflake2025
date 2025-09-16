@@ -39,5 +39,29 @@
 
 ### 10. Bigger / wider / deeper network?
 
+### 11. Augment value training with MCTS predictions:
+#### Loss-side Improvements (Often the Biggest Wins)
+
+#### (a) Mix Two Value Targets
+
+Let:
+
+- **`z_outcome`** ∈ {+1, -1}: the final game result from the perspective of the current player (or a fixed player like Red).
+- **`z_mcts`** ∈ [-1, +1]: the MCTS root value (visit-weighted average of child values).
+
+Train against a mixture:
+
+$$
+z_{mix} = (1 - \alpha) \cdot z_{outcome} + \alpha \cdot z_{mcts}
+$$
+
+with $\alpha$ in the range 0.3–0.7 (try 0.5 first). This stabilizes and speeds up learning.
+
+---
+
+#### (b) Light Label Smoothing on Outcomes
+
+If you use pure outcomes, map ±1 to ±s with $s \approx 0.95$:
+
 ### 12. Update on moves in winning games more?
  - Feature request rather than a bug: Do we want the policy head to update more on moves from the winning player?
