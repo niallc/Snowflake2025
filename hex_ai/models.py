@@ -534,18 +534,24 @@ def compute_move_stage(board: torch.Tensor) -> torch.Tensor:
     ranging from 0.0 (empty board) to 1.0 (full board).
     
     Args:
-        board: Board tensor of shape (batch_size, 3, height, width)
+        board: Board tensor of shape (batch_size, 3, height, width) or (3, height, width)
                where channels are [blue_channel, red_channel, player_channel]
                
     Returns:
         torch.Tensor: Move stage tensor of shape (batch_size,) in [0,1] range
     """
-    # Count non-empty cells (blue + red stones)
-    stones_on_board = (board[:, 0] + board[:, 1]).sum(dim=(1, 2))
+    # Handle single board case
+    if board.dim() == 3:
+        board = board.unsqueeze(0)
+    
+    # Binarize each plane before counting (matches data pipeline logic)
+    blue = (board[:, 0] > 0).float()
+    red = (board[:, 1] > 0).float()
+    stones_on_board = (blue + red).sum(dim=(1, 2))
     
     # Normalize by total board size
-    board_size = board.shape[2] * board.shape[3]  # height * width
-    move_stage = stones_on_board.float() / board_size
+    board_area = board.shape[2] * board.shape[3]  # height * width
+    move_stage = stones_on_board / float(board_area)
     
     return move_stage
 

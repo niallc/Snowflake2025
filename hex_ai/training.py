@@ -181,8 +181,8 @@ class Trainer:
                  value_weight: float = VALUE_LOSS_WEIGHT,
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
-                 value_learning_rate_factor: float = 0.1,
-                 value_weight_decay_factor: float = 5.0,
+                 value_learning_rate_factor: float = 1.0,
+                 value_weight_decay_factor: float = 1.0,
                  log_interval_batches: int = 200,
                  run_timestamp: Optional[str] = None,
                  shutdown_handler=None):
@@ -200,8 +200,8 @@ class Trainer:
             value_weight: Weight for the value loss.
             weight_decay: Weight decay for the optimizer.
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
-            value_learning_rate_factor: Factor to multiply learning rate for value head (default: 0.1)
-            value_weight_decay_factor: Factor to multiply weight decay for value head (default: 5.0)
+            value_learning_rate_factor: Factor to multiply learning rate for value head (default: 1.0, no effect)
+            value_weight_decay_factor: Factor to multiply weight decay for value head (default: 1.0, no effect)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
             run_timestamp: Optional timestamp for the entire run to use in log filenames
 
