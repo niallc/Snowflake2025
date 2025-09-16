@@ -70,12 +70,11 @@ MAX_VALUE_OUTPUT_ABS = 0.999
 # effectively from these positions.
 
 # Loss value thresholds for detecting numerical instability
-MAX_TOTAL_LOSS_ABS = 200.0  # Increased to accommodate KL divergence loss
-MAX_POLICY_LOSS_ABS = 100.0  # Increased to accommodate KL divergence loss (was 50.0)
+MAX_TOTAL_LOSS_ABS = 100.0
+MAX_POLICY_LOSS_ABS = 50.0
 MAX_VALUE_LOSS_ABS = 10.0
-# Rationale: These thresholds account for the new loss function that uses KL divergence
-# for label smoothing, which can produce larger loss values than CrossEntropyLoss.
-# Values above these indicate unusual numerical behavior that may lead to NaN.
+# Rationale: These thresholds detect unusual numerical behavior that may lead to NaN.
+# With proper L2 penalty on logits, losses should stay within normal ranges.
 
 # Gradient norm thresholds for detecting gradient explosion
 MAX_GRADIENT_NORM = 100.0
@@ -88,11 +87,29 @@ NUMERICAL_STABILITY_WARMUP_BATCHES = 20
 # to stabilize from random initialization. Early batches often have extreme values
 # that are not indicative of actual training problems.
 
+# =============================================================================
+# LOSS FUNCTION HYPERPARAMETERS
+# =============================================================================
+
+# Policy entropy regularization weight
+DEFAULT_ENTROPY_WEIGHT = 1e-3
+# Rationale: Encourages policy uncertainty to prevent overconfidence and logit explosion
+
+# Label smoothing factor for policy targets over legal moves
+DEFAULT_LABEL_SMOOTHING = 0.1
+# Rationale: Prevents overconfidence by smoothing targets over legal moves
+
+# L2 penalty on centered logits to prevent explosion
+DEFAULT_LOGITS_L2_LAMBDA = 1e-5
+# Rationale: Directly penalizes logit scale/variance to prevent gradient explosion
+# GPT recommendation: start at 1e-6, increase to 5e-6, 1e-5, or rarely 3e-5 if needed
+
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
     
     def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT, 
-                 entropy_weight: float = 1e-3, label_smoothing: float = 0.1, logits_l2_lambda: float = 1e-6):
+                 entropy_weight: float = DEFAULT_ENTROPY_WEIGHT, label_smoothing: float = DEFAULT_LABEL_SMOOTHING, 
+                 logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
@@ -246,6 +263,7 @@ class PolicyValueLoss(nn.Module):
                 
                 logp = torch.log_softmax(logits, dim=1)
                 policy_loss = -(target * logp).sum(dim=1).mean()
+                
             else:
                 policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
             
@@ -366,9 +384,9 @@ class Trainer:
                  experiment_name: Optional[str] = None,
                  policy_weight: float = POLICY_LOSS_WEIGHT,
                  value_weight: float = VALUE_LOSS_WEIGHT,
-                 entropy_weight: float = 1e-3,
-                 label_smoothing: float = 0.1,
-                 logits_l2_lambda: float = 1e-6,
+                 entropy_weight: float = DEFAULT_ENTROPY_WEIGHT,
+                 label_smoothing: float = DEFAULT_LABEL_SMOOTHING,
+                 logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA,
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 1.0,
@@ -392,7 +410,7 @@ class Trainer:
             value_weight: Weight for the value loss.
             entropy_weight: Weight for the policy entropy regularization (default: 1e-3).
             label_smoothing: Label smoothing factor for policy targets over legal moves (default: 0.1).
-            logits_l2_lambda: L2 penalty on centered logits to prevent explosion (default: 1e-6).
+            logits_l2_lambda: L2 penalty on centered logits to prevent explosion (default: 1e-5).
             weight_decay: Weight decay for the optimizer.
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 1.0, no effect)
