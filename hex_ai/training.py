@@ -724,11 +724,31 @@ class Trainer:
                        f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
                        f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
         
+        # Enhanced debugging for extreme values
+        if policy_max_abs > 30.0 or value_max_abs > 0.8:  # Lower threshold for more debugging
+            # Get gradient norm info if available
+            grad_norm_info = ""
+            if hasattr(self, 'gradient_clipping_debug') and self.gradient_clipping_debug:
+                latest_grad = self.gradient_clipping_debug[-1]
+                grad_norm_info = f", pre_clip_grad_norm={latest_grad['pre_clip']:.3f}, post_clip_grad_norm={latest_grad['post_clip']:.3f}"
+            
+            logger.warning(f"LARGE_VALUES_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
+                          f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
+                          f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
+                          f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]{grad_norm_info}")
+        
         # Check for extreme values that indicate numerical instability (skip during early training)
         if (not is_early_training and 
             (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS)):
             policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
             value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
+            
+            # Enhanced debug information
+            logger.error(f"EXTREME_VALUES_DETECTED: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}")
+            logger.error(f"Policy stats: max_abs={policy_max_abs:.6f}, mean={policy_pred.mean().item():.6f}, "
+                        f"std={policy_pred.std().item():.6f}, range={policy_range}")
+            logger.error(f"Value stats: max_abs={value_max_abs:.6f}, mean={value_pred.mean().item():.6f}, "
+                        f"std={value_pred.std().item():.6f}, range={value_range}")
             
             # Save debug information to errors directory
             self._save_debug_info(epoch, mini_epoch, batch_idx, policy_pred, value_pred, 
