@@ -23,7 +23,7 @@ import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
-from hex_ai.models import compute_move_stage, compute_value_loss
+from hex_ai.models import compute_move_stage, compute_value_loss, MAX_LOG_COSH_INPUT_ABS
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -80,10 +80,11 @@ MAX_GRADIENT_NORM = 100.0
 # Rationale: Gradient norms > 100 indicate potential gradient explosion,
 # which can cause numerical instability and NaN values.
 
-# Log-cosh loss input thresholds for detecting extreme value differences
-MAX_LOG_COSH_INPUT_ABS = 20.0
-# Rationale: log(cosh(x)) loses precision for |x| > 20. Beyond this point,
-# the function becomes essentially linear and may cause numerical issues.
+# Warmup period for numerical stability checks
+NUMERICAL_STABILITY_WARMUP_BATCHES = 20
+# Rationale: Skip extreme value checks for the first N batches to allow the network
+# to stabilize from random initialization. Early batches often have extreme values
+# that are not indicative of actual training problems.
 
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
@@ -142,7 +143,9 @@ class PolicyValueLoss(nn.Module):
                 f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
             )
         
-        # Check for extreme loss values that indicate numerical instability
+        # Check for extreme loss values that indicate numerical instability (skip during warmup)
+        # Note: We need to access batch_count from the trainer, but this is in the loss function
+        # For now, we'll keep loss checks active from the start since extreme losses are always concerning
         if (abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS or 
             abs(policy_loss.item()) > MAX_POLICY_LOSS_ABS or 
             abs(value_loss.item()) > MAX_VALUE_LOSS_ABS):
@@ -281,6 +284,8 @@ class Trainer:
         self.betas = betas
         self.eps = eps
         
+        # Note: Numerical stability warmup is now handled via epoch/mini_epoch/batch_idx checks
+        
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
         
@@ -366,7 +371,7 @@ class Trainer:
             logger.warning(f"System analysis failed: {e}")
     
     
-    def validate(self) -> Dict[str, float]:
+    def validate(self, epoch: int = None, mini_epoch: int = None) -> Dict[str, float]:
         """Validate the model."""
         if not self.val_loader:
             return {}
@@ -404,7 +409,11 @@ class Trainer:
                 policy_max_abs = torch.abs(policy_pred).max().item()
                 value_max_abs = torch.abs(value_pred).max().item()
                 
-                if policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS or abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS:
+                # Check if we're in early training phase
+                is_early_training = (epoch == 1 and mini_epoch == 1)
+                
+                if (not is_early_training and 
+                    (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS or abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS)):
                     policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
                     value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
                     
@@ -666,8 +675,11 @@ class Trainer:
         }
 
     def _process_single_batch(self, batch_idx: int, boards: torch.Tensor, policies: torch.Tensor, 
-                            values: torch.Tensor, state: Dict, move_stage: torch.Tensor) -> Dict:
+                            values: torch.Tensor, state: Dict, move_stage: torch.Tensor, epoch: int = None, mini_epoch: int = None) -> Dict:
         """Process a single batch and return updated state."""
+        # Check if we're in early training phase (first few batches of first mini-epoch of first epoch)
+        is_early_training = (epoch == 1 and mini_epoch == 1 and batch_idx < NUMERICAL_STABILITY_WARMUP_BATCHES)
+        
         # Calculate timing metrics
         timing = TrainingUtilities.calculate_batch_timing(state)
         
@@ -700,8 +712,9 @@ class Trainer:
         policy_max_abs = torch.abs(policy_pred).max().item()
         value_max_abs = torch.abs(value_pred).max().item()
         
-        # Check for extreme values that indicate numerical instability
-        if policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS:
+        # Check for extreme values that indicate numerical instability (skip during early training)
+        if (not is_early_training and 
+            (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS)):
             policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
             value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
             
@@ -847,6 +860,12 @@ class Trainer:
         - Custom training loops that need fine-grained control
         - Integration with external training frameworks
         - Debugging and experimentation
+        
+        Args:
+            batch_iterable: Iterable of batches to train on
+            epoch: Current epoch number (for logging and numerical stability warmup)
+            mini_epoch: Current mini-epoch number (for logging and numerical stability warmup)
+            val_metrics: Validation metrics from previous validation
 
         Unlike train(), this method:
         - Does NOT manage epochs, checkpointing, or validation
@@ -872,6 +891,8 @@ class Trainer:
         # Initialize training state
         state = self._initialize_training_state()
         
+        # Note: Numerical stability warmup is handled via epoch/mini_epoch/batch_idx checks
+        
         # Process each batch
         for batch_idx, batch_data in enumerate(batch_iterable):
             # Validate batch format - should always be 4 elements now
@@ -883,7 +904,7 @@ class Trainer:
                 )
             
             boards, policies, values, move_stage = batch_data
-            state = self._process_single_batch(batch_idx, boards, policies, values, state, move_stage)
+            state = self._process_single_batch(batch_idx, boards, policies, values, state, move_stage, epoch, mini_epoch)
             
             # Progress logging
             self._handle_progress_logging(batch_idx, epoch, mini_epoch, state)

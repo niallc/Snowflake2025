@@ -70,7 +70,7 @@ class MiniEpochOrchestrator:
                 # Validation (do this before training so we can pass metrics)
                 val_metrics = None
                 if self.val_loader is not None:
-                    val_metrics = self.trainer.validate()
+                    val_metrics = self.trainer.validate(epoch=epoch+1, mini_epoch=mini_epoch_idx+1)
                 
                 # Check for shutdown before starting training
                 if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
@@ -78,7 +78,7 @@ class MiniEpochOrchestrator:
                     raise GracefulShutdownRequested()
                 
                 # Train on this mini-epoch
-                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch, mini_epoch=mini_epoch_idx, val_metrics=val_metrics)
+                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch+1, mini_epoch=mini_epoch_idx+1, val_metrics=val_metrics)
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
