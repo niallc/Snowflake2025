@@ -156,6 +156,10 @@ class PolicyValueLoss(nn.Module):
             from hex_ai.utils.format_conversion import board_2nxn_to_nxn, rowcol_to_trmph
             from hex_ai.inference.board_display import display_hex_board
             import numpy as np
+            import pickle
+            import gzip
+            from pathlib import Path
+            from datetime import datetime
             
             print("\n" + "="*80)
             print("CRITICAL BUG: ILLEGAL TARGETS DETECTED")
@@ -242,6 +246,10 @@ class PolicyValueLoss(nn.Module):
                         other_row = other_target // width
                         other_col = other_target % width
                         print(f"  Sample {other_idx}: target={other_target} (row={other_row}, col={other_col})")
+                
+                # Save the problematic sample data for further analysis
+                self._save_problematic_sample(board, policy_target, legal_mask, target_indices, 
+                                            target_is_legal, sample_idx)
             
             print("\n" + "="*80)
             print("END OF ILLEGAL TARGET DEBUG INFO")
@@ -249,6 +257,94 @@ class PolicyValueLoss(nn.Module):
             
         except Exception as e:
             print(f"Error in debug function: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _save_problematic_sample(self, board: torch.Tensor, policy_target: torch.Tensor, 
+                                legal_mask: torch.Tensor, target_indices: torch.Tensor, 
+                                target_is_legal: torch.Tensor, sample_idx: int):
+        """
+        Save the problematic training sample data to a pickle file for further analysis.
+        
+        This allows us to reconstruct the problem and trace it back to the original record.
+        """
+        try:
+            import pickle
+            import gzip
+            from pathlib import Path
+            from datetime import datetime
+            
+            # Create temp directory if it doesn't exist
+            temp_dir = Path("temp")
+            temp_dir.mkdir(exist_ok=True)
+            
+            # Create timestamped filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"illegal_target_sample_{timestamp}.pkl.gz"
+            filepath = temp_dir / filename
+            
+            # Prepare the sample data
+            sample_data = {
+                'timestamp': timestamp,
+                'sample_idx': sample_idx,
+                'batch_size': board.shape[0],
+                'board_size': board.shape[2],  # Assuming square board
+                
+                # The problematic sample data
+                'problematic_sample': {
+                    'board': board[sample_idx].cpu().numpy(),  # (3, height, width)
+                    'policy_target': policy_target[sample_idx].cpu().numpy(),  # (height*width,)
+                    'legal_mask': legal_mask[sample_idx].cpu().numpy(),  # (height*width,)
+                    'target_index': target_indices[sample_idx].item(),
+                    'target_is_legal': target_is_legal[sample_idx].item(),
+                },
+                
+                # The entire batch for context
+                'full_batch': {
+                    'board': board.cpu().numpy(),  # (batch_size, 3, height, width)
+                    'policy_target': policy_target.cpu().numpy(),  # (batch_size, height*width)
+                    'legal_mask': legal_mask.cpu().numpy(),  # (batch_size, height*width)
+                    'target_indices': target_indices.cpu().numpy(),  # (batch_size,)
+                    'target_is_legal': target_is_legal.cpu().numpy(),  # (batch_size,)
+                },
+                
+                # Analysis information
+                'analysis': {
+                    'illegal_count': int((~target_is_legal).sum().item()),
+                    'total_samples': board.shape[0],
+                    'board_shape': list(board.shape),
+                    'policy_shape': list(policy_target.shape),
+                }
+            }
+            
+            # Save to compressed pickle file
+            with gzip.open(filepath, 'wb') as f:
+                pickle.dump(sample_data, f)
+            
+            print(f"\n💾 SAVED PROBLEMATIC SAMPLE DATA")
+            print(f"   File: {filepath}")
+            print(f"   Sample {sample_idx} has illegal target at index {target_indices[sample_idx].item()}")
+            print(f"   This data can be used to reconstruct the problem and trace back to the original record")
+            
+            # Also save a human-readable summary
+            summary_file = temp_dir / f"illegal_target_summary_{timestamp}.txt"
+            with open(summary_file, 'w') as f:
+                f.write(f"ILLEGAL TARGET SAMPLE ANALYSIS\n")
+                f.write(f"Timestamp: {timestamp}\n")
+                f.write(f"Sample Index: {sample_idx}\n")
+                f.write(f"Target Index: {target_indices[sample_idx].item()}\n")
+                f.write(f"Target Is Legal: {target_is_legal[sample_idx].item()}\n")
+                f.write(f"Illegal Count: {int((~target_is_legal).sum().item())}\n")
+                f.write(f"Total Samples: {board.shape[0]}\n")
+                f.write(f"Board Shape: {list(board.shape)}\n")
+                f.write(f"Policy Shape: {list(policy_target.shape)}\n")
+                f.write(f"\nData saved to: {filepath}\n")
+                f.write(f"Use this data to reconstruct the problem and trace back to the original record.\n")
+            
+            print(f"   Summary: {summary_file}")
+            
+        except Exception as e:
+            print(f"❌ Failed to save problematic sample data: {e}")
             import traceback
             traceback.print_exc()
     
