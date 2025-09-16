@@ -46,15 +46,19 @@ def calculate_mini_epoch_samples(
 # Define your sweep grid here (edit as needed)
 SWEEP = {
     "batch_size": [256],
-    "max_grad_norm": [4],
+    "max_grad_norm": [2.0],  # Updated default for AdamW
     "weight_decay": [1e-4],
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.7],
-    "learning_rate": [0.001],
+    "learning_rate": [3e-4],  # Updated default for AdamW
+    
+    # AdamW optimizer parameters
+    "betas": [(0.9, 0.999)],  # Coefficients for computing running averages
+    "eps": [1e-8],  # Term added to denominator for numerical stability
     
     # New KataGo-inspired architecture parameters
-    "resnet_depth": [7],  # Number of residual blocks (mapped to num_blocks) - 6 blocks ≈ ResNet-18
+    "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
     "trunk_channels": [128],  # Number of channels in trunk
     "dropout_prob": [0],  # Dropout regularization
     
@@ -73,8 +77,10 @@ SHORT_LABELS = {
     "value_weight_decay_factor": "vwdf",
     "policy_weight": "pw",
     "value_weight": "vw",
-    "resnet_depth": "rd",
+    "num_blocks": "nb",
     "trunk_channels": "tc",
+    "betas": "betas",
+    "eps": "eps",
     # Add more as needed
 }
 

@@ -237,7 +237,9 @@ class Trainer:
                  value_weight_decay_factor: float = 1.0,
                  log_interval_batches: int = 200,
                  run_timestamp: Optional[str] = None,
-                 shutdown_handler=None):
+                 shutdown_handler=None,
+                 betas: Tuple[float, float] = (0.9, 0.999),
+                 eps: float = 1e-8):
         """
         Args:
             model: The neural network model to train.
@@ -256,6 +258,8 @@ class Trainer:
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 1.0, no effect)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
             run_timestamp: Optional timestamp for the entire run to use in log filenames
+            betas: Coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
+            eps: Term added to the denominator to improve numerical stability (default: 1e-8)
 
         """
         if device is None:
@@ -274,6 +278,8 @@ class Trainer:
         self.value_learning_rate_factor = value_learning_rate_factor
         self.value_weight_decay_factor = value_weight_decay_factor
         self.original_learning_rate = learning_rate  # Store the original learning rate
+        self.betas = betas
+        self.eps = eps
         
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
@@ -298,7 +304,7 @@ class Trainer:
         ]
         
         # Optimizer and loss
-        self.optimizer = optim.Adam(param_groups)
+        self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight)
         
         # Learning rate scheduler (ReduceLROnPlateau)
@@ -772,15 +778,17 @@ class Trainer:
             'learning_rate': self.optimizer.param_groups[0]['lr'],
             'batch_size': self.train_loader.batch_size,
             'dataset_size': 'N/A',
-            'network_structure': f"ResNet{getattr(self.model, 'resnet_depth', '?')}",
+            'network_structure': f"ResNet{getattr(self.model, 'num_blocks', '?')}",
             'policy_weight': getattr(self.criterion, 'policy_weight', ''),
             'value_weight': getattr(self.criterion, 'value_weight', ''),
             'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
-            'dropout_prob': getattr(self.model, 'dropout', type('dummy', (), {'p': ''})).p if hasattr(self.model, 'dropout') else '',
+            'dropout_prob': self.model.dropout.p if hasattr(self.model, 'dropout') else '',
             'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
             'max_grad_norm': getattr(self, 'max_grad_norm', ''),
             'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),
-            'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', '')
+            'value_weight_decay_factor': getattr(self, 'value_weight_decay_factor', ''),
+            'betas': getattr(self, 'betas', ''),
+            'eps': getattr(self, 'eps', '')
         }
 
 

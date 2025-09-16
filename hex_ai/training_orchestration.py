@@ -189,18 +189,27 @@ def run_single_experiment(
     model_params = {}
     trainer_params = {}
     
-    # Model parameters
-    if 'resnet_depth' in exp_config['hyperparameters']:
-        model_params['num_blocks'] = exp_config['hyperparameters']['resnet_depth']
-    if 'trunk_channels' in exp_config['hyperparameters']:
-        model_params['trunk_channels'] = exp_config['hyperparameters']['trunk_channels']
-    if 'dropout_prob' in exp_config['hyperparameters']:
-        model_params['dropout_prob'] = exp_config['hyperparameters']['dropout_prob']
+    # Model parameters - expect only the correct parameter names
+    required_model_params = {'num_blocks', 'trunk_channels', 'dropout_prob'}
+    for param in required_model_params:
+        if param in exp_config['hyperparameters']:
+            model_params[param] = exp_config['hyperparameters'][param]
+        else:
+            raise ValueError(f"Missing required model parameter: {param}. "
+                           f"Available hyperparameters: {list(exp_config['hyperparameters'].keys())}")
+    
+    # Check for legacy parameter names and provide clear error
+    legacy_params = {'resnet_depth'}
+    for legacy_param in legacy_params:
+        if legacy_param in exp_config['hyperparameters']:
+            raise ValueError(f"Legacy parameter '{legacy_param}' is no longer supported. "
+                           f"Use 'num_blocks' instead.")
+    
     # Note: use_value_bottleneck is no longer a parameter in the new KataGo-inspired architecture
     # The value head now has a fixed bottleneck design
     
     # Trainer parameters (everything else except batch_size and model parameters)
-    model_param_keys = {'resnet_depth', 'trunk_channels', 'dropout_prob'}  # Keys that map to model parameters
+    model_param_keys = {'num_blocks', 'trunk_channels', 'dropout_prob'}  # Keys that map to model parameters
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
                      if k not in model_param_keys and k != 'batch_size'}
     
