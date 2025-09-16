@@ -191,18 +191,18 @@ def run_single_experiment(
     
     # Model parameters
     if 'resnet_depth' in exp_config['hyperparameters']:
-        model_params['resnet_depth'] = exp_config['hyperparameters']['resnet_depth']
+        model_params['num_blocks'] = exp_config['hyperparameters']['resnet_depth']
+    if 'trunk_channels' in exp_config['hyperparameters']:
+        model_params['trunk_channels'] = exp_config['hyperparameters']['trunk_channels']
     if 'dropout_prob' in exp_config['hyperparameters']:
         model_params['dropout_prob'] = exp_config['hyperparameters']['dropout_prob']
-    if 'use_value_bottleneck' in exp_config['hyperparameters']:
-        model_params['use_value_bottleneck'] = exp_config['hyperparameters']['use_value_bottleneck']
-    else:
-        # Default to True for the enhanced value head
-        model_params['use_value_bottleneck'] = True
+    # Note: use_value_bottleneck is no longer a parameter in the new KataGo-inspired architecture
+    # The value head now has a fixed bottleneck design
     
-    # Trainer parameters (everything else except batch_size which is used for DataLoader creation)
+    # Trainer parameters (everything else except batch_size and model parameters)
+    model_param_keys = {'resnet_depth', 'trunk_channels', 'dropout_prob'}  # Keys that map to model parameters
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
-                     if k not in model_params and k != 'batch_size'}
+                     if k not in model_param_keys and k != 'batch_size'}
     
     model = TwoHeadedResNet(**model_params).to(device)
     

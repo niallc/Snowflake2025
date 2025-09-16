@@ -62,14 +62,15 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_creation(self):
         """Test that TwoHeadedResNet can be created."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         self.assertIsInstance(model, TwoHeadedResNet)
     
     def test_model_forward(self):
         """Test that model forward pass works."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         x = torch.randn(4, 3, BOARD_SIZE, BOARD_SIZE)
-        policy_logits, value_logit = model(x)
+        move_stage = torch.rand(4)  # Random move stages in [0,1]
+        policy_logits, value_logit = model(x, move_stage)
         
         # Check output shapes
         self.assertEqual(policy_logits.shape, (4, POLICY_OUTPUT_SIZE))
@@ -80,16 +81,16 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_parameters(self):
         """Test that model has reasonable number of parameters."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         num_params = count_parameters(model)
         
-        # ResNet-18 should have ~11M parameters
-        self.assertGreater(num_params, 10_000_000)  # At least 10M
-        self.assertLess(num_params, 15_000_000)     # Less than 15M
+        # KataGo-inspired model should have reasonable number of parameters
+        self.assertGreater(num_params, 1_000_000)   # At least 1M
+        self.assertLess(num_params, 50_000_000)     # Less than 50M
     
     def test_model_summary(self):
         """Test that model summary works."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         summary = get_model_summary(model)
         
         # Check that summary contains expected information
@@ -100,12 +101,13 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_device_transfer(self):
         """Test that model can be moved to different devices."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         
         # Test CPU
         model_cpu = model.cpu()
         x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE)
-        policy, value = model_cpu(x)
+        move_stage = torch.rand(2)
+        policy, value = model_cpu(x, move_stage)
         self.assertEqual(policy.device, torch.device('cpu'))
         self.assertEqual(value.device, torch.device('cpu'))
         
@@ -113,15 +115,17 @@ class TestTwoHeadedResNet(unittest.TestCase):
         if torch.cuda.is_available():
             model_cuda = model.cuda()
             x_cuda = x.cuda()
-            policy, value = model_cuda(x_cuda)
+            move_stage_cuda = move_stage.cuda()
+            policy, value = model_cuda(x_cuda, move_stage_cuda)
             self.assertEqual(policy.device, torch.device('cuda'))
             self.assertEqual(value.device, torch.device('cuda'))
     
     def test_model_gradients(self):
         """Test that model can compute gradients."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE, requires_grad=True)
-        policy_logits, value_logit = model(x)
+        move_stage = torch.rand(2)
+        policy_logits, value_logit = model(x, move_stage)
         
         # Compute loss and backward pass
         loss = policy_logits.sum() + value_logit.sum()
@@ -132,44 +136,39 @@ class TestTwoHeadedResNet(unittest.TestCase):
     
     def test_model_batch_sizes(self):
         """Test that model works with different batch sizes."""
-        model = TwoHeadedResNet(use_value_bottleneck=True)
+        model = TwoHeadedResNet()
         
         batch_sizes = [1, 4, 8, 16]
         for batch_size in batch_sizes:
             x = torch.randn(batch_size, 3, BOARD_SIZE, BOARD_SIZE)
-            policy_logits, value_logit = model(x)
+            move_stage = torch.rand(batch_size)
+            policy_logits, value_logit = model(x, move_stage)
             
             self.assertEqual(policy_logits.shape, (batch_size, POLICY_OUTPUT_SIZE))
             self.assertEqual(value_logit.shape, (batch_size, VALUE_OUTPUT_SIZE))
     
     def test_value_head_architecture(self):
         """Test the enhanced value head architecture."""
-        # Test with bottleneck
-        model_with_bottleneck = TwoHeadedResNet(use_value_bottleneck=True)
+        # Test the new KataGo-inspired value head (always has bottleneck)
+        model = TwoHeadedResNet()
         x = torch.randn(2, 3, BOARD_SIZE, BOARD_SIZE)
-        policy, value = model_with_bottleneck(x)
+        move_stage = torch.rand(2)
+        policy, value = model(x, move_stage)
         
         # Check value range is [-1, 1] due to tanh
         self.assertTrue(torch.all(value >= -1) and torch.all(value <= 1))
         
-        # Test without bottleneck
-        model_no_bottleneck = TwoHeadedResNet(use_value_bottleneck=False)
-        policy2, value2 = model_no_bottleneck(x)
-        
-        # Check value range is [-1, 1] due to tanh
-        self.assertTrue(torch.all(value2 >= -1) and torch.all(value2 <= 1))
-        
-        # Both should have same shapes
-        self.assertEqual(value.shape, value2.shape)
-        self.assertEqual(policy.shape, policy2.shape)
+        # Check that the value head has the expected structure
+        self.assertTrue(hasattr(model.value_head, 'k_outputs'))
+        self.assertEqual(model.value_head.k_outputs, 4)
 
 
 class TestModelFactory(unittest.TestCase):
     """Test cases for the model factory function."""
     
-    def test_create_model_resnet18(self):
-        """Test creating ResNet-18 model."""
-        model = create_model("resnet18")
+    def test_create_model_katago_inspired(self):
+        """Test creating KataGo-inspired model."""
+        model = create_model("katago_inspired")
         self.assertIsInstance(model, TwoHeadedResNet)
     
     def test_create_model_invalid_type(self):

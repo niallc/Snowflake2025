@@ -45,6 +45,11 @@ from .config import (
     INITIAL_CHANNELS, CHANNEL_PROGRESSION, RESNET_DEPTH
 )
 
+# Numerical stability constant for log-cosh loss
+MAX_LOG_COSH_INPUT_ABS = 20.0
+# Rationale: log(cosh(x)) loses precision for |x| > 20. Beyond this point,
+# the function becomes essentially linear and may cause numerical issues.
+
 
 class ResNetBlock(nn.Module):
     """
@@ -503,9 +508,31 @@ def log_cosh_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         
     Returns:
         torch.Tensor: Scalar loss value
-    """
+"""
     x = pred - target
-    return torch.mean(torch.log(torch.cosh(x + 1e-12)))
+    loss = torch.mean(torch.log(torch.cosh(x + 1e-12)))
+    
+    # CRITICAL: Check for NaN in log-cosh loss
+    if torch.isnan(loss):
+        raise RuntimeError(
+            f"NaN detected in log_cosh_loss! "
+            f"pred range: [{pred.min().item():.6f}, {pred.max().item():.6f}], "
+            f"target range: [{target.min().item():.6f}, {target.max().item():.6f}], "
+            f"x range: [{x.min().item():.6f}, {x.max().item():.6f}]. "
+            f"This indicates numerical instability in the value loss computation."
+        )
+    
+    # Check for extreme values that may lead to numerical issues
+    x_max_abs = torch.abs(x).max().item()
+    if x_max_abs > MAX_LOG_COSH_INPUT_ABS:  # log(cosh(20)) ≈ 20, beyond this we lose precision
+        raise RuntimeError(
+            f"Extreme values detected in log_cosh_loss! "
+            f"x max_abs: {x_max_abs:.6f}, pred range: [{pred.min().item():.6f}, {pred.max().item():.6f}], "
+            f"target range: [{target.min().item():.6f}, {target.max().item():.6f}]. "
+            f"These values may cause numerical instability in subsequent computations."
+        )
+    
+    return loss
 
 
 def compute_value_loss(pred: torch.Tensor, target: torch.Tensor, 

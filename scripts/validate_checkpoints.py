@@ -117,7 +117,7 @@ class CheckpointValidator:
         if result['can_load'] and isinstance(checkpoint, dict):
             try:
                 if 'model_state_dict' in checkpoint:
-                    model = TwoHeadedResNet(use_value_bottleneck=True)
+                    model = TwoHeadedResNet()
                     model.load_state_dict(checkpoint['model_state_dict'])
                     result['model_loadable'] = True
                 else:

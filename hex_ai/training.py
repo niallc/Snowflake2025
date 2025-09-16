@@ -52,6 +52,39 @@ logger = logging.getLogger(__name__)
 POLICY_LOSS_WEIGHT = 0.15
 VALUE_LOSS_WEIGHT = 0.85
 
+# =============================================================================
+# NUMERICAL STABILITY MONITORING CONSTANTS
+# =============================================================================
+
+# Policy logit thresholds for detecting loss of uncertainty
+MAX_POLICY_LOGIT_ABS = 20.0
+# Rationale: Logits > 20 create softmax probabilities > 0.9999, indicating
+# complete loss of uncertainty. The network becomes overconfident and can't
+# express doubt, leading to training instability.
+
+# Value output thresholds for detecting tanh saturation
+MAX_VALUE_OUTPUT_ABS = 0.999
+# Rationale: Values > 0.999 indicate tanh saturation, causing severe gradient
+# vanishing (gradients < 0.002). This prevents the network from learning
+# effectively from these positions.
+
+# Loss value thresholds for detecting numerical instability
+MAX_TOTAL_LOSS_ABS = 100.0
+MAX_POLICY_LOSS_ABS = 50.0
+MAX_VALUE_LOSS_ABS = 10.0
+# Rationale: These are conservative thresholds based on typical training ranges.
+# Values above these indicate unusual numerical behavior that may lead to NaN.
+
+# Gradient norm thresholds for detecting gradient explosion
+MAX_GRADIENT_NORM = 100.0
+# Rationale: Gradient norms > 100 indicate potential gradient explosion,
+# which can cause numerical instability and NaN values.
+
+# Log-cosh loss input thresholds for detecting extreme value differences
+MAX_LOG_COSH_INPUT_ABS = 20.0
+# Rationale: log(cosh(x)) loses precision for |x| > 20. Beyond this point,
+# the function becomes essentially linear and may cause numerical issues.
+
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
     
@@ -100,6 +133,25 @@ class PolicyValueLoss(nn.Module):
         # Combine losses with weights
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss)
+        
+        # CRITICAL: Check for NaN values and fail fast
+        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss):
+            raise RuntimeError(
+                f"NaN detected in loss computation! "
+                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}. "
+                f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
+            )
+        
+        # Check for extreme loss values that indicate numerical instability
+        if (abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS or 
+            abs(policy_loss.item()) > MAX_POLICY_LOSS_ABS or 
+            abs(value_loss.item()) > MAX_VALUE_LOSS_ABS):
+            raise RuntimeError(
+                f"Extreme loss values detected! "
+                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}. "
+                f"These values are unusually high and may indicate numerical instability. "
+                f"Check learning rate, gradient clipping, and model architecture."
+            )
         
         loss_dict = {
             'total_loss': total_loss.item(),
@@ -322,15 +374,41 @@ class Trainer:
         }
         
         with torch.no_grad():
-            for boards, policies, values in self.val_loader:
+            for boards, policies, values, move_stage in self.val_loader:
                     
                 # Move to device
-                boards, policies, values = TrainingUtilities.move_batch_to_device(boards, policies, values, self.device)
+                boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
                 
                 # Forward pass with mixed precision
                 with self.mixed_precision.autocast_context():
-                    policy_pred, value_pred = self.model(boards)
+                    policy_pred, value_pred = self.model(boards, move_stage)
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
+                
+                # CRITICAL: Check for NaN in validation
+                if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any() or torch.isnan(total_loss):
+                    raise RuntimeError(
+                        f"NaN detected in validation! "
+                        f"policy_pred has NaN: {torch.isnan(policy_pred).any()}, "
+                        f"value_pred has NaN: {torch.isnan(value_pred).any()}, "
+                        f"total_loss is NaN: {torch.isnan(total_loss)}. "
+                        f"This indicates numerical instability in the model."
+                    )
+                
+                # Check for extreme values in validation
+                policy_max_abs = torch.abs(policy_pred).max().item()
+                value_max_abs = torch.abs(value_pred).max().item()
+                
+                if policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS or abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS:
+                    policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
+                    value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
+                    
+                    raise RuntimeError(
+                        f"Extreme values detected in validation! "
+                        f"policy_pred max_abs: {policy_max_abs:.6f}, range: {policy_range}, "
+                        f"value_pred max_abs: {value_max_abs:.6f}, range: {value_range}, "
+                        f"total_loss: {total_loss.item():.6f}. "
+                        f"Policy logits > 20 or value outputs > 0.999 indicate numerical instability."
+                    )
                 
                 # Track metrics
                 val_losses.append(loss_dict['total_loss'])
@@ -588,8 +666,7 @@ class Trainer:
         timing = TrainingUtilities.calculate_batch_timing(state)
         
         # Move to device
-        boards, policies, values = TrainingUtilities.move_batch_to_device(boards, policies, values, self.device)
-        move_stage = move_stage.to(self.device)
+        boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
         
         # Forward pass with mixed precision
         self.optimizer.zero_grad()
@@ -597,12 +674,82 @@ class Trainer:
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values)
         
+        # CRITICAL: Check for NaN and extreme values in model outputs
+        if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any():
+            # Get diagnostic information
+            policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
+            value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
+            move_stage_range = f"[{move_stage.min().item():.6f}, {move_stage.max().item():.6f}]"
+            
+            raise RuntimeError(
+                f"NaN detected in model outputs! "
+                f"policy_pred has NaN: {torch.isnan(policy_pred).any()}, range: {policy_range}, "
+                f"value_pred has NaN: {torch.isnan(value_pred).any()}, range: {value_range}, "
+                f"move_stage range: {move_stage_range}. "
+                f"This indicates numerical instability in the model forward pass. "
+                f"Check learning rate, gradient clipping, and model architecture."
+            )
+        
+        # Check for extreme values that indicate numerical instability
+        policy_max_abs = torch.abs(policy_pred).max().item()
+        value_max_abs = torch.abs(value_pred).max().item()
+        
+        # Check for extreme values that indicate numerical instability
+        if policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS:
+            policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
+            value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
+            
+            raise RuntimeError(
+                f"Extreme values detected in model outputs! "
+                f"policy_pred max_abs: {policy_max_abs:.6f}, range: {policy_range}, "
+                f"value_pred max_abs: {value_max_abs:.6f}, range: {value_range}. "
+                f"Policy logits > 20 indicate loss of uncertainty (softmax saturation). "
+                f"Value outputs > 0.999 indicate tanh saturation (gradient vanishing). "
+                f"Check learning rate, gradient clipping, and model architecture."
+            )
+        
         # Backward pass: compute gradients for this batch
         scaled_loss = self.mixed_precision.scale_loss(total_loss)
         scaled_loss.backward()
         
         # Apply gradient clipping and track norms
         self._apply_gradient_clipping(state)
+        
+        # CRITICAL: Check for NaN and extreme values in gradients after backward pass
+        has_nan_grad = False
+        has_extreme_grad = False
+        max_grad_norm = 0.0
+        
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                max_grad_norm = max(max_grad_norm, grad_norm)
+                
+                if torch.isnan(param.grad).any():
+                    has_nan_grad = True
+                    print(f"WARNING: NaN gradient detected in parameter {name}")
+                
+                if grad_norm > MAX_GRADIENT_NORM:  # Extreme gradient norm
+                    has_extreme_grad = True
+                    print(f"WARNING: Extreme gradient norm {grad_norm:.6f} in parameter {name}")
+        
+        if has_nan_grad:
+            raise RuntimeError(
+                f"NaN detected in gradients after backward pass! "
+                f"This indicates gradient explosion. "
+                f"Check learning rate (current: {self.optimizer.param_groups[0]['lr']}), "
+                f"gradient clipping (current: {self.max_grad_norm}), "
+                f"and model architecture."
+            )
+        
+        if has_extreme_grad:
+            raise RuntimeError(
+                f"Extreme gradient norms detected! Max gradient norm: {max_grad_norm:.6f}. "
+                f"This indicates potential gradient explosion. "
+                f"Check learning rate (current: {self.optimizer.param_groups[0]['lr']}), "
+                f"gradient clipping (current: {self.max_grad_norm}), "
+                f"and model architecture."
+            )
         
         # Optimizer step: update model parameters using accumulated gradients
         self.mixed_precision.step_optimizer(self.optimizer)
@@ -738,6 +885,15 @@ class Trainer:
             key: float(np.mean(values)) if values else float('nan') 
             for key, values in state['mini_epoch_metrics'].items()
         }
+        
+        # CRITICAL: Check for NaN in mini-epoch averages
+        for key, value in mini_epoch_avg.items():
+            if np.isnan(value):
+                raise RuntimeError(
+                    f"NaN detected in mini-epoch average for {key}={value}! "
+                    f"This indicates numerical instability has occurred during training. "
+                    f"Check learning rate, gradient clipping, and model architecture."
+                )
         
         # Calculate diagnostic metrics
         diagnostics = self._calculate_diagnostic_metrics(val_metrics, state['gradient_norms'])

@@ -458,9 +458,9 @@ class TrainingUtilities:
     
     @staticmethod
     def move_batch_to_device(boards: torch.Tensor, policies: torch.Tensor, 
-                           values: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                           values: torch.Tensor, move_stage: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Move batch data to the specified device."""
-        return boards.to(device), policies.to(device), values.to(device)
+        return boards.to(device), policies.to(device), values.to(device), move_stage.to(device)
     
     @staticmethod
     def calculate_batch_timing(state: Dict) -> Dict:

@@ -51,11 +51,15 @@ SWEEP = {
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.7],
-    "learning_rate": [0.0001],
+    "learning_rate": [0.001],
     
-    # Likely resolved:
-    "dropout_prob": [0],
-    # Add more as needed
+    # New KataGo-inspired architecture parameters
+    "resnet_depth": [7],  # Number of residual blocks (mapped to num_blocks) - 6 blocks ≈ ResNet-18
+    "trunk_channels": [128],  # Number of channels in trunk
+    "dropout_prob": [0],  # Dropout regularization
+    
+    # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
+    # are currently fixed in the architecture but could be made configurable later
 }
 
 # Short labels for parameters
@@ -69,6 +73,8 @@ SHORT_LABELS = {
     "value_weight_decay_factor": "vwdf",
     "policy_weight": "pw",
     "value_weight": "vw",
+    "resnet_depth": "rd",
+    "trunk_channels": "tc",
     # Add more as needed
 }
 
