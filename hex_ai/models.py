@@ -87,7 +87,7 @@ class PolicyHeadStabilityConfig:
     Helps detect when initialization scaling is being overwhelmed."""
     
     # Layer normalization
-    LAYER_NORM_EPS = 5e-7
+    LAYER_NORM_EPS = 3e-5
     """Epsilon for layer normalization numerical stability.
     Standard value to prevent division by zero."""
 
@@ -745,7 +745,7 @@ def compute_move_stage(board: torch.Tensor) -> torch.Tensor:
     
     # Normalize by total board size
     board_area = board.shape[2] * board.shape[3]  # height * width
-    move_stage = stones_on_board / float(board_area)
+    move_stage = stones_on_board / board_area
     
     return move_stage
 

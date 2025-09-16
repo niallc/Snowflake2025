@@ -580,7 +580,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         # Normalize by board area
         board_area = board_3ch.shape[1] * board_3ch.shape[2]  # height * width
-        move_stage = stones_on_board / float(board_area)  # Python float in [0,1]
+        move_stage = stones_on_board / board_area  # Python float in [0,1]
         
         board_tensor = torch.from_numpy(board_3ch).float()
         policy = self._normalize_policy(policy)

@@ -41,6 +41,72 @@ from hex_ai.value_utils import ValuePredictor
 
 logger = logging.getLogger(__name__)
 
+
+class LargeValuesDebugAccumulator:
+    """Accumulates large values debug information and logs summaries to reduce noise."""
+    
+    def __init__(self, batch_interval: int = 30):
+        self.batch_interval = batch_interval
+        self.accumulated_data = []
+        self.batch_count = 0
+    
+    def add_debug_info(self, epoch: int, mini_epoch: int, batch_idx: int, 
+                      policy_max_abs: float, value_max_abs: float,
+                      policy_range: tuple, value_range: tuple, grad_norm_info: str = ""):
+        """Add debug information for a batch."""
+        self.accumulated_data.append({
+            'epoch': epoch,
+            'mini_epoch': mini_epoch,
+            'batch_idx': batch_idx,
+            'policy_max_abs': policy_max_abs,
+            'value_max_abs': value_max_abs,
+            'policy_range': policy_range,
+            'value_range': value_range,
+            'grad_norm_info': grad_norm_info
+        })
+        self.batch_count += 1
+        
+        # Log summary every batch_interval batches
+        if self.batch_count >= self.batch_interval:
+            self._log_summary()
+            self._reset()
+    
+    def _log_summary(self):
+        """Log a summary of accumulated debug information."""
+        if not self.accumulated_data:
+            return
+        
+        # Calculate statistics
+        policy_max_abs_values = [d['policy_max_abs'] for d in self.accumulated_data]
+        value_max_abs_values = [d['value_max_abs'] for d in self.accumulated_data]
+        
+        policy_mean = sum(policy_max_abs_values) / len(policy_max_abs_values)
+        policy_std = (sum((x - policy_mean) ** 2 for x in policy_max_abs_values) / len(policy_max_abs_values)) ** 0.5
+        value_mean = sum(value_max_abs_values) / len(value_max_abs_values)
+        value_std = (sum((x - value_mean) ** 2 for x in value_max_abs_values) / len(value_max_abs_values)) ** 0.5
+        
+        # Get batch range
+        first_batch = self.accumulated_data[0]['batch_idx']
+        last_batch = self.accumulated_data[-1]['batch_idx']
+        epoch = self.accumulated_data[0]['epoch']
+        mini_epoch = self.accumulated_data[0]['mini_epoch']
+        
+        logger.warning(f"LARGE_VALUES_SUMMARY: Epoch {epoch}, Mini-epoch {mini_epoch}, "
+                      f"Batches {first_batch}-{last_batch} ({len(self.accumulated_data)} batches): "
+                      f"policy_max_abs: mean={policy_mean:.3f}±{policy_std:.3f}, "
+                      f"value_max_abs: mean={value_mean:.3f}±{value_std:.3f}")
+    
+    def _reset(self):
+        """Reset accumulated data."""
+        self.accumulated_data = []
+        self.batch_count = 0
+    
+    def flush(self):
+        """Force log any remaining accumulated data."""
+        if self.accumulated_data:
+            self._log_summary()
+            self._reset()
+
 # Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
 # Note about analysis of training runs that use different loss weights:
 # The analysis script *should* use fixed values for the policy and value weights.
@@ -429,10 +495,10 @@ class PolicyValueLoss(nn.Module):
         logits_l2 = (centered_logits.pow(2).mean())  # scalar
         logits_l2_loss = self.logits_l2_lambda * logits_l2
         
-        # Policy loss: handle terminal moves by detecting zero vectors (original approach)
+        # Policy loss: handle terminal moves by detecting zero vectors
         # Terminal moves are represented as zero vectors in the data pipeline
         
-        # Simple validation: check for zero vectors (terminal moves)
+        # Check if any samples are terminal moves (zero vectors)
         batch_size = policy_target.shape[0]
         zero_vectors = (policy_target.sum(dim=1) == 0.0)  # (batch_size,)
         terminal_count = zero_vectors.sum().item()
@@ -451,8 +517,10 @@ class PolicyValueLoss(nn.Module):
                 )
             else:
                 # All samples are terminal moves (terminal_count == batch_size)
-                policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
-                entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
+                # Create zero tensors that are properly connected to the computation graph
+                # Use policy_pred to ensure proper dtype and device, then create zero scalar
+                policy_loss = torch.tensor(0.0, dtype=policy_pred.dtype, device=policy_pred.device, requires_grad=True)
+                entropy_loss = torch.tensor(0.0, dtype=policy_pred.dtype, device=policy_pred.device, requires_grad=True)
         else:
             # No terminal moves - process normally
             policy_loss, entropy_loss = self._compute_policy_loss(policy_pred, policy_target, board)
@@ -599,11 +667,14 @@ class MixedPrecisionTrainer:
                     self.scaler = GradScaler()
                     logger.info("Mixed precision training enabled for CUDA GPU")
                 elif device_str == 'mps':
-                    # MPS uses torch.autocast with device_type="mps"
-                    self.autocast = lambda: torch.autocast(device_type="mps")
-                    # MPS doesn't need GradScaler, but we'll keep the interface
+                    # TODO: Semi-urgent: Are we sure we can't use mixed precision with autocast?
+                    #       I think I was using it before. I *definitely* used it for a long time with MPS.
+                    # MPS mixed precision is problematic with autocast - disable for now
+                    # MPS autocast can create float16 tensors without proper GradScaler support
+                    # which leads to scalar type mismatches during backward pass
+                    self.use_mixed_precision = False
                     self.scaler = None
-                    logger.info("Mixed precision training enabled for MPS GPU")
+                    logger.warning("WARNING: Mixed precision temprarily disabled for MPS due to scalar type issues. Using full precision.")
             except ImportError:
                 logger.warning("PyTorch AMP not available, falling back to full precision")
                 self.use_mixed_precision = False
@@ -869,6 +940,9 @@ class Trainer:
         logger.info(f"Value head learning rate: {learning_rate * value_learning_rate_factor:.6f} (factor: {value_learning_rate_factor})")
         logger.info(f"Value head weight decay: {weight_decay * value_weight_decay_factor:.6f} (factor: {value_weight_decay_factor})")
         self.log_interval_batches = log_interval_batches
+        
+        # Initialize large values debug accumulator
+        self.large_values_accumulator = LargeValuesDebugAccumulator(batch_interval=30)
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
@@ -1254,7 +1328,7 @@ class Trainer:
                        f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
                        f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
         
-        # Enhanced debugging for extreme values
+        # Enhanced debugging for extreme values - use accumulator to reduce noise
         if policy_max_abs > 30.0 or value_max_abs > 0.8:  # Lower threshold for more debugging
             # Get gradient norm info if available
             grad_norm_info = ""
@@ -1262,10 +1336,14 @@ class Trainer:
                 latest_grad = self.gradient_clipping_debug[-1]
                 grad_norm_info = f", pre_clip_grad_norm={latest_grad['pre_clip']:.3f}, post_clip_grad_norm={latest_grad['post_clip']:.3f}"
             
-            logger.warning(f"LARGE_VALUES_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
-                          f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
-                          f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
-                          f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]{grad_norm_info}")
+            # Add to accumulator instead of logging immediately
+            self.large_values_accumulator.add_debug_info(
+                epoch=epoch, mini_epoch=mini_epoch, batch_idx=batch_idx,
+                policy_max_abs=policy_max_abs, value_max_abs=value_max_abs,
+                policy_range=(policy_pred.min().item(), policy_pred.max().item()),
+                value_range=(value_pred.min().item(), value_pred.max().item()),
+                grad_norm_info=grad_norm_info
+            )
         
         # Check for extreme values that indicate numerical instability (skip during early training)
         if (not is_early_training and 
@@ -1548,5 +1626,8 @@ class Trainer:
         # Learning rate scheduler step (ReduceLROnPlateau)
         if val_metrics and 'total_loss' in val_metrics:
             self.scheduler.step(val_metrics['total_loss'])
+        
+        # Flush any remaining large values debug information
+        self.large_values_accumulator.flush()
         
         return mini_epoch_avg
