@@ -290,16 +290,36 @@ class Trainer:
         self.mixed_precision = MixedPrecisionTrainer(device)
         
         # Create parameter groups for different learning rates and weight decay
-        # Separate the value head parameters from the rest
+        # Use the model's built-in policy head stability mechanisms
+        
+        # Get policy head parameter groups (with higher weight decay for final layer)
+        policy_final_params = model.get_policy_head_final_layer_params()
+        policy_other_params = model.get_policy_head_other_params()
+        
+        # Get value head parameters
         value_head_params = list(model.value_head.parameters())
         value_head_param_ids = {id(p) for p in value_head_params}
-        other_params = [p for p in model.parameters() if id(p) not in value_head_param_ids]
         
+        # Get all other parameters (excluding policy head and value head)
+        other_param_ids = {id(p) for p in policy_final_params + policy_other_params + value_head_params}
+        trunk_params = [p for p in model.parameters() if id(p) not in other_param_ids]
+        
+        # Create parameter groups with proper weight decay for policy head final layer
         param_groups = [
             {
-                'params': other_params,
+                'params': trunk_params,
                 'lr': learning_rate,
                 'weight_decay': weight_decay
+            },
+            {
+                'params': policy_other_params,
+                'lr': learning_rate,
+                'weight_decay': weight_decay
+            },
+            {
+                'params': policy_final_params,
+                'lr': learning_rate,
+                'weight_decay': weight_decay * 2.0  # Higher weight decay for policy final layer
             },
             {
                 'params': value_head_params,

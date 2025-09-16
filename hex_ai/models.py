@@ -729,57 +729,6 @@ def is_new_architecture(model: nn.Module) -> bool:
             hasattr(model, 'num_blocks'))
 
 
-def create_optimizer_with_policy_head_stability(model: nn.Module, 
-                                               base_learning_rate: float = 3e-4,
-                                               base_weight_decay: float = 1e-4,
-                                               betas: Tuple[float, float] = (0.9, 0.999),
-                                               eps: float = 1e-8) -> torch.optim.AdamW:
-    """
-    Create an optimizer with different weight decay for policy head final layer.
-    
-    This function addresses the policy head stability issue by applying higher
-    weight decay to the final conv layer that is prone to gradient accumulation.
-    
-    Args:
-        model: The neural network model
-        base_learning_rate: Base learning rate for all parameters
-        base_weight_decay: Base weight decay for most parameters
-        betas: Adam beta parameters
-        eps: Adam epsilon parameter
-        
-    Returns:
-        AdamW optimizer with parameter groups for different weight decay
-    """
-    # Get all model parameters except policy head final layer
-    other_params = []
-    for name, param in model.named_parameters():
-        if not (hasattr(model, 'policy_head') and 
-                hasattr(model.policy_head, 'conv2') and 
-                name == 'policy_head.conv2.weight'):
-            other_params.append(param)
-    
-    # Get policy head final layer parameters
-    policy_final_params = []
-    if hasattr(model, 'policy_head') and hasattr(model.policy_head, 'conv2'):
-        policy_final_params = [model.policy_head.conv2.weight]
-    
-    # Create parameter groups with different weight decay
-    param_groups = [
-        {
-            'params': other_params,
-            'weight_decay': base_weight_decay,
-            'lr': base_learning_rate
-        }
-    ]
-    
-    if policy_final_params:
-        param_groups.append({
-            'params': policy_final_params,
-            'weight_decay': base_weight_decay * POLICY_HEAD_CONFIG.FINAL_LAYER_WEIGHT_DECAY_FACTOR,
-            'lr': base_learning_rate
-        })
-    
-    return torch.optim.AdamW(param_groups, betas=betas, eps=eps)
 
 
 def monitor_policy_head_gradients(model: nn.Module, batch_idx: int = None):
