@@ -57,7 +57,7 @@ VALUE_LOSS_WEIGHT = 0.85
 # =============================================================================
 
 # Policy logit thresholds for detecting loss of uncertainty
-MAX_POLICY_LOGIT_ABS = 20.0
+MAX_POLICY_LOGIT_ABS = 40.0  # Temporarily increased for diagnostic purposes
 # Rationale: Logits > 20 create softmax probabilities > 0.9999, indicating
 # complete loss of uncertainty. The network becomes overconfident and can't
 # express doubt, leading to training instability.
@@ -712,19 +712,36 @@ class Trainer:
         policy_max_abs = torch.abs(policy_pred).max().item()
         value_max_abs = torch.abs(value_pred).max().item()
         
+        # TEMPORARY: Log values during early training for diagnostic purposes
+        if is_early_training:
+            logger.info(f"EARLY_TRAINING_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
+                       f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
+                       f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
+                       f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
+        elif epoch == 1 and mini_epoch == 1 and batch_idx < 30:  # Log first 10 batches after warmup
+            logger.info(f"POST_WARMUP_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
+                       f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
+                       f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
+                       f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
+        
         # Check for extreme values that indicate numerical instability (skip during early training)
         if (not is_early_training and 
             (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS)):
             policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
             value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
             
+            # Save debug information to errors directory
+            self._save_debug_info(epoch, mini_epoch, batch_idx, policy_pred, value_pred, 
+                                policy_max_abs, value_max_abs, "extreme_model_outputs")
+            
             raise RuntimeError(
                 f"Extreme values detected in model outputs! "
                 f"policy_pred max_abs: {policy_max_abs:.6f}, range: {policy_range}, "
                 f"value_pred max_abs: {value_max_abs:.6f}, range: {value_range}. "
-                f"Policy logits > 20 indicate loss of uncertainty (softmax saturation). "
-                f"Value outputs > 0.999 indicate tanh saturation (gradient vanishing). "
-                f"Check learning rate, gradient clipping, and model architecture."
+                f"Policy logits > {MAX_POLICY_LOGIT_ABS} indicate loss of uncertainty (softmax saturation). "
+                f"Value outputs > {MAX_VALUE_OUTPUT_ABS} indicate tanh saturation (gradient vanishing). "
+                f"Check learning rate, gradient clipping, and model architecture. "
+                f"Debug info saved to checkpoints/bookkeeping/errors/"
             )
         
         # Backward pass: compute gradients for this batch
@@ -785,8 +802,56 @@ class Trainer:
         
         return state
 
-    def _extract_hyperparameters_for_logging(self) -> Dict:
-        """Extract hyperparameters for CSV logging."""
+    def _save_debug_info(self, epoch: int, mini_epoch: int, batch_idx: int, 
+                        policy_pred: torch.Tensor, value_pred: torch.Tensor,
+                        policy_max_abs: float, value_max_abs: float, error_type: str):
+        """Save debug information to errors directory for analysis."""
+        try:
+            import os
+            from pathlib import Path
+            import json
+            from datetime import datetime
+            
+            # Create errors directory if it doesn't exist
+            errors_dir = Path("checkpoints/bookkeeping/errors")
+            errors_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create debug filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_file = errors_dir / f"debug_{error_type}_{timestamp}.json"
+            
+            # Collect debug information
+            debug_info = {
+                "timestamp": timestamp,
+                "error_type": error_type,
+                "epoch": epoch,
+                "mini_epoch": mini_epoch,
+                "batch_idx": batch_idx,
+                "policy_max_abs": policy_max_abs,
+                "value_max_abs": value_max_abs,
+                "policy_range": [policy_pred.min().item(), policy_pred.max().item()],
+                "value_range": [value_pred.min().item(), value_pred.max().item()],
+                "policy_mean": policy_pred.mean().item(),
+                "value_mean": value_pred.mean().item(),
+                "policy_std": policy_pred.std().item(),
+                "value_std": value_pred.std().item(),
+                "thresholds": {
+                    "MAX_POLICY_LOGIT_ABS": MAX_POLICY_LOGIT_ABS,
+                    "MAX_VALUE_OUTPUT_ABS": MAX_VALUE_OUTPUT_ABS
+                }
+            }
+            
+            # Save to JSON file
+            with open(debug_file, 'w') as f:
+                json.dump(debug_info, f, indent=2)
+                
+            logger.info(f"Debug info saved to {debug_file}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save debug info: {e}")
+
+    def _get_hyperparameter_summary(self) -> Dict[str, any]:
+        """Get a summary of hyperparameters for logging."""
         return {
             'learning_rate': self.optimizer.param_groups[0]['lr'],
             'batch_size': self.train_loader.batch_size,
