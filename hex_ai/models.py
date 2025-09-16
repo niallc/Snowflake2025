@@ -119,19 +119,16 @@ class GlobalPoolingResidualBlock(nn.Module):
             
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local path
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
+        local = F.relu(self.bn1(self.conv1(x)))
+        local = self.bn2(self.conv2(local))
         
         # Global pooling path
         g = F.relu(self.gbn(self.gconv(x)))   # (B, gpool_channels, H, W)
         g = g.mean(dim=(2, 3))                # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
         
-        # Inject global bias
-        out = out + g
-        
-        # Residual connection
-        out = F.relu(out + x)
+        # Combine: residual connection + global bias
+        out = F.relu(local + x + g)
         return out
 
 
@@ -327,6 +324,14 @@ class TwoHeadedResNet(nn.Module):
                 # Initialize layer norm layers
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+        
+        # Special initialization for policy head final conv layer
+        # This layer produces logits and should be initialized more conservatively
+        if hasattr(self, 'policy_head') and hasattr(self.policy_head, 'conv2'):
+            nn.init.xavier_normal_(self.policy_head.conv2.weight)
+            # Scale down the weights to prevent extreme logits
+            with torch.no_grad():
+                self.policy_head.conv2.weight *= 0.1
     
     def forward_shared(self, x: torch.Tensor) -> torch.Tensor:
         """Run the shared trunk up to the penultimate representation."""
