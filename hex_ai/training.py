@@ -248,24 +248,88 @@ class PolicyValueLoss(nn.Module):
             B, V = logits.shape
             target_indices = policy_target.argmax(dim=1)  # (batch_size,)
             
-            if self.label_smoothing > 0:
-                # Build smoothed targets over the legal set
-                with torch.no_grad():
-                    if legal_mask is not None:
-                        legal_counts = legal_mask.sum(dim=1, keepdim=True).clamp_min(1)
-                        uniform = legal_mask.float() / legal_counts  # per-row uniform on legal
-                    else:
-                        uniform = torch.full_like(logits, 1.0 / V)
+            # CRITICAL: Check for target-mask mismatch and handle illegal targets
+            if legal_mask is not None:
+                batch = torch.arange(B, device=logits.device)
+                target_is_legal = legal_mask[batch, target_indices]  # (B,)
+                bad_count = int((~target_is_legal).sum().item())
+                
+                if bad_count > 0:
+                    logger.warning(f"Found {bad_count} samples with illegal targets out of {B} total samples. "
+                                 f"This indicates a data pipeline issue where policy targets point to illegal moves.")
                     
-                    target = torch.zeros_like(logits)
-                    target[torch.arange(B), target_indices] = 1.0
-                    target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
-                
-                logp = torch.log_softmax(logits, dim=1)
-                policy_loss = -(target * logp).sum(dim=1).mean()
-                
+                    # Option 1: Drop bad samples from policy loss computation
+                    # Keep them for value loss but exclude from policy loss
+                    if target_is_legal.any():
+                        # Only compute policy loss on legal targets
+                        legal_batch_mask = target_is_legal
+                        legal_logits = logits[legal_batch_mask]
+                        legal_target_indices = target_indices[legal_batch_mask]
+                        legal_legal_mask = legal_mask[legal_batch_mask] if legal_mask is not None else None
+                        
+                        if self.label_smoothing > 0:
+                            # Build smoothed targets strictly over legal moves
+                            legal_B = legal_logits.shape[0]
+                            target = torch.zeros_like(legal_logits)
+                            target[torch.arange(legal_B, device=legal_logits.device), legal_target_indices] = 1.0
+                            
+                            if legal_legal_mask is not None:
+                                legal_counts = legal_legal_mask.sum(dim=1).clamp_min(1)
+                                epsilon = self.label_smoothing
+                                # Zero out illegal mass before smoothing
+                                target = target * legal_legal_mask.float()
+                                # Renormalize the one-hot in case target was illegal (becomes all-zeros row)
+                                row_sum = target.sum(dim=1, keepdim=True).clamp_min(1.0)
+                                target = target / row_sum  # stays one-hot if legal, becomes 0-row if illegal
+                                # Uniform over legal moves
+                                uniform = legal_legal_mask.float() / legal_counts.unsqueeze(1)
+                                # Final smoothed distribution
+                                target = (1 - epsilon) * target + epsilon * uniform
+                            
+                            logp = torch.log_softmax(legal_logits, dim=1)
+                            policy_loss = -(target * logp).sum(dim=1).mean()
+                        else:
+                            policy_loss = F.cross_entropy(legal_logits, legal_target_indices, reduction='mean')
+                    else:
+                        # No valid targets left; set zero policy loss
+                        policy_loss = torch.zeros((), device=logits.device, dtype=logits.dtype)
+                        logger.warning("All policy targets are illegal! Setting policy loss to zero.")
+                else:
+                    # All targets are legal - proceed with normal computation
+                    if self.label_smoothing > 0:
+                        # Build smoothed targets strictly over legal moves
+                        target = torch.zeros_like(logits)
+                        target[batch, target_indices] = 1.0
+                        
+                        legal_counts = legal_mask.sum(dim=1).clamp_min(1)
+                        epsilon = self.label_smoothing
+                        # Zero out illegal mass before smoothing
+                        target = target * legal_mask.float()
+                        # Renormalize the one-hot in case target was illegal (becomes all-zeros row)
+                        row_sum = target.sum(dim=1, keepdim=True).clamp_min(1.0)
+                        target = target / row_sum  # stays one-hot if legal, becomes 0-row if illegal
+                        # Uniform over legal moves
+                        uniform = legal_mask.float() / legal_counts.unsqueeze(1)
+                        # Final smoothed distribution
+                        target = (1 - epsilon) * target + epsilon * uniform
+                        
+                        logp = torch.log_softmax(logits, dim=1)
+                        policy_loss = -(target * logp).sum(dim=1).mean()
+                    else:
+                        policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
             else:
-                policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+                # No legal mask - proceed with original logic
+                if self.label_smoothing > 0:
+                    # Build smoothed targets over all moves
+                    target = torch.zeros_like(logits)
+                    target[batch, target_indices] = 1.0
+                    uniform = torch.full_like(logits, 1.0 / V)
+                    target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
+                    
+                    logp = torch.log_softmax(logits, dim=1)
+                    policy_loss = -(target * logp).sum(dim=1).mean()
+                else:
+                    policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
             
             # ----- Entropy bonus (encourages spread) -----
             if self.entropy_weight > 0:
