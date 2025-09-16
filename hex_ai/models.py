@@ -116,6 +116,15 @@ class GlobalPoolingResidualBlock(nn.Module):
         self.gconv = nn.Conv2d(channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, channels)
+        
+        # Initialize weights to prevent extreme values
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Initialize weights to prevent extreme values in global pooling."""
+        # Use Xavier initialization but with reduced scale to prevent extreme values
+        # This maintains good gradient flow while being more conservative
+        nn.init.xavier_normal_(self.fc.weight, gain=0.1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local path
@@ -127,8 +136,9 @@ class GlobalPoolingResidualBlock(nn.Module):
         g = g.mean(dim=(2, 3))                # (B, gpool_channels)
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
         
-        # Inject global bias
-        out = out + g
+        # Inject global bias with proper scaling to prevent extreme values
+        # With better initialization, we can use a larger scaling factor
+        out = out + 0.3 * g
         
         # Residual connection
         out = F.relu(out + x)
@@ -159,6 +169,20 @@ class PolicyHead(nn.Module):
         self.gconv = nn.Conv2d(trunk_channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, trunk_channels)
+        
+        # Initialize weights to prevent extreme values
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Initialize weights to prevent extreme values in policy logits."""
+        # Use Kaiming initialization for conv2 (final layer) but with reduced scale
+        # This maintains good gradient flow while being more conservative
+        nn.init.kaiming_normal_(self.conv2.weight, mode='fan_out', nonlinearity='relu')
+        with torch.no_grad():
+            self.conv2.weight *= 0.1  # Scale down to prevent extreme logits
+        
+        # Use Xavier initialization for global pooling FC layer with reduced scale
+        nn.init.xavier_normal_(self.fc.weight, gain=0.1)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Local features
@@ -167,10 +191,11 @@ class PolicyHead(nn.Module):
         # Global pooling path
         g = F.relu(self.gbn(self.gconv(x)))      # (B, gpool_channels, H, W)
         g = g.mean(dim=(2, 3))                   # (B, gpool_channels)
-        g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
+        g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, trunk_channels, 1, 1)
         
-        # Inject global bias
-        local = local + g
+        # Inject global bias with proper scaling to prevent extreme values
+        # With better initialization, we can use a larger scaling factor
+        local = local + 0.3 * g
         
         # Final conv → logits
         p = self.conv2(local)  # (B, 1, H, W)

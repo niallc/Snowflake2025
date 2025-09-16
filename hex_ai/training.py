@@ -57,7 +57,7 @@ VALUE_LOSS_WEIGHT = 0.85
 # =============================================================================
 
 # Policy logit thresholds for detecting loss of uncertainty
-MAX_POLICY_LOGIT_ABS = 40.0  # Temporarily increased for diagnostic purposes
+MAX_POLICY_LOGIT_ABS = 20.0  # Restored to normal value after fixing global pooling bug
 # Rationale: Logits > 20 create softmax probabilities > 0.9999, indicating
 # complete loss of uncertainty. The network becomes overconfident and can't
 # express doubt, leading to training instability.
