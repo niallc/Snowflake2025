@@ -364,8 +364,7 @@ class TwoHeadedResNet(nn.Module):
     - Enhanced value head with hidden layer and optional bottleneck
     """
     
-    def __init__(self, num_blocks: int = 10, trunk_channels: int = 128, 
-                 dropout_prob: float = 0.1):
+    def __init__(self, num_blocks: int = 10, trunk_channels: int = 128):
         super().__init__()
         self.num_blocks = num_blocks
         self.trunk_channels = trunk_channels
@@ -384,12 +383,6 @@ class TwoHeadedResNet(nn.Module):
             else:
                 blocks.append(ResNetBlock(trunk_channels, trunk_channels))
         self.trunk = nn.Sequential(*blocks)
-        
-        # Global average pooling
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        
-        # Dropout layer (kept for value path only)
-        self.dropout = nn.Dropout(p=dropout_prob)
         
         # Policy head with global pooling bias injection
         self.policy_head = PolicyHead(trunk_channels, BOARD_SIZE)
@@ -420,7 +413,12 @@ class TwoHeadedResNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
                 # Initialize batch norm layers
-                nn.init.constant_(m.weight, 1)
+                # For ResNet v2 stability: zero-init the last BN gamma in each residual block
+                # This makes each block start as an identity function
+                if self._is_last_bn_in_residual_block(m):
+                    nn.init.constant_(m.weight, 0)  # Zero-init for ResNet v2 stability
+                else:
+                    nn.init.constant_(m.weight, 1)  # Standard init for other BN layers
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
                 # Xavier initialization for linear layers
@@ -434,6 +432,32 @@ class TwoHeadedResNet(nn.Module):
         
         # Policy head final layer initialization is handled in PolicyHead._initialize_final_layer()
         # This ensures proper initialization with the new stability mechanisms
+    
+    def _is_last_bn_in_residual_block(self, bn_module: nn.BatchNorm2d) -> bool:
+        """
+        Check if a BatchNorm module is the last BN in a residual block.
+        
+        For ResNet v2 stability, we zero-initialize the last BN gamma in each
+        residual block so that each block starts as an identity function.
+        
+        Args:
+            bn_module: The BatchNorm module to check
+            
+        Returns:
+            True if this is the last BN in a residual block, False otherwise
+        """
+        # Find the module name to check if it's the last BN in a block
+        for name, module in self.named_modules():
+            if module is bn_module:
+                # Check if this is the second BN in a residual block
+                # Pattern: trunk.X.bn2 or similar for the last BN in each block
+                if 'trunk' in name and name.endswith('.bn2'):
+                    return True
+                # Also check for shortcut BNs (though they're less common in our architecture)
+                if 'shortcut' in name and name.endswith('.1'):  # shortcut.1 is usually the BN
+                    return True
+                break
+        return False
     
     def forward_shared(self, x: torch.Tensor) -> torch.Tensor:
         """Run the shared trunk up to the penultimate representation."""
