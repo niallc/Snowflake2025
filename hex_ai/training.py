@@ -635,7 +635,7 @@ class Trainer:
                                 gpu_memory_mb: Optional[float], best_val_loss: Optional[float]) -> Dict:
         """Prepare data for CSV logging."""
         # Extract hyperparameters
-        hp = self._extract_hyperparameters_for_logging()
+        hp = self._get_hyperparameter_summary()
         
         epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
         mini_epoch_time = sum(batch_times)

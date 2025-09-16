@@ -50,6 +50,48 @@ MAX_LOG_COSH_INPUT_ABS = 20.0
 # Rationale: log(cosh(x)) loses precision for |x| > 20. Beyond this point,
 # the function becomes essentially linear and may cause numerical issues.
 
+# =============================================================================
+# POLICY HEAD STABILITY CONFIGURATION
+# =============================================================================
+
+class PolicyHeadStabilityConfig:
+    """
+    Configuration for policy head stability mechanisms.
+    
+    This class centralizes all the hyperparameters and thresholds used to prevent
+    the systematic value explosion that was occurring in the policy head final layer.
+    
+    The key insight is that the policy head final conv layer was accumulating gradients
+    without proper normalization, causing logits to grow from ~0.5 to >20.0 over ~500 batches.
+    """
+    
+    # Initialization
+    FINAL_LAYER_SCALING = 0.1
+    """Scaling factor for policy head final conv layer initialization.
+    Standard practice for policy networks to prevent extreme initial logits."""
+    
+    # Weight decay
+    FINAL_LAYER_WEIGHT_DECAY_FACTOR = 2.0
+    """Multiplier for weight decay on policy head final layer.
+    Higher weight decay prevents gradient accumulation without harming performance."""
+    
+    # Monitoring thresholds
+    GRADIENT_NORM_WARNING_THRESHOLD = 5.0
+    """Gradient norm threshold for early instability detection.
+    Lower than global threshold to catch policy head issues early."""
+    
+    WEIGHT_MAGNITUDE_WARNING_THRESHOLD = 2.0
+    """Weight magnitude threshold for early instability detection.
+    Helps detect when initialization scaling is being overwhelmed."""
+    
+    # Layer normalization
+    LAYER_NORM_EPS = 1e-5
+    """Epsilon for layer normalization numerical stability.
+    Standard value to prevent division by zero."""
+
+# Global instance for easy access
+POLICY_HEAD_CONFIG = PolicyHeadStabilityConfig()
+
 
 class ResNetBlock(nn.Module):
     """
@@ -134,30 +176,77 @@ class GlobalPoolingResidualBlock(nn.Module):
 
 class PolicyHead(nn.Module):
     """
-    Policy head with global pooling bias injection.
+    Policy head with global pooling bias injection and stability mechanisms.
     
     This head computes both local features and global board context,
     then combines them before producing move logits. The global pooling
     allows the policy to consider whole-board balance when selecting moves.
+    
+    Stability improvements:
+    - Layer normalization before final conv layer to prevent magnitude growth
+    - Enhanced monitoring for gradient and weight magnitudes
+    - Specialized initialization for the final conv layer
     """
     
     def __init__(self, trunk_channels: int, board_size: int, gpool_channels: int = 16):
         super().__init__()
         self.board_size = board_size
+        self.trunk_channels = trunk_channels
         
         # Local conv path
         self.conv1 = nn.Conv2d(trunk_channels, trunk_channels, 3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(trunk_channels)
         
-        # Local → logits
+        # Layer normalization before final conv to prevent magnitude growth
+        # This is critical for preventing the systematic value explosion
+        self.layer_norm = nn.LayerNorm(trunk_channels, eps=POLICY_HEAD_CONFIG.LAYER_NORM_EPS)
+        
+        # Local → logits (final conv layer with special handling)
         self.conv2 = nn.Conv2d(trunk_channels, 1, kernel_size=1, bias=False)
         
         # Global pooling bias
         self.gconv = nn.Conv2d(trunk_channels, gpool_channels, kernel_size=1, bias=False)
         self.gbn = nn.BatchNorm2d(gpool_channels)
         self.fc = nn.Linear(gpool_channels, trunk_channels)
+        
+        # Initialize the final conv layer with conservative scaling
+        self._initialize_final_layer()
             
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _initialize_final_layer(self):
+        """
+        Initialize the final conv layer with conservative scaling to prevent
+        extreme logits during training.
+        """
+        # Use He initialization with very conservative scaling
+        # He initialization is better for ReLU networks
+        nn.init.kaiming_normal_(self.conv2.weight, mode='fan_in', nonlinearity='relu')
+        
+        with torch.no_grad():
+            # Scale down weights to prevent extreme logits during training
+            # The layer normalization provides the main stability, this is just a safety factor
+            self.conv2.weight *= POLICY_HEAD_CONFIG.FINAL_LAYER_SCALING
+    
+    def _monitor_stability(self, local_features: torch.Tensor, batch_idx: int = None):
+        """
+        Monitor gradient and weight magnitudes for early detection of instability.
+        
+        Args:
+            local_features: Features before final conv layer
+            batch_idx: Current batch index for logging
+        """
+        # Monitor weight magnitudes in final conv layer
+        weight_magnitude = torch.abs(self.conv2.weight).max().item()
+        if weight_magnitude > POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD:
+            print(f"WARNING: Policy head final layer weight magnitude {weight_magnitude:.3f} "
+                  f"exceeds threshold {POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD}")
+        
+        # Monitor feature magnitudes before final conv
+        feature_magnitude = torch.abs(local_features).max().item()
+        if feature_magnitude > 10.0:  # Arbitrary threshold for feature monitoring
+            print(f"WARNING: Policy head feature magnitude {feature_magnitude:.3f} "
+                  f"is large (batch {batch_idx})")
+    
+    def forward(self, x: torch.Tensor, batch_idx: int = None) -> torch.Tensor:
         # Local features
         local = F.relu(self.bn1(self.conv1(x)))
         
@@ -169,8 +258,20 @@ class PolicyHead(nn.Module):
         # Inject global bias
         local = local + g
         
+        # Apply layer normalization to prevent magnitude growth
+        # Reshape for layer norm: (B, C, H, W) -> (B, H, W, C) -> (B*H*W, C)
+        B, C, H, W = local.shape
+        local_reshaped = local.permute(0, 2, 3, 1).contiguous().view(-1, C)
+        local_normalized = self.layer_norm(local_reshaped)
+        # Reshape back: (B*H*W, C) -> (B, H, W, C) -> (B, C, H, W)
+        local_normalized = local_normalized.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        
+        # Monitor stability (only in training mode to avoid overhead)
+        if self.training and batch_idx is not None and batch_idx % 50 == 0:
+            self._monitor_stability(local_normalized, batch_idx)
+        
         # Final conv → logits
-        p = self.conv2(local)  # (B, 1, H, W)
+        p = self.conv2(local_normalized)  # (B, 1, H, W)
         return p.flatten(1)    # (B, H*W)
 
 
@@ -309,6 +410,12 @@ class TwoHeadedResNet(nn.Module):
         """Initialize model weights using modern best practices."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
+                # Skip policy head final conv layer - it has special initialization
+                if (hasattr(self, 'policy_head') and 
+                    hasattr(self.policy_head, 'conv2') and 
+                    m is self.policy_head.conv2):
+                    continue  # Skip this layer - it's already initialized in PolicyHead
+                
                 # Kaiming initialization for conv layers
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
@@ -325,13 +432,8 @@ class TwoHeadedResNet(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
         
-        # Special initialization for policy head final conv layer
-        # This layer produces logits and should be initialized more conservatively
-        if hasattr(self, 'policy_head') and hasattr(self.policy_head, 'conv2'):
-            nn.init.xavier_normal_(self.policy_head.conv2.weight)
-            # Scale down the weights to prevent extreme logits
-            with torch.no_grad():
-                self.policy_head.conv2.weight *= 0.1
+        # Policy head final layer initialization is handled in PolicyHead._initialize_final_layer()
+        # This ensures proper initialization with the new stability mechanisms
     
     def forward_shared(self, x: torch.Tensor) -> torch.Tensor:
         """Run the shared trunk up to the penultimate representation."""
@@ -339,13 +441,14 @@ class TwoHeadedResNet(nn.Module):
         trunk_out = self.trunk(x)
         return trunk_out
 
-    def forward(self, x: torch.Tensor, move_stage: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, move_stage: torch.Tensor, batch_idx: int = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through the two-headed ResNet.
         
         Args:
             x: Input tensor of shape (batch_size, 3, 13, 13)
             move_stage: Normalized move number tensor of shape (batch_size,) in [0,1] range
+            batch_idx: Current batch index for monitoring (optional)
             
         Returns:
             Tuple of (policy_logits, value_signed):
@@ -355,13 +458,35 @@ class TwoHeadedResNet(nn.Module):
         # Shared trunk
         trunk_out = self.forward_shared(x)
         
-        # Policy head with global pooling bias injection
-        policy_logits = self.policy_head(trunk_out)
+        # Policy head with global pooling bias injection and stability monitoring
+        policy_logits = self.policy_head(trunk_out, batch_idx)
         
         # Value head with stage conditioning
         value_signed = self.value_head(trunk_out, move_stage)
         
         return policy_logits, value_signed
+
+    def get_policy_head_final_layer_params(self):
+        """
+        Get parameters for the policy head final conv layer with higher weight decay.
+        
+        Returns:
+            List of parameters that should have higher weight decay applied
+        """
+        return [self.policy_head.conv2.weight]
+    
+    def get_policy_head_other_params(self):
+        """
+        Get parameters for the policy head excluding the final conv layer.
+        
+        Returns:
+            List of parameters that should have normal weight decay applied
+        """
+        other_params = []
+        for name, param in self.policy_head.named_parameters():
+            if name != 'conv2.weight':  # Exclude final conv layer
+                other_params.append(param)
+        return other_params
 
     @torch.no_grad()
     def forward_value_only(self, x: torch.Tensor, move_stage: torch.Tensor) -> torch.Tensor:
@@ -601,4 +726,88 @@ def is_new_architecture(model: nn.Module) -> bool:
     return (hasattr(model, 'value_head') and 
             hasattr(model.value_head, 'k_outputs') and
             hasattr(model, 'trunk_channels') and
-            hasattr(model, 'num_blocks')) 
+            hasattr(model, 'num_blocks'))
+
+
+def create_optimizer_with_policy_head_stability(model: nn.Module, 
+                                               base_learning_rate: float = 3e-4,
+                                               base_weight_decay: float = 1e-4,
+                                               betas: Tuple[float, float] = (0.9, 0.999),
+                                               eps: float = 1e-8) -> torch.optim.AdamW:
+    """
+    Create an optimizer with different weight decay for policy head final layer.
+    
+    This function addresses the policy head stability issue by applying higher
+    weight decay to the final conv layer that is prone to gradient accumulation.
+    
+    Args:
+        model: The neural network model
+        base_learning_rate: Base learning rate for all parameters
+        base_weight_decay: Base weight decay for most parameters
+        betas: Adam beta parameters
+        eps: Adam epsilon parameter
+        
+    Returns:
+        AdamW optimizer with parameter groups for different weight decay
+    """
+    # Get all model parameters except policy head final layer
+    other_params = []
+    for name, param in model.named_parameters():
+        if not (hasattr(model, 'policy_head') and 
+                hasattr(model.policy_head, 'conv2') and 
+                name == 'policy_head.conv2.weight'):
+            other_params.append(param)
+    
+    # Get policy head final layer parameters
+    policy_final_params = []
+    if hasattr(model, 'policy_head') and hasattr(model.policy_head, 'conv2'):
+        policy_final_params = [model.policy_head.conv2.weight]
+    
+    # Create parameter groups with different weight decay
+    param_groups = [
+        {
+            'params': other_params,
+            'weight_decay': base_weight_decay,
+            'lr': base_learning_rate
+        }
+    ]
+    
+    if policy_final_params:
+        param_groups.append({
+            'params': policy_final_params,
+            'weight_decay': base_weight_decay * POLICY_HEAD_CONFIG.FINAL_LAYER_WEIGHT_DECAY_FACTOR,
+            'lr': base_learning_rate
+        })
+    
+    return torch.optim.AdamW(param_groups, betas=betas, eps=eps)
+
+
+def monitor_policy_head_gradients(model: nn.Module, batch_idx: int = None):
+    """
+    Monitor gradient norms in the policy head for early detection of instability.
+    
+    Args:
+        model: The neural network model
+        batch_idx: Current batch index for logging
+    """
+    if not hasattr(model, 'policy_head') or not hasattr(model.policy_head, 'conv2'):
+        return
+    
+    # Check if gradients exist
+    if model.policy_head.conv2.weight.grad is None:
+        return
+    
+    # Compute gradient norm for policy head final layer
+    grad_norm = torch.norm(model.policy_head.conv2.weight.grad).item()
+    
+    if grad_norm > POLICY_HEAD_CONFIG.GRADIENT_NORM_WARNING_THRESHOLD:
+        print(f"WARNING: Policy head final layer gradient norm {grad_norm:.3f} "
+              f"exceeds threshold {POLICY_HEAD_CONFIG.GRADIENT_NORM_WARNING_THRESHOLD} "
+              f"(batch {batch_idx})")
+    
+    # Also monitor weight magnitude
+    weight_magnitude = torch.abs(model.policy_head.conv2.weight).max().item()
+    if weight_magnitude > POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD:
+        print(f"WARNING: Policy head final layer weight magnitude {weight_magnitude:.3f} "
+              f"exceeds threshold {POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD} "
+              f"(batch {batch_idx})") 
