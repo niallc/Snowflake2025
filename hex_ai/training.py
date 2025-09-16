@@ -91,12 +91,13 @@ class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
     
     def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT, 
-                 entropy_weight: float = 1e-3, label_smoothing: float = 0.1):
+                 entropy_weight: float = 1e-3, label_smoothing: float = 0.1, logits_l2_lambda: float = 1e-6):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
         self.label_smoothing = label_smoothing
+        self.logits_l2_lambda = logits_l2_lambda
         self.policy_loss = nn.CrossEntropyLoss()
         # Value loss is now handled by the new compute_value_loss function
     
@@ -177,19 +178,17 @@ class PolicyValueLoss(nn.Module):
                 policy_target: torch.Tensor, value_target: torch.Tensor, 
                 board: torch.Tensor = None) -> Tuple[torch.Tensor, Dict]:
         """
-        Compute combined policy and value loss.
+        Compute combined policy and value loss with direct logit scale penalty.
         
-        This function handles the case where policy_target might be None (indicating
-        no valid policy target, such as for final game positions). When policy_target
-        is None, the policy loss is set to a constant (zero) tensor, which results
-        in zero gradients for the policy head while still allowing gradients to flow
-        through the value head and shared features.
+        This implements the approach from GPT that directly penalizes logit scale
+        to prevent explosion, combined with entropy regularization and label smoothing.
         
         Args:
-            policy_pred: Predicted policy logits (batch_size, policy_output_size)
+            policy_pred: Predicted policy logits (batch_size, policy_output_size) - RAW logits before masking
             value_pred: Predicted value (batch_size, 1) in [-1,1] range
             policy_target: Target policy probabilities (batch_size, policy_output_size) or None
             value_target: Target value (batch_size, 1) in [-1,1] range (signed)
+            board: Board tensor for legal move detection (batch_size, 3, height, width)
             
         Returns:
             total_loss: Combined loss
@@ -204,53 +203,80 @@ class PolicyValueLoss(nn.Module):
             # a standalone tensor with requires_grad=True that's disconnected from the graph
             policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
             entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
+            logits_l2_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         else:
-            # Apply label smoothing if board is provided
-            if board is not None and self.label_smoothing > 0:
-                policy_target = self._apply_label_smoothing(policy_target, board)
+            # ----- Logit L2 on centered logits (pre-mask) -----
+            # This directly penalizes the scale/variance of logits to prevent explosion
+            with torch.no_grad():
+                mean_per_row = policy_pred.mean(dim=1, keepdim=True)
+            centered_logits = policy_pred - mean_per_row
+            logits_l2 = (centered_logits.pow(2).mean())  # scalar
+            logits_l2_loss = self.logits_l2_lambda * logits_l2
             
-            # Use appropriate loss function based on whether label smoothing is applied
-            if board is not None and self.label_smoothing > 0:
-                # Use KL divergence loss for smoothed targets (probability distributions)
-                policy_log_probs = F.log_softmax(policy_pred, dim=1)
-                policy_loss = F.kl_div(policy_log_probs, policy_target, reduction='batchmean')
+            # ----- Get legal moves mask -----
+            legal_mask = None
+            if board is not None:
+                legal_mask = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
+            
+            # ----- Apply legal mask to logits -----
+            logits = policy_pred
+            if legal_mask is not None:
+                # Use -1e9 instead of -inf to avoid NaNs in some AMP settings
+                logits = logits.masked_fill(~legal_mask.bool(), -1e9)
+            
+            # ----- Policy loss with label smoothing over legal moves -----
+            B, V = logits.shape
+            target_indices = policy_target.argmax(dim=1)  # (batch_size,)
+            
+            if self.label_smoothing > 0:
+                # Build smoothed targets over the legal set
+                with torch.no_grad():
+                    if legal_mask is not None:
+                        legal_counts = legal_mask.sum(dim=1, keepdim=True).clamp_min(1)
+                        uniform = legal_mask.float() / legal_counts  # per-row uniform on legal
+                    else:
+                        uniform = torch.full_like(logits, 1.0 / V)
+                    
+                    target = torch.zeros_like(logits)
+                    target[torch.arange(B), target_indices] = 1.0
+                    target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
+                
+                logp = torch.log_softmax(logits, dim=1)
+                policy_loss = -(target * logp).sum(dim=1).mean()
             else:
-                # Use CrossEntropyLoss for one-hot targets (class indices)
-                policy_class_target = policy_target.argmax(dim=1)
-                policy_loss = self.policy_loss(policy_pred, policy_class_target)
+                policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
             
-            # Compute policy entropy regularization to prevent logit explosion
-            # This encourages the policy to maintain uncertainty and prevents overconfidence
+            # ----- Entropy bonus (encourages spread) -----
             if self.entropy_weight > 0:
-                policy_probs = F.softmax(policy_pred, dim=1)
-                policy_log_probs = F.log_softmax(policy_pred, dim=1)
-                entropy = -(policy_probs * policy_log_probs).sum(dim=1).mean()
-                entropy_loss = -entropy  # Negative entropy to encourage higher entropy (more uncertainty)
+                p = torch.softmax(logits, dim=1)
+                entropy = -(p * torch.log(p.clamp_min(1e-12))).sum(dim=1).mean()
+                entropy_loss = -self.entropy_weight * entropy
             else:
                 entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         
-        # Combine losses with weights
+        # ----- Total loss -----
         total_loss = (self.policy_weight * policy_loss + 
                      self.value_weight * value_loss +
-                     self.entropy_weight * entropy_loss)
+                     self.entropy_weight * entropy_loss +
+                     logits_l2_loss)
         
         # CRITICAL: Check for NaN values and fail fast
-        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy_loss):
+        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy_loss) or torch.isnan(logits_l2_loss):
             raise RuntimeError(
                 f"NaN detected in loss computation! "
-                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}, entropy_loss={entropy_loss.item()}. "
+                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}, "
+                f"entropy_loss={entropy_loss.item()}, logits_l2_loss={logits_l2_loss.item()}. "
                 f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
             )
         
-        # Check for extreme loss values that indicate numerical instability (skip during warmup)
-        # Note: We need to access batch_count from the trainer, but this is in the loss function
-        # For now, we'll keep loss checks active from the start since extreme losses are always concerning
+        # Check for extreme loss values that indicate numerical instability
         if (abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS or 
             abs(policy_loss.item()) > MAX_POLICY_LOSS_ABS or 
             abs(value_loss.item()) > MAX_VALUE_LOSS_ABS):
             raise RuntimeError(
                 f"Extreme loss values detected! "
-                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}, entropy_loss={entropy_loss.item():.6f}. "
+                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}, "
+                f"entropy_loss={entropy_loss.item():.6f}, logits_l2_loss={logits_l2_loss.item():.6f}. "
                 f"These values are unusually high and may indicate numerical instability. "
                 f"Check learning rate, gradient clipping, and model architecture."
             )
@@ -259,7 +285,8 @@ class PolicyValueLoss(nn.Module):
             'total_loss': total_loss.item(),
             'policy_loss': policy_loss.item(),
             'value_loss': value_loss.item(),
-            'entropy_loss': entropy_loss.item()
+            'entropy_loss': entropy_loss.item(),
+            'logits_l2_loss': logits_l2_loss.item()
         }
         
         return total_loss, loss_dict
@@ -336,6 +363,7 @@ class Trainer:
                  value_weight: float = VALUE_LOSS_WEIGHT,
                  entropy_weight: float = 1e-3,
                  label_smoothing: float = 0.1,
+                 logits_l2_lambda: float = 1e-6,
                  weight_decay: float = 1e-4,
                  max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 1.0,
@@ -359,6 +387,7 @@ class Trainer:
             value_weight: Weight for the value loss.
             entropy_weight: Weight for the policy entropy regularization (default: 1e-3).
             label_smoothing: Label smoothing factor for policy targets over legal moves (default: 0.1).
+            logits_l2_lambda: L2 penalty on centered logits to prevent explosion (default: 1e-6).
             weight_decay: Weight decay for the optimizer.
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 1.0, no effect)
@@ -514,7 +543,8 @@ class Trainer:
         # Optimizer and loss
         self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight, 
-                                        entropy_weight=entropy_weight, label_smoothing=label_smoothing)
+                                        entropy_weight=entropy_weight, label_smoothing=label_smoothing,
+                                        logits_l2_lambda=logits_l2_lambda)
         
         # Learning rate scheduler (ReduceLROnPlateau)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -586,7 +616,8 @@ class Trainer:
             'policy_loss': [],
             'value_loss': [],
             'total_loss': [],
-            'entropy_loss': []
+            'entropy_loss': [],
+            'logits_l2_loss': []
         }
         
         with torch.no_grad():
@@ -787,7 +818,8 @@ class Trainer:
                 f"total_loss={state['mini_epoch_metrics']['total_loss'][-1]:.4f}, "
                 f"policy_loss={state['mini_epoch_metrics']['policy_loss'][-1]:.4f}, "
                 f"value_loss={state['mini_epoch_metrics']['value_loss'][-1]:.4f}, "
-                f"entropy_loss={state['mini_epoch_metrics']['entropy_loss'][-1]:.4f} "
+                f"entropy_loss={state['mini_epoch_metrics']['entropy_loss'][-1]:.4f}, "
+                f"logits_l2_loss={state['mini_epoch_metrics']['logits_l2_loss'][-1]:.6f} "
                 f"(elapsed {elapsed:.1f}s)"
             )
             if batch_idx + 1 == state['next_log_batch']:
@@ -870,7 +902,8 @@ class Trainer:
                 'policy_loss': [],
                 'value_loss': [],
                 'total_loss': [],
-                'entropy_loss': []
+                'entropy_loss': [],
+                'logits_l2_loss': []
             },
             'gradient_norms': [],
             'start_time': time.time(),
