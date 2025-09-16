@@ -143,6 +143,115 @@ class PolicyValueLoss(nn.Module):
         
         return legal_moves
     
+    def _debug_illegal_targets(self, board: torch.Tensor, policy_target: torch.Tensor, 
+                              legal_mask: torch.Tensor, target_indices: torch.Tensor, 
+                              target_is_legal: torch.Tensor):
+        """
+        Debug illegal targets by displaying board states and move information.
+        
+        This method provides detailed debugging information when illegal targets are detected,
+        including visual board representations and move analysis.
+        """
+        try:
+            from hex_ai.utils.format_conversion import board_2nxn_to_nxn, rowcol_to_trmph
+            from hex_ai.inference.board_display import display_hex_board
+            import numpy as np
+            
+            print("\n" + "="*80)
+            print("CRITICAL BUG: ILLEGAL TARGETS DETECTED")
+            print("="*80)
+            
+            # Find the first illegal target for detailed analysis
+            illegal_indices = (~target_is_legal).nonzero(as_tuple=False).squeeze(-1)
+            if illegal_indices.numel() > 0:
+                sample_idx = illegal_indices[0].item()
+                
+                print(f"\nAnalyzing first illegal target (sample {sample_idx}):")
+                print(f"Target index: {target_indices[sample_idx].item()}")
+                print(f"Target is legal: {target_is_legal[sample_idx].item()}")
+                
+                # Get board state
+                board_sample = board[sample_idx]  # (3, height, width)
+                blue_channel = board_sample[0].cpu().numpy()  # (height, width)
+                red_channel = board_sample[1].cpu().numpy()   # (height, width)
+                player_channel = board_sample[2].cpu().numpy()  # (height, width)
+                
+                # Convert to display format
+                board_2d = np.zeros_like(blue_channel, dtype=str)
+                board_2d[:] = 'e'  # empty
+                board_2d[blue_channel == 1] = 'b'  # blue
+                board_2d[red_channel == 1] = 'r'   # red
+                
+                print(f"\nBoard state (sample {sample_idx}):")
+                print("Blue channel (1=blue piece, 0=empty):")
+                print(blue_channel)
+                print("Red channel (1=red piece, 0=empty):")
+                print(red_channel)
+                print("Player channel (1=blue to move, -1=red to move):")
+                print(player_channel)
+                
+                # Display the board visually
+                print(f"\nVisual board representation:")
+                display_hex_board(board_2d)
+                
+                # Analyze legal moves
+                legal_moves_flat = legal_mask[sample_idx].cpu().numpy()  # (height*width,)
+                legal_moves_2d = legal_moves_flat.reshape(blue_channel.shape)
+                
+                print(f"\nLegal moves mask (True=legal, False=illegal):")
+                print(legal_moves_2d.astype(int))
+                
+                # Find the target position
+                target_idx = target_indices[sample_idx].item()
+                height, width = blue_channel.shape
+                target_row = target_idx // width
+                target_col = target_idx % width
+                
+                print(f"\nTarget analysis:")
+                print(f"Target index: {target_idx}")
+                print(f"Target position: row={target_row}, col={target_col}")
+                print(f"Target is legal: {legal_moves_2d[target_row, target_col]}")
+                print(f"Target position has blue piece: {blue_channel[target_row, target_col] == 1}")
+                print(f"Target position has red piece: {red_channel[target_row, target_col] == 1}")
+                
+                # Convert to TRMPH format for easier debugging
+                try:
+                    trmph_move = rowcol_to_trmph(target_row, target_col, height)
+                    print(f"Target move in TRMPH format: {trmph_move}")
+                except Exception as e:
+                    print(f"Could not convert to TRMPH format: {e}")
+                
+                # Show all legal moves
+                legal_positions = np.where(legal_moves_2d)
+                print(f"\nAll legal positions: {list(zip(legal_positions[0], legal_positions[1]))}")
+                
+                # Show policy target distribution
+                policy_target_sample = policy_target[sample_idx].cpu().numpy()
+                print(f"\nPolicy target distribution (top 5 values):")
+                top_indices = np.argsort(policy_target_sample)[-5:][::-1]
+                for idx in top_indices:
+                    row, col = idx // width, idx % width
+                    print(f"  Index {idx} (row={row}, col={col}): {policy_target_sample[idx]:.6f}")
+                
+                # Check if there are other illegal targets
+                if illegal_indices.numel() > 1:
+                    print(f"\nOther illegal targets in this batch:")
+                    for i in range(1, min(illegal_indices.numel(), 5)):  # Show up to 5
+                        other_idx = illegal_indices[i].item()
+                        other_target = target_indices[other_idx].item()
+                        other_row = other_target // width
+                        other_col = other_target % width
+                        print(f"  Sample {other_idx}: target={other_target} (row={other_row}, col={other_col})")
+            
+            print("\n" + "="*80)
+            print("END OF ILLEGAL TARGET DEBUG INFO")
+            print("="*80)
+            
+        except Exception as e:
+            print(f"Error in debug function: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _apply_label_smoothing(self, policy_target: torch.Tensor, board: torch.Tensor) -> torch.Tensor:
         """
         Apply label smoothing over legal moves.
@@ -255,45 +364,14 @@ class PolicyValueLoss(nn.Module):
                 bad_count = int((~target_is_legal).sum().item())
                 
                 if bad_count > 0:
-                    logger.warning(f"Found {bad_count} samples with illegal targets out of {B} total samples. "
-                                 f"This indicates a data pipeline issue where policy targets point to illegal moves.")
-                    
-                    # Option 1: Drop bad samples from policy loss computation
-                    # Keep them for value loss but exclude from policy loss
-                    if target_is_legal.any():
-                        # Only compute policy loss on legal targets
-                        legal_batch_mask = target_is_legal
-                        legal_logits = logits[legal_batch_mask]
-                        legal_target_indices = target_indices[legal_batch_mask]
-                        legal_legal_mask = legal_mask[legal_batch_mask] if legal_mask is not None else None
-                        
-                        if self.label_smoothing > 0:
-                            # Build smoothed targets strictly over legal moves
-                            legal_B = legal_logits.shape[0]
-                            target = torch.zeros_like(legal_logits)
-                            target[torch.arange(legal_B, device=legal_logits.device), legal_target_indices] = 1.0
-                            
-                            if legal_legal_mask is not None:
-                                legal_counts = legal_legal_mask.sum(dim=1).clamp_min(1)
-                                epsilon = self.label_smoothing
-                                # Zero out illegal mass before smoothing
-                                target = target * legal_legal_mask.float()
-                                # Renormalize the one-hot in case target was illegal (becomes all-zeros row)
-                                row_sum = target.sum(dim=1, keepdim=True).clamp_min(1.0)
-                                target = target / row_sum  # stays one-hot if legal, becomes 0-row if illegal
-                                # Uniform over legal moves
-                                uniform = legal_legal_mask.float() / legal_counts.unsqueeze(1)
-                                # Final smoothed distribution
-                                target = (1 - epsilon) * target + epsilon * uniform
-                            
-                            logp = torch.log_softmax(legal_logits, dim=1)
-                            policy_loss = -(target * logp).sum(dim=1).mean()
-                        else:
-                            policy_loss = F.cross_entropy(legal_logits, legal_target_indices, reduction='mean')
-                    else:
-                        # No valid targets left; set zero policy loss
-                        policy_loss = torch.zeros((), device=logits.device, dtype=logits.dtype)
-                        logger.warning("All policy targets are illegal! Setting policy loss to zero.")
+                    # CRITICAL: This is a bug that needs to be found and fixed!
+                    # Don't mask the error - fail immediately with detailed debugging info
+                    self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
+                    raise RuntimeError(
+                        f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
+                        f"This indicates a data pipeline issue where policy targets point to illegal moves. "
+                        f"Training stopped to prevent silent failures. Check debug output above for details."
+                    )
                 else:
                     # All targets are legal - proceed with normal computation
                     if self.label_smoothing > 0:
