@@ -438,8 +438,6 @@ class PolicyValueLoss(nn.Module):
         terminal_count = zero_vectors.sum().item()
         
         if terminal_count > 0:
-            # Log terminal move statistics for debugging
-            print(f"TERMINAL MOVE DETECTED: {terminal_count}/{batch_size} samples are terminal moves (zero vectors)")
             # Mixed batch - process only non-terminal moves
             non_terminal_indices = ~zero_vectors
             if non_terminal_indices.any():

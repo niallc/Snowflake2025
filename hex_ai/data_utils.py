@@ -876,7 +876,6 @@ def get_valid_policy_target(policy, use_uniform: bool = False):
     return np.array(policy, dtype=np.float32)
 
 
-
 def preprocess_example_for_model(ex, use_uniform_policy: bool = False):
     """
     Convert a raw example dict to (board, policy, value) tensors for model input.

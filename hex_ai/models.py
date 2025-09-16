@@ -66,11 +66,13 @@ class PolicyHeadStabilityConfig:
     """
     
     # Initialization
+    # TODO: Revisit this value, it may be way too strong from debugging exploding policy values.
     FINAL_LAYER_SCALING = 0.1
     """Scaling factor for policy head final conv layer initialization.
     Standard practice for policy networks to prevent extreme initial logits."""
     
     # Weight decay
+    # TODO: Revisit this value, it may be way too strong from debugging exploding policy values.
     FINAL_LAYER_WEIGHT_DECAY_FACTOR = 2.0
     """Multiplier for weight decay on policy head final layer.
     Higher weight decay prevents gradient accumulation without harming performance."""
@@ -85,7 +87,7 @@ class PolicyHeadStabilityConfig:
     Helps detect when initialization scaling is being overwhelmed."""
     
     # Layer normalization
-    LAYER_NORM_EPS = 1e-5
+    LAYER_NORM_EPS = 5e-7
     """Epsilon for layer normalization numerical stability.
     Standard value to prevent division by zero."""
 
