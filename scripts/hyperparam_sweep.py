@@ -60,7 +60,7 @@ SWEEP = {
     # New KataGo-inspired architecture parameters
     "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
     "trunk_channels": [128],  # Number of channels in trunk
-    "dropout_prob": [0],  # Dropout regularization
+    "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
     
     # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
     # are currently fixed in the architecture but could be made configurable later

@@ -979,7 +979,7 @@ class Trainer:
             'policy_weight': getattr(self.criterion, 'policy_weight', ''),
             'value_weight': getattr(self.criterion, 'value_weight', ''),
             'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
-            'dropout_prob': self.model.dropout.p if hasattr(self.model, 'dropout') else '',
+            'dropout_prob': 'N/A (not used in current architecture)',
             'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
             'max_grad_norm': getattr(self, 'max_grad_norm', ''),
             'value_learning_rate_factor': getattr(self, 'value_learning_rate_factor', ''),

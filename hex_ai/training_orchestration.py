@@ -190,13 +190,19 @@ def run_single_experiment(
     trainer_params = {}
     
     # Model parameters - expect only the correct parameter names
-    required_model_params = {'num_blocks', 'trunk_channels', 'dropout_prob'}
+    required_model_params = {'num_blocks', 'trunk_channels'}
     for param in required_model_params:
         if param in exp_config['hyperparameters']:
             model_params[param] = exp_config['hyperparameters'][param]
         else:
             raise ValueError(f"Missing required model parameter: {param}. "
                            f"Available hyperparameters: {list(exp_config['hyperparameters'].keys())}")
+    
+    # Handle legacy dropout_prob parameter (no longer used in model)
+    if 'dropout_prob' in exp_config['hyperparameters']:
+        # Log a warning but don't fail - this is a legacy parameter
+        logger.warning(f"Legacy parameter 'dropout_prob' is no longer used in the model architecture. "
+                      f"Value {exp_config['hyperparameters']['dropout_prob']} will be ignored.")
     
     # Check for legacy parameter names and provide clear error
     legacy_params = {'resnet_depth'}
@@ -208,10 +214,11 @@ def run_single_experiment(
     # Note: use_value_bottleneck is no longer a parameter in the new KataGo-inspired architecture
     # The value head now has a fixed bottleneck design
     
-    # Trainer parameters (everything else except batch_size and model parameters)
-    model_param_keys = {'num_blocks', 'trunk_channels', 'dropout_prob'}  # Keys that map to model parameters
+    # Trainer parameters (everything else except batch_size, model parameters, and legacy parameters)
+    model_param_keys = {'num_blocks', 'trunk_channels'}  # Keys that map to model parameters
+    legacy_params = {'dropout_prob'}  # Legacy parameters that should be ignored
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
-                     if k not in model_param_keys and k != 'batch_size'}
+                     if k not in model_param_keys and k not in legacy_params and k != 'batch_size'}
     
     model = TwoHeadedResNet(**model_params).to(device)
     
