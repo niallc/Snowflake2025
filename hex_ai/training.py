@@ -70,10 +70,11 @@ MAX_VALUE_OUTPUT_ABS = 0.999
 # effectively from these positions.
 
 # Loss value thresholds for detecting numerical instability
-MAX_TOTAL_LOSS_ABS = 100.0
-MAX_POLICY_LOSS_ABS = 50.0
+MAX_TOTAL_LOSS_ABS = 200.0  # Increased to accommodate KL divergence loss
+MAX_POLICY_LOSS_ABS = 100.0  # Increased to accommodate KL divergence loss (was 50.0)
 MAX_VALUE_LOSS_ABS = 10.0
-# Rationale: These are conservative thresholds based on typical training ranges.
+# Rationale: These thresholds account for the new loss function that uses KL divergence
+# for label smoothing, which can produce larger loss values than CrossEntropyLoss.
 # Values above these indicate unusual numerical behavior that may lead to NaN.
 
 # Gradient norm thresholds for detecting gradient explosion
@@ -197,21 +198,22 @@ class PolicyValueLoss(nn.Module):
         # Value loss using new log-cosh loss with label smoothing
         value_loss = compute_value_loss(value_pred, value_target, smooth=0.95)
         
+        # ----- Logit L2 on centered logits (pre-mask) -----
+        # This directly penalizes the scale/variance of logits to prevent explosion
+        # Apply this regardless of whether we have policy targets
+        with torch.no_grad():
+            mean_per_row = policy_pred.mean(dim=1, keepdim=True)
+        centered_logits = policy_pred - mean_per_row
+        logits_l2 = (centered_logits.pow(2).mean())  # scalar
+        logits_l2_loss = self.logits_l2_lambda * logits_l2
+        
         # Policy loss: handle None targets by using constant loss (zero gradient)
         if policy_target is None:
             # Create a zero tensor with no gradients - this is cleaner than creating
             # a standalone tensor with requires_grad=True that's disconnected from the graph
             policy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
             entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
-            logits_l2_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         else:
-            # ----- Logit L2 on centered logits (pre-mask) -----
-            # This directly penalizes the scale/variance of logits to prevent explosion
-            with torch.no_grad():
-                mean_per_row = policy_pred.mean(dim=1, keepdim=True)
-            centered_logits = policy_pred - mean_per_row
-            logits_l2 = (centered_logits.pow(2).mean())  # scalar
-            logits_l2_loss = self.logits_l2_lambda * logits_l2
             
             # ----- Get legal moves mask -----
             legal_mask = None
@@ -221,8 +223,9 @@ class PolicyValueLoss(nn.Module):
             # ----- Apply legal mask to logits -----
             logits = policy_pred
             if legal_mask is not None:
-                # Use -1e9 instead of -inf to avoid NaNs in some AMP settings
-                logits = logits.masked_fill(~legal_mask.bool(), -1e9)
+                # Use -1e4 instead of -1e9 to avoid overflow in float16 (Half precision)
+                # float16 range is approximately -65504 to 65504
+                logits = logits.masked_fill(~legal_mask.bool(), -1e4)
             
             # ----- Policy loss with label smoothing over legal moves -----
             B, V = logits.shape
@@ -249,7 +252,9 @@ class PolicyValueLoss(nn.Module):
             # ----- Entropy bonus (encourages spread) -----
             if self.entropy_weight > 0:
                 p = torch.softmax(logits, dim=1)
-                entropy = -(p * torch.log(p.clamp_min(1e-12))).sum(dim=1).mean()
+                # Use a larger minimum value for float16 compatibility
+                min_val = 1e-6 if p.dtype == torch.float16 else 1e-12
+                entropy = -(p * torch.log(p.clamp_min(min_val))).sum(dim=1).mean()
                 entropy_loss = -self.entropy_weight * entropy
             else:
                 entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
