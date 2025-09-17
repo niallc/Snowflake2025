@@ -180,7 +180,17 @@ class ModelWrapper:
         # Time the actual neural network forward pass (pure inference)
         pure_forward_start = time.perf_counter()
         with torch.no_grad():
-            policy_logits, value_signed = self.model(board_tensors)
+            # Validate model architecture
+            if not is_new_architecture(self.model):
+                raise ValueError(
+                    f"Model does not support new architecture. Expected model with move_stage support. "
+                    f"Model type: {type(self.model).__name__}. "
+                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                )
+            
+            # Compute move_stage from board state and call model
+            move_stage = compute_move_stage(board_tensors)
+            policy_logits, value_signed = self.model(board_tensors, move_stage)
         pure_forward_ms = (time.perf_counter() - pure_forward_start) * 1000.0
         
         # Time device synchronization
