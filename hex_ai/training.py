@@ -486,13 +486,29 @@ class PolicyValueLoss(nn.Module):
         # Value loss using new log-cosh loss with label smoothing
         value_loss = compute_value_loss(value_pred, value_target, smooth=0.95)
         
-        # ----- Logit L2 on centered logits (pre-mask) -----
-        # This directly penalizes the scale/variance of logits to prevent explosion
+        # ----- Logit L2 on legal moves only, centered over legal positions -----
+        # This directly penalizes the scale/variance of legal logits to prevent explosion
         # Apply this regardless of whether we have policy targets
+        if board is None:
+            raise RuntimeError(
+                "CRITICAL BUG: board tensor is None in PolicyValueLoss.forward(). "
+                "The board tensor is required for legal move masking and L2 regularization. "
+                "This indicates a bug in the training pipeline where boards are not being passed to the loss function. "
+                "Check that all calls to criterion() include the board tensor as the 5th argument."
+            )
+        
+        legal_mask = self._get_legal_moves_from_board(board)
+        
+        # Compute per-sample mean over legal entries only
         with torch.no_grad():
-            mean_per_row = policy_pred.mean(dim=1, keepdim=True)
-        centered_logits = policy_pred - mean_per_row
-        logits_l2 = (centered_logits.pow(2).mean())  # scalar
+            legal_sum = (policy_pred * legal_mask).sum(dim=1, keepdim=True)
+            legal_counts = legal_mask.sum(dim=1, keepdim=True).clamp_min(1)
+            legal_mean = legal_sum / legal_counts
+        
+        # Center logits over legal positions only, zero elsewhere
+        centered = (policy_pred - legal_mean) * legal_mask
+        # Normalize by number of legal entries so batches with many illegals aren't over-penalized
+        logits_l2 = (centered.pow(2).sum(dim=1) / legal_counts.squeeze(1)).mean()
         logits_l2_loss = self.logits_l2_lambda * logits_l2
         
         # Policy loss: handle terminal moves by detecting zero vectors
@@ -510,7 +526,7 @@ class PolicyValueLoss(nn.Module):
                 # Process only non-terminal moves
                 non_terminal_policy_pred = policy_pred[non_terminal_indices]
                 non_terminal_policy_target = policy_target[non_terminal_indices]
-                non_terminal_board = board[non_terminal_indices] if board is not None else None
+                non_terminal_board = board[non_terminal_indices]
                 
                 policy_loss, entropy_loss = self._compute_policy_loss(
                     non_terminal_policy_pred, non_terminal_policy_target, non_terminal_board
@@ -575,67 +591,58 @@ class PolicyValueLoss(nn.Module):
             Tuple of (policy_loss, entropy_loss)
         """
         # ----- Get legal moves mask -----
-        legal_mask = None
-        if board is not None:
-            legal_mask = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
+        if board is None:
+            raise RuntimeError(
+                "CRITICAL BUG: board tensor is None in _compute_policy_loss(). "
+                "The board tensor is required for legal move masking in policy loss computation. "
+                "This indicates a bug in the training pipeline where boards are not being passed to the loss function. "
+                "Check that all calls to criterion() include the board tensor as the 5th argument."
+            )
+        
+        legal_mask = self._get_legal_moves_from_board(board)  # (batch_size, height * width)
         
         # ----- Apply legal mask to logits -----
         logits = policy_pred
-        if legal_mask is not None:
-            # Use -1e4 instead of -1e9 to avoid overflow in float16 (Half precision)
-            # float16 range is approximately -65504 to 65504
-            logits = logits.masked_fill(~legal_mask.bool(), -1e4)
+        # Use -1e4 instead of -1e9 to avoid overflow in float16 (Half precision)
+        # float16 range is approximately -65504 to 65504
+        logits = logits.masked_fill(~legal_mask.bool(), -1e4)
         
         # ----- Policy loss with label smoothing over legal moves -----
         B, V = logits.shape
         target_indices = policy_target.argmax(dim=1)  # (batch_size,)
         
         # CRITICAL: Check for target-mask mismatch and handle illegal targets
-        if legal_mask is not None:
-            batch = torch.arange(B, device=logits.device)
-            target_is_legal = legal_mask[batch, target_indices]  # (B,)
-            bad_count = int((~target_is_legal).sum().item())
+        batch = torch.arange(B, device=logits.device)
+        target_is_legal = legal_mask[batch, target_indices]  # (B,)
+        bad_count = int((~target_is_legal).sum().item())
+        
+        if bad_count > 0:
+            # CRITICAL: This is a bug that needs to be found and fixed!
+            # Don't mask the error - fail immediately with detailed debugging info
+            self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
+            raise RuntimeError(
+                f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
+                f"This indicates a data pipeline issue where policy targets point to illegal moves. "
+                f"Training stopped to prevent silent failures. Check debug output above for details."
+            )
+        
+        # All targets are legal - proceed with normal computation
+        if self.label_smoothing > 0:
+            # Build smoothed targets strictly over legal moves
+            target = torch.zeros_like(logits)
+            target[batch, target_indices] = 1.0
             
-            if bad_count > 0:
-                # CRITICAL: This is a bug that needs to be found and fixed!
-                # Don't mask the error - fail immediately with detailed debugging info
-                self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
-                raise RuntimeError(
-                    f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
-                    f"This indicates a data pipeline issue where policy targets point to illegal moves. "
-                    f"Training stopped to prevent silent failures. Check debug output above for details."
-                )
-            else:
-                # All targets are legal - proceed with normal computation
-                if self.label_smoothing > 0:
-                    # Build smoothed targets strictly over legal moves
-                    target = torch.zeros_like(logits)
-                    target[batch, target_indices] = 1.0
-                    
-                    legal_counts = legal_mask.sum(dim=1).clamp_min(1)
-                    epsilon = self.label_smoothing
-                    # Uniform over legal moves
-                    uniform = legal_mask.float() / legal_counts.unsqueeze(1)
-                    # Final smoothed distribution
-                    target = (1 - epsilon) * target + epsilon * uniform
-                    
-                    logp = torch.log_softmax(logits, dim=1)
-                    policy_loss = -(target * logp).sum(dim=1).mean()
-                else:
-                    policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+            legal_counts = legal_mask.sum(dim=1).clamp_min(1)
+            epsilon = self.label_smoothing
+            # Uniform over legal moves
+            uniform = legal_mask.float() / legal_counts.unsqueeze(1)
+            # Final smoothed distribution
+            target = (1 - epsilon) * target + epsilon * uniform
+            
+            logp = torch.log_softmax(logits, dim=1)
+            policy_loss = -(target * logp).sum(dim=1).mean()
         else:
-            # No legal mask - proceed with original logic
-            if self.label_smoothing > 0:
-                # Build smoothed targets over all moves
-                target = torch.zeros_like(logits)
-                target[batch, target_indices] = 1.0
-                uniform = torch.full_like(logits, 1.0 / V)
-                target = (1 - self.label_smoothing) * target + self.label_smoothing * uniform
-                
-                logp = torch.log_softmax(logits, dim=1)
-                policy_loss = -(target * logp).sum(dim=1).mean()
-            else:
-                policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+            policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
         
         # ----- Entropy bonus (encourages spread) -----
         if self.entropy_weight > 0:
@@ -810,9 +817,11 @@ class Trainer:
                         break
                 
                 if param_name is None:
-                    # Fallback: assume it should have weight decay
-                    weight_decay_params.append(param)
-                    continue
+                    raise RuntimeError(
+                        f"CRITICAL BUG: Could not find parameter name for parameter {param}. "
+                        f"This indicates a bug in the parameter separation logic. "
+                        f"All model parameters should have identifiable names for proper weight decay handling."
+                    )
                 
                 # Check if this is a norm layer parameter or bias
                 if any(norm_type in param_name for norm_type in ['bn', 'norm', 'batch_norm', 'layer_norm']):
@@ -1239,7 +1248,14 @@ class Trainer:
         # Extract hyperparameters
         hp = self._get_hyperparameter_summary()
         
-        epoch_id = f"{epoch+1}_mini{mini_epoch+1}" if epoch is not None and mini_epoch is not None else "unknown"
+        if epoch is None or mini_epoch is None:
+            raise RuntimeError(
+                f"CRITICAL BUG: epoch or mini_epoch is None in CSV logging. "
+                f"epoch={epoch}, mini_epoch={mini_epoch}. "
+                f"This indicates a bug in the training pipeline where epoch/mini_epoch are not being passed properly. "
+                f"Check that all calls to _prepare_csv_logging_data() include valid epoch and mini_epoch values."
+            )
+        epoch_id = f"{epoch+1}_mini{mini_epoch+1}"
         mini_epoch_time = sum(batch_times)
         
         return {
