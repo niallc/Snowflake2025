@@ -228,6 +228,40 @@ def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
     board_2nxn = board_nxn_to_2nxn(board_nxn)
     return board_2nxn_to_3nxn(board_2nxn)
 
+def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
+    """
+    Convert a (3, N, N) tensor to a (N, N) string array format.
+    Extracts the first two channels (blue and red) and converts to string representation.
+    The third channel (player-to-move) is ignored.
+    
+    Args:
+        board_3nxn: torch.Tensor of shape (3, N, N) or np.ndarray of shape (3, N, N)
+        
+    Returns:
+        np.ndarray of shape (N, N) with 'e'=empty, 'b'=blue, 'r'=red
+        
+    Raises:
+        ValueError: If input shape is not (3, N, N)
+    """
+    if isinstance(board_3nxn, torch.Tensor):
+        board_np = board_3nxn.detach().cpu().numpy()
+    else:
+        board_np = board_3nxn
+    
+    if board_np.shape != (3, BOARD_SIZE, BOARD_SIZE):
+        raise ValueError(f"Expected shape (3, {BOARD_SIZE}, {BOARD_SIZE}), got {board_np.shape}")
+    
+    # Extract blue and red channels
+    blue_channel = board_np[channel_to_int(Channel.BLUE)]
+    red_channel = board_np[channel_to_int(Channel.RED)]
+    
+    # Convert to N×N string format
+    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+    board_nxn[blue_channel == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
+    board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
+    
+    return board_nxn
+
 def parse_trmph_game_record(line: str) -> tuple[str, str]:
     """
     Parse a single line from a TRMPH file, returning (trmph_url, winner_indicator).

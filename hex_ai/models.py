@@ -87,7 +87,7 @@ class PolicyHeadStabilityConfig:
     Helps detect when initialization scaling is being overwhelmed."""
     
     # Layer normalization
-    LAYER_NORM_EPS = 3e-5
+    LAYER_NORM_EPS = 5e-7
     """Epsilon for layer normalization numerical stability.
     Standard value to prevent division by zero."""
 

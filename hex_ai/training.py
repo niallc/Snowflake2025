@@ -969,7 +969,7 @@ class Trainer:
         self.log_interval_batches = log_interval_batches
         
         # Initialize large values debug accumulator
-        self.large_values_accumulator = LargeValuesDebugAccumulator(batch_interval=30)
+        self.large_values_accumulator = LargeValuesDebugAccumulator(batch_interval=200)
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
