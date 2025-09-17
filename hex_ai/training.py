@@ -52,7 +52,9 @@ class LargeValuesDebugAccumulator:
     
     def add_debug_info(self, epoch: int, mini_epoch: int, batch_idx: int, 
                       policy_max_abs: float, value_max_abs: float,
-                      policy_range: tuple, value_range: tuple, grad_norm_info: str = ""):
+                      policy_range: tuple, value_range: tuple, 
+                      legal_policy_max_abs: float = None, legal_policy_std: float = None,
+                      grad_norm_info: str = ""):
         """Add debug information for a batch."""
         self.accumulated_data.append({
             'epoch': epoch,
@@ -62,6 +64,8 @@ class LargeValuesDebugAccumulator:
             'value_max_abs': value_max_abs,
             'policy_range': policy_range,
             'value_range': value_range,
+            'legal_policy_max_abs': legal_policy_max_abs,
+            'legal_policy_std': legal_policy_std,
             'grad_norm_info': grad_norm_info
         })
         self.batch_count += 1
@@ -80,6 +84,10 @@ class LargeValuesDebugAccumulator:
         policy_max_abs_values = [d['policy_max_abs'] for d in self.accumulated_data]
         value_max_abs_values = [d['value_max_abs'] for d in self.accumulated_data]
         
+        # Calculate legal move statistics
+        legal_policy_max_values = [d['legal_policy_max_abs'] for d in self.accumulated_data if d['legal_policy_max_abs'] is not None]
+        legal_policy_std_values = [d['legal_policy_std'] for d in self.accumulated_data if d['legal_policy_std'] is not None]
+        
         policy_mean = sum(policy_max_abs_values) / len(policy_max_abs_values)
         policy_std = (sum((x - policy_mean) ** 2 for x in policy_max_abs_values) / len(policy_max_abs_values)) ** 0.5
         value_mean = sum(value_max_abs_values) / len(value_max_abs_values)
@@ -91,10 +99,20 @@ class LargeValuesDebugAccumulator:
         epoch = self.accumulated_data[0]['epoch']
         mini_epoch = self.accumulated_data[0]['mini_epoch']
         
+        # Log summary focusing on legal moves
         logger.warning(f"LARGE_VALUES_SUMMARY: Epoch {epoch}, Mini-epoch {mini_epoch}, "
                       f"Batches {first_batch}-{last_batch} ({len(self.accumulated_data)} batches): "
                       f"policy_max_abs: mean={policy_mean:.3f}±{policy_std:.3f}, "
                       f"value_max_abs: mean={value_mean:.3f}±{value_std:.3f}")
+        
+        # Add legal move statistics if available
+        if legal_policy_max_values:
+            legal_max_mean = sum(legal_policy_max_values) / len(legal_policy_max_values)
+            logger.warning(f"LEGAL_MOVES_SUMMARY: legal_policy_max_abs: mean={legal_max_mean:.3f}")
+        
+        if legal_policy_std_values:
+            legal_std_mean = sum(legal_policy_std_values) / len(legal_policy_std_values)
+            logger.warning(f"LEGAL_MOVES_SUMMARY: legal_policy_std: mean={legal_std_mean:.3f}")
     
     def _reset(self):
         """Reset accumulated data."""
@@ -1014,8 +1032,10 @@ class Trainer:
                         f"This indicates numerical instability in the model."
                     )
                 
-                # Check for extreme values in validation
-                policy_max_abs = torch.abs(policy_pred).max().item()
+                # Check for extreme values in validation - focus on legal moves only
+                legal_mask = self.criterion._get_legal_moves_from_board(boards)
+                legal_policy_pred = policy_pred * legal_mask
+                policy_max_abs = torch.abs(legal_policy_pred).max().item()
                 value_max_abs = torch.abs(value_pred).max().item()
                 
                 # Check if we're in early training phase
@@ -1328,8 +1348,10 @@ class Trainer:
                 f"Check learning rate, gradient clipping, and model architecture."
             )
         
-        # Check for extreme values that indicate numerical instability
-        policy_max_abs = torch.abs(policy_pred).max().item()
+        # Check for extreme values that indicate numerical instability - focus on legal moves only
+        legal_mask = self.criterion._get_legal_moves_from_board(boards)
+        legal_policy_pred = policy_pred * legal_mask
+        policy_max_abs = torch.abs(legal_policy_pred).max().item()
         value_max_abs = torch.abs(value_pred).max().item()
         
         # TEMPORARY: Log values during early training for diagnostic purposes
@@ -1352,12 +1374,17 @@ class Trainer:
                 latest_grad = self.gradient_clipping_debug[-1]
                 grad_norm_info = f", pre_clip_grad_norm={latest_grad['pre_clip']:.3f}, post_clip_grad_norm={latest_grad['post_clip']:.3f}"
             
+            # Calculate legal move statistics
+            legal_policy_std = legal_policy_pred.std().item()
+            
             # Add to accumulator instead of logging immediately
             self.large_values_accumulator.add_debug_info(
                 epoch=epoch, mini_epoch=mini_epoch, batch_idx=batch_idx,
                 policy_max_abs=policy_max_abs, value_max_abs=value_max_abs,
                 policy_range=(policy_pred.min().item(), policy_pred.max().item()),
                 value_range=(value_pred.min().item(), value_pred.max().item()),
+                legal_policy_max_abs=policy_max_abs,  # This is now legal_policy_max_abs
+                legal_policy_std=legal_policy_std,
                 grad_norm_info=grad_norm_info
             )
         
