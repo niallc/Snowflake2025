@@ -499,6 +499,14 @@ class PolicyValueLoss(nn.Module):
         # float16 range is approximately -65504 to 65504
         logits = logits.masked_fill(~legal_mask.bool(), -1e4)
         
+        # ----- Center logits to prevent mean drift -----
+        # Subtract the mean of legal move logits from all logits
+        # This keeps logits centered around 0 without changing probabilities
+        with torch.no_grad():
+            denom = legal_mask.sum(dim=1, keepdim=True).clamp_min(1)
+            mean_legal = (logits.clamp_min(-1e3) * legal_mask).sum(dim=1, keepdim=True) / denom
+        logits = torch.where(legal_mask, logits - mean_legal, logits)
+        
         # ----- Policy loss with label smoothing over legal moves -----
         B, V = logits.shape
         target_indices = policy_target.argmax(dim=1)  # (batch_size,)
