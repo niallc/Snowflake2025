@@ -42,88 +42,6 @@ from hex_ai.value_utils import ValuePredictor
 logger = logging.getLogger(__name__)
 
 
-class LargeValuesDebugAccumulator:
-    """Accumulates large values debug information and logs summaries to reduce noise."""
-    
-    def __init__(self, batch_interval: int = 30):
-        self.batch_interval = batch_interval
-        self.accumulated_data = []
-        self.batch_count = 0
-    
-    def add_debug_info(self, epoch: int, mini_epoch: int, batch_idx: int, 
-                      policy_max_abs: float, value_max_abs: float,
-                      policy_range: tuple, value_range: tuple, 
-                      legal_policy_max_abs: float = None, legal_policy_std: float = None,
-                      grad_norm_info: str = ""):
-        """Add debug information for a batch."""
-        self.accumulated_data.append({
-            'epoch': epoch,
-            'mini_epoch': mini_epoch,
-            'batch_idx': batch_idx,
-            'policy_max_abs': policy_max_abs,
-            'value_max_abs': value_max_abs,
-            'policy_range': policy_range,
-            'value_range': value_range,
-            'legal_policy_max_abs': legal_policy_max_abs,
-            'legal_policy_std': legal_policy_std,
-            'grad_norm_info': grad_norm_info
-        })
-        self.batch_count += 1
-        
-        # Log summary every batch_interval batches
-        if self.batch_count >= self.batch_interval:
-            self._log_summary()
-            self._reset()
-    
-    def _log_summary(self):
-        """Log a summary of accumulated debug information."""
-        if not self.accumulated_data:
-            return
-        
-        # Calculate statistics
-        policy_max_abs_values = [d['policy_max_abs'] for d in self.accumulated_data]
-        value_max_abs_values = [d['value_max_abs'] for d in self.accumulated_data]
-        
-        # Calculate legal move statistics
-        legal_policy_max_values = [d['legal_policy_max_abs'] for d in self.accumulated_data if d['legal_policy_max_abs'] is not None]
-        legal_policy_std_values = [d['legal_policy_std'] for d in self.accumulated_data if d['legal_policy_std'] is not None]
-        
-        policy_mean = sum(policy_max_abs_values) / len(policy_max_abs_values)
-        policy_std = (sum((x - policy_mean) ** 2 for x in policy_max_abs_values) / len(policy_max_abs_values)) ** 0.5
-        value_mean = sum(value_max_abs_values) / len(value_max_abs_values)
-        value_std = (sum((x - value_mean) ** 2 for x in value_max_abs_values) / len(value_max_abs_values)) ** 0.5
-        
-        # Get batch range
-        first_batch = self.accumulated_data[0]['batch_idx']
-        last_batch = self.accumulated_data[-1]['batch_idx']
-        epoch = self.accumulated_data[0]['epoch']
-        mini_epoch = self.accumulated_data[0]['mini_epoch']
-        
-        # Log summary focusing on legal moves
-        logger.warning(f"LARGE_VALUES_SUMMARY: Epoch {epoch}, Mini-epoch {mini_epoch}, "
-                      f"Batches {first_batch}-{last_batch} ({len(self.accumulated_data)} batches): "
-                      f"policy_max_abs: mean={policy_mean:.3f}±{policy_std:.3f}, "
-                      f"value_max_abs: mean={value_mean:.3f}±{value_std:.3f}")
-        
-        # Add legal move statistics if available
-        if legal_policy_max_values:
-            legal_max_mean = sum(legal_policy_max_values) / len(legal_policy_max_values)
-            logger.warning(f"LEGAL_MOVES_SUMMARY: legal_policy_max_abs: mean={legal_max_mean:.3f}")
-        
-        if legal_policy_std_values:
-            legal_std_mean = sum(legal_policy_std_values) / len(legal_policy_std_values)
-            logger.warning(f"LEGAL_MOVES_SUMMARY: legal_policy_std: mean={legal_std_mean:.3f}")
-    
-    def _reset(self):
-        """Reset accumulated data."""
-        self.accumulated_data = []
-        self.batch_count = 0
-    
-    def flush(self):
-        """Force log any remaining accumulated data."""
-        if self.accumulated_data:
-            self._log_summary()
-            self._reset()
 
 # Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
 # Note about analysis of training runs that use different loss weights:
@@ -137,39 +55,6 @@ class LargeValuesDebugAccumulator:
 POLICY_LOSS_WEIGHT = 0.15
 VALUE_LOSS_WEIGHT = 0.85
 
-# =============================================================================
-# NUMERICAL STABILITY MONITORING CONSTANTS
-# =============================================================================
-
-# Policy logit thresholds for detecting loss of uncertainty
-MAX_POLICY_LOGIT_ABS = 20.0  # Restored to normal value after fixing global pooling bug
-# Rationale: Logits > 20 create softmax probabilities > 0.9999, indicating
-# complete loss of uncertainty. The network becomes overconfident and can't
-# express doubt, leading to training instability.
-
-# Value output thresholds for detecting tanh saturation
-MAX_VALUE_OUTPUT_ABS = 0.999
-# Rationale: Values > 0.999 indicate tanh saturation, causing severe gradient
-# vanishing (gradients < 0.002). This prevents the network from learning
-# effectively from these positions.
-
-# Loss value thresholds for detecting numerical instability
-MAX_TOTAL_LOSS_ABS = 100.0
-MAX_POLICY_LOSS_ABS = 50.0
-MAX_VALUE_LOSS_ABS = 10.0
-# Rationale: These thresholds detect unusual numerical behavior that may lead to NaN.
-# With proper L2 penalty on logits, losses should stay within normal ranges.
-
-# Gradient norm thresholds for detecting gradient explosion
-MAX_GRADIENT_NORM = 100.0
-# Rationale: Gradient norms > 100 indicate potential gradient explosion,
-# which can cause numerical instability and NaN values.
-
-# Warmup period for numerical stability checks
-NUMERICAL_STABILITY_WARMUP_BATCHES = 20
-# Rationale: Skip extreme value checks for the first N batches to allow the network
-# to stabilize from random initialization. Early batches often have extreme values
-# that are not indicative of actual training problems.
 
 # =============================================================================
 # LOSS FUNCTION HYPERPARAMETERS
@@ -574,17 +459,6 @@ class PolicyValueLoss(nn.Module):
                 f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
             )
         
-        # Check for extreme loss values that indicate numerical instability
-        if (abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS or 
-            abs(policy_loss.item()) > MAX_POLICY_LOSS_ABS or 
-            abs(value_loss.item()) > MAX_VALUE_LOSS_ABS):
-            raise RuntimeError(
-                f"Extreme loss values detected! "
-                f"total_loss={total_loss.item():.6f}, policy_loss={policy_loss.item():.6f}, value_loss={value_loss.item():.6f}, "
-                f"entropy_loss={entropy_loss.item():.6f}, logits_l2_loss={logits_l2_loss.item():.6f}. "
-                f"These values are unusually high and may indicate numerical instability. "
-                f"Check learning rate, gradient clipping, and model architecture."
-            )
         
         loss_dict = {
             'total_loss': total_loss.item(),
@@ -968,8 +842,6 @@ class Trainer:
         logger.info(f"Value head weight decay: {weight_decay * value_weight_decay_factor:.6f} (factor: {value_weight_decay_factor})")
         self.log_interval_batches = log_interval_batches
         
-        # Initialize large values debug accumulator
-        self.large_values_accumulator = LargeValuesDebugAccumulator(batch_interval=200)
     
     def _run_system_analysis(self):
         """Run system analysis and log recommendations."""
@@ -1038,21 +910,6 @@ class Trainer:
                 policy_max_abs = torch.abs(legal_policy_pred).max().item()
                 value_max_abs = torch.abs(value_pred).max().item()
                 
-                # Check if we're in early training phase
-                is_early_training = (epoch == 1 and mini_epoch == 1)
-                
-                if (not is_early_training and 
-                    (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS or abs(total_loss.item()) > MAX_TOTAL_LOSS_ABS)):
-                    policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
-                    value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
-                    
-                    raise RuntimeError(
-                        f"Extreme values detected in validation! "
-                        f"policy_pred max_abs: {policy_max_abs:.6f}, range: {policy_range}, "
-                        f"value_pred max_abs: {value_max_abs:.6f}, range: {value_range}, "
-                        f"total_loss: {total_loss.item():.6f}. "
-                        f"Policy logits > 20 or value outputs > 0.999 indicate numerical instability."
-                    )
                 
                 # Track metrics
                 val_losses.append(loss_dict['total_loss'])
@@ -1317,8 +1174,6 @@ class Trainer:
     def _process_single_batch(self, batch_idx: int, boards: torch.Tensor, policies: torch.Tensor, 
                             values: torch.Tensor, state: Dict, move_stage: torch.Tensor, epoch: int = None, mini_epoch: int = None) -> Dict:
         """Process a single batch and return updated state."""
-        # Check if we're in early training phase (first few batches of first mini-epoch of first epoch)
-        is_early_training = (epoch == 1 and mini_epoch == 1 and batch_idx < NUMERICAL_STABILITY_WARMUP_BATCHES)
         
         # Calculate timing metrics
         timing = TrainingUtilities.calculate_batch_timing(state)
@@ -1348,72 +1203,6 @@ class Trainer:
                 f"Check learning rate, gradient clipping, and model architecture."
             )
         
-        # Check for extreme values that indicate numerical instability - focus on legal moves only
-        legal_mask = self.criterion._get_legal_moves_from_board(boards)
-        legal_policy_pred = policy_pred * legal_mask
-        policy_max_abs = torch.abs(legal_policy_pred).max().item()
-        value_max_abs = torch.abs(value_pred).max().item()
-        
-        # TEMPORARY: Log values during early training for diagnostic purposes
-        if is_early_training:
-            logger.info(f"EARLY_TRAINING_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
-                       f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
-                       f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
-                       f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
-        elif epoch == 1 and mini_epoch == 1 and batch_idx < 30:  # Log first 10 batches after warmup
-            logger.info(f"POST_WARMUP_DEBUG: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}: "
-                       f"policy_max_abs={policy_max_abs:.6f}, value_max_abs={value_max_abs:.6f}, "
-                       f"policy_range=[{policy_pred.min().item():.3f}, {policy_pred.max().item():.3f}], "
-                       f"value_range=[{value_pred.min().item():.3f}, {value_pred.max().item():.3f}]")
-        
-        # Enhanced debugging for extreme values - use accumulator to reduce noise
-        if policy_max_abs > 30.0 or value_max_abs > 0.8:  # Lower threshold for more debugging
-            # Get gradient norm info if available
-            grad_norm_info = ""
-            if hasattr(self, 'gradient_clipping_debug') and self.gradient_clipping_debug:
-                latest_grad = self.gradient_clipping_debug[-1]
-                grad_norm_info = f", pre_clip_grad_norm={latest_grad['pre_clip']:.3f}, post_clip_grad_norm={latest_grad['post_clip']:.3f}"
-            
-            # Calculate legal move statistics
-            legal_policy_std = legal_policy_pred.std().item()
-            
-            # Add to accumulator instead of logging immediately
-            self.large_values_accumulator.add_debug_info(
-                epoch=epoch, mini_epoch=mini_epoch, batch_idx=batch_idx,
-                policy_max_abs=policy_max_abs, value_max_abs=value_max_abs,
-                policy_range=(policy_pred.min().item(), policy_pred.max().item()),
-                value_range=(value_pred.min().item(), value_pred.max().item()),
-                legal_policy_max_abs=policy_max_abs,  # This is now legal_policy_max_abs
-                legal_policy_std=legal_policy_std,
-                grad_norm_info=grad_norm_info
-            )
-        
-        # Check for extreme values that indicate numerical instability (skip during early training)
-        if (not is_early_training and 
-            (policy_max_abs > MAX_POLICY_LOGIT_ABS or value_max_abs > MAX_VALUE_OUTPUT_ABS)):
-            policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
-            value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
-            
-            # Enhanced debug information
-            logger.error(f"EXTREME_VALUES_DETECTED: Epoch {epoch}, Mini-epoch {mini_epoch}, Batch {batch_idx}")
-            logger.error(f"Policy stats: max_abs={policy_max_abs:.6f}, mean={policy_pred.mean().item():.6f}, "
-                        f"std={policy_pred.std().item():.6f}, range={policy_range}")
-            logger.error(f"Value stats: max_abs={value_max_abs:.6f}, mean={value_pred.mean().item():.6f}, "
-                        f"std={value_pred.std().item():.6f}, range={value_range}")
-            
-            # Save debug information to errors directory
-            self._save_debug_info(epoch, mini_epoch, batch_idx, policy_pred, value_pred, 
-                                policy_max_abs, value_max_abs, "extreme_model_outputs")
-            
-            raise RuntimeError(
-                f"Extreme values detected in model outputs! "
-                f"policy_pred max_abs: {policy_max_abs:.6f}, range: {policy_range}, "
-                f"value_pred max_abs: {value_max_abs:.6f}, range: {value_range}. "
-                f"Policy logits > {MAX_POLICY_LOGIT_ABS} indicate loss of uncertainty (softmax saturation). "
-                f"Value outputs > {MAX_VALUE_OUTPUT_ABS} indicate tanh saturation (gradient vanishing). "
-                f"Check learning rate, gradient clipping, and model architecture. "
-                f"Debug info saved to checkpoints/bookkeeping/errors/"
-            )
         
         # Backward pass: compute gradients for this batch
         scaled_loss = self.mixed_precision.scale_loss(total_loss)
@@ -1436,9 +1225,6 @@ class Trainer:
                     has_nan_grad = True
                     print(f"WARNING: NaN gradient detected in parameter {name}")
                 
-                if grad_norm > MAX_GRADIENT_NORM:  # Extreme gradient norm
-                    has_extreme_grad = True
-                    print(f"WARNING: Extreme gradient norm {grad_norm:.6f} in parameter {name}")
         
         if has_nan_grad:
             raise RuntimeError(
@@ -1473,53 +1259,6 @@ class Trainer:
         
         return state
 
-    def _save_debug_info(self, epoch: int, mini_epoch: int, batch_idx: int, 
-                        policy_pred: torch.Tensor, value_pred: torch.Tensor,
-                        policy_max_abs: float, value_max_abs: float, error_type: str):
-        """Save debug information to errors directory for analysis."""
-        try:
-            import os
-            from pathlib import Path
-            import json
-            from datetime import datetime
-            
-            # Create errors directory if it doesn't exist
-            errors_dir = Path("checkpoints/bookkeeping/errors")
-            errors_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Create debug filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_file = errors_dir / f"debug_{error_type}_{timestamp}.json"
-            
-            # Collect debug information
-            debug_info = {
-                "timestamp": timestamp,
-                "error_type": error_type,
-                "epoch": epoch,
-                "mini_epoch": mini_epoch,
-                "batch_idx": batch_idx,
-                "policy_max_abs": policy_max_abs,
-                "value_max_abs": value_max_abs,
-                "policy_range": [policy_pred.min().item(), policy_pred.max().item()],
-                "value_range": [value_pred.min().item(), value_pred.max().item()],
-                "policy_mean": policy_pred.mean().item(),
-                "value_mean": value_pred.mean().item(),
-                "policy_std": policy_pred.std().item(),
-                "value_std": value_pred.std().item(),
-                "thresholds": {
-                    "MAX_POLICY_LOGIT_ABS": MAX_POLICY_LOGIT_ABS,
-                    "MAX_VALUE_OUTPUT_ABS": MAX_VALUE_OUTPUT_ABS
-                }
-            }
-            
-            # Save to JSON file
-            with open(debug_file, 'w') as f:
-                json.dump(debug_info, f, indent=2)
-                
-            logger.info(f"Debug info saved to {debug_file}")
-            
-        except Exception as e:
-            logger.warning(f"Failed to save debug info: {e}")
 
     def _get_hyperparameter_summary(self) -> Dict[str, any]:
         """Get a summary of hyperparameters for logging."""
@@ -1670,7 +1409,5 @@ class Trainer:
         if val_metrics and 'total_loss' in val_metrics:
             self.scheduler.step(val_metrics['total_loss'])
         
-        # Flush any remaining large values debug information
-        self.large_values_accumulator.flush()
         
         return mini_epoch_avg
