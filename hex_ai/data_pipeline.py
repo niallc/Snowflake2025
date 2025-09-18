@@ -585,7 +585,14 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         board_tensor = torch.from_numpy(board_3ch).float()
         policy = self._normalize_policy(policy)
         policy_tensor = torch.FloatTensor(policy)
-        value_tensor = torch.FloatTensor([value])
+        
+        # CRITICAL FIX: Convert value targets from [0,1] to [-1,1] range
+        # Training data has values in [0,1] range (0.0 = Blue win, 1.0 = Red win)
+        # But the model outputs values in [-1,1] range with tanh activation
+        # MCTS expects [-1,1] range values
+        value_signed = 2.0 * value - 1.0  # Convert [0,1] -> [-1,1]
+        value_tensor = torch.FloatTensor([value_signed])
+        
         move_stage_tensor = torch.tensor(move_stage, dtype=torch.float32)
         
         return board_tensor, policy_tensor, value_tensor, move_stage_tensor

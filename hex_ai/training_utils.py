@@ -166,8 +166,8 @@ def create_sample_data(batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor,
     
     # Create random value targets (single value per board)
     values = torch.randn(batch_size, VALUE_OUTPUT_SIZE)
-    # TODO: Check here and elsewhere whether we're correctly using [-1, 1], vs. [0, 1].
-    values = torch.sigmoid(values)  # Convert to [0, 1] range (targets are still in [0,1])
+    # Convert to [-1, 1] range to match the new value head architecture
+    values = torch.tanh(values)  # Convert to [-1, 1] range (matches model output)
     
     return boards, policies, values
 
