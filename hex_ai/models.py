@@ -38,7 +38,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
-import math
 
 from .config import (
     BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
@@ -767,33 +766,3 @@ def is_new_architecture(model: nn.Module) -> bool:
 
 
 
-
-def monitor_policy_head_gradients(model: nn.Module, batch_idx: int = None):
-    """
-    Monitor gradient norms in the policy head for early detection of instability.
-    
-    Args:
-        model: The neural network model
-        batch_idx: Current batch index for logging
-    """
-    if not hasattr(model, 'policy_head') or not hasattr(model.policy_head, 'conv2'):
-        return
-    
-    # Check if gradients exist
-    if model.policy_head.conv2.weight.grad is None:
-        return
-    
-    # Compute gradient norm for policy head final layer
-    grad_norm = torch.norm(model.policy_head.conv2.weight.grad).item()
-    
-    if grad_norm > POLICY_HEAD_CONFIG.GRADIENT_NORM_WARNING_THRESHOLD:
-        print(f"WARNING: Policy head final layer gradient norm {grad_norm:.3f} "
-              f"exceeds threshold {POLICY_HEAD_CONFIG.GRADIENT_NORM_WARNING_THRESHOLD} "
-              f"(batch {batch_idx})")
-    
-    # Also monitor weight magnitude
-    weight_magnitude = torch.abs(model.policy_head.conv2.weight).max().item()
-    if weight_magnitude > POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD:
-        print(f"WARNING: Policy head final layer weight magnitude {weight_magnitude:.3f} "
-              f"exceeds threshold {POLICY_HEAD_CONFIG.WEIGHT_MAGNITUDE_WARNING_THRESHOLD} "
-              f"(batch {batch_idx})") 

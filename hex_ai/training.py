@@ -1032,7 +1032,7 @@ class Trainer:
         # Calculate gradient norm before clipping (for diagnostic purposes)
         pre_clip_gradient_norm = None
         try:
-            pre_clip_gradient_norm = TrainingUtilities.calculate_gradient_norm(self.model)
+            pre_clip_gradient_norm = get_gradient_norm(self.model)
             if pre_clip_gradient_norm > 0:
                 state['gradient_norms'].append(pre_clip_gradient_norm)
         except Exception as e:
@@ -1045,7 +1045,7 @@ class Trainer:
             # Calculate gradient norm after clipping (to verify clipping worked)
             post_clip_gradient_norm = None
             try:
-                post_clip_gradient_norm = TrainingUtilities.calculate_gradient_norm(self.model)
+                post_clip_gradient_norm = get_gradient_norm(self.model)
             except Exception as e:
                 print(f"[train_on_batches] Warning: Failed to calculate post-clip gradient norm: {e}")
             

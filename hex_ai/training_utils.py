@@ -8,8 +8,6 @@ and other common operations used throughout the project.
 import torch
 import numpy as np
 import time
-import math
-from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 import logging
 
@@ -476,17 +474,6 @@ class TrainingUtilities:
             'batch_start_time': batch_start_time
         }
     
-    @staticmethod
-    def calculate_gradient_norm(model: torch.nn.Module) -> float:
-        """Calculate gradient norm for all model parameters."""
-        total_norm = 0.0
-        param_count = 0
-        for p in model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                total_norm += param_norm.item() ** 2
-                param_count += 1
-        return total_norm ** (1. / 2) if param_count > 0 else 0.0
     
     @staticmethod
     def calculate_statistics(values: List[float]) -> Dict[str, float]:
