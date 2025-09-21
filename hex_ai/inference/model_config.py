@@ -18,30 +18,14 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # # Temporary state for retraining:
 
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250913_064942/pipeline_sweep_exp0__99914b_20250913_065347/"
-# CURRENT_BEST_MODEL_FILE = "epoch9_mini9.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250915_082202/pipeline_sweep_exp0__99914b_20250915_082629/"
-# CURRENT_BEST_MODEL_FILE = "epoch10_mini11.pt.gz"
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
-CURRENT_BEST_MODEL_FILE = "epoch6_mini75.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
 
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250914_164612/"
-# CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250912_093351/pipeline_sweep_exp0__99914b_20250912_093858/"
-# CURRENT_BEST_MODEL_FILE = "epoch7_mini4.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250910_080404/pipeline_sweep_exp0__99914b_20250910_080404/"
-# CURRENT_BEST_MODEL_FILE = "epoch6_mini44.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250909_195315/pipeline_sweep_exp0__99914b_20250909_195315/"
-# CURRENT_BEST_MODEL_FILE = "epoch5_mini39.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "sep6th_extraValueLayer/pipeline_20250906_82558/pipeline_sweep_exp0__99914b_20250906_182558"
-# CURRENT_BEST_MODEL_FILE = "epoch4_mini123.pt.gz"
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
 PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
-PREVIOUS_BEST_MODEL_FILE = "epoch5_mini69.pt.gz"
-# PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-# PREVIOUS_BEST_MODEL_FILE = "epoch2_mini201.pt.gz"
+PREVIOUS_BEST_MODEL_FILE = "epoch6_mini90.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)

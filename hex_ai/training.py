@@ -25,6 +25,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
 from hex_ai.models import compute_move_stage, compute_value_loss, MAX_LOG_COSH_INPUT_ABS
+from hex_ai.nan_debug_utils import check_for_nan_and_debug
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -450,16 +451,7 @@ class PolicyValueLoss(nn.Module):
                      self.entropy_weight * entropy_loss +
                      logits_l2_loss)
         
-        # CRITICAL: Check for NaN values and fail fast
-        if torch.isnan(total_loss) or torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy_loss) or torch.isnan(logits_l2_loss):
-            raise RuntimeError(
-                f"NaN detected in loss computation! "
-                f"total_loss={total_loss.item()}, policy_loss={policy_loss.item()}, value_loss={value_loss.item()}, "
-                f"entropy_loss={entropy_loss.item()}, logits_l2_loss={logits_l2_loss.item()}. "
-                f"This indicates numerical instability. Check learning rate, gradient clipping, and model architecture."
-            )
-        
-        
+        # Create loss dictionary first
         loss_dict = {
             'total_loss': total_loss.item(),
             'policy_loss': policy_loss.item(),
@@ -467,6 +459,19 @@ class PolicyValueLoss(nn.Module):
             'entropy_loss': entropy_loss.item(),
             'logits_l2_loss': logits_l2_loss.item()
         }
+        
+        # CRITICAL: Check for NaN values and fail fast with detailed debugging
+        check_for_nan_and_debug(
+            policy_pred=policy_pred,
+            value_pred=value_pred,
+            total_loss=total_loss,
+            loss_dict=loss_dict,
+            boards=board,
+            policies=policy_target,
+            values=value_target,
+            move_stage=torch.zeros(policy_pred.shape[0], 1, device=policy_pred.device),  # Placeholder
+            context="loss_computation"
+        )
         
         return total_loss, loss_dict
 
@@ -892,7 +897,7 @@ class Trainer:
         }
         
         with torch.no_grad():
-            for boards, policies, values, move_stage in self.val_loader:
+            for batch_idx, (boards, policies, values, move_stage) in enumerate(self.val_loader):
                     
                 # Move to device
                 boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
@@ -902,15 +907,21 @@ class Trainer:
                     policy_pred, value_pred = self.model(boards, move_stage)
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
-                # CRITICAL: Check for NaN in validation
-                if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any() or torch.isnan(total_loss):
-                    raise RuntimeError(
-                        f"NaN detected in validation! "
-                        f"policy_pred has NaN: {torch.isnan(policy_pred).any()}, "
-                        f"value_pred has NaN: {torch.isnan(value_pred).any()}, "
-                        f"total_loss is NaN: {torch.isnan(total_loss)}. "
-                        f"This indicates numerical instability in the model."
-                    )
+                # CRITICAL: Check for NaN in validation with detailed debugging
+                check_for_nan_and_debug(
+                    policy_pred=policy_pred,
+                    value_pred=value_pred,
+                    total_loss=total_loss,
+                    loss_dict=loss_dict,
+                    boards=boards,
+                    policies=policies,
+                    values=values,
+                    move_stage=move_stage,
+                    context="validation",
+                    batch_idx=batch_idx,
+                    epoch=epoch,
+                    mini_epoch=mini_epoch
+                )
                 
                 # Check for extreme values in validation - focus on legal moves only
                 legal_mask = self.criterion._get_legal_moves_from_board(boards)
@@ -1195,21 +1206,21 @@ class Trainer:
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
-        # CRITICAL: Check for NaN and extreme values in model outputs
-        if torch.isnan(policy_pred).any() or torch.isnan(value_pred).any():
-            # Get diagnostic information
-            policy_range = f"[{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]"
-            value_range = f"[{value_pred.min().item():.6f}, {value_pred.max().item():.6f}]"
-            move_stage_range = f"[{move_stage.min().item():.6f}, {move_stage.max().item():.6f}]"
-            
-            raise RuntimeError(
-                f"NaN detected in model outputs! "
-                f"policy_pred has NaN: {torch.isnan(policy_pred).any()}, range: {policy_range}, "
-                f"value_pred has NaN: {torch.isnan(value_pred).any()}, range: {value_range}, "
-                f"move_stage range: {move_stage_range}. "
-                f"This indicates numerical instability in the model forward pass. "
-                f"Check learning rate, gradient clipping, and model architecture."
-            )
+        # CRITICAL: Check for NaN in training with detailed debugging
+        check_for_nan_and_debug(
+            policy_pred=policy_pred,
+            value_pred=value_pred,
+            total_loss=total_loss,
+            loss_dict=loss_dict,
+            boards=boards,
+            policies=policies,
+            values=values,
+            move_stage=move_stage,
+            context="training",
+            batch_idx=batch_idx,
+            epoch=epoch,
+            mini_epoch=mini_epoch
+        )
         
         
         # Backward pass: compute gradients for this batch

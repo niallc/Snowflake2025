@@ -73,6 +73,7 @@ scripts/example_strength_evaluation.py
 write_ups/tournament_duplicate_models_design.md
 write_ups/gumbel_noise_temperature_fix.md
 write_ups/policy_logit_explosion_analysis.md
+write_ups/nan_validation_investigation.md
 
 
 # VSCode
