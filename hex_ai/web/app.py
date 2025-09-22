@@ -312,7 +312,7 @@ def _build_orchestration_from_dict(cfg: dict | None) -> None:
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
                    temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
-                   enable_gumbel=True, gumbel_max_sims=500):
+                   enable_gumbel=False, gumbel_max_sims=500):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")

@@ -91,24 +91,25 @@ let state = {
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
   red_model_id: 'model1',  // Use current best model for both players by default
-  blue_temperature: 1.0,
-  red_temperature: 1.0,
+  blue_temperature: 0.35,
+  red_temperature: 0.35,
   // MCTS settings
-  blue_num_simulations: 4800,
-  red_num_simulations: 4800,
+  blue_num_simulations: 4801,
+  red_num_simulations: 4801,
   blue_exploration_constant: 2.9,
   red_exploration_constant: 2.9,
   // Gumbel settings
-  blue_enable_gumbel: true,
-  red_enable_gumbel: true,
-  blue_gumbel_max_sims: 50000,
-  red_gumbel_max_sims: 50000,
+  blue_enable_gumbel: false,
+  red_enable_gumbel: false,
+  blue_gumbel_max_sims: 49999,
+  red_gumbel_max_sims: 49999,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
   verbose_level: 2, 
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
+  redo_history: [], // Track undone moves for redo functionality
   constants: null // Will be populated from backend
 };
 
@@ -227,7 +228,7 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 
 async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
                                num_simulations = 200, exploration_constant = 1.4,
-                               enable_gumbel = true, gumbel_max_sims = 500) {
+                               enable_gumbel = false, gumbel_max_sims = 4996) {
   console.log(`makeComputerMove called with model_id: ${model_id}`);
   
   // Always use MCTS endpoint
@@ -898,12 +899,45 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('undo-btn').addEventListener('click', () => {
     if (state.move_history.length > 0) {
+      // Save current state to redo history before undoing
+      const currentState = {
+        trmph: state.trmph,
+        board: JSON.parse(JSON.stringify(state.board)),
+        player: state.player,
+        legal_moves: [...state.legal_moves],
+        winner: state.winner,
+        last_move: state.last_move ? [...state.last_move] : null,
+        last_move_player: state.last_move_player
+      };
+      state.redo_history.push(currentState);
+      
+      // Restore previous state
       const previousState = state.move_history.pop();
       Object.assign(state, previousState);
       updateUI();
     }
   });
 
+  document.getElementById('redo-btn').addEventListener('click', () => {
+    if (state.redo_history.length > 0) {
+      // Save current state to undo history before redoing
+      const currentState = {
+        trmph: state.trmph,
+        board: JSON.parse(JSON.stringify(state.board)),
+        player: state.player,
+        legal_moves: [...state.legal_moves],
+        winner: state.winner,
+        last_move: state.last_move ? [...state.last_move] : null,
+        last_move_player: state.last_move_player
+      };
+      state.move_history.push(currentState);
+      
+      // Restore next state from redo history
+      const nextState = state.redo_history.pop();
+      Object.assign(state, nextState);
+      updateUI();
+    }
+  });
 
 });
 
@@ -1414,12 +1448,13 @@ function saveStateForUndo() {
   };
   state.move_history.push(stateCopy);
   
-  // Keep only last 10 moves in history
-  if (state.move_history.length > 10) {
+  // Clear redo history when new moves are made
+  state.redo_history = [];
+  
+  // Keep only last 5,000 moves in history
+  if (state.move_history.length > 5000) {
     state.move_history.shift();
   }
-  
-
 } 
 
 // --- Debug utilities ---

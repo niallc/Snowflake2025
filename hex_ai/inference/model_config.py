@@ -18,8 +18,10 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # # Temporary state for retraining:
 
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
-CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
+# CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
+CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 

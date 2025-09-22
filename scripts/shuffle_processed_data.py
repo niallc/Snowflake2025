@@ -135,12 +135,62 @@ class DataShuffler:
         })
         
         try:
+            # Ensure output directory exists before saving progress
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            
             temp_progress_file = self.progress_file.with_suffix('.tmp')
-            with open(temp_progress_file, 'w') as f:
-                json.dump(self.progress, f, indent=2)
-            temp_progress_file.rename(self.progress_file)
+            final_progress_file = self.progress_file
+            
+            # Step 1: Write to temporary file
+            try:
+                with open(temp_progress_file, 'w') as f:
+                    json.dump(self.progress, f, indent=2)
+                
+                # Verify the temp file was actually written and has content
+                if not temp_progress_file.exists():
+                    raise RuntimeError(f"Temp progress file was not created: {temp_progress_file}")
+                
+                temp_size = temp_progress_file.stat().st_size
+                if temp_size == 0:
+                    raise RuntimeError(f"Temp progress file is empty (0 bytes): {temp_progress_file}")
+                
+                logger.debug(f"Successfully wrote {temp_size} bytes to temp progress file: {temp_progress_file}")
+                
+            except Exception as e:
+                raise RuntimeError(f"Failed to write temp progress file {temp_progress_file}: {e}")
+            
+            # Step 2: Rename temp file to final file
+            try:
+                # Check if final file already exists and remove it first
+                if final_progress_file.exists():
+                    final_progress_file.unlink()
+                    logger.debug(f"Removed existing progress file: {final_progress_file}")
+                
+                # Perform the rename
+                temp_progress_file.rename(final_progress_file)
+                logger.debug(f"Successfully renamed {temp_progress_file} -> {final_progress_file}")
+                
+            except Exception as e:
+                # Provide detailed context about the rename failure
+                temp_exists = temp_progress_file.exists()
+                final_exists = final_progress_file.exists()
+                temp_size = temp_progress_file.stat().st_size if temp_exists else "N/A"
+                final_size = final_progress_file.stat().st_size if final_exists else "N/A"
+                
+                error_context = (
+                    f"Failed to rename progress file:\n"
+                    f"  Source: {temp_progress_file} (exists: {temp_exists}, size: {temp_size})\n"
+                    f"  Target: {final_progress_file} (exists: {final_exists}, size: {final_size})\n"
+                    f"  Output dir: {self.output_dir} (exists: {self.output_dir.exists()})\n"
+                    f"  Error: {e}"
+                )
+                
+                raise RuntimeError(f"Critical error: Failed to save progress file.\n{error_context}")
+                
         except Exception as e:
             logger.error(f"Failed to save progress file: {e}")
+            # CRASH instead of continuing
+            raise
     
     def _load_pkl_gz(self, file_path: Path) -> Dict[str, Any]:
         """Load data from a .pkl.gz file."""
