@@ -14,9 +14,9 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from .data_utils import validate_game, extract_training_examples_from_game
-from hex_ai.utils.format_conversion import parse_trmph_game_record, trmph_to_moves
+from hex_ai.utils.format_conversion import trmph_to_moves
 from hex_ai.value_utils import trmph_winner_to_training_value
 from hex_ai.enums import Player
 
@@ -66,11 +66,21 @@ def parse_trmph_line_flexible(line: str) -> Tuple[str, Optional[str]]:
     
     # Handle old format: "http://www.trmph.com/hex/board#13,moves b"
     elif line.startswith('http://www.trmph.com/hex/board#'):
-        try:
-            trmph_url, winner_indicator = parse_trmph_game_record(line)
-            return trmph_url, winner_indicator
-        except ValueError as e:
-            raise ValueError(f"Invalid old format TRMPH line: {e}")
+        parts = line.split()
+        if len(parts) != 2:
+            raise ValueError(f"Invalid old format TRMPH line: expected 2 parts, got {len(parts)}")
+        trmph_url, winner_indicator = parts
+        
+        # Check for legacy formats and raise exceptions
+        if winner_indicator == "1":
+            raise ValueError(f"Legacy TRMPH_BLUE_WIN value ('1') detected in line: {repr(line)}. Use new format ('b') instead.")
+        elif winner_indicator == "2":
+            raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected in line: {repr(line)}. Use new format ('r') instead.")
+        
+        if winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
+            raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
+        
+        return trmph_url, winner_indicator
     
     else:
         raise ValueError(f"Unrecognized TRMPH format: {line}")

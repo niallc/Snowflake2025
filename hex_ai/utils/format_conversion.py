@@ -261,26 +261,3 @@ def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
     board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     
     return board_nxn
-
-def parse_trmph_game_record(line: str) -> tuple[str, str]:
-    """
-    Parse a single line from a TRMPH file, returning (trmph_url, winner_indicator).
-    Raises ValueError if the format is invalid or if legacy formats are detected.
-    """
-    line = line.strip()
-    if not line:
-        raise ValueError("Empty line")
-    parts = line.split()
-    if len(parts) != 2:
-        raise ValueError(f"Invalid TRMPH game record format: {repr(line)}")
-    trmph_url, winner_indicator = parts
-    
-    # Check for legacy formats and raise exceptions
-    if winner_indicator == "1":
-        raise ValueError(f"Legacy TRMPH_BLUE_WIN value ('1') detected in line: {repr(line)}. Use new format ('b') instead.")
-    elif winner_indicator == "2":
-        raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected in line: {repr(line)}. Use new format ('r') instead.")
-    
-    if winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
-        raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
-    return trmph_url, winner_indicator 

@@ -15,7 +15,7 @@ from datetime import datetime
 from hex_ai.batch_processor import BatchProcessor
 from hex_ai.file_utils import atomic_write_pickle_gz, sanitize_filename
 from hex_ai.data_utils import load_trmph_file
-from hex_ai.utils.format_conversion import parse_trmph_game_record
+from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.data_utils import extract_training_examples_with_selector_from_game
 from hex_ai.value_utils import Player, Winner
 
@@ -108,7 +108,11 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         for i, game_line in enumerate(trmph_lines):
             try:
                 # Parse the game record
-                trmph_url, winner = parse_trmph_game_record(game_line)
+                trmph_url, winner = parse_trmph_line_flexible(game_line)
+                
+                # Skip lines without winner indicator
+                if winner is None:
+                    continue
                 
                 # Extract training examples from this game
                 game_id = (file_idx, i+1)  # file_idx and line_idx (1-based)

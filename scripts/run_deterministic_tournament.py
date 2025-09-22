@@ -77,8 +77,9 @@ from hex_ai.inference.strategy_config import StrategyConfig, parse_strategy_conf
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.format_conversion import (
-    rowcol_to_trmph, trmph_move_to_rowcol, strip_trmph_preamble, split_trmph_moves
+    rowcol_to_trmph, trmph_to_moves
 )
+from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.random_utils import set_deterministic_seeds
@@ -92,7 +93,7 @@ DEFAULT_NUM_OPENINGS = 100
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_SEED = None  # Will be set to int(time.time()) if None
 DEFAULT_VERBOSE = 1
-TRMPH_SOURCE_DIR = "data/twoNetGames"
+TRMPH_SOURCE_DIR = "data/sf25/sep21"
 TRMPH_FILE_PATTERN = "*.trmph"
 OUTPUT_DIR_PREFIX = "data/tournament_play/deterministic_tournament_"
 
@@ -213,12 +214,6 @@ def get_move_config_for_strategy(strategy_config: StrategyConfig, global_tempera
     return MoveSelectionConfig(**config_dict)
 
 
-def validate_coordinates(row: int, col: int, board_size: int = BOARD_SIZE) -> None:
-    """Validate that coordinates are within board bounds."""
-    if not (0 <= row < board_size and 0 <= col < board_size):
-        raise ValueError(f"Invalid coordinates ({row}, {col}) for board size {board_size}")
-
-
 def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH, 
                                    max_openings: int = 500) -> List[OpeningPosition]:
     """
@@ -243,41 +238,20 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAU
                 break
             
             line = line.strip()
-            if not line or not line.startswith('http://www.trmph.com/hex/board#13,'):
+            if not line or not line.startswith(TRMPH_PREFIX):
                 continue
             
-            # Parse TRMPH line
+            # Parse TRMPH line using centralized utility
             try:
-                # Extract moves and winner
-                parts = line.split('#13,')
-                if len(parts) != 2:
+                trmph_string, winner_indicator = parse_trmph_line_flexible(line)
+                
+                # Skip lines without winner indicator (we need completed games for openings)
+                if winner_indicator is None:
                     continue
                 
-                moves_winner = parts[1]
-                # Find the winner indicator (b or r) at the end
-                if moves_winner.endswith(f' {TRMPH_BLUE_WIN}'):
-                    moves_str = moves_winner[:-2]
-                    winner = TRMPH_BLUE_WIN
-                elif moves_winner.endswith(f' {TRMPH_RED_WIN}'):
-                    moves_str = moves_winner[:-2]
-                    winner = TRMPH_RED_WIN
-                else:
-                    continue
-                
-                # Convert TRMPH moves to row,col coordinates with strict validation
-                moves = []
+                # Convert TRMPH moves to row,col coordinates using centralized utility
                 try:
-                    # Use the proper TRMPH parsing functions
-                    trmph_moves = split_trmph_moves(moves_str)
-                    for trmph_move in trmph_moves:
-                        try:
-                            row, col = trmph_move_to_rowcol(trmph_move, BOARD_SIZE)
-                            validate_coordinates(row, col, BOARD_SIZE)
-                            moves.append((row, col))
-                        except ValueError as e:
-                            # Log and skip invalid moves, but continue processing
-                            logger.warning(f"Invalid move '{trmph_move}' in line {line_num}: {e}")
-                            continue
+                    moves = trmph_to_moves(trmph_string, BOARD_SIZE)
                 except ValueError as e:
                     logger.warning(f"Could not parse moves in line {line_num}: {e}")
                     continue
@@ -342,14 +316,8 @@ def load_openings_from_file(file_path: str, opening_length: int = DEFAULT_OPENIN
                 if not moves_str.startswith(TRMPH_PREFIX):
                     raise ValueError(f"Line {line_num}: Expected TRMPH format starting with '{TRMPH_PREFIX}'")
                 
-                # Parse moves
-                trmph_moves = split_trmph_moves(moves_str[len(TRMPH_PREFIX):])  # Remove prefix
-                moves = []
-                
-                for trmph_move in trmph_moves:
-                    row, col = trmph_move_to_rowcol(trmph_move, BOARD_SIZE)
-                    validate_coordinates(row, col, BOARD_SIZE)
-                    moves.append((row, col))
+                # Parse moves using centralized utility
+                moves = trmph_to_moves(moves_str, BOARD_SIZE)
                 
                 # Truncate to opening length if necessary
                 if len(moves) >= opening_length:
