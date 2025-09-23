@@ -937,7 +937,107 @@ class Trainer:
         
         # Compute validation averages
         val_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in val_metrics.items()}
+        
+        # CRITICAL: Check for NaN in validation averages and capture debug info
+        val_avg_has_nan = any(np.isnan(v) for v in val_avg.values())
+        if val_avg_has_nan:
+            self._handle_validation_nan_debug(val_avg, val_metrics, epoch, mini_epoch)
+        
         return val_avg
+    
+    def _handle_validation_nan_debug(self, val_avg: Dict[str, float], val_metrics: Dict[str, List[float]], 
+                                   epoch: Optional[int], mini_epoch: Optional[int]) -> None:
+        """
+        Handle NaN values in validation averages by capturing debug information and exiting.
+        
+        This method is called when validation averages contain NaN values, which indicates
+        numerical instability. It captures comprehensive debug information and exits
+        the training process to prevent further corruption.
+        """
+        import time
+        import pickle
+        import gzip
+        from pathlib import Path
+        
+        # Create comprehensive debug information
+        debug_info = {
+            'timestamp': time.time(),
+            'context': 'validation_averages',
+            'epoch': epoch,
+            'mini_epoch': mini_epoch,
+            
+            # Validation averages that contain NaN
+            'val_avg': val_avg,
+            'val_avg_has_nan': {k: np.isnan(v) for k, v in val_avg.items()},
+            
+            # Individual validation metrics (lists of values from each batch)
+            'val_metrics': val_metrics,
+            'val_metrics_stats': {
+                key: {
+                    'count': len(values),
+                    'has_nan': any(np.isnan(v) for v in values),
+                    'nan_count': sum(1 for v in values if np.isnan(v)),
+                    'min': float(np.nanmin(values)) if values else float('nan'),
+                    'max': float(np.nanmax(values)) if values else float('nan'),
+                    'mean': float(np.nanmean(values)) if values else float('nan'),
+                    'std': float(np.nanstd(values)) if values else float('nan')
+                }
+                for key, values in val_metrics.items()
+            },
+            
+            # Model state information
+            'model_info': {
+                'device': str(next(self.model.parameters()).device),
+                'dtype': str(next(self.model.parameters()).dtype),
+                'num_parameters': sum(p.numel() for p in self.model.parameters()),
+                'num_trainable_parameters': sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            },
+            
+            # Optimizer state
+            'optimizer_info': {
+                'type': type(self.optimizer).__name__,
+                'learning_rate': self.optimizer.param_groups[0]['lr'] if self.optimizer.param_groups else None,
+                'momentum': self.optimizer.param_groups[0].get('momentum', None) if self.optimizer.param_groups else None,
+                'weight_decay': self.optimizer.param_groups[0].get('weight_decay', None) if self.optimizer.param_groups else None
+            },
+            
+            # Training configuration
+            'training_config': {
+                'mixed_precision': self.mixed_precision.use_mixed_precision if hasattr(self, 'mixed_precision') else None,
+                'gradient_clipping': getattr(self, 'gradient_clipping', None),
+                'best_val_loss': getattr(self, 'best_val_loss', None)
+            }
+        }
+        
+        # Create temp directory if it doesn't exist
+        temp_dir = Path("temp")
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Create filename with timestamp
+        timestamp = int(time.time())
+        debug_file = temp_dir / f"validation_nan_debug_epoch{epoch}_mini{mini_epoch}_{timestamp}.pkl.gz"
+        
+        # Dump debug data
+        with gzip.open(debug_file, 'wb') as f:
+            pickle.dump(debug_info, f)
+        
+        # Create detailed error message
+        nan_components = [k for k, v in val_avg.items() if np.isnan(v)]
+        error_msg = (
+            f"CRITICAL: NaN detected in validation averages! "
+            f"NaN components: {nan_components} | "
+            f"Epoch: {epoch}, Mini-epoch: {mini_epoch} | "
+            f"Debug data saved to: {debug_file} | "
+            f"This indicates numerical instability in validation. "
+            f"Training will exit to prevent further corruption. "
+            f"Check learning rate, gradient clipping, and model architecture."
+        )
+        
+        # Log the error before raising
+        self.logger.error(error_msg)
+        
+        # Raise error to exit training
+        raise RuntimeError(error_msg)
         
     def save_checkpoint(self, path: Path, train_metrics: Dict, val_metrics: Dict, compress: bool = True):
         """
