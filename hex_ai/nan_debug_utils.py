@@ -12,7 +12,7 @@ import gzip
 import time
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 def check_for_nan_and_debug(
     policy_pred: torch.Tensor,

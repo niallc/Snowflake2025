@@ -19,10 +19,11 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.run_deterministic_tournament import (
-    OpeningPosition, StrategyConfig, parse_strategy_configs,
+    OpeningPosition, StrategyConfig,
     extract_openings_from_trmph_file, generate_diverse_openings,
     play_deterministic_game
 )
+from hex_ai.inference.strategy_config import create_unified_config_from_args, create_strategy_configs_from_unified_config
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
 
@@ -75,7 +76,17 @@ def test_strategy_parsing():
     
     # Test different strategy types
     strategies = ["policy", "mcts_100", "fixed_tree_13_8"]
-    configs = parse_strategy_configs(strategies, None, None)
+    
+    # Create unified config
+    unified_config = create_unified_config_from_args(
+        strategies=strategies,
+        models=["current_best", "current_best", "current_best"],
+        mcts_sims=[100, 100, 100],  # For all strategies
+        temperatures=[0.0, 0.0, 0.0]
+    )
+    
+    # Create strategy configs
+    configs = create_strategy_configs_from_unified_config(unified_config)
     
     assert len(configs) == 3, "Wrong number of configs"
     assert configs[0].strategy_type == "policy", "Wrong policy config"
