@@ -32,10 +32,6 @@ class StrategyConfig:
     def __str__(self) -> str:
         return f"{self.name}({self.strategy_type})"
 
-# TODO: Clean up these temporary comments
-# OLD FUNCTIONS REMOVED: parse_strategy_configs, validate_strategy_configs, and get_strategy_summary
-# These functions have been replaced by the new unified parameter system.
-# Use create_unified_config_from_args() and create_strategy_configs_from_unified_config() instead.
 
 
 def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamentConfig) -> List[StrategyConfig]:
@@ -87,14 +83,6 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
             if "gumbel_candidate_log_offset" in participant_config:
                 config_dict["gumbel_candidate_log_offset"] = participant_config["gumbel_candidate_log_offset"]
         
-        elif strategy_type == "fixed_tree":
-            # Extract search widths from strategy name (e.g., "fixed_tree_13_8" -> [13, 8])
-            try:
-                parts = strategy_name.split("_")[2:]
-                widths = [int(w) for w in parts]
-                config_dict["search_widths"] = widths
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")
         
         # Create StrategyConfig
         strategy_config = StrategyConfig(
@@ -119,7 +107,7 @@ def _determine_strategy_type(strategy_name: str) -> str:
         strategy_name: Name of the strategy
     
     Returns:
-        Strategy type ("policy", "mcts", or "fixed_tree")
+        Strategy type ("policy" or "mcts")
     
     Raises:
         ValueError: If strategy name is invalid
@@ -128,8 +116,6 @@ def _determine_strategy_type(strategy_name: str) -> str:
         return "policy"
     elif strategy_name == "mcts":
         return "mcts"
-    elif strategy_name.startswith("fixed_tree_"):
-        return "fixed_tree"
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
@@ -281,7 +267,7 @@ def _to_list_if_needed(value: Optional[Union[Any, List[Any]]], num_strategies: i
     
     if isinstance(value, list):
         if len(value) == 1:
-            # Single value in list - apply to all strategies (backward compatibility)
+            # Single value in list - apply to all strategies
             return [value[0]] * num_strategies
         elif len(value) != num_strategies:
             raise ValueError(f"List length ({len(value)}) must match number of strategies ({num_strategies})")

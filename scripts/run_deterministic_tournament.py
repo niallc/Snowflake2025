@@ -81,6 +81,15 @@ from hex_ai.utils.format_conversion import (
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.deterministic_tournament_utils import (
+    setup_tournament_output,
+    save_opening_positions,
+    setup_strategy_pair_files,
+    create_play_config_for_pair,
+    GameDuplicateTracker,
+    play_strategy_pair_games,
+    report_strategy_pair_results
+)
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.random_utils import set_deterministic_seeds
 
@@ -521,48 +530,6 @@ def play_deterministic_game(
     # Play the game from the opening position
     move_sequence = list(opening.moves)  # Start with opening moves
     
-    # The filename that a logger writes to (if using a FileHandler) can be accessed via:
-    # logger.handlers[0].baseFilename  # if the first handler is a FileHandler
-    #
-    # If logger.handlers has length 0, then the logger has no handlers attached.
-    # In this case, logging calls will propagate up to the parent logger (unless propagate=False).
-    # If no ancestor logger has a handler, the logging output is lost (not shown anywhere).
-    # By default, the root logger has a StreamHandler to stderr, so output is usually visible unless all handlers are removed.
-    #
-    # To inspect a logger for an upstream (parent) logger and its handlers in the interactive debugger, you can use:
-    #   logger.parent         # This gives you the parent logger object (or None for the root logger)
-    #   logger.parent.handlers
-    #   logger.parent.name
-    #   logger.parent.parent  # And so on, up the chain
-    #
-    # To walk up the logger hierarchy and print all handlers, you can use:
-    #   l = logger
-    #   while l:
-    #       print(f"Logger: {l.name}, Handlers: {l.handlers}")
-    #       l = l.parent
-    #
-    # If you see <StreamHandler <stderr> (NOTSET)> in logger.parent.handlers[0], this means that
-    # the parent logger (often the root logger) is configured to output log messages to standard error (stderr).
-    # So, unless you have added a FileHandler or other handler, your log output will go to the terminal's stderr.
-    #
-    # If you are NOT seeing log output in your terminal, possible reasons include:
-    #   - The logger's level is set higher than the messages you are emitting (e.g., logger.level is WARNING, but you are logging INFO).
-    #   - The handler's level is set higher than your messages.
-    #   - The terminal in Cursor may not be showing stderr output, or stderr is not connected to the visible terminal.
-    #   - Some environments (e.g., certain IDEs, Jupyter, or subprocesses) may redirect or suppress stderr.
-    #   - There may be code elsewhere that removes or reconfigures handlers.
-    #
-    # To debug, try adding this at the top of your script (after imports) to force logging to stdout:
-    # import logging, sys
-    # root = logging.getLogger()
-    # root.setLevel(logging.DEBUG)
-    # for h in root.handlers:
-    #     root.removeHandler(h)
-    # handler = logging.StreamHandler(sys.stdout)
-    # handler.setLevel(logging.DEBUG)
-    # root.addHandler(handler)
-    #
-    # This will ensure all log output goes to stdout, which is almost always visible in terminal windows.
     logger.debug(f"Starting game: {strategy_a.name} vs {strategy_b.name}")
     logger.debug(f"Opening moves: {opening.moves}")
     logger.debug(f"Initial state current player: {state.current_player_enum}")
@@ -700,208 +667,44 @@ def run_deterministic_tournament(
     preload_tournament_models(model_paths)
     model_cache = get_model_cache()
     
-    # Create output directory and files
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-    output_dir = f"{OUTPUT_DIR_PREFIX}{timestamp}"
-    os.makedirs(output_dir, exist_ok=True)
+    # Set up tournament output using utilities
+    output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
+    save_opening_positions(openings, openings_file)
     
-    # Save opening positions
-    openings_file = os.path.join(output_dir, "openings.txt")
-    with open(openings_file, 'w') as f:
-        for i, opening in enumerate(openings):
-            f.write(f"Opening {i+1}: {opening.get_trmph_string()}\n")
-    
-    # Track games for duplicate detection with more detailed tracking
-    seen_games = set()  # All games across all strategy pairs and openings
-    current_pair_games = {}  # Games from current strategy pair: {opening_idx: [game1_key, game2_key]}
+    # Initialize game duplicate tracker
+    duplicate_tracker = GameDuplicateTracker()
     
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
         logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
         
-        # Create output files for this strategy pair
-        pair_name = f"{strategy_a.name}_vs_{strategy_b.name}"
-        trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
-        csv_file = os.path.join(output_dir, f"{pair_name}.csv")
+        # Set up output files for this strategy pair
+        trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
         
-        # Write header to .trmph file with collision avoidance
-        from hex_ai.inference.tournament import TournamentPlayConfig
+        # Create play configuration
+        play_config = create_play_config_for_pair(strategy_a, strategy_b, temperature, seed)
         
-        # Create per-participant temperature mapping
-        participant_temperatures = {}
-        if strategy_a.temperature is not None:
-            participant_temperatures[strategy_a.name] = strategy_a.temperature
-        if strategy_b.temperature is not None:
-            participant_temperatures[strategy_b.name] = strategy_b.temperature
-        
-        # Use the first strategy's temperature as the global temperature for the play config
-        # (this is mainly for backward compatibility, the real temperatures are in participant_temperatures)
-        global_temp = strategy_a.temperature if strategy_a.temperature is not None else temperature
-        
-        play_config = TournamentPlayConfig(
-            temperature=global_temp,
-            random_seed=seed,
-            pie_rule=False,  # Deterministic tournaments don't use pie rule
-            strategy="deterministic",
-            participant_temperatures=participant_temperatures
-        )
-        # Include all model paths used in this tournament
+        # Write TRMPH header
         pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
         pair_strategy_configs = [strategy_a, strategy_b]
-        actual_trmph_file = write_tournament_trmph_header(trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, strategy_configs=pair_strategy_configs)
+        actual_trmph_file = write_tournament_trmph_header(
+            trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, 
+            strategy_configs=pair_strategy_configs
+        )
         
         # Find available CSV filename
         actual_csv_file = find_available_csv_filename(csv_file)
         
-        # Reset tracking for this strategy pair
-        current_pair_games = {}
+        # Play all games for this strategy pair using utility function
+        game_results = play_strategy_pair_games(
+            model_cache, strategy_a, strategy_b, openings, temperature, verbose,
+            duplicate_tracker, actual_trmph_file, actual_csv_file, play_deterministic_game, result
+        )
         
-        # Play games from each opening position
-        game_results = []
-        for opening_idx, opening in enumerate(openings):
-            if verbose >= 1:
-                if opening_idx == 0:
-                    print(f"  Opening {opening_idx + 1}/{len(openings)}", end="", flush=True)
-                else:
-                    print(",", opening_idx + 1, end="", flush=True)
-            
-            # Game 1: Strategy A (Blue) vs Strategy B (Red)
-            logger.debug(f"Playing game 1: {strategy_a.name} (Blue) vs {strategy_b.name} (Red) from opening {opening_idx + 1}")
-            result_1 = play_deterministic_game(
-                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
-            )
-            game_results.append(result_1)
-            
-            # Game 2: Strategy B (Blue) vs Strategy A (Red)
-            logger.debug(f"Playing game 2: {strategy_b.name} (Blue) vs {strategy_a.name} (Red) from opening {opening_idx + 1}")
-            result_2 = play_deterministic_game(
-                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
-            )
-            game_results.append(result_2)
-            
-            # Store games for this opening to check for immediate duplicates (Case 1)
-            game_1_key = f"{result_1['trmph_str']}_{result_1['winner_char']}"
-            game_2_key = f"{result_2['trmph_str']}_{result_2['winner_char']}"
-            current_pair_games[opening_idx] = [game_1_key, game_2_key]
-            
-            # Case 1: Check if both strategies produced the same game from this opening
-            if game_1_key == game_2_key:
-                opening_trmph = opening.get_trmph_string()
-                print(f"Warning: {strategy_a.name} and {strategy_b.name} both produced same game {opening_trmph}")
-            
-            # Case 2: Check if either game duplicates a game from a different opening (SHOULD BE IMPOSSIBLE)
-            for other_opening_idx, other_games in current_pair_games.items():
-                if other_opening_idx != opening_idx:  # Different opening
-                    duplicate_game = None
-                    if game_1_key in other_games:
-                        duplicate_game = game_1_key
-                    elif game_2_key in other_games:
-                        duplicate_game = game_2_key
-                    
-                    if duplicate_game:
-                        print(f"ERROR: Game from opening {opening_idx + 1} duplicates game from opening {other_opening_idx + 1}")
-                        print(f"  This should be impossible! Opening positions should guarantee unique games.")
-                        print(f"  Opening {opening_idx + 1}: {opening.moves}")
-                        print(f"  Opening {other_opening_idx + 1}: {openings[other_opening_idx].moves}")
-                        sys.exit(1)
-            
-            # Log TRMPH results
-            append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
-            append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
-            
-            # Log CSV results
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-            rows = [
-                {
-                    "timestamp": timestamp,
-                    "strategy_a": strategy_a.name,
-                    "strategy_b": strategy_b.name,
-                    "model_a": os.path.basename(strategy_a.model_path),
-                    "model_b": os.path.basename(strategy_b.model_path),
-                    "opening_idx": opening_idx,
-                    "opening_source": opening.source_game,
-                    "game": "A_first",
-                    "trmph": result_1['trmph_str'],
-                    "winner": result_1['winner_char'],
-                    "winner_strategy": result_1['winner_strategy'],
-                    "num_moves": result_1['num_moves'],
-                    "opening_length": opening.opening_length,
-                    "temperature": temperature,
-                    "strategy_a_time": result_1['strategy_timings'].get(strategy_a.name, 0.0),
-                    "strategy_b_time": result_1['strategy_timings'].get(strategy_b.name, 0.0),
-                    "total_game_time": sum(result_1['strategy_timings'].values())
-                },
-                {
-                    "timestamp": timestamp,
-                    "strategy_a": strategy_b.name,
-                    "strategy_b": strategy_a.name,
-                    "model_a": os.path.basename(strategy_b.model_path),
-                    "model_b": os.path.basename(strategy_a.model_path),
-                    "opening_idx": opening_idx,
-                    "opening_source": opening.source_game,
-                    "game": "B_first",
-                    "trmph": result_2['trmph_str'],
-                    "winner": result_2['winner_char'],
-                    "winner_strategy": result_2['winner_strategy'],
-                    "num_moves": result_2['num_moves'],
-                    "opening_length": opening.opening_length,
-                    "temperature": temperature,
-                    "strategy_a_time": result_2['strategy_timings'].get(strategy_b.name, 0.0),
-                    "strategy_b_time": result_2['strategy_timings'].get(strategy_a.name, 0.0),
-                    "total_game_time": sum(result_2['strategy_timings'].values())
-                }
-            ]
-            
-            write_csv_results(rows, actual_csv_file)
-            
-            # Record results for tournament tracking with timing data
-            # Game 1: Strategy A vs Strategy B
-            winner_1 = result_1['winner_strategy']  # Now uses unique names
-            loser_1 = strategy_b.name if winner_1 == strategy_a.name else strategy_a.name
-            result.record_game_with_timing(winner_1, loser_1, result_1)
-            
-            # Game 2: Strategy B vs Strategy A
-            winner_2 = result_2['winner_strategy']  # Now uses unique names
-            loser_2 = strategy_a.name if winner_2 == strategy_b.name else strategy_b.name
-            result.record_game_with_timing(winner_2, loser_2, result_2)
-            
-            if verbose >= 1:
-                print(f":{result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
-        
-        # Case 3: Check for duplicate games across different strategy pairs
-        for result_data in game_results:
-            game_key = f"{result_data['trmph_str']}_{result_data['winner_char']}"
-            
-            if game_key in seen_games:
-                opening_trmph = result_data['opening'].get_trmph_string()
-                print(f"Warning: Duplicate game across strategy pairs from {opening_trmph}")
-            else:
-                seen_games.add(game_key)
-        
-        if verbose >= 1:
-            print()  # New line after games
-        
-        # Print statistics for the current strategy pair using shared utility
-        # Extract head-to-head results for this specific pair
-        strategy_a_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_a.original_name)
-        strategy_b_wins = sum(1 for result in game_results if result['winner_strategy'] == strategy_b.original_name)
-        total_games = len(game_results)
-        
-        if total_games > 0:
-            # Print win rate summary for this match (like regular tournaments)
-            strategy_a_win_rate = strategy_a_wins / total_games
-            strategy_b_win_rate = strategy_b_wins / total_games
-            
-            print(f"  {strategy_a.original_name}: {strategy_a_wins}/{total_games} wins ({strategy_a_win_rate*100:.1f}%)")
-            print(f"  {strategy_b.original_name}: {strategy_b_wins}/{total_games} wins ({strategy_b_win_rate*100:.1f}%)")
-            
-            # Print timing summary for this match
-            total_time_a = sum(game['strategy_timings'].get(strategy_a.name, 0.0) for game in game_results)
-            total_time_b = sum(game['strategy_timings'].get(strategy_b.name, 0.0) for game in game_results)
-            
-            print(f"  Timing: {strategy_a.original_name}={total_time_a:.3f}s, {strategy_b.original_name}={total_time_b:.3f}s")
+        # Report results for this pair
+        report_strategy_pair_results(verbose, strategy_a, strategy_b, result)
     
-    logger.info(f"Tournament complete. Total unique games played: {len(seen_games)}")
+    logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
     return result
 
 
@@ -943,7 +746,7 @@ Examples:
     parser.add_argument('--model-dirs', type=str,
                        help='Comma-separated list of model directories (used with --model-files)')
     parser.add_argument('--strategies', type=str, required=True,
-                       help='Comma-separated list of strategies to compare (e.g., "mcts,policy,fixed_tree_13_8")')
+                       help='Comma-separated list of strategies to compare (e.g., "mcts,policy")')
     parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
                        help=f'Number of opening positions to generate (default: {DEFAULT_NUM_OPENINGS})')
     parser.add_argument('--opening-length', type=int, default=DEFAULT_OPENING_LENGTH,
@@ -956,8 +759,6 @@ Examples:
                        help=f'Directory containing TRMPH files for opening generation (default: {TRMPH_SOURCE_DIR})')
     parser.add_argument('--mcts-sims', type=str,
                        help='Comma-separated MCTS simulation counts (overrides strategy names)')
-    parser.add_argument('--search-widths', type=str,
-                       help='Semicolon-separated search width sets (e.g., "13,8;20,10")')
     parser.add_argument('--batch-sizes', type=str,
                        help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
     parser.add_argument('--c-puct', type=str,
@@ -1002,7 +803,7 @@ def main():
         print("ERROR: Must specify either --models (registry) or both --model-files and --model-dirs (direct)")
         sys.exit(1)
     
-    # Parse strategy names (e.g., "mcts", "policy", "fixed_tree_13_8")
+    # Parse strategy names (e.g., "mcts", "policy")
     strategy_names = [name.strip() for name in args.strategies.split(',')]
     
     # Parse model specifications
@@ -1054,10 +855,6 @@ def main():
     mcts_sims = None
     if args.mcts_sims:
         mcts_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
-    
-    search_widths = None
-    if args.search_widths:
-        search_widths = [s.strip() for s in args.search_widths.split(';')]
     
     batch_sizes = None
     if args.batch_sizes:
@@ -1130,27 +927,9 @@ def main():
             strategy_signatures.append(signature)
         
         if len(strategy_signatures) != len(set(strategy_signatures)):
-            # Find duplicates by strategy name only (for user-friendly error message)
-            final_original_names = [config.original_name for config in strategy_configs]
-            if len(final_original_names) != len(set(final_original_names)):
-                from collections import Counter
-                name_counts = Counter(final_original_names)
-                duplicates = [name for name, count in name_counts.items() if count > 1]
-                
-                print("ERROR: Tournament requires unique strategy configurations.")
-                print(f"Duplicate strategy names found: {duplicates}")
-                print("Each strategy must differ in at least one of:")
-                print("  - Strategy type (policy, mcts, fixed_tree)")
-                print("  - Model checkpoint")
-                print("  - MCTS simulation count")
-                print("  - Search parameters (batch size, c_puct, etc.)")
-                print("  - Gumbel settings")
-                print()
-                print("Examples of valid configurations:")
-                print("  --strategies=policy,mcts_100  (different types)")
-                print("  --strategies=mcts_100,mcts_200  (different sim counts)")
-                print("  --strategies=mcts_100,mcts_100 --enable-gumbel=false,true  (different Gumbel settings)")
-                sys.exit(1)
+            print("ERROR: Duplicate strategy configurations detected.")
+            print("Each strategy must be unique in both name and model path.")
+            sys.exit(1)
                 
     except ValueError as e:
         print(f"ERROR: {e}")
