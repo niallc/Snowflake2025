@@ -221,6 +221,66 @@ def create_nan_error_message(
     
     return " | ".join(error_parts)
 
+def calculate_validation_metrics_statistics(val_metrics: Dict[str, List[float]]) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculate comprehensive statistics for validation metrics.
+    
+    Args:
+        val_metrics: Dictionary mapping metric names to lists of values from each batch
+        
+    Returns:
+        Dictionary with statistics for each metric
+    """
+    return {
+        key: {
+            'count': len(values),
+            'has_nan': any(np.isnan(v) for v in values),
+            'nan_count': sum(1 for v in values if np.isnan(v)),
+            'min': float(np.nanmin(values)) if values else float('nan'),
+            'max': float(np.nanmax(values)) if values else float('nan'),
+            'mean': float(np.nanmean(values)) if values else float('nan'),
+            'std': float(np.nanstd(values)) if values else float('nan')
+        }
+        for key, values in val_metrics.items()
+    }
+
+def create_batch_analysis(val_metrics: Dict[str, List[float]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Create batch-by-batch analysis for validation metrics.
+    
+    Args:
+        val_metrics: Dictionary mapping metric names to lists of values from each batch
+        
+    Returns:
+        Dictionary with batch-by-batch analysis for each metric
+    """
+    return {
+        key: [
+            {
+                'batch_idx': i,
+                'value': float(v),
+                'is_nan': bool(np.isnan(v))
+            }
+            for i, v in enumerate(values)
+        ]
+        for key, values in val_metrics.items()
+    }
+
+def find_nan_batch_indices(val_metrics: Dict[str, List[float]]) -> List[int]:
+    """
+    Find batch indices that contain NaN in any metric.
+    
+    Args:
+        val_metrics: Dictionary mapping metric names to lists of values from each batch
+        
+    Returns:
+        List of batch indices that have NaN in any metric
+    """
+    return list(set([
+        i for key, values in val_metrics.items()
+        for i, v in enumerate(values) if np.isnan(v)
+    ]))
+
 def check_model_outputs_for_nan(
     policy_pred: torch.Tensor,
     value_pred: torch.Tensor,

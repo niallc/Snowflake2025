@@ -25,7 +25,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
 from hex_ai.models import compute_move_stage, compute_value_loss, MAX_LOG_COSH_INPUT_ABS
-from hex_ai.nan_debug_utils import check_for_nan_and_debug
+from hex_ai.nan_debug_utils import check_for_nan_and_debug, calculate_validation_metrics_statistics, create_batch_analysis, find_nan_batch_indices
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -972,18 +972,9 @@ class Trainer:
             
             # Individual validation metrics (lists of values from each batch)
             'val_metrics': val_metrics,
-            'val_metrics_stats': {
-                key: {
-                    'count': len(values),
-                    'has_nan': any(np.isnan(v) for v in values),
-                    'nan_count': sum(1 for v in values if np.isnan(v)),
-                    'min': float(np.nanmin(values)) if values else float('nan'),
-                    'max': float(np.nanmax(values)) if values else float('nan'),
-                    'mean': float(np.nanmean(values)) if values else float('nan'),
-                    'std': float(np.nanstd(values)) if values else float('nan')
-                }
-                for key, values in val_metrics.items()
-            },
+            'val_metrics_stats': calculate_validation_metrics_statistics(val_metrics),
+            'batch_analysis': create_batch_analysis(val_metrics),
+            'nan_batch_indices': find_nan_batch_indices(val_metrics),
             
             # Model state information
             'model_info': {
@@ -1006,7 +997,17 @@ class Trainer:
                 'mixed_precision': self.mixed_precision.use_mixed_precision if hasattr(self, 'mixed_precision') else None,
                 'gradient_clipping': getattr(self, 'gradient_clipping', None),
                 'best_val_loss': getattr(self, 'best_val_loss', None)
-            }
+            },
+            
+            # Data loader information
+            'data_loader_info': {
+                'val_loader_exists': self.val_loader is not None,
+                'val_loader_type': type(self.val_loader).__name__ if self.val_loader else None,
+                'batch_size': getattr(self.val_loader, 'batch_size', None) if self.val_loader else None,
+                'num_workers': getattr(self.val_loader, 'num_workers', None) if self.val_loader else None,
+                'shuffle': getattr(self.val_loader, 'shuffle', None) if self.val_loader else None
+            },
+            
         }
         
         # Create temp directory if it doesn't exist
@@ -1030,7 +1031,7 @@ class Trainer:
             f"Debug data saved to: {debug_file} | "
             f"This indicates numerical instability in validation. "
             f"Training will exit to prevent further corruption. "
-            f"Check learning rate, gradient clipping, and model architecture."
+            f"See write_ups/nan_validation_investigation.md for detailed analysis and next steps."
         )
         
         # Log the error before raising
@@ -1211,27 +1212,11 @@ class Trainer:
             diagnostics['best_val_loss']
         )
         
-        # Create a single metrics dictionary for cleaner CSV logging
-        metrics_dict = {
-            'epoch': csv_data['epoch_id'],
-            'train_metrics': mini_epoch_avg,
-            'val_metrics': val_metrics,
-            'hyperparams': csv_data['hyperparams'],
-            'training_time': csv_data['training_time'],
-            'epoch_time': csv_data['epoch_time'],
-            'samples_per_second': csv_data['samples_per_second'],
-            'memory_usage_mb': csv_data['memory_usage_mb'],
-            'gpu_memory_mb': csv_data['gpu_memory_mb'],
-            'gradient_norm': csv_data['gradient_norm'],
-            'post_clip_gradient_norm': csv_data['post_clip_gradient_norm'],
-            'weight_stats': csv_data['weight_stats'],
-            'gradient_stats': csv_data['gradient_stats'],
-            'lr_stats': csv_data['lr_stats'],
-            'best_val_loss': csv_data['best_val_loss'],
-            'notes': csv_data['notes']
-        }
+        # Add training metrics to the CSV data
+        csv_data['train_metrics'] = mini_epoch_avg
+        csv_data['val_metrics'] = val_metrics
         
-        self.csv_logger.log_mini_epoch(**metrics_dict)
+        self.csv_logger.log_mini_epoch(**csv_data)
 
 
 
@@ -1251,11 +1236,11 @@ class Trainer:
                 f"This indicates a bug in the training pipeline where epoch/mini_epoch are not being passed properly. "
                 f"Check that all calls to _prepare_csv_logging_data() include valid epoch and mini_epoch values."
             )
-        epoch_id = f"{epoch+1}_mini{mini_epoch+1}"
-        mini_epoch_time = sum(batch_times)
+        epoch_id = TrainingUtilities.format_epoch_id(epoch, mini_epoch)
+        mini_epoch_time = TrainingUtilities.calculate_mini_epoch_time(batch_times)
         
         return {
-            'epoch_id': epoch_id,
+            'epoch': epoch_id,
             'hyperparams': hp,
             'training_time': mini_epoch_time,
             'epoch_time': mini_epoch_time,

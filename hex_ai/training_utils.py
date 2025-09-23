@@ -488,6 +488,16 @@ class TrainingUtilities:
         }
     
     @staticmethod
+    def format_epoch_id(epoch: int, mini_epoch: int) -> str:
+        """Format epoch and mini-epoch into a string identifier."""
+        return f"{epoch+1}_mini{mini_epoch+1}"
+    
+    @staticmethod
+    def calculate_mini_epoch_time(batch_times: List[float]) -> float:
+        """Calculate total time for a mini-epoch from batch times."""
+        return sum(batch_times)
+    
+    @staticmethod
     def should_log_progress(batch_idx: int, epoch: int, mini_epoch: int, 
                           next_log_batch: int, start_time: float, last_time_log: float) -> bool:
         """Determine if we should log progress at this batch."""
