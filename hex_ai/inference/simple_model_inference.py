@@ -18,7 +18,7 @@ from hex_ai.training_utils import get_device  # Use centralized device detection
 from hex_ai.utils import format_conversion as fc
 from hex_ai.utils.player_utils import get_player_to_move_from_board
 from hex_ai.value_utils import (
-    get_legal_policy_probs, get_top_k_moves_with_probs, model_output_to_prob, policy_logits_to_probs,
+    get_legal_policy_probs, get_top_k_moves_with_probs, policy_logits_to_probs,
     select_top_k_moves, trmph_winner_to_clear_str, trmph_winner_to_training_value, ValuePerspective
 )
 

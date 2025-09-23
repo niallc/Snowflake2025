@@ -631,11 +631,6 @@ async function onCellClick(e) {
   }
 }
 
-function getLastMove(board, legalMoves) {
-  // This function is no longer used since we track the last move directly
-  // in the onCellClick and stepComputerMove functions
-  return null;
-}
 
 // --- Computer move functionality ---
 async function stepComputerMove() {

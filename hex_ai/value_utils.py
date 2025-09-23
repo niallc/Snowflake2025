@@ -318,51 +318,6 @@ class ValuePredictor:
         return torch.all((model_output >= -1.0) & (model_output <= 1.0)).item()
 
 
-# Legacy compatibility functions (deprecated but kept for backward compatibility)
-def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
-    """
-    Convert model output (sigmoid(logit)) to probability for the given perspective.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    model_output is the probability that Red wins (after applying sigmoid to the raw logit).
-    """
-    if perspective is None:
-        raise ValueError("perspective cannot be None")
-    elif perspective == ValuePerspective.TRAINING_TARGET:
-        return model_output
-    elif perspective == ValuePerspective.BLUE_WIN_PROB:
-        return 1.0 - model_output
-    elif perspective == ValuePerspective.RED_WIN_PROB:
-        return model_output
-    else:
-        raise ValueError(f"Unknown perspective: {perspective}")
-
-def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
-    """
-    Convert a probability for a given perspective to the model output convention.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability, so the model output convention
-    is the probability that Red wins.
-    """
-    if perspective is None:
-        raise ValueError("perspective cannot be None")
-    elif perspective == ValuePerspective.TRAINING_TARGET:
-        return prob
-    elif perspective == ValuePerspective.BLUE_WIN_PROB:
-        return 1.0 - prob
-    elif perspective == ValuePerspective.RED_WIN_PROB:
-        return prob
-    else:
-        raise ValueError(f"Unknown perspective: {perspective}")
-
-
-
 def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
     """
     Given raw policy logits (numpy array or torch tensor), return softmaxed probabilities as a numpy array.

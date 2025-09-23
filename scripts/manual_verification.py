@@ -41,7 +41,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search_with_batching, PositionCollector
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import get_top_k_moves_with_probs
 from hex_ai.inference.model_config import get_model_path
 
@@ -102,18 +102,20 @@ def manual_verification_3x2():
     # Now test the batched search
     print(f"\n=== Testing Batched Search ===")
     
-    # Run batched search
-    best_move, best_value, _, search_stats = minimax_policy_value_search_with_batching(
-        state=state,
-        model=model,
-        widths=[3, 2],
-        temperature=1.0
+    # Run modern fixed tree search
+    search_config = create_fixed_tree_config(
+        search_widths=[3, 2],
+        temperature=1.0,
+        batch_size=1000
     )
+    result = run_fixed_tree_search(state, model, search_config)
+    best_move = result.move
+    best_value = result.value
     
-    print(f"Batched search result:")
+    print(f"Modern fixed tree search result:")
     print(f"  Best move: {best_move}")
     print(f"  Best value: {best_value:.3f}")
-    print(f"  Search stats: {search_stats['policy_items_processed']} policy evals in {search_stats['policy_nn_time']:.4f}s")
+    print(f"  Search completed successfully")
     
     # Verify the result makes sense
     print(f"\n=== Verification ===")

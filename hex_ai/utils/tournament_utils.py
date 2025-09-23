@@ -6,7 +6,7 @@ in tournament-related functionality.
 """
 
 import os
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Tuple, Optional, Union, Any
 
 
 def generate_player_labels(checkpoint_paths: List[str]) -> Tuple[List[str], Dict[str, str]]:
@@ -307,3 +307,62 @@ def determine_winner_labels_simple(
         raise ValueError(f"Invalid winner_color: {winner_color}")
     
     return winner_label, loser_label
+
+
+def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
+    """
+    Parse tournament parameters from command line arguments.
+    
+    This function consolidates the duplicate parameter parsing logic from
+    run_tournament.py and run_deterministic_tournament.py.
+    
+    Args:
+        args: Parsed command line arguments
+        
+    Returns:
+        Dictionary containing parsed parameters
+    """
+    # Parse optional parameters using unified system
+    mcts_sims = None
+    if args.mcts_sims:
+        mcts_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
+    
+    batch_sizes = None
+    if args.batch_sizes:
+        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
+    
+    c_pucts = None
+    if args.c_puct:
+        c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
+    
+    enable_gumbel = None
+    if args.enable_gumbel:
+        enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
+    
+    gumbel_sim_thresholds = None
+    if args.gumbel_sim_threshold:
+        gumbel_sim_thresholds = [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
+    
+    gumbel_candidate_log_bases = None
+    if args.gumbel_candidate_log_base:
+        gumbel_candidate_log_bases = [float(s.strip()) for s in args.gumbel_candidate_log_base.split(',')]
+    
+    gumbel_candidate_log_offsets = None
+    if args.gumbel_candidate_log_offset:
+        gumbel_candidate_log_offsets = [float(s.strip()) for s in args.gumbel_candidate_log_offset.split(',')]
+    
+    # Parse per-strategy temperatures
+    temperatures = None
+    if args.temperatures:
+        temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
+    
+    return {
+        'mcts_sims': mcts_sims,
+        'batch_sizes': batch_sizes,
+        'c_pucts': c_pucts,
+        'enable_gumbel': enable_gumbel,
+        'gumbel_sim_thresholds': gumbel_sim_thresholds,
+        'gumbel_candidate_log_bases': gumbel_candidate_log_bases,
+        'gumbel_candidate_log_offsets': gumbel_candidate_log_offsets,
+        'temperatures': temperatures
+    }

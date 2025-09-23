@@ -559,7 +559,6 @@ class StrengthEvaluator:
         
         return policy_dict, value_dict
     
-# Removed _evaluate_policy_mcts - now handled by _run_mcts_shared
     
     def _evaluate_value(self, state: HexGameState) -> Tuple[Dict[Tuple[int, int], float], Tuple[int, int]]:
         """Evaluate value for a position."""
@@ -610,7 +609,6 @@ class StrengthEvaluator:
         
         return value_dict
     
-# Removed _evaluate_value_mcts - now handled by _run_mcts_shared
     
     
     def _calculate_delta_policy(self, policy_dict: Dict[Tuple[int, int], float], 

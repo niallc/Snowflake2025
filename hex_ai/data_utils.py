@@ -500,7 +500,7 @@ def create_board_from_moves(moves: List[str]) -> np.ndarray:
     
     # Use parse_trmph_to_board for consistent duplicate handling and error checking
     # We use "exception" since remove_repeated_moves should be called before this function
-    board_nxn = parse_trmph_to_board(trmph_text, duplicate_action="exception")
+    board_nxn = parse_trmph_to_board(trmph_text)
     
     # Convert N×N format to 2-channel format for neural network training
     board_state = np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)

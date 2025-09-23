@@ -407,7 +407,7 @@ class BaselineMCTSConfig:
     virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
     terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
-    # Removed seed parameter - randomness should be controlled externally
+    # Randomness should be controlled externally
 
     # Confidence-based termination parameters
     enable_confidence_termination: bool = False

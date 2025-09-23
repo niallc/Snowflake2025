@@ -50,7 +50,6 @@ Examples:
 """
 
 import argparse
-import csv
 import glob
 import itertools
 import json
@@ -617,21 +616,6 @@ def play_deterministic_game(
     }
 
 
-def write_csv_results(rows: List[Dict[str, Any]], csv_file: str) -> None:
-    """Write CSV results to file."""
-    csv_path = Path(csv_file)
-    write_header = not csv_path.exists()
-    headers = list(rows[0].keys())
-    
-    with open(csv_path, 'a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        if write_header:
-            writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
-
 def run_deterministic_tournament(
     strategy_configs: List[StrategyConfig],
     openings: List[OpeningPosition],
@@ -851,41 +835,17 @@ def main():
             
             model_paths.append(model_path)
     
-    # Parse optional parameters using new unified system
-    mcts_sims = None
-    if args.mcts_sims:
-        mcts_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
-    
-    batch_sizes = None
-    if args.batch_sizes:
-        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
-    
-    c_pucts = None
-    if args.c_puct:
-        c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
-    
-    enable_gumbel = None
-    if args.enable_gumbel:
-        enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
-    
-    gumbel_sim_thresholds = None
-    if args.gumbel_sim_threshold:
-        gumbel_sim_thresholds = [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
-    
-    # Parse per-strategy temperatures
-    temperatures = None
-    if args.temperatures:
-        temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
-    
-    # Parse Gumbel candidate log bases
-    gumbel_candidate_log_bases = None
-    if args.gumbel_candidate_log_base:
-        gumbel_candidate_log_bases = [float(s.strip()) for s in args.gumbel_candidate_log_base.split(',')]
-    
-    # Parse Gumbel candidate log offsets
-    gumbel_candidate_log_offsets = None
-    if args.gumbel_candidate_log_offset:
-        gumbel_candidate_log_offsets = [float(s.strip()) for s in args.gumbel_candidate_log_offset.split(',')]
+    # Parse optional parameters using shared utility
+    from hex_ai.utils.tournament_utils import parse_tournament_parameters
+    parsed_params = parse_tournament_parameters(args)
+    mcts_sims = parsed_params['mcts_sims']
+    batch_sizes = parsed_params['batch_sizes']
+    c_pucts = parsed_params['c_pucts']
+    enable_gumbel = parsed_params['enable_gumbel']
+    gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
+    gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
+    gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    temperatures = parsed_params['temperatures']
     
     # Create strategy configurations using new unified system
     try:

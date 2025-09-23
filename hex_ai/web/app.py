@@ -41,7 +41,7 @@ CORS(app)
 # - player: UI-friendly color string ("blue"|"red")
 # - player_enum: canonical enum name ("BLUE"|"RED")
 # - player_index: canonical numeric (0=BLUE, 1=RED)
-# - player_raw: DEPRECATED; remove after frontend migrates
+# - player_raw: remove after frontend migrates
 
 # TODO: PERFORMANCE INVESTIGATION - MCTS vs Fixed Tree Search Performance Gap
 # Fixed tree search: ~6 games/sec with depth 2, ~100 leaf nodes
@@ -286,12 +286,13 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
             "total_legal_moves": len(legal_moves)
         }
     
-    # Level 2: Detailed analysis (removed tree search since we only use MCTS now)
+    # TODO: Understand the value of the below conditionals with pass statements.
+    # Level 2: Detailed analysis
     if verbose >= 2:
         # No tree search analysis needed since we only use MCTS
         pass
     
-    # Level 3: Full analysis (removed policy-value comparison since we only use MCTS now)
+    # Level 3: Full analysis
     if verbose >= 3:
         # No policy-value comparison needed since we only use MCTS
         pass
@@ -303,11 +304,6 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
-
-# TODO: Remove this function
-def _build_orchestration_from_dict(cfg: dict | None) -> None:
-    """Legacy function - orchestration is now handled internally by BaselineMCTS."""
-    return None
 
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
@@ -1129,9 +1125,8 @@ def api_mcts_move():
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     
-    # Optional orchestration overrides from request
-    orchestration_cfg = data.get("orchestration", None)
-    orchestration = _build_orchestration_from_dict(orchestration_cfg)
+    # Optional orchestration overrides from request (legacy - not used)
+    orchestration = None
     
     result = make_mcts_move(
         trmph,

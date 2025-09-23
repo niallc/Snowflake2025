@@ -4,7 +4,6 @@ from typing import List, Dict, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 import numpy as np
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.value_utils import (
     Winner, 
@@ -155,7 +154,6 @@ class TournamentPlayConfig:
         random_seed: Optional[int] = None,
         pie_rule: bool = False,
         swap_threshold: float = 0.5,
-        search_widths: Optional[list] = None,
         strategy: str = "policy",
         strategy_config: Optional[Dict[str, Any]] = None,
         participant_temperatures: Optional[Dict[str, float]] = None
@@ -168,7 +166,6 @@ class TournamentPlayConfig:
         self.random_seed = random_seed
         self.pie_rule = pie_rule
         self.swap_threshold = swap_threshold  # Red swaps if Blue's win prob >= this threshold
-        self.search_widths = search_widths  # Legacy support
         self.strategy = strategy
         self.strategy_config = strategy_config or {}
         random.seed(random_seed)
@@ -182,8 +179,17 @@ class TournamentPlayConfig:
         if participant_path in self.participant_temperatures:
             return self.participant_temperatures[participant_path]
         elif isinstance(self.temperature, list):
-            # This shouldn't happen if setup is correct, but provide fallback
-            return self.temperature[0] if self.temperature else 0.5
+            # Configuration error: temperature is a list but participant not found in participant_temperatures
+            raise ValueError(
+                f"Temperature configuration error: participant '{participant_path}' not found in "
+                f"participant_temperatures, but temperature is configured as a list. "
+                f"Either:\n"
+                f"  1. Add '{participant_path}' to participant_temperatures, or\n"
+                f"  2. Use a single temperature value instead of a list, or\n"
+                f"  3. Ensure all participants are properly configured in participant_temperatures.\n"
+                f"Current participant_temperatures: {list(self.participant_temperatures.keys())}\n"
+                f"Current temperature: {self.temperature}"
+            )
         else:
             return self.temperature
 
@@ -346,7 +352,6 @@ def log_game_result(result: GameResult, model_1: SimpleModelInference,
             "temperature_2": temp_2,
             "strategy": play_config.strategy,
             "strategy_config": str(play_config.strategy_config),
-            "search_widths": str(play_config.search_widths),  # Legacy
             "seed": play_config.random_seed
         }
         
@@ -425,8 +430,6 @@ def play_single_game(model_1: SimpleModelInference,
             "). Swapped=", str(pie_result.swap), ".\n",
             "Model_1=", str(model_name_1), ",Model_2=", str(model_name_2)
         ]))
-    # elif verbose >= 1:
-    #     print(".", end="", flush=True)
 
     # Log results    
     log_game_result(result, model_1, model_2, play_config, log_file, csv_file, model_1_label, model_2_label)
@@ -570,7 +573,6 @@ def run_round_robin_tournament(
                 print(f"Pie rule: {play_config.pie_rule}, Temperature: {play_config.temperature}, "
                       f"Random seed: {play_config.random_seed}")
                 print(f"Strategy: {play_config.strategy}, Config: {play_config.strategy_config}")
-                print(f"Search widths: {config.search_widths}")  # Legacy
             if verbose >= 1:
                 print(f"{game_idx+1},", end="", flush=True)
         

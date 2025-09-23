@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_cache import get_model_cache
 
@@ -86,10 +86,14 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
         if not config.search_widths:
             raise ValueError("FixedTreeSearchStrategy requires search_widths configuration")
         
-        move, _ = minimax_policy_value_search(
-            state, model, config.search_widths, temperature=config.temperature
+        # Create modern config and run search
+        search_config = create_fixed_tree_config(
+            search_widths=config.search_widths,
+            temperature=config.temperature,
+            batch_size=1000  # Default batch size
         )
-        return move
+        result = run_fixed_tree_search(state, model, search_config, verbose)
+        return result.move
     
     def get_name(self) -> str:
         return "fixed_tree"

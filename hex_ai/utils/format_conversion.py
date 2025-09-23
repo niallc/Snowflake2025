@@ -80,20 +80,19 @@ def trmph_to_moves(trmph_text: str, board_size: int = BOARD_SIZE) -> list[tuple[
     
     return rowcol_moves
 
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicate_action: str = "exception") -> np.ndarray:
+def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE) -> np.ndarray:
     """
     Parse a trmph string to a board matrix.
     
     Args:
         trmph_text: Complete trmph string
         board_size: Size of the board
-        duplicate_action: How to handle duplicate moves ("exception" or "ignore")
         
     Returns:
         Board matrix with 'e'=empty, 'b'=blue, 'r'=red (character array)
         
     Raises:
-        ValueError: If duplicate_action="exception" and duplicate move found
+        ValueError: If duplicate move found
     """
     # Strip preamble and get moves
     bare_moves = strip_trmph_preamble(trmph_text)
@@ -108,23 +107,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         
         # Check for duplicate moves
         if board[row, col] != Piece.EMPTY.value:
-            if duplicate_action == "ignore":
-                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
-                break  # Do not process any moves after a duplicate.
-            else:
-                # Enhanced debugging output for non-training contexts
-                import traceback
-                frame = traceback.extract_stack()[-2]  # Get calling frame
-                logger.error(f"DUPLICATE MOVE DETECTED:")
-                logger.error(f"  File: {frame.filename}")
-                logger.error(f"  Line: {frame.lineno}")
-                logger.error(f"  Function: {frame.name}")
-                logger.error(f"  Move: '{move}' at position ({row}, {col})")
-                logger.error(f"  Move index: {i}")
-                logger.error(f"  Board value at position: {board[row, col]}")
-                logger.error(f"  Full trmph string: {trmph_text}")
-                logger.error(f"  All moves: {moves}")
-                raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
+            raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
         
         # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
         is_blue_turn = (i % 2) == 0

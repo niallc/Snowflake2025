@@ -187,39 +187,17 @@ def main():
             
             model_paths.append(model_path)
     
-    # Parse optional parameters using new unified system
-    mcts_sims = None
-    if args.mcts_sims:
-        mcts_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
-    
-    batch_sizes = None
-    if args.batch_sizes:
-        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
-    
-    c_pucts = None
-    if args.c_puct:
-        c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
-    
-    enable_gumbel = None
-    if args.enable_gumbel:
-        enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
-    
-    gumbel_sim_thresholds = None
-    if args.gumbel_sim_threshold:
-        gumbel_sim_thresholds = [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
-    
-    gumbel_candidate_log_bases = None
-    if args.gumbel_candidate_log_base:
-        gumbel_candidate_log_bases = [float(s.strip()) for s in args.gumbel_candidate_log_base.split(',')]
-    
-    gumbel_candidate_log_offsets = None
-    if args.gumbel_candidate_log_offset:
-        gumbel_candidate_log_offsets = [float(s.strip()) for s in args.gumbel_candidate_log_offset.split(',')]
-    
-    # Parse per-strategy temperatures
-    temperatures = None
-    if args.temperatures:
-        temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
+    # Parse optional parameters using shared utility
+    from hex_ai.utils.tournament_utils import parse_tournament_parameters
+    parsed_params = parse_tournament_parameters(args)
+    mcts_sims = parsed_params['mcts_sims']
+    batch_sizes = parsed_params['batch_sizes']
+    c_pucts = parsed_params['c_pucts']
+    enable_gumbel = parsed_params['enable_gumbel']
+    gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
+    gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
+    gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    temperatures = parsed_params['temperatures']
     
     # Create strategy configurations using new unified system
     try:
@@ -254,34 +232,16 @@ def main():
             config.name = unique_name
         
         # Validate that all strategy configurations are unique
-        # Check for duplicates by considering both strategy name and model path
-        strategy_signatures = []
-        for config in strategy_configs:
-            signature = f"{config.original_name}:{config.model_path}"
-            strategy_signatures.append(signature)
-        
+        strategy_signatures = [f"{config.original_name}:{config.model_path}" for config in strategy_configs]
         if len(strategy_signatures) != len(set(strategy_signatures)):
-            # Find duplicates by strategy name only (for user-friendly error message)
-            final_original_names = [config.original_name for config in strategy_configs]
-            if len(final_original_names) != len(set(final_original_names)):
-                from collections import Counter
-                name_counts = Counter(final_original_names)
-                duplicates = [name for name, count in name_counts.items() if count > 1]
-                
-                print("ERROR: Tournament requires unique strategy configurations.")
-                print(f"Duplicate strategy names found: {duplicates}")
-                print("Each strategy must differ in at least one of:")
-                print("  - Strategy type (policy, mcts)")
-                print("  - Model checkpoint")
-                print("  - MCTS simulation count")
-                print("  - Search parameters (batch size, c_puct, etc.)")
-                print("  - Gumbel settings")
-                print()
-                print("Examples of valid configurations:")
-                print("  --strategies=policy,mcts  (different types)")
-                print("  --strategies=mcts,mcts --mcts-sims=100,200  (different sim counts)")
-                print("  --strategies=mcts,mcts --enable-gumbel=false,true  (different Gumbel settings)")
-                sys.exit(1)
+            print("ERROR: Tournament requires unique strategy configurations.")
+            print("Each strategy must differ in at least one of:")
+            print("  - Strategy type (policy, mcts)")
+            print("  - Model checkpoint") 
+            print("  - MCTS simulation count")
+            print("  - Search parameters (batch size, c_puct, etc.)")
+            print("  - Gumbel settings")
+            sys.exit(1)
     
     except ValueError as e:
         print(f"ERROR: {e}")

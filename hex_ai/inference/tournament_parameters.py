@@ -131,14 +131,17 @@ class TournamentModelConfig:
         # Priority 1: Per-participant models
         if self.per_participant_models and participant_label in self.per_participant_models:
             model_spec = self.per_participant_models[participant_label]
-            # Try to resolve as model registry name first, then as direct path
+            # Try to resolve as model registry name first
             try:
                 return get_model_path(model_spec)
-            except ValueError:
-                # Assume it's a direct path
-                if not os.path.exists(model_spec):
-                    raise ValueError(f"Model path does not exist: {model_spec}")
-                return model_spec
+            except ValueError as e:
+                # Model registry lookup failed - this is a configuration error
+                raise ValueError(
+                    f"Model specification '{model_spec}' for participant '{participant_label}' "
+                    f"is not a valid model registry name. "
+                    f"Available models: {list(get_all_model_info().keys())}. "
+                    f"Original error: {e}"
+                )
         
         # Priority 2: Direct model paths
         elif self.model_paths and strategy_index < len(self.model_paths):

@@ -16,11 +16,10 @@ from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph, apply_move_to_state, select_top_value_head_move
 from hex_ai.file_utils import GracefulShutdown
 import sys
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
     Winner,
     ValuePerspective,
-    model_output_to_prob,
     winner_to_color,
     ValuePredictor,
     get_policy_probs_from_logits,
@@ -137,7 +136,15 @@ def main():
             else:
                 print("Model is thinking...")
                 if args.search_widths:
-                    move, move_value = minimax_policy_value_search(state, model, search_widths, batch_size=1000, use_alpha_beta=True, temperature=args.temperature)
+                    # Use modern fixed tree search API
+                    search_config = create_fixed_tree_config(
+                        search_widths=search_widths,
+                        temperature=args.temperature,
+                        batch_size=1000
+                    )
+                    result = run_fixed_tree_search(state, model, search_config)
+                    move = result.move
+                    move_value = result.value
                     num_leaves = np.prod(search_widths)
                     print(f"[Tree search] Evaluated up to {num_leaves} leaf positions (widths: {search_widths})")
                 else:
