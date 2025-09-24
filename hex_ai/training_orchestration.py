@@ -264,6 +264,10 @@ def run_single_experiment(
     except Exception as e:
         logger.error(f"Training failed: {e}")
         raise
+    finally:
+        # TEMPORARY: Cleanup enhanced NaN detection logging
+        from hex_ai.nan_debug_utils import cleanup_global_first_nan_detector
+        cleanup_global_first_nan_detector()
 
 def select_device():
     """

@@ -25,7 +25,10 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
 from hex_ai.models import compute_move_stage, compute_value_loss, MAX_LOG_COSH_INPUT_ABS
-from hex_ai.nan_debug_utils import check_for_nan_and_debug, calculate_validation_metrics_statistics, create_batch_analysis, find_nan_batch_indices
+from hex_ai.nan_debug_utils import (
+    check_for_nan_and_debug, calculate_validation_metrics_statistics, create_batch_analysis, find_nan_batch_indices,
+    initialize_global_first_nan_detector, get_global_first_nan_detector, cleanup_global_first_nan_detector
+)
 
 from .config import VERBOSE_LEVEL
 from .models import TwoHeadedResNet
@@ -886,6 +889,12 @@ class Trainer:
         if not self.val_loader:
             return {}
         
+        # TEMPORARY: Initialize enhanced NaN detection if not already done
+        if get_global_first_nan_detector() is None:
+            initialize_global_first_nan_detector(log_dir="temp", enabled=True)
+        
+        first_nan_detector = get_global_first_nan_detector()
+        
         self.model.eval()
         val_losses = []
         val_metrics = {
@@ -907,7 +916,39 @@ class Trainer:
                     policy_pred, value_pred = self.model(boards, move_stage)
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
-                # CRITICAL: Check for NaN in validation with detailed debugging
+                # TEMPORARY: Enhanced first-NaN detection and batch monitoring
+                if first_nan_detector:
+                    # Check for first NaN occurrence with comprehensive logging
+                    nan_detected = first_nan_detector.check_and_log_first_nan(
+                        policy_pred=policy_pred,
+                        value_pred=value_pred,
+                        total_loss=total_loss,
+                        loss_dict=loss_dict,
+                        boards=boards,
+                        policies=policies,
+                        values=values,
+                        move_stage=move_stage,
+                        context="validation",
+                        batch_idx=batch_idx,
+                        epoch=epoch,
+                        mini_epoch=mini_epoch
+                    )
+                    
+                    # Log batch summary for trend analysis
+                    first_nan_detector.log_batch_summary(
+                        batch_idx=batch_idx,
+                        epoch=epoch,
+                        mini_epoch=mini_epoch,
+                        loss_dict=loss_dict,
+                        policy_pred=policy_pred,
+                        value_pred=value_pred,
+                        boards=boards,
+                        policies=policies,
+                        values=values,
+                        context="validation"
+                    )
+                
+                # CRITICAL: Check for NaN in validation with detailed debugging (existing system)
                 check_for_nan_and_debug(
                     policy_pred=policy_pred,
                     value_pred=value_pred,
@@ -938,8 +979,13 @@ class Trainer:
         # Compute validation averages
         val_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in val_metrics.items()}
         
-        # CRITICAL: Check for NaN in validation averages and capture debug info
+        # TEMPORARY: Enhanced NaN detection in averaging step
         val_avg_has_nan = any(np.isnan(v) for v in val_avg.values())
+        if val_avg_has_nan and first_nan_detector and not first_nan_detector.nan_detected:
+            # This is the first NaN in averages - log it with enhanced system
+            first_nan_detector.log_averaging_nan(val_avg, val_metrics, epoch, mini_epoch)
+        
+        # CRITICAL: Check for NaN in validation averages and capture debug info (existing system)
         if val_avg_has_nan:
             self._handle_validation_nan_debug(val_avg, val_metrics, epoch, mini_epoch)
         
@@ -1291,7 +1337,40 @@ class Trainer:
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
-        # CRITICAL: Check for NaN in training with detailed debugging
+        # TEMPORARY: Enhanced first-NaN detection and batch monitoring for training
+        first_nan_detector = get_global_first_nan_detector()
+        if first_nan_detector:
+            # Check for first NaN occurrence with comprehensive logging
+            nan_detected = first_nan_detector.check_and_log_first_nan(
+                policy_pred=policy_pred,
+                value_pred=value_pred,
+                total_loss=total_loss,
+                loss_dict=loss_dict,
+                boards=boards,
+                policies=policies,
+                values=values,
+                move_stage=move_stage,
+                context="training",
+                batch_idx=batch_idx,
+                epoch=epoch,
+                mini_epoch=mini_epoch
+            )
+            
+            # Log batch summary for trend analysis
+            first_nan_detector.log_batch_summary(
+                batch_idx=batch_idx,
+                epoch=epoch,
+                mini_epoch=mini_epoch,
+                loss_dict=loss_dict,
+                policy_pred=policy_pred,
+                value_pred=value_pred,
+                boards=boards,
+                policies=policies,
+                values=values,
+                context="training"
+            )
+        
+        # CRITICAL: Check for NaN in training with detailed debugging (existing system)
         check_for_nan_and_debug(
             policy_pred=policy_pred,
             value_pred=value_pred,
