@@ -150,11 +150,9 @@ class GameDuplicateTracker:
         game_1_key = f"{result_1['trmph_str']}_{result_1['winner_char']}"
         game_2_key = f"{result_2['trmph_str']}_{result_2['winner_char']}"
         
-        # Check for duplicates in seen games (should not happen with deterministic openings)
+        # Check for duplicates in seen games (can happen between different strategy pairs)
         if game_1_key in self.seen_games or game_2_key in self.seen_games:
-            print(f"ERROR: Duplicate game detected! This should not happen with deterministic openings.")
-            print(f"Game 1: {game_1_key}, Game 2: {game_2_key}")
-            raise SystemExit(1)
+            print(f"Warning: Duplicate game detected between strategy pairs")
         
         self.seen_games.add(game_1_key)
         self.seen_games.add(game_2_key)
