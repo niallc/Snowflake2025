@@ -333,22 +333,25 @@ class FirstNaNDetector:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(exist_ok=True)
         
+        # TEMPORARY: Add timestamp to log files to avoid conflicts between runs
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
         # Setup first-NaN logger
         self.first_nan_logger = self._setup_logger(
             "first_nan", 
-            self.log_dir / "first_nan_detection.log"
+            self.log_dir / f"first_nan_detection_{timestamp}.log"
         )
         
         # Setup batch monitoring logger
         self.batch_monitor_logger = self._setup_logger(
             "batch_monitor",
-            self.log_dir / "batch_monitoring_summary.log"
+            self.log_dir / f"batch_monitoring_summary_{timestamp}.log"
         )
         
         # Setup trend tracking logger
         self.trend_logger = self._setup_logger(
             "trend_tracker",
-            self.log_dir / "trend_analysis.log"
+            self.log_dir / f"trend_analysis_{timestamp}.log"
         )
         
         self.batch_count = 0
@@ -911,8 +914,9 @@ class FirstNaNDetector:
         if not self.enabled:
             return
         
-        # Create final summary
-        summary_file = self.log_dir / "nan_detection_summary.txt"
+        # Create final summary with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_file = self.log_dir / f"nan_detection_summary_{timestamp}.txt"
         with open(summary_file, 'w') as f:
             f.write("NaN DETECTION SUMMARY\n")
             f.write("=" * 50 + "\n")
