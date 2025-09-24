@@ -738,7 +738,7 @@ class Trainer:
                  label_smoothing: float = DEFAULT_LABEL_SMOOTHING,
                  logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA,
                  weight_decay: float = 1e-4,
-                 max_grad_norm: float = 20.0,
+                 max_grad_norm: float = 2.0,
                  value_learning_rate_factor: float = 1.0,
                  value_weight_decay_factor: float = 1.0,
                  policy_learning_rate_factor: float = 0.25,
@@ -926,7 +926,7 @@ class Trainer:
         
         # Learning rate scheduler (ReduceLROnPlateau)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
+            self.optimizer, mode='min', factor=0.7, patience=5, min_lr=1e-6
         )
         
         # Training state
@@ -1289,17 +1289,25 @@ class Trainer:
             state['mini_epoch_metrics'][key].append(loss_dict[key])
 
     def _monitor_policy_predictions(self, policy_pred: torch.Tensor, batch_idx: int, is_training: bool = True) -> None:
-        """Monitor policy predictions for extreme values (informational only)."""
+        """Monitor policy predictions for extreme values (informational only, throttled)."""
         max_policy = policy_pred.max().item()
         min_policy = policy_pred.min().item()
         range_policy = max_policy - min_policy
         phase = "training" if is_training else "validation"
         
-        # Only log if values are extremely large (for monitoring purposes)
-        if max_policy > 80:  # Very large values (informational)
-            logger.info(f"Large policy prediction: max={max_policy:.2f}, range={range_policy:.2f} at batch {batch_idx} ({phase})")
-        elif range_policy > 50:  # Large range between min/max (informational)
-            logger.info(f"Large policy prediction range: {range_policy:.2f} at batch {batch_idx} ({phase})")
+        # Initialize tracking attributes if they don't exist
+        if not hasattr(self, '_policy_monitoring_logged'):
+            self._policy_monitoring_logged = {'training': False, 'validation': False}
+        
+        # Only log once per mini-epoch to avoid flooding
+        if not self._policy_monitoring_logged[phase]:
+            # Only log if values are extremely large (for monitoring purposes)
+            if max_policy > 80:  # Very large values (informational)
+                logger.info(f"Large policy prediction: max={max_policy:.2f}, range={range_policy:.2f} at batch {batch_idx} ({phase})")
+                self._policy_monitoring_logged[phase] = True
+            elif range_policy > 50:  # Large range between min/max (informational)
+                logger.info(f"Large policy prediction range: {range_policy:.2f} at batch {batch_idx} ({phase})")
+                self._policy_monitoring_logged[phase] = True
 
     def _apply_gradient_clipping(self, state: Dict) -> None:
         """Apply gradient clipping and track gradient norms."""
@@ -1672,6 +1680,10 @@ class Trainer:
         
         # Initialize training state
         state = self._initialize_training_state()
+        
+        # Reset policy monitoring flags for this mini-epoch
+        if hasattr(self, '_policy_monitoring_logged'):
+            self._policy_monitoring_logged = {'training': False, 'validation': False}
         
         # Note: Numerical stability warmup is handled via epoch/mini_epoch/batch_idx checks
         
