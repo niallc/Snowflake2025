@@ -418,6 +418,44 @@ class PolicyValueLoss(nn.Module):
         logits_l2 = (centered.pow(2).sum(dim=1) / legal_counts.squeeze(1)).mean()
         logits_l2_loss = self.logits_l2_lambda * logits_l2
         
+        # TEMPORARY: Enhanced NaN detection for logits L2 calculation
+        from hex_ai.nan_debug_utils import get_global_first_nan_detector
+        first_nan_detector = get_global_first_nan_detector()
+        
+        if first_nan_detector and torch.isnan(logits_l2_loss) and not first_nan_detector.nan_detected:
+            first_nan_detector.first_nan_logger.info("🚨 NaN DETECTED IN LOGITS L2 CALCULATION 🚨")
+            first_nan_detector.first_nan_logger.info(f"policy_pred range: [{policy_pred.min().item():.6f}, {policy_pred.max().item():.6f}]")
+            first_nan_detector.first_nan_logger.info(f"legal_mask sum: {legal_mask.sum()}")
+            first_nan_detector.first_nan_logger.info(f"legal_sum: {legal_sum.flatten()}")
+            first_nan_detector.first_nan_logger.info(f"legal_counts: {legal_counts.flatten()}")
+            first_nan_detector.first_nan_logger.info(f"legal_mean: {legal_mean.flatten()}")
+            first_nan_detector.first_nan_logger.info(f"legal_mean has NaN: {torch.isnan(legal_mean).any()}")
+            first_nan_detector.first_nan_logger.info(f"legal_mean has Inf: {torch.isinf(legal_mean).any()}")
+            first_nan_detector.first_nan_logger.info(f"centered range: [{centered.min().item():.6f}, {centered.max().item():.6f}]")
+            first_nan_detector.first_nan_logger.info(f"centered has NaN: {torch.isnan(centered).any()}")
+            first_nan_detector.first_nan_logger.info(f"centered has Inf: {torch.isinf(centered).any()}")
+            centered_squared = centered.pow(2)
+            first_nan_detector.first_nan_logger.info(f"centered_squared range: [{centered_squared.min().item():.6f}, {centered_squared.max().item():.6f}]")
+            first_nan_detector.first_nan_logger.info(f"centered_squared has NaN: {torch.isnan(centered_squared).any()}")
+            first_nan_detector.first_nan_logger.info(f"centered_squared has Inf: {torch.isinf(centered_squared).any()}")
+            squared_sum = centered_squared.sum(dim=1)
+            first_nan_detector.first_nan_logger.info(f"squared_sum range: [{squared_sum.min().item():.6f}, {squared_sum.max().item():.6f}]")
+            first_nan_detector.first_nan_logger.info(f"squared_sum has NaN: {torch.isnan(squared_sum).any()}")
+            first_nan_detector.first_nan_logger.info(f"squared_sum has Inf: {torch.isinf(squared_sum).any()}")
+            legal_counts_squeezed = legal_counts.squeeze(1)
+            first_nan_detector.first_nan_logger.info(f"legal_counts_squeezed: {legal_counts_squeezed}")
+            first_nan_detector.first_nan_logger.info(f"legal_counts_squeezed has NaN: {torch.isnan(legal_counts_squeezed).any()}")
+            first_nan_detector.first_nan_logger.info(f"legal_counts_squeezed has Inf: {torch.isinf(legal_counts_squeezed).any()}")
+            normalized = squared_sum / legal_counts_squeezed
+            first_nan_detector.first_nan_logger.info(f"normalized range: [{normalized.min().item():.6f}, {normalized.max().item():.6f}]")
+            first_nan_detector.first_nan_logger.info(f"normalized has NaN: {torch.isnan(normalized).any()}")
+            first_nan_detector.first_nan_logger.info(f"normalized has Inf: {torch.isinf(normalized).any()}")
+            first_nan_detector.first_nan_logger.info(f"logits_l2: {logits_l2.item()}")
+            first_nan_detector.first_nan_logger.info(f"logits_l2 is NaN: {torch.isnan(logits_l2)}")
+            first_nan_detector.first_nan_logger.info(f"logits_l2_lambda: {self.logits_l2_lambda}")
+            first_nan_detector.first_nan_logger.info(f"logits_l2_loss: {logits_l2_loss.item()}")
+            first_nan_detector.first_nan_logger.info(f"logits_l2_loss is NaN: {torch.isnan(logits_l2_loss)}")
+        
         # Policy loss: handle terminal moves by detecting zero vectors
         # Terminal moves are represented as zero vectors in the data pipeline
         
@@ -453,6 +491,34 @@ class PolicyValueLoss(nn.Module):
                      self.value_weight * value_loss +
                      self.entropy_weight * entropy_loss +
                      logits_l2_loss)
+        
+        # TEMPORARY: Enhanced NaN detection for individual loss components
+        # This will help identify exactly which component produces the first NaN
+        from hex_ai.nan_debug_utils import get_global_first_nan_detector
+        first_nan_detector = get_global_first_nan_detector()
+        
+        if first_nan_detector:
+            # Check each component individually for NaN
+            components = {
+                'policy_loss': policy_loss,
+                'value_loss': value_loss, 
+                'entropy_loss': entropy_loss,
+                'logits_l2_loss': logits_l2_loss,
+                'total_loss': total_loss
+            }
+            
+            # Check for NaN in any component
+            nan_components = []
+            for name, component in components.items():
+                if torch.isnan(component):
+                    nan_components.append(name)
+            
+            if nan_components and not first_nan_detector.nan_detected:
+                # This is the first NaN - log detailed component analysis
+                first_nan_detector._log_first_nan_components(
+                    components, nan_components, policy_pred, value_pred, 
+                    policy_target, value_target, board
+                )
         
         # Create loss dictionary first
         loss_dict = {
@@ -559,6 +625,37 @@ class PolicyValueLoss(nn.Module):
             min_val = 1e-6 if p.dtype == torch.float16 else 1e-12
             entropy = -(p * torch.log(p.clamp_min(min_val))).sum(dim=1).mean()
             entropy_loss = -self.entropy_weight * entropy
+            
+            # TEMPORARY: Enhanced NaN detection for entropy calculation
+            from hex_ai.nan_debug_utils import get_global_first_nan_detector
+            first_nan_detector = get_global_first_nan_detector()
+            
+            if first_nan_detector and torch.isnan(entropy_loss) and not first_nan_detector.nan_detected:
+                first_nan_detector.first_nan_logger.info("🚨 NaN DETECTED IN ENTROPY CALCULATION 🚨")
+                first_nan_detector.first_nan_logger.info(f"logits range: [{logits.min().item():.6f}, {logits.max().item():.6f}]")
+                first_nan_detector.first_nan_logger.info(f"softmax p range: [{p.min().item():.6f}, {p.max().item():.6f}]")
+                first_nan_detector.first_nan_logger.info(f"p has NaN: {torch.isnan(p).any()}")
+                first_nan_detector.first_nan_logger.info(f"p has Inf: {torch.isinf(p).any()}")
+                first_nan_detector.first_nan_logger.info(f"p sum per sample: {p.sum(dim=1)}")
+                first_nan_detector.first_nan_logger.info(f"min_val: {min_val}")
+                p_clamped = p.clamp_min(min_val)
+                first_nan_detector.first_nan_logger.info(f"p_clamped range: [{p_clamped.min().item():.6f}, {p_clamped.max().item():.6f}]")
+                log_p = torch.log(p_clamped)
+                first_nan_detector.first_nan_logger.info(f"log(p_clamped) range: [{log_p.min().item():.6f}, {log_p.max().item():.6f}]")
+                first_nan_detector.first_nan_logger.info(f"log(p_clamped) has NaN: {torch.isnan(log_p).any()}")
+                first_nan_detector.first_nan_logger.info(f"log(p_clamped) has Inf: {torch.isinf(log_p).any()}")
+                entropy_term = -(p * log_p)
+                first_nan_detector.first_nan_logger.info(f"entropy_term range: [{entropy_term.min().item():.6f}, {entropy_term.max().item():.6f}]")
+                first_nan_detector.first_nan_logger.info(f"entropy_term has NaN: {torch.isnan(entropy_term).any()}")
+                first_nan_detector.first_nan_logger.info(f"entropy_term has Inf: {torch.isinf(entropy_term).any()}")
+                entropy_sum = entropy_term.sum(dim=1)
+                first_nan_detector.first_nan_logger.info(f"entropy_sum range: [{entropy_sum.min().item():.6f}, {entropy_sum.max().item():.6f}]")
+                first_nan_detector.first_nan_logger.info(f"entropy_sum has NaN: {torch.isnan(entropy_sum).any()}")
+                first_nan_detector.first_nan_logger.info(f"entropy_sum has Inf: {torch.isinf(entropy_sum).any()}")
+                first_nan_detector.first_nan_logger.info(f"entropy: {entropy.item()}")
+                first_nan_detector.first_nan_logger.info(f"entropy is NaN: {torch.isnan(entropy)}")
+                first_nan_detector.first_nan_logger.info(f"entropy_loss: {entropy_loss.item()}")
+                first_nan_detector.first_nan_logger.info(f"entropy_loss is NaN: {torch.isnan(entropy_loss)}")
         else:
             entropy_loss = torch.zeros((), device=policy_pred.device, dtype=policy_pred.dtype)
         
@@ -1192,14 +1289,17 @@ class Trainer:
             state['mini_epoch_metrics'][key].append(loss_dict[key])
 
     def _monitor_policy_predictions(self, policy_pred: torch.Tensor, batch_idx: int, is_training: bool = True) -> None:
-        """Monitor policy predictions for overflow and log warnings/errors."""
+        """Monitor policy predictions for extreme values (informational only)."""
         max_policy = policy_pred.max().item()
+        min_policy = policy_pred.min().item()
+        range_policy = max_policy - min_policy
         phase = "training" if is_training else "validation"
         
-        if max_policy > 40:  # Critical threshold - causes softmax overflow
-            logger.error(f"Policy prediction overflow CRITICAL: max={max_policy:.2f} at batch {batch_idx} ({phase})")
-        elif max_policy > 35:  # Warning threshold - approaching overflow
-            logger.warning(f"Policy prediction overflow warning: max={max_policy:.2f} at batch {batch_idx} ({phase})")
+        # Only log if values are extremely large (for monitoring purposes)
+        if max_policy > 80:  # Very large values (informational)
+            logger.info(f"Large policy prediction: max={max_policy:.2f}, range={range_policy:.2f} at batch {batch_idx} ({phase})")
+        elif range_policy > 50:  # Large range between min/max (informational)
+            logger.info(f"Large policy prediction range: {range_policy:.2f} at batch {batch_idx} ({phase})")
 
     def _apply_gradient_clipping(self, state: Dict) -> None:
         """Apply gradient clipping and track gradient norms."""

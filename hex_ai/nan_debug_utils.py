@@ -797,6 +797,115 @@ class FirstNaNDetector:
         self.first_nan_logger.info(f"Averaging debug data saved to: {debug_file}")
         self.first_nan_logger.info("=" * 80)
     
+    def _log_first_nan_components(self, 
+                                  components: Dict[str, torch.Tensor],
+                                  nan_components: List[str],
+                                  policy_pred: torch.Tensor,
+                                  value_pred: torch.Tensor,
+                                  policy_target: torch.Tensor,
+                                  value_target: torch.Tensor,
+                                  board: torch.Tensor):
+        """
+        TEMPORARY: Log detailed analysis of the first NaN occurrence in loss components.
+        
+        This method captures the exact moment and calculation where the first NaN appears
+        in any loss component, providing comprehensive debugging information.
+        """
+        self.nan_detected = True
+        
+        self.first_nan_logger.info("🚨 FIRST NaN DETECTED IN LOSS COMPONENTS 🚨")
+        self.first_nan_logger.info("=" * 80)
+        self.first_nan_logger.info(f"Timestamp: {datetime.now().isoformat()}")
+        self.first_nan_logger.info(f"NaN components: {nan_components}")
+        self.first_nan_logger.info("=" * 80)
+        
+        # Log each component individually
+        self.first_nan_logger.info("LOSS COMPONENT ANALYSIS:")
+        for name, component in components.items():
+            is_nan = torch.isnan(component)
+            is_inf = torch.isinf(component)
+            self.first_nan_logger.info(f"  {name}:")
+            self.first_nan_logger.info(f"    Value: {component.item()}")
+            self.first_nan_logger.info(f"    Is NaN: {is_nan}")
+            self.first_nan_logger.info(f"    Is Inf: {is_inf}")
+            if is_nan:
+                self.first_nan_logger.info(f"    *** THIS COMPONENT IS NaN ***")
+            self.first_nan_logger.info("")
+        
+        # Log input tensor statistics
+        self.first_nan_logger.info("INPUT TENSOR STATISTICS:")
+        self._log_tensor_statistics("policy_pred", policy_pred, self.first_nan_logger)
+        self._log_tensor_statistics("value_pred", value_pred, self.first_nan_logger)
+        self._log_tensor_statistics("policy_target", policy_target, self.first_nan_logger)
+        self._log_tensor_statistics("value_target", value_target, self.first_nan_logger)
+        self._log_tensor_statistics("board", board, self.first_nan_logger)
+        
+        # Log recent trends
+        self._log_recent_trends()
+        
+        # Save comprehensive debug data
+        self._dump_first_nan_components_data(
+            components, nan_components, policy_pred, value_pred,
+            policy_target, value_target, board
+        )
+        
+        self.first_nan_logger.info("=" * 80)
+        self.first_nan_logger.info("FIRST NaN COMPONENT ANALYSIS COMPLETE")
+        self.first_nan_logger.info("=" * 80)
+    
+    def _dump_first_nan_components_data(self,
+                                        components: Dict[str, torch.Tensor],
+                                        nan_components: List[str],
+                                        policy_pred: torch.Tensor,
+                                        value_pred: torch.Tensor,
+                                        policy_target: torch.Tensor,
+                                        value_target: torch.Tensor,
+                                        board: torch.Tensor):
+        """TEMPORARY: Save comprehensive debug data for first NaN in components."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create comprehensive debug data
+        debug_data = {
+            'timestamp': datetime.now().isoformat(),
+            'nan_components': nan_components,
+            'components': {name: component.item() for name, component in components.items()},
+            'component_tensors': {name: component.detach().cpu() for name, component in components.items()},
+            'policy_pred': policy_pred.detach().cpu(),
+            'value_pred': value_pred.detach().cpu(),
+            'policy_target': policy_target.detach().cpu(),
+            'value_target': value_target.detach().cpu(),
+            'board': board.detach().cpu(),
+            'recent_trends': {
+                'policy_losses': self.recent_policy_losses[-20:],
+                'value_losses': self.recent_value_losses[-20:],
+                'total_losses': self.recent_total_losses[-20:],
+                'policy_pred_stats': self.recent_policy_pred_stats[-20:],
+                'value_pred_stats': self.recent_value_pred_stats[-20:]
+            },
+            'batch_stats': self.batch_stats[-50:] if self.batch_stats else []
+        }
+        
+        # Save as compressed pickle
+        debug_file = self.log_dir / f"first_nan_components_{timestamp}.pkl.gz"
+        with gzip.open(debug_file, 'wb') as f:
+            pickle.dump(debug_data, f)
+        
+        # Save as JSON for human readability
+        json_file = self.log_dir / f"first_nan_components_{timestamp}.json"
+        json_data = {
+            'timestamp': debug_data['timestamp'],
+            'nan_components': debug_data['nan_components'],
+            'components': debug_data['components'],
+            'recent_trends': debug_data['recent_trends'],
+            'batch_count': len(debug_data['batch_stats'])
+        }
+        
+        with open(json_file, 'w') as f:
+            json.dump(json_data, f, indent=2)
+        
+        self.first_nan_logger.info(f"Component debug data saved to: {debug_file}")
+        self.first_nan_logger.info(f"Component summary saved to: {json_file}")
+    
     def finalize_logging(self):
         """Finalize logging and create summary reports."""
         if not self.enabled:
