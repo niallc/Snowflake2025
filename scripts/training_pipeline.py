@@ -845,7 +845,7 @@ Examples:
     
     # Hyperparameter override arguments
     parser.add_argument("--learning-rate", type=float, help="Override learning rate (e.g., 1e-4)")
-    parser.add_argument("--batch-size", type=int, help="Override batch size")
+    parser.add_argument("--train-batch-size", type=int, help="Override training batch size")
     parser.add_argument("--weight-decay", type=float, help="Override weight decay")
     parser.add_argument("--policy-weight", type=float, help="Override policy weight (value weight will be 1-policy_weight)")
     parser.add_argument("--max-grad-norm", type=float, help="Override max gradient norm")
@@ -911,8 +911,8 @@ def main():
         hyperparameter_overrides = {}
         if args.learning_rate is not None:
             hyperparameter_overrides["learning_rate"] = [args.learning_rate]
-        if args.batch_size is not None:
-            hyperparameter_overrides["batch_size"] = [args.batch_size]
+        if args.train_batch_size is not None:
+            hyperparameter_overrides["batch_size"] = [args.train_batch_size]
         if args.weight_decay is not None:
             hyperparameter_overrides["weight_decay"] = [args.weight_decay]
         if args.policy_weight is not None:

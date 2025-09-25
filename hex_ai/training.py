@@ -419,6 +419,7 @@ class PolicyValueLoss(nn.Module):
         logits_l2_loss = self.logits_l2_lambda * logits_l2
         
         # TEMPORARY: Enhanced NaN detection for logits L2 calculation
+        # TODO: Remove after confirming training stability (3+ successful runs)
         from hex_ai.nan_debug_utils import get_global_first_nan_detector
         first_nan_detector = get_global_first_nan_detector()
         
@@ -493,6 +494,7 @@ class PolicyValueLoss(nn.Module):
                      logits_l2_loss)
         
         # TEMPORARY: Enhanced NaN detection for individual loss components
+        # TODO: Remove after confirming training stability (3+ successful runs)
         # This will help identify exactly which component produces the first NaN
         from hex_ai.nan_debug_utils import get_global_first_nan_detector
         first_nan_detector = get_global_first_nan_detector()
@@ -627,6 +629,7 @@ class PolicyValueLoss(nn.Module):
             entropy_loss = -self.entropy_weight * entropy
             
             # TEMPORARY: Enhanced NaN detection for entropy calculation
+            # TODO: Remove after confirming training stability (3+ successful runs)
             from hex_ai.nan_debug_utils import get_global_first_nan_detector
             first_nan_detector = get_global_first_nan_detector()
             
@@ -922,7 +925,7 @@ class Trainer:
                                         logits_l2_lambda=logits_l2_lambda)
         
         # Learning rate scheduler (ReduceLROnPlateau)
-        # TODO: NOTE, I have reduced min_lr to =2e-6, as a temporary check to see if learning becomes more stable.
+        # TODO: NOTE, I have reduced min_lr to =2e-6 (from 1e-5), as a temporary check to see if learning becomes more stable.
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.5, patience=3, min_lr=2e-6
         )
@@ -988,6 +991,7 @@ class Trainer:
             return {}
         
         # TEMPORARY: Initialize enhanced NaN detection if not already done
+        # TODO: Remove after confirming training stability
         if get_global_first_nan_detector() is None:
             initialize_global_first_nan_detector(log_dir="temp", enabled=True)
         
@@ -1015,10 +1019,9 @@ class Trainer:
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
                 
-                # TEMPORARY: Enhanced first-NaN detection and batch monitoring
+                # Check for NaN in validation
                 if first_nan_detector:
-                    # Check for first NaN occurrence with comprehensive logging
-                    nan_detected = first_nan_detector.check_and_log_first_nan(
+                    first_nan_detector.check_and_log_first_nan(
                         policy_pred=policy_pred,
                         value_pred=value_pred,
                         total_loss=total_loss,
@@ -1032,22 +1035,8 @@ class Trainer:
                         epoch=epoch,
                         mini_epoch=mini_epoch
                     )
-                    
-                    # Log batch summary for trend analysis
-                    first_nan_detector.log_batch_summary(
-                        batch_idx=batch_idx,
-                        epoch=epoch,
-                        mini_epoch=mini_epoch,
-                        loss_dict=loss_dict,
-                        policy_pred=policy_pred,
-                        value_pred=value_pred,
-                        boards=boards,
-                        policies=policies,
-                        values=values,
-                        context="validation"
-                    )
                 
-                # CRITICAL: Check for NaN in validation with detailed debugging (existing system)
+                # Check for NaN in validation
                 check_for_nan_and_debug(
                     policy_pred=policy_pred,
                     value_pred=value_pred,
@@ -1063,38 +1052,19 @@ class Trainer:
                     mini_epoch=mini_epoch
                 )
                 
-                # Check for extreme values in validation - focus on legal moves only
-                legal_mask = self.criterion._get_legal_moves_from_board(boards)
-                legal_policy_pred = policy_pred * legal_mask
-                policy_max_abs = torch.abs(legal_policy_pred).max().item()
-                value_max_abs = torch.abs(value_pred).max().item()
-                
-                
                 # Track metrics
                 val_losses.append(loss_dict['total_loss'])
                 for key in val_metrics:
                     val_metrics[key].append(loss_dict[key])
         
-        # CRITICAL: Check if val_metrics is empty before computing averages
+        # Check if val_metrics is empty before computing averages
         val_metrics_empty = all(len(values) == 0 for values in val_metrics.values())
         if val_metrics_empty:
-            # Enhanced debugging information
-            logger.error(f"val_metrics keys: {list(val_metrics.keys())}")
-            logger.error(f"val_metrics lengths: {[len(v) for v in val_metrics.values()]}")
-            logger.error(f"val_losses length: {len(val_losses)}")
-            
-            # Get the last batch's loss_dict for debugging
-            if len(val_losses) > 0:
-                logger.error(f"Last batch total_loss: {val_losses[-1]}")
-                # Note: We can't get the full loss_dict here since it's not stored
-                logger.error("Note: loss_dict was not stored, so we can't check its keys/values")
-            
             error_msg = (
-                f"CRITICAL: val_metrics is completely empty! "
-                f"Validation loop processed {len(val_losses)} batches but appended 0 metrics. "
-                f"This indicates the append logic in the validation loop is not executing. "
+                f"Validation dataset produced no data. "
                 f"Epoch: {epoch}, Mini-epoch: {mini_epoch}. "
-                f"Check validation loop for exceptions or early returns that prevent append logic from running."
+                f"This usually indicates the validation dataset has reached its max_examples_unaugmented limit "
+                f"and needs to be reset. Check that validation dataset reset is working properly."
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
@@ -1102,13 +1072,12 @@ class Trainer:
         # Compute validation averages
         val_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in val_metrics.items()}
         
-        # TEMPORARY: Enhanced NaN detection in averaging step
+        # Check for NaN in validation averages
         val_avg_has_nan = any(np.isnan(v) for v in val_avg.values())
         if val_avg_has_nan and first_nan_detector and not first_nan_detector.nan_detected:
-            # This is the first NaN in averages - log it with enhanced system
             first_nan_detector.log_averaging_nan(val_avg, val_metrics, epoch, mini_epoch)
         
-        # CRITICAL: Check for NaN in validation averages and capture debug info (existing system)
+        # Handle NaN in validation averages
         if val_avg_has_nan:
             self._handle_validation_nan_debug(val_avg, val_metrics, epoch, mini_epoch)
         
@@ -1463,11 +1432,10 @@ class Trainer:
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
         
-        # TEMPORARY: Enhanced first-NaN detection and batch monitoring for training
+        # Check for NaN in training
         first_nan_detector = get_global_first_nan_detector()
         if first_nan_detector:
-            # Check for first NaN occurrence with comprehensive logging
-            nan_detected = first_nan_detector.check_and_log_first_nan(
+            first_nan_detector.check_and_log_first_nan(
                 policy_pred=policy_pred,
                 value_pred=value_pred,
                 total_loss=total_loss,
@@ -1480,20 +1448,6 @@ class Trainer:
                 batch_idx=batch_idx,
                 epoch=epoch,
                 mini_epoch=mini_epoch
-            )
-            
-            # Log batch summary for trend analysis
-            first_nan_detector.log_batch_summary(
-                batch_idx=batch_idx,
-                epoch=epoch,
-                mini_epoch=mini_epoch,
-                loss_dict=loss_dict,
-                policy_pred=policy_pred,
-                value_pred=value_pred,
-                boards=boards,
-                policies=policies,
-                values=values,
-                context="training"
             )
         
         # CRITICAL: Check for NaN in training with detailed debugging (existing system)

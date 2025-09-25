@@ -308,8 +308,9 @@ def check_model_outputs_for_nan(
 # ============================================================================
 # TEMPORARY ENHANCED NaN DETECTION AND LOGGING SYSTEM
 # ============================================================================
-# This section contains temporary code for debugging NaN validation issues.
-# All functions and classes in this section should be removed after the issue is resolved.
+# TODO: Remove this entire section after confirming training stability across multiple runs
+#       Target: Remove after 3+ successful end-to-end training runs without NaN issues
+#       This system helps catch numerical instability early and provides valuable diagnostics
 
 import logging
 from pathlib import Path
@@ -355,10 +356,7 @@ class FirstNaNDetector:
         )
         
         self.batch_count = 0
-        self.summary_interval = 100  # Log summary every 100 batches
-        self.batch_stats = []
         self.validation_batch_count = 0
-        self.validation_batch_stats = []
         
         # Track trends leading up to NaN
         self.recent_policy_losses = []
@@ -371,7 +369,6 @@ class FirstNaNDetector:
         self.first_nan_logger.info("TEMPORARY NaN DETECTION SYSTEM INITIALIZED")
         self.first_nan_logger.info("=" * 80)
         self.first_nan_logger.info(f"Log directory: {self.log_dir}")
-        self.first_nan_logger.info(f"Summary interval: {self.summary_interval} batches")
         self.first_nan_logger.info("=" * 80)
     
     def _setup_logger(self, name: str, log_file: Path) -> logging.Logger:
@@ -601,8 +598,8 @@ class FirstNaNDetector:
             'recent_total_losses': self.recent_total_losses[-20:],
             
             # Batch statistics
-            'validation_batch_stats': self.validation_batch_stats[-50:] if context == "validation" else [],
-            'batch_stats': self.batch_stats[-50:]
+            'validation_batch_stats': [],
+            'batch_stats': []
         }
         
         # Save to compressed pickle file
@@ -634,126 +631,6 @@ class FirstNaNDetector:
         
         self.first_nan_logger.info(f"JSON summary saved to: {json_file}")
     
-    def log_batch_summary(self, 
-                         batch_idx: int,
-                         epoch: Optional[int],
-                         mini_epoch: Optional[int],
-                         loss_dict: Dict[str, float],
-                         policy_pred: torch.Tensor,
-                         value_pred: torch.Tensor,
-                         boards: torch.Tensor,
-                         policies: torch.Tensor,
-                         values: torch.Tensor,
-                         context: str = "unknown"):
-        """Log batch-level summary statistics."""
-        
-        if not self.enabled:
-            return
-        
-        # Update counters
-        if context == "validation":
-            self.validation_batch_count += 1
-        else:
-            self.batch_count += 1
-        
-        # Collect statistics
-        batch_stat = {
-            'timestamp': datetime.now().isoformat(),
-            'context': context,
-            'batch_idx': batch_idx,
-            'epoch': epoch,
-            'mini_epoch': mini_epoch,
-            'loss_dict': loss_dict.copy(),
-            'policy_pred_stats': self._get_tensor_stats(policy_pred),
-            'value_pred_stats': self._get_tensor_stats(value_pred),
-            'input_stats': {
-                'boards': self._get_tensor_stats(boards),
-                'policies': self._get_tensor_stats(policies),
-                'values': self._get_tensor_stats(values)
-            }
-        }
-        
-        # Store in appropriate list
-        if context == "validation":
-            self.validation_batch_stats.append(batch_stat)
-        else:
-            self.batch_stats.append(batch_stat)
-        
-        # Update recent trends
-        self.recent_policy_losses.append(loss_dict.get('policy_loss', 0.0))
-        self.recent_value_losses.append(loss_dict.get('value_loss', 0.0))
-        self.recent_total_losses.append(loss_dict.get('total_loss', 0.0))
-        
-        # Keep only recent history (last 100 batches)
-        if len(self.recent_policy_losses) > 100:
-            self.recent_policy_losses = self.recent_policy_losses[-100:]
-        if len(self.recent_value_losses) > 100:
-            self.recent_value_losses = self.recent_value_losses[-100:]
-        if len(self.recent_total_losses) > 100:
-            self.recent_total_losses = self.recent_total_losses[-100:]
-        
-        # Log summary every N batches
-        if (context == "validation" and self.validation_batch_count % self.summary_interval == 0) or \
-           (context != "validation" and self.batch_count % self.summary_interval == 0):
-            self._log_periodic_summary(batch_stat, context)
-    
-    def _get_tensor_stats(self, tensor: torch.Tensor) -> Dict[str, Any]:
-        """Get basic statistics for a tensor."""
-        if tensor.numel() == 0:
-            return {'empty': True}
-        
-        stats = {
-            'shape': list(tensor.shape),
-            'dtype': str(tensor.dtype),
-            'has_nan': bool(torch.isnan(tensor).any()),
-            'nan_count': int(torch.isnan(tensor).sum()),
-            'has_inf': bool(torch.isinf(tensor).any()),
-            'inf_count': int(torch.isinf(tensor).sum())
-        }
-        
-        if not torch.isnan(tensor).all():
-            stats.update({
-                'min': float(tensor.min()),
-                'max': float(tensor.max())
-            })
-            
-            # Handle different tensor types for mean and std
-            if tensor.dtype in [torch.float16, torch.float32, torch.float64]:
-                stats.update({
-                    'mean': float(tensor.mean()),
-                    'std': float(tensor.std())
-                })
-            else:
-                # For integer tensors, convert to float for statistics
-                tensor_float = tensor.float()
-                stats.update({
-                    'mean': float(tensor_float.mean()),
-                    'std': float(tensor_float.std())
-                })
-        
-        return stats
-    
-    def _log_periodic_summary(self, batch_stat: Dict[str, Any], context: str):
-        """Log periodic summary of batch statistics."""
-        logger = self.batch_monitor_logger
-        
-        logger.info(f"=== {context.upper()} BATCH SUMMARY ===")
-        logger.info(f"Batch: {batch_stat['batch_idx']}, Epoch: {batch_stat['epoch']}, Mini-epoch: {batch_stat['mini_epoch']}")
-        logger.info(f"Losses: {batch_stat['loss_dict']}")
-        
-        # Log prediction statistics
-        policy_stats = batch_stat['policy_pred_stats']
-        value_stats = batch_stat['value_pred_stats']
-        
-        logger.info(f"Policy pred - Min: {policy_stats.get('min', 'N/A'):.6f}, Max: {policy_stats.get('max', 'N/A'):.6f}, Mean: {policy_stats.get('mean', 'N/A'):.6f}")
-        logger.info(f"Value pred - Min: {value_stats.get('min', 'N/A'):.6f}, Max: {value_stats.get('max', 'N/A'):.6f}, Mean: {value_stats.get('mean', 'N/A'):.6f}")
-        
-        # Log recent trends
-        if len(self.recent_total_losses) >= 10:
-            recent_avg = np.mean(self.recent_total_losses[-10:])
-            logger.info(f"Recent {context} loss average: {recent_avg:.6f}")
-        
-        logger.info("=" * 50)
     
     def log_averaging_nan(self, 
                          val_avg: Dict[str, float],
@@ -790,7 +667,7 @@ class FirstNaNDetector:
             'mini_epoch': mini_epoch,
             'val_avg': val_avg,
             'val_metrics': val_metrics,
-            'validation_batch_stats': self.validation_batch_stats[-100:]  # Last 100 validation batches
+            'validation_batch_stats': []  # No batch stats collected
         }
         
         debug_file = self.log_dir / f"averaging_nan_{timestamp}.pkl.gz"
@@ -885,7 +762,7 @@ class FirstNaNDetector:
                 'policy_pred_stats': self.recent_policy_pred_stats[-20:],
                 'value_pred_stats': self.recent_value_pred_stats[-20:]
             },
-            'batch_stats': self.batch_stats[-50:] if self.batch_stats else []
+            'batch_stats': []
         }
         
         # Save as compressed pickle
@@ -900,7 +777,7 @@ class FirstNaNDetector:
             'nan_components': debug_data['nan_components'],
             'components': debug_data['components'],
             'recent_trends': debug_data['recent_trends'],
-            'batch_count': len(debug_data['batch_stats'])
+            'batch_count': 0
         }
         
         with open(json_file, 'w') as f:

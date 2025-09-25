@@ -266,6 +266,7 @@ def run_single_experiment(
         raise
     finally:
         # TEMPORARY: Cleanup enhanced NaN detection logging
+        # TODO: Remove after confirming training stability (3+ successful runs)
         from hex_ai.nan_debug_utils import cleanup_global_first_nan_detector
         cleanup_global_first_nan_detector()
 
