@@ -73,9 +73,9 @@ DEFAULT_LABEL_SMOOTHING = 0.1
 # Rationale: Prevents overconfidence by smoothing targets over legal moves
 
 # L2 penalty on centered logits to prevent explosion
-DEFAULT_LOGITS_L2_LAMBDA = 1e-4
+DEFAULT_LOGITS_L2_LAMBDA = 1e-5
 # Rationale: Directly penalizes logit scale/variance to prevent gradient explosion
-# Increased from 1e-5 to 1e-4 to better control policy logit explosion (values > 40)
+# GPT recommendation: start at 1e-6, increase to 5e-6, 1e-5, or rarely 3e-5 if needed
 
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
@@ -738,10 +738,9 @@ class Trainer:
                  label_smoothing: float = DEFAULT_LABEL_SMOOTHING,
                  logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA,
                  weight_decay: float = 1e-4,
-                 max_grad_norm: float = 2.0,
+                 max_grad_norm: float = 20.0,
                  value_learning_rate_factor: float = 1.0,
                  value_weight_decay_factor: float = 1.0,
-                 policy_learning_rate_factor: float = 0.25,
                  log_interval_batches: int = 200,
                  run_timestamp: Optional[str] = None,
                  shutdown_handler=None,
@@ -766,7 +765,6 @@ class Trainer:
             max_grad_norm: If not None, clip gradients to this max norm after backward(). Default: 20.0
             value_learning_rate_factor: Factor to multiply learning rate for value head (default: 1.0, no effect)
             value_weight_decay_factor: Factor to multiply weight decay for value head (default: 1.0, no effect)
-            policy_learning_rate_factor: Factor to multiply learning rate for policy head (default: 0.5, reduces policy LR to prevent logit explosion)
             log_interval_batches: How often (in batches) to log progress during training (default: 200)
             run_timestamp: Optional timestamp for the entire run to use in log filenames
             betas: Coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
@@ -788,7 +786,6 @@ class Trainer:
         # Store hyperparameters for logging
         self.value_learning_rate_factor = value_learning_rate_factor
         self.value_weight_decay_factor = value_weight_decay_factor
-        self.policy_learning_rate_factor = policy_learning_rate_factor
         self.original_learning_rate = learning_rate  # Store the original learning rate
         self.betas = betas
         self.eps = eps
@@ -880,13 +877,13 @@ class Trainer:
         if policy_other_weight_decay:
             param_groups.append({
                 'params': policy_other_weight_decay,
-                'lr': learning_rate * policy_learning_rate_factor,
+                'lr': learning_rate,
                 'weight_decay': weight_decay
             })
         if policy_other_no_weight_decay:
             param_groups.append({
                 'params': policy_other_no_weight_decay,
-                'lr': learning_rate * policy_learning_rate_factor,
+                'lr': learning_rate,
                 'weight_decay': 0.0
             })
         
@@ -894,13 +891,13 @@ class Trainer:
         if policy_final_weight_decay:
             param_groups.append({
                 'params': policy_final_weight_decay,
-                'lr': learning_rate * policy_learning_rate_factor,
+                'lr': learning_rate,
                 'weight_decay': weight_decay * 2.0  # Higher weight decay for policy final layer
             })
         if policy_final_no_weight_decay:
             param_groups.append({
                 'params': policy_final_no_weight_decay,
-                'lr': learning_rate * policy_learning_rate_factor,
+                'lr': learning_rate,
                 'weight_decay': 0.0
             })
         
@@ -926,7 +923,7 @@ class Trainer:
         
         # Learning rate scheduler (ReduceLROnPlateau)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.7, patience=5, min_lr=1e-6
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
         )
         
         # Training state
@@ -1016,8 +1013,6 @@ class Trainer:
                     policy_pred, value_pred = self.model(boards, move_stage)
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
-                # Monitor policy predictions for overflow
-                self._monitor_policy_predictions(policy_pred, batch_idx, is_training=False)
                 
                 # TEMPORARY: Enhanced first-NaN detection and batch monitoring
                 if first_nan_detector:
@@ -1184,7 +1179,7 @@ class Trainer:
         )
         
         # Log the error before raising
-        self.logger.error(error_msg)
+        logger.error(error_msg)
         
         # Raise error to exit training
         raise RuntimeError(error_msg)
@@ -1288,26 +1283,6 @@ class Trainer:
         for key in state['mini_epoch_metrics']:
             state['mini_epoch_metrics'][key].append(loss_dict[key])
 
-    def _monitor_policy_predictions(self, policy_pred: torch.Tensor, batch_idx: int, is_training: bool = True) -> None:
-        """Monitor policy predictions for extreme values (informational only, throttled)."""
-        max_policy = policy_pred.max().item()
-        min_policy = policy_pred.min().item()
-        range_policy = max_policy - min_policy
-        phase = "training" if is_training else "validation"
-        
-        # Initialize tracking attributes if they don't exist
-        if not hasattr(self, '_policy_monitoring_logged'):
-            self._policy_monitoring_logged = {'training': False, 'validation': False}
-        
-        # Only log once per mini-epoch to avoid flooding
-        if not self._policy_monitoring_logged[phase]:
-            # Only log if values are extremely large (for monitoring purposes)
-            if max_policy > 80:  # Very large values (informational)
-                logger.info(f"Large policy prediction: max={max_policy:.2f}, range={range_policy:.2f} at batch {batch_idx} ({phase})")
-                self._policy_monitoring_logged[phase] = True
-            elif range_policy > 50:  # Large range between min/max (informational)
-                logger.info(f"Large policy prediction range: {range_policy:.2f} at batch {batch_idx} ({phase})")
-                self._policy_monitoring_logged[phase] = True
 
     def _apply_gradient_clipping(self, state: Dict) -> None:
         """Apply gradient clipping and track gradient norms."""
@@ -1323,11 +1298,6 @@ class Trainer:
         # Clip gradients to avoid exploding gradients (if configured)
         if self.max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-            
-            # Additional policy-specific gradient clipping to prevent logit explosion
-            policy_params = list(self.model.policy_head.parameters())
-            if policy_params:
-                torch.nn.utils.clip_grad_norm_(policy_params, max_norm=5.0)
             
             # Calculate gradient norm after clipping (to verify clipping worked)
             post_clip_gradient_norm = None
@@ -1466,8 +1436,6 @@ class Trainer:
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
-        # Monitor policy predictions for overflow
-        self._monitor_policy_predictions(policy_pred, batch_idx, is_training=True)
         
         # TEMPORARY: Enhanced first-NaN detection and batch monitoring for training
         first_nan_detector = get_global_first_nan_detector()

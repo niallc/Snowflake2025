@@ -18,8 +18,10 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # # Temporary state for retraining:
 
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
-CURRENT_BEST_MODEL_FILE = "epoch13_mini5.pt.gz"
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250924_151002/pipeline_sweep_exp0__99914b_20250924_151002"
+CURRENT_BEST_MODEL_FILE = "epoch14_mini34.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
+# CURRENT_BEST_MODEL_FILE = "epoch13_mini5.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
 # CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
