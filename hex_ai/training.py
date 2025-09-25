@@ -1074,6 +1074,30 @@ class Trainer:
                 for key in val_metrics:
                     val_metrics[key].append(loss_dict[key])
         
+        # CRITICAL: Check if val_metrics is empty before computing averages
+        val_metrics_empty = all(len(values) == 0 for values in val_metrics.values())
+        if val_metrics_empty:
+            # Enhanced debugging information
+            logger.error(f"val_metrics keys: {list(val_metrics.keys())}")
+            logger.error(f"val_metrics lengths: {[len(v) for v in val_metrics.values()]}")
+            logger.error(f"val_losses length: {len(val_losses)}")
+            
+            # Get the last batch's loss_dict for debugging
+            if len(val_losses) > 0:
+                logger.error(f"Last batch total_loss: {val_losses[-1]}")
+                # Note: We can't get the full loss_dict here since it's not stored
+                logger.error("Note: loss_dict was not stored, so we can't check its keys/values")
+            
+            error_msg = (
+                f"CRITICAL: val_metrics is completely empty! "
+                f"Validation loop processed {len(val_losses)} batches but appended 0 metrics. "
+                f"This indicates the append logic in the validation loop is not executing. "
+                f"Epoch: {epoch}, Mini-epoch: {mini_epoch}. "
+                f"Check validation loop for exceptions or early returns that prevent append logic from running."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
         # Compute validation averages
         val_avg = {key: float(np.mean(values)) if values else float('nan') for key, values in val_metrics.items()}
         
@@ -1101,6 +1125,7 @@ class Trainer:
         import time
         import pickle
         import gzip
+        import numpy as np
         from pathlib import Path
         
         # Create comprehensive debug information
