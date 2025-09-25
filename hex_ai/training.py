@@ -922,8 +922,9 @@ class Trainer:
                                         logits_l2_lambda=logits_l2_lambda)
         
         # Learning rate scheduler (ReduceLROnPlateau)
+        # TODO: NOTE, I have reduced min_lr to =2e-6, as a temporary check to see if learning becomes more stable.
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-5
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=2e-6
         )
         
         # Training state

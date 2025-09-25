@@ -23,6 +23,7 @@ from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.data_collection import parse_shard_ranges
+from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 # Create timestamp for the entire run (without minutes/seconds)
@@ -43,46 +44,12 @@ def calculate_mini_epoch_samples(
     num_mini_epochs = max(min_mini_epochs, min(max_mini_epochs, target_mini_epochs))
     return max_samples // num_mini_epochs
 
-# Define your sweep grid here (edit as needed)
-SWEEP = {
-    "batch_size": [256],
-    "max_grad_norm": [2.0],  # Updated default for AdamW
-    "weight_decay": [1e-4],
-    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
-    "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
-    "policy_weight": [0.7],
-    "learning_rate": [3e-4],  # Updated default for AdamW
-    
-    # AdamW optimizer parameters
-    "betas": [(0.9, 0.999)],  # Coefficients for computing running averages
-    "eps": [1e-8],  # Term added to denominator for numerical stability
-    
-    # New KataGo-inspired architecture parameters
-    "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
-    "trunk_channels": [128],  # Number of channels in trunk
-    "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
-    
-    # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
-    # are currently fixed in the architecture but could be made configurable later
-}
+# Get the default sweep configuration from shared location
+# You can override specific parameters by passing overrides to create_hyperparameter_sweep()
+SWEEP = create_hyperparameter_sweep()  # Use default configuration
 
-# Short labels for parameters
-SHORT_LABELS = {
-    "learning_rate": "lr",
-    "batch_size": "bs",
-    "max_grad_norm": "mgn",
-    "dropout_prob": "do",
-    "weight_decay": "wd",
-    "value_learning_rate_factor": "vlrf",
-    "value_weight_decay_factor": "vwdf",
-    "policy_weight": "pw",
-    "value_weight": "vw",
-    "num_blocks": "nb",
-    "trunk_channels": "tc",
-    "betas": "betas",
-    "eps": "eps",
-    # Add more as needed
-}
+# Use shared short labels
+SHORT_LABELS = HYPERPARAMETER_SHORT_LABELS
 
 # Determine which parameters vary in this sweep
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]

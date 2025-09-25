@@ -15,6 +15,111 @@ from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SI
 from hex_ai.value_utils import ValuePredictor
 
 
+# =============================================================
+#  Hyperparameter Configuration
+# =============================================================
+
+# Default hyperparameter sweep configuration
+# This is the central place where all hyperparameters are defined
+DEFAULT_HYPERPARAMETER_SWEEP = {
+    "batch_size": [256],
+    "max_grad_norm": [2.0],  # Updated default for AdamW
+    "weight_decay": [1e-4],
+    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
+    "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
+    "policy_weight": [0.7],
+    "learning_rate": [3e-4],  # Updated default for AdamW
+    
+    # AdamW optimizer parameters
+    "betas": [(0.9, 0.999)],  # Coefficients for computing running averages
+    "eps": [1e-8],  # Term added to denominator for numerical stability
+    
+    # New KataGo-inspired architecture parameters
+    "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
+    "trunk_channels": [128],  # Number of channels in trunk
+    "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
+    
+    # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
+    # are currently fixed in the architecture but could be made configurable later
+}
+
+# Short labels for parameters (used in experiment naming)
+HYPERPARAMETER_SHORT_LABELS = {
+    "learning_rate": "lr",
+    "batch_size": "bs",
+    "max_grad_norm": "mgn",
+    "dropout_prob": "do",
+    "weight_decay": "wd",
+    "value_learning_rate_factor": "vlrf",
+    "value_weight_decay_factor": "vwdf",
+    "policy_weight": "pw",
+    "value_weight": "vw",
+    "num_blocks": "nb",
+    "trunk_channels": "tc",
+    "betas": "betas",
+    "eps": "eps",
+}
+
+
+def create_hyperparameter_sweep(overrides: Dict = None) -> Dict:
+    """
+    Create a hyperparameter sweep configuration with optional overrides.
+    
+    Args:
+        overrides: Dictionary of parameter overrides. Keys should match parameter names,
+                  values should be lists (even single values should be in lists).
+                  
+    Returns:
+        Dictionary with hyperparameter sweep configuration
+        
+    Examples:
+        # Use default configuration
+        sweep = create_hyperparameter_sweep()
+        
+        # Override learning rate
+        sweep = create_hyperparameter_sweep({"learning_rate": [1e-4]})
+        
+        # Override multiple parameters
+        sweep = create_hyperparameter_sweep({
+            "learning_rate": [1e-4, 5e-5],
+            "batch_size": [128, 256]
+        })
+    """
+    sweep = DEFAULT_HYPERPARAMETER_SWEEP.copy()
+    
+    if overrides:
+        for param, values in overrides.items():
+            if param not in sweep:
+                raise ValueError(f"Unknown hyperparameter: {param}. "
+                               f"Available parameters: {list(sweep.keys())}")
+            if not isinstance(values, list):
+                raise ValueError(f"Override values must be lists, got {type(values)} for {param}")
+            sweep[param] = values
+    
+    return sweep
+
+
+def get_single_hyperparameter_config(overrides: Dict = None) -> Dict:
+    """
+    Get a single hyperparameter configuration (first value from each sweep parameter).
+    
+    Args:
+        overrides: Dictionary of parameter overrides
+        
+    Returns:
+        Dictionary with single values for each parameter
+        
+    Examples:
+        # Get default single config
+        config = get_single_hyperparameter_config()
+        
+        # Get config with overridden learning rate
+        config = get_single_hyperparameter_config({"learning_rate": [1e-4]})
+    """
+    sweep = create_hyperparameter_sweep(overrides)
+    return {param: values[0] for param, values in sweep.items()}
+
+
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
     """
     Set up logging configuration for the project.

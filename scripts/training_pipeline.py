@@ -32,6 +32,7 @@ from hex_ai.trmph_processing.cli import create_config_from_args, process_files
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
+from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
 
 # Script imports (moved to top level)
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data, parse_shard_ranges
@@ -73,6 +74,8 @@ class PipelineConfig:
     max_samples: int = 35000000
     max_validation_samples: int = 137000
     results_dir: str = "checkpoints/hyperparameter_tuning"
+    override_checkpoint_hyperparameters: bool = False
+    hyperparameter_overrides: Dict = field(default_factory=dict)
     
     # Pipeline control
     run_game_collection: bool = False  # New: Collect games from multiple sources
@@ -507,17 +510,39 @@ class TrainingStep:
         # Create shutdown handler
         shutdown_handler = GracefulShutdown()
         
-        # Create experiment configurations from sweep
-        from scripts.hyperparam_sweep import SWEEP, all_param_combinations, make_experiment_name
+        # Create experiment configurations from shared sweep
+        sweep = create_hyperparameter_sweep(self.config.hyperparameter_overrides)
         
-        all_configs = list(all_param_combinations(SWEEP))
+        # Generate all parameter combinations
+        import itertools
+        param_names = list(sweep.keys())
+        param_values = list(sweep.values())
+        all_configs = list(itertools.product(*param_values))
+        
         experiments = []
-        for i, config in enumerate(all_configs):
+        for i, config_values in enumerate(all_configs):
+            config = dict(zip(param_names, config_values))
+            
             # Compute value_weight so that policy_weight + value_weight = 1
-            config = dict(config)  # Make a copy to avoid mutating the sweep dict
             if "policy_weight" in config:
                 config["value_weight"] = 1.0 - config["policy_weight"]
-            exp_name = make_experiment_name(config, i, tag="pipeline_sweep")
+            
+            # Create experiment name
+            exp_name = f"pipeline_sweep_{i}"
+            if len(all_configs) > 1:
+                # Add parameter labels for multi-parameter sweeps
+                varying_params = [k for k, v in sweep.items() if len(v) > 1]
+                if varying_params:
+                    labels = []
+                    for param in varying_params:
+                        short_label = HYPERPARAMETER_SHORT_LABELS.get(param, param)
+                        value = config[param]
+                        if isinstance(value, float):
+                            labels.append(f"{short_label}{value:.0e}")
+                        else:
+                            labels.append(f"{short_label}{value}")
+                    exp_name = f"pipeline_sweep_{i}_{'_'.join(labels)}"
+            
             experiments.append({
                 'experiment_name': exp_name,
                 'hyperparameters': config
@@ -548,7 +573,7 @@ class TrainingStep:
             shard_ranges=all_shard_ranges,
             shutdown_handler=shutdown_handler,
             run_timestamp=self.config.run_timestamp,
-            override_checkpoint_hyperparameters=False,
+            override_checkpoint_hyperparameters=self.config.override_checkpoint_hyperparameters,
             shuffle_shards=True
         )
         
@@ -815,6 +840,17 @@ Examples:
     parser.add_argument("--max-samples", type=int, default=35000000, help="Max training samples")
     parser.add_argument("--max-validation-samples", type=int, default=137000, help="Max validation samples")
     parser.add_argument("--results-dir", default="checkpoints/hyperparameter_tuning", help="Results directory")
+    parser.add_argument("--override-checkpoint-hyperparameters", action="store_true", 
+                       help="Override checkpoint hyperparameters with current sweep settings (resets optimizer state)")
+    
+    # Hyperparameter override arguments
+    parser.add_argument("--learning-rate", type=float, help="Override learning rate (e.g., 1e-4)")
+    parser.add_argument("--batch-size", type=int, help="Override batch size")
+    parser.add_argument("--weight-decay", type=float, help="Override weight decay")
+    parser.add_argument("--policy-weight", type=float, help="Override policy weight (value weight will be 1-policy_weight)")
+    parser.add_argument("--max-grad-norm", type=float, help="Override max gradient norm")
+    parser.add_argument("--value-learning-rate-factor", type=float, help="Override value learning rate factor")
+    parser.add_argument("--value-weight-decay-factor", type=float, help="Override value weight decay factor")
     
     # Pipeline control
     parser.add_argument("--run-game-collection", action="store_true", help="Run game collection from multiple sources")
@@ -871,6 +907,23 @@ def main():
             raise ValueError("Must specify either --model-path or --use-current-best-model")
         
 
+        # Collect hyperparameter overrides
+        hyperparameter_overrides = {}
+        if args.learning_rate is not None:
+            hyperparameter_overrides["learning_rate"] = [args.learning_rate]
+        if args.batch_size is not None:
+            hyperparameter_overrides["batch_size"] = [args.batch_size]
+        if args.weight_decay is not None:
+            hyperparameter_overrides["weight_decay"] = [args.weight_decay]
+        if args.policy_weight is not None:
+            hyperparameter_overrides["policy_weight"] = [args.policy_weight]
+        if args.max_grad_norm is not None:
+            hyperparameter_overrides["max_grad_norm"] = [args.max_grad_norm]
+        if args.value_learning_rate_factor is not None:
+            hyperparameter_overrides["value_learning_rate_factor"] = [args.value_learning_rate_factor]
+        if args.value_weight_decay_factor is not None:
+            hyperparameter_overrides["value_weight_decay_factor"] = [args.value_weight_decay_factor]
+
         # Create configuration
         config = PipelineConfig(
             model_path=args.model_path,
@@ -895,6 +948,8 @@ def main():
             max_samples=args.max_samples,
             max_validation_samples=args.max_validation_samples,
             results_dir=args.results_dir,
+            override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters,
+            hyperparameter_overrides=hyperparameter_overrides,
             run_game_collection=args.run_game_collection,
             run_selfplay=not args.no_selfplay and args.selfplay_dir is None,
             run_preprocessing=not args.no_preprocessing,
