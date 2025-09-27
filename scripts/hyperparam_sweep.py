@@ -23,6 +23,7 @@ from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
+from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 # Create timestamp for the entire run (without minutes/seconds)
@@ -169,12 +170,27 @@ Examples:
         help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
     )
     
-    parser.add_argument(
+    # Validation data arguments
+    validation_group = parser.add_argument_group('validation data')
+    
+    validation_group.add_argument(
+        '--validation-dirs',
+        type=str,
+        nargs='*',
+        help='Validation data directories (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
         '--validation-shard-ranges',
         type=str,
-        nargs='+',
-        required=True,
-        help='Shard ranges for validation data. Format: "start-end", "all", or "None" (e.g., --validation-shard-ranges "None" "all" to skip first dir, use all shards from second). Use same values as --shard-ranges if you want identical ranges.'
+        nargs='*',
+        help='Validation shard ranges (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
+        '--no-validation',
+        action='store_true',
+        help='Disable validation entirely'
     )
     
     # Resume training arguments
@@ -234,10 +250,21 @@ Examples:
         print(f"ERROR: Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
         sys.exit(1)
     
-    # Validate validation shard range arguments
-    if args.validation_shard_ranges and len(args.validation_shard_ranges) != len(args.data_dirs):
-        print(f"ERROR: Number of validation shard ranges ({len(args.validation_shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
-        sys.exit(1)
+    # Resolve validation configuration
+    validation_dirs, validation_shard_ranges = resolve_validation_config(
+        validation_dirs=args.validation_dirs,
+        validation_shard_ranges=args.validation_shard_ranges,
+        no_validation=args.no_validation
+    )
+    
+    # Validate validation configuration if not disabled
+    if validation_dirs and validation_shard_ranges:
+        if len(validation_dirs) != len(validation_shard_ranges):
+            print(f"ERROR: Number of validation directories ({len(validation_dirs)}) must match number of validation shard ranges ({len(validation_shard_ranges)})")
+            sys.exit(1)
+    
+    # Log validation summary
+    log_validation_summary(validation_dirs, validation_shard_ranges)
 
     # Handle current best model option
     resume_from = None
@@ -324,7 +351,8 @@ Examples:
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=args.data_dirs,
-            validation_shard_ranges=args.validation_shard_ranges,
+            validation_dirs=validation_dirs,
+            validation_shard_ranges=validation_shard_ranges,
             results_dir=args.results_dir,
             train_ratio=0.8,
             num_epochs=args.epochs,

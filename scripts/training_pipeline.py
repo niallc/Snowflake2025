@@ -36,6 +36,7 @@ from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SH
 
 # Script imports (moved to top level)
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
+from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 from scripts.shuffle_processed_data import DataShuffler
 
 
@@ -62,7 +63,9 @@ class PipelineConfig:
     cleaned_trmph_data_dirs: List[str] = field(default_factory=list)  # Already cleaned .trmph files
     processed_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])  # Existing processed data
     shard_ranges: List[str] = field(default_factory=lambda: ["all"])
-    validation_shard_ranges: List[str]  # Validation shard ranges (required)
+    validation_dirs: Optional[List[str]] = None  # Validation data directories (optional, defaults to hardcoded values)
+    validation_shard_ranges: Optional[List[str]] = None  # Validation shard ranges (optional, defaults to hardcoded values)
+    no_validation: bool = False  # Disable validation entirely
     selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
     # Processing configuration
@@ -130,9 +133,16 @@ class PipelineConfig:
         if self.shard_ranges and len(self.shard_ranges) != len(self.processed_data_dirs):
             raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of processed data directories ({len(self.processed_data_dirs)})")
         
-        # Validate validation shard ranges match processed data directories
-        if self.validation_shard_ranges and len(self.validation_shard_ranges) != len(self.processed_data_dirs):
-            raise ValueError(f"Number of validation shard ranges ({len(self.validation_shard_ranges)}) must match number of processed data directories ({len(self.processed_data_dirs)})")
+        # Resolve validation configuration
+        resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
+            validation_dirs=self.validation_dirs,
+            validation_shard_ranges=self.validation_shard_ranges,
+            no_validation=self.no_validation
+        )
+        
+        # Store resolved validation configuration
+        self.resolved_validation_dirs = resolved_validation_dirs
+        self.resolved_validation_ranges = resolved_validation_ranges
         
         # Validate that collected data will be used for training
         if self.run_game_collection and not self.run_preprocessing and not self.run_trmph_processing and not self.run_shuffling:
@@ -558,15 +568,18 @@ class TrainingStep:
             all_data_dirs = [new_shuffled_dir] + self.config.processed_data_dirs
             all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
             # For validation, use "all" for new data and existing validation ranges
-            all_validation_shard_ranges = ["all"] + self.config.validation_shard_ranges
+            all_validation_dirs = [new_shuffled_dir] + self.config.resolved_validation_dirs
+            all_validation_shard_ranges = ["all"] + self.config.resolved_validation_ranges
         else:
             all_data_dirs = self.config.processed_data_dirs
             all_shard_ranges = self.config.shard_ranges
-            all_validation_shard_ranges = self.config.validation_shard_ranges
+            all_validation_dirs = self.config.resolved_validation_dirs
+            all_validation_shard_ranges = self.config.resolved_validation_ranges
         
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=all_data_dirs,
+            validation_dirs=all_validation_dirs,
             validation_shard_ranges=all_validation_shard_ranges,
             results_dir=results_dir,
             train_ratio=0.8,
@@ -840,8 +853,28 @@ Examples:
                        help="Existing processed data directories for training")
     parser.add_argument("--shard-ranges", type=str, nargs='+',
                        help='Shard ranges for processed data directories. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
-    parser.add_argument("--validation-shard-ranges", type=str, nargs='+', required=True,
-                       help='Shard ranges for validation data. Format: "start-end", "all", or "None" (e.g., --validation-shard-ranges "None" "all" to skip first dir, use all shards from second). Use same values as --shard-ranges if you want identical ranges.')
+    # Validation data arguments
+    validation_group = parser.add_argument_group('validation data')
+    
+    validation_group.add_argument(
+        '--validation-dirs',
+        type=str,
+        nargs='*',
+        help='Validation data directories (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
+        '--validation-shard-ranges',
+        type=str,
+        nargs='*',
+        help='Validation shard ranges (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
+        '--no-validation',
+        action='store_true',
+        help='Disable validation entirely'
+    )
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
@@ -951,7 +984,9 @@ def main():
             cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
             processed_data_dirs=args.processed_data_dirs,
             shard_ranges=getattr(args, 'shard_ranges', None),
+            validation_dirs=args.validation_dirs,
             validation_shard_ranges=args.validation_shard_ranges,
+            no_validation=args.no_validation,
             selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
             position_selector=args.position_selector,

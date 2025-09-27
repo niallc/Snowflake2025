@@ -28,12 +28,14 @@ from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEFAULT_P
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
 from hex_ai.data_pipeline import discover_processed_files
 from hex_ai.error_handling import GracefulShutdownRequested
+from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 
 logger = logging.getLogger(__name__)
 
 
 def create_datasets(data_dirs: List[str], 
                    shard_ranges: List[str],
+                   validation_dirs: List[str],
                    validation_shard_ranges: List[str],
                    train_ratio: float = 0.8,
                    max_examples_unaugmented: Optional[int] = None,
@@ -64,7 +66,7 @@ def create_datasets(data_dirs: List[str],
         )
         
         val_dataset = StreamingMixedShardDataset(
-            data_dirs=data_dirs,
+            data_dirs=validation_dirs,
             shard_ranges=validation_shard_ranges,
             pool_size=pool_size,
             refill_threshold=refill_threshold,
@@ -74,7 +76,7 @@ def create_datasets(data_dirs: List[str],
             verbose=verbose,
             random_seed=random_seed,
             is_validation=True  # Enable validation-specific behavior
-        ) if max_validation_examples else None
+        ) if max_validation_examples and validation_dirs else None
         
         # Log data summary after shard discovery
         train_summary = train_dataset.get_data_summary()
@@ -354,7 +356,8 @@ def save_overall_results(results_path, overall_results):
 def run_hyperparameter_tuning_current_data(
     experiments: List[Dict],
     data_dirs: Union[str, List[str]],  # Single directory or list of directories
-    validation_shard_ranges: List[str],  # Shard ranges for validation data
+    validation_dirs: Optional[List[str]] = None,  # Override validation directories
+    validation_shard_ranges: Optional[List[str]] = None,  # Override validation ranges
     results_dir: str = "checkpoints/hyperparameter_tuning",
     train_ratio: float = 0.8,
     num_epochs: int = 10,
@@ -382,6 +385,8 @@ def run_hyperparameter_tuning_current_data(
     Args:
         experiments: List of experiment configurations
         data_dirs: Single data directory (str) or list of data directories (List[str])
+        validation_dirs: Override validation directories (defaults to hardcoded values)
+        validation_shard_ranges: Override validation shard ranges (defaults to hardcoded values)
         results_dir: Directory to save results
         train_ratio: Ratio for train/val split
         num_epochs: Number of training epochs
@@ -394,7 +399,6 @@ def run_hyperparameter_tuning_current_data(
         mini_epoch_samples: Number of samples per mini-epoch
         resume_from: Optional path to resume from (file or directory)
         shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
-        validation_shard_ranges: Optional list of shard ranges for validation data (e.g., ["None", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         pool_size: Target number of positions to maintain in memory (default: 1M)
         refill_threshold: Refill pool when it drops below this many positions (default: 750K)
@@ -430,16 +434,28 @@ def run_hyperparameter_tuning_current_data(
     if len(shard_ranges) != len(data_dirs):
         raise ValueError(f"Number of shard_ranges ({len(shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
     
-    # Validate that we have the right number of validation shard ranges
-    if len(validation_shard_ranges) != len(data_dirs):
-        raise ValueError(f"Number of validation_shard_ranges ({len(validation_shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
+    # Resolve validation configuration
+    resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
+        validation_dirs=validation_dirs,
+        validation_shard_ranges=validation_shard_ranges,
+        no_validation=False  # We don't support no_validation in this function
+    )
+    
+    # Validate validation configuration if not empty
+    if resolved_validation_dirs and resolved_validation_ranges:
+        if len(resolved_validation_dirs) != len(resolved_validation_ranges):
+            raise ValueError(f"Number of validation directories ({len(resolved_validation_dirs)}) must match number of validation shard ranges ({len(resolved_validation_ranges)})")
     
     # Validate training shard ranges
     from hex_ai.data_collection import validate_shard_ranges
     validate_shard_ranges(data_dirs, shard_ranges, context_name="training", logger=logger)
     
-    # Validate validation shard ranges
-    validate_shard_ranges(data_dirs, validation_shard_ranges, context_name="validation", logger=logger)
+    # Validate validation shard ranges if not empty
+    if resolved_validation_dirs and resolved_validation_ranges:
+        validate_shard_ranges(resolved_validation_dirs, resolved_validation_ranges, context_name="validation", logger=logger)
+    
+    # Log validation summary
+    log_validation_summary(resolved_validation_dirs, resolved_validation_ranges)
     
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
@@ -449,7 +465,8 @@ def run_hyperparameter_tuning_current_data(
     train_loader, val_loader = create_datasets(
         data_dirs=data_dirs,
         shard_ranges=shard_ranges,
-        validation_shard_ranges=validation_shard_ranges,
+        validation_dirs=resolved_validation_dirs,
+        validation_shard_ranges=resolved_validation_ranges,
         train_ratio=train_ratio,
         max_examples_unaugmented=max_examples_unaugmented,
         max_validation_examples=max_validation_examples,
