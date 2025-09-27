@@ -16,19 +16,19 @@ maintaining deterministic gameplay within each run.
 Examples:
 
 1. Compare strategies using 100 diverse openings:
-   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+   PYTHONPATH=. python scripts/run_tournament.py \
      --model=current_best \
      --strategies=policy,mcts_122,fixed_tree_13_8 \
      --num-openings=100
 
 2. Use specific opening file:
-   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+   PYTHONPATH=. python scripts/run_tournament.py \
      --model=current_best \
      --strategies=mcts_100,mcts_200 \
      --opening-file=data/deterministic_openings.txt
 
 3. Use custom temperature:
-   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+   PYTHONPATH=. python scripts/run_tournament.py \
      --model=current_best \
      --strategies=policy,mcts_122 \
      --num-openings=150 \
@@ -36,13 +36,13 @@ Examples:
 
 4. Get different opening sets for multiple runs:
    # Each run automatically gets a different seed (from time)
-   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+   PYTHONPATH=. python scripts/run_tournament.py \
      --model=current_best \
      --strategies=policy,mcts_122 \
      --num-openings=100
    
    # Or manually specify seeds for reproducible results
-   PYTHONPATH=. python scripts/run_deterministic_tournament.py \
+   PYTHONPATH=. python scripts/run_tournament.py \
      --model=current_best \
      --strategies=policy,mcts_122 \
      --num-openings=100 \
@@ -103,7 +103,7 @@ DEFAULT_SEED = None  # Will be set to int(time.time()) if None
 DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep21"
 TRMPH_FILE_PATTERN = "*.trmph"
-OUTPUT_DIR_PREFIX = "data/tournament_play/deterministic_tournament_"
+OUTPUT_DIR_PREFIX = "data/tournament_play/tournament_"
 
 # TODO: Consider adding configuration for:
 # Low priority: Timeout handling for long-running strategies
@@ -616,7 +616,7 @@ def play_deterministic_game(
     }
 
 
-def run_deterministic_tournament(
+def run_tournament(
     strategy_configs: List[StrategyConfig],
     openings: List[OpeningPosition],
     temperature: float = DEFAULT_TEMPERATURE,
@@ -954,7 +954,7 @@ def main():
     
     # Create unified script config
     script_config = ScriptConfig(
-        script_type="deterministic_tournament",
+        script_type="tournament",
         models=model_paths,
         strategies=strategy_names,
         num_games=len(openings),
@@ -981,7 +981,7 @@ def main():
     print()
     
     # Run tournament
-    result = run_deterministic_tournament(
+    result = run_tournament(
         strategy_configs=strategy_configs,
         openings=openings,
         temperature=args.temperature,
@@ -997,7 +997,7 @@ def main():
         "directory": output_dir
     }
     
-    print_script_results("deterministic_tournament", result, script_config, output_files)
+    print_script_results("tournament", result, script_config, output_files)
 
 
 if __name__ == "__main__":

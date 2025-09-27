@@ -18,7 +18,7 @@ from typing import List
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.run_deterministic_tournament import (
+from scripts.run_tournament import (
     OpeningPosition, StrategyConfig,
     extract_openings_from_trmph_file, generate_diverse_openings,
     play_deterministic_game

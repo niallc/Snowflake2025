@@ -1,7 +1,7 @@
 """
 Utilities for deterministic tournament management.
 
-This module provides utilities to break down the large run_deterministic_tournament()
+This module provides utilities to break down the large run_tournament()
 function into smaller, focused components.
 """
 

@@ -314,7 +314,7 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     Parse tournament parameters from command line arguments.
     
     This function consolidates the duplicate parameter parsing logic from
-    run_tournament.py and run_deterministic_tournament.py.
+    run_tournament.py.
     
     Args:
         args: Parsed command line arguments
