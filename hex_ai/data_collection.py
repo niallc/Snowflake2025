@@ -745,60 +745,52 @@ def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
         raise
 
 
-def parse_shard_ranges(shard_ranges: list, data_dirs: list, logger=None) -> tuple:
+def validate_shard_ranges(data_dirs: List[str], 
+                         shard_ranges: List[str], 
+                         context_name: str = "data",
+                         logger=None) -> None:
     """
-    Parse multiple shard ranges and convert to skip_files and max_files format.
+    Validate shard ranges for data directories, handling "None" ranges by skipping directories.
     
     Args:
-        shard_ranges: List of shard range strings (e.g., ["251-300", "all"])
-        data_dirs: List of data directory paths for validation
-        logger: Optional logger for warnings
-        
-    Returns:
-        Tuple of (skip_files_list, max_files_list) - one value per data directory
+        data_dirs: List of data directory paths
+        shard_ranges: List of shard range strings (e.g., ["251-300", "all", "None"])
+        context_name: Context name for logging (e.g., "training", "validation")
+        logger: Optional logger instance
         
     Raises:
-        ValueError: If parsing fails or validation fails
+        RuntimeError: If validation fails or no data files found
     """
     if logger is None:
         logger = logging.getLogger(__name__)
     
-    # Set default shard ranges if not provided
-    if not shard_ranges:
-        shard_ranges = ["all"] * len(data_dirs)
-        logger.info(f"Using default shard ranges: {shard_ranges}")
+    from hex_ai.data_pipeline import discover_processed_files
     
-    # Validate lengths match
-    if len(shard_ranges) != len(data_dirs):
-        raise ValueError(f"Number of shard ranges ({len(shard_ranges)}) must match number of data directories ({len(data_dirs)})")
-    
-    # Parse shard ranges and convert to skip_files and max_files format
-    skip_files = []
-    max_files = []
-    for i, (range_str, data_dir) in enumerate(zip(shard_ranges, data_dirs)):
+    for i, (data_dir, shard_range) in enumerate(zip(data_dirs, shard_ranges)):
         try:
-            start, end = parse_shard_range(range_str, data_dir)
+            # Skip directories with "None" shard range
+            if shard_range.lower() == "none":
+                logger.info(f"{context_name.title()} directory {i+1}: Skipping {data_dir} (range: {shard_range})")
+                continue
+            
+            # Parse shard range for this directory
+            start, end = parse_shard_range(shard_range, data_dir)
             
             if end is None:  # 'all' case
-                skip_files.append(0)
-                max_files.append(None)  # No limit
+                skip_files = 0
+                max_files = None
             else:
-                # For range start-end, we skip the first 'start' files and limit to 'end-start+1' files
-                skip_files.append(start)
-                max_files.append(end - start + 1)  # Number of files in the range
-                
-                # Check if the data directory has enough shards
-                data_path = Path(data_dir)
-                if data_path.exists():
-                    shard_files = list(data_path.glob("shuffled_*.pkl.gz"))
-                    max_shard = len(shard_files) - 1
-                    if end > max_shard:
-                        logger.warning(f"Data directory {data_dir} only has shards 0-{max_shard}, but range specifies up to {end}")
-                else:
-                    logger.warning(f"Data directory {data_dir} does not exist")
-                    
-        except ValueError as e:
-            raise ValueError(f"Error parsing shard range for {data_dir}: {e}")
-    
-    logger.info(f"Parsed shard ranges: {list(zip(data_dirs, shard_ranges, skip_files, max_files))}")
-    return skip_files, max_files
+                skip_files = start
+                max_files = end - start + 1
+            
+            # Discover files in this directory
+            data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
+            
+            if not data_files:
+                raise RuntimeError(f"No {context_name} data files found in {data_dir} with range {shard_range}")
+            
+            logger.info(f"{context_name.title()} directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
+            
+        except Exception as e:
+            logger.error(f"Failed to validate {context_name} data in {data_dir}: {e}")
+            raise RuntimeError(f"Failed to validate {context_name} data in {data_dir}: {e}")

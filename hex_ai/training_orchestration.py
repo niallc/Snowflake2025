@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 def create_datasets(data_dirs: List[str], 
                    shard_ranges: List[str],
+                   validation_shard_ranges: List[str],
                    train_ratio: float = 0.8,
                    max_examples_unaugmented: Optional[int] = None,
                    max_validation_examples: Optional[int] = None,
@@ -64,14 +65,15 @@ def create_datasets(data_dirs: List[str],
         
         val_dataset = StreamingMixedShardDataset(
             data_dirs=data_dirs,
-            shard_ranges=shard_ranges,
+            shard_ranges=validation_shard_ranges,
             pool_size=pool_size,
             refill_threshold=refill_threshold,
             max_memory_gb=max_memory_gb,
             enable_augmentation=False,  # Validation dataset is not augmented
             max_examples_unaugmented=max_validation_examples,
             verbose=verbose,
-            random_seed=random_seed
+            random_seed=random_seed,
+            is_validation=True  # Enable validation-specific behavior
         ) if max_validation_examples else None
         
         # Log data summary after shard discovery
@@ -84,6 +86,17 @@ def create_datasets(data_dirs: List[str],
         logger.info(f"Total shards: {train_summary['total_shards']}")
         logger.info(f"Data directories: {train_summary['directories']}")
         logger.info("=" * 60)
+        
+        # Log validation data summary if validation dataset exists
+        if val_dataset is not None:
+            val_summary = val_dataset.get_data_summary()
+            logger.info("VALIDATION DATA SUMMARY")
+            logger.info("=" * 60)
+            logger.info(f"Estimated total positions: ~{val_summary['estimated_total_positions']:,}")
+            logger.info(f"Estimated total games: ~{val_summary['estimated_total_games']:,}")
+            logger.info(f"Total shards: {val_summary['total_shards']}")
+            logger.info(f"Data directories: {val_summary['directories']}")
+            logger.info("=" * 60)
         
         # Create DataLoaders from the datasets
         train_loader = torch.utils.data.DataLoader(
@@ -222,8 +235,6 @@ def run_single_experiment(
     
     model = TwoHeadedResNet(**model_params).to(device)
     
-
-    
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -266,7 +277,7 @@ def run_single_experiment(
         raise
     finally:
         # TEMPORARY: Cleanup enhanced NaN detection logging
-        # TODO: Remove after confirming training stability (3+ successful runs)
+        # TODO: Remove after confirming training stability (3+ successful runs without NaN issues)
         from hex_ai.nan_debug_utils import cleanup_global_first_nan_detector
         cleanup_global_first_nan_detector()
 
@@ -340,11 +351,10 @@ def save_overall_results(results_path, overall_results):
     with open(results_path / "overall_results.json", "w") as f:
         json.dump(overall_results, f, indent=2, default=str)
 
-# Refactored main function
-
 def run_hyperparameter_tuning_current_data(
     experiments: List[Dict],
-    data_dirs: Union[str, List[str]],  # Updated to support multiple directories
+    data_dirs: Union[str, List[str]],  # Single directory or list of directories
+    validation_shard_ranges: List[str],  # Shard ranges for validation data
     results_dir: str = "checkpoints/hyperparameter_tuning",
     train_ratio: float = 0.8,
     num_epochs: int = 10,
@@ -355,9 +365,9 @@ def run_hyperparameter_tuning_current_data(
     experiment_name: Optional[str] = None,
     enable_augmentation: bool = True,
     mini_epoch_samples: int = 128000,
-    resume_from: Optional[str] = None,  # New: Resume from checkpoint file
-    shard_ranges: Optional[List[str]] = None,  # New: Shard ranges for each directory (e.g., ["251-300", "all"])
-    shuffle_shards: bool = True,  # New: Control whether to shuffle data shards
+    resume_from: Optional[str] = None,  # Resume from checkpoint file
+    shard_ranges: Optional[List[str]] = None,  # Shard ranges for each directory (e.g., ["251-300", "all"])
+    shuffle_shards: bool = True,  # Control whether to shuffle data shards
     pool_size: int = DEFAULT_POOL_SIZE,  # Pool size for mixed dataset
     refill_threshold: int = DEFAULT_REFILL_THRESHOLD,  # Refill threshold for mixed dataset
     max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,  # Memory limit for mixed dataset
@@ -384,6 +394,7 @@ def run_hyperparameter_tuning_current_data(
         mini_epoch_samples: Number of samples per mini-epoch
         resume_from: Optional path to resume from (file or directory)
         shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
+        validation_shard_ranges: Optional list of shard ranges for validation data (e.g., ["None", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         pool_size: Target number of positions to maintain in memory (default: 1M)
         refill_threshold: Refill pool when it drops below this many positions (default: 750K)
@@ -399,8 +410,6 @@ def run_hyperparameter_tuning_current_data(
     # Handle backward compatibility: convert single directory to list
     if isinstance(data_dirs, str):
         data_dirs = [data_dirs]
-        # data_weights = None  # Single directory doesn't need weights
-        skip_files = None # Single directory doesn't need per-directory skip
     
     if max_validation_examples is None:
         max_validation_examples = max_examples_unaugmented
@@ -421,28 +430,16 @@ def run_hyperparameter_tuning_current_data(
     if len(shard_ranges) != len(data_dirs):
         raise ValueError(f"Number of shard_ranges ({len(shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
     
-    # Do a quick validation that the directories exist and have data
-    from hex_ai.data_collection import parse_shard_range
-    from hex_ai.data_pipeline import discover_processed_files
-    for i, (data_dir, shard_range) in enumerate(zip(data_dirs, shard_ranges)):
-        try:
-            start, end = parse_shard_range(shard_range, data_dir)
-            if end is None:
-                skip_files = 0
-                max_files = None
-            else:
-                skip_files = start
-                max_files = end - start + 1
-            
-            data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
-            if not data_files:
-                raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
-            
-            logger.info(f"Directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
-            
-        except Exception as e:
-            logger.error(f"Failed to validate data in {data_dir}: {e}")
-            raise RuntimeError(f"Failed to validate data in {data_dir}: {e}")
+    # Validate that we have the right number of validation shard ranges
+    if len(validation_shard_ranges) != len(data_dirs):
+        raise ValueError(f"Number of validation_shard_ranges ({len(validation_shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
+    
+    # Validate training shard ranges
+    from hex_ai.data_collection import validate_shard_ranges
+    validate_shard_ranges(data_dirs, shard_ranges, context_name="training", logger=logger)
+    
+    # Validate validation shard ranges
+    validate_shard_ranges(data_dirs, validation_shard_ranges, context_name="validation", logger=logger)
     
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
@@ -452,6 +449,7 @@ def run_hyperparameter_tuning_current_data(
     train_loader, val_loader = create_datasets(
         data_dirs=data_dirs,
         shard_ranges=shard_ranges,
+        validation_shard_ranges=validation_shard_ranges,
         train_ratio=train_ratio,
         max_examples_unaugmented=max_examples_unaugmented,
         max_validation_examples=max_validation_examples,

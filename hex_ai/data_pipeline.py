@@ -125,6 +125,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         max_examples_unaugmented: Stop after yielding this many (unaugmented) examples
         verbose: Verbose level (2=default, 3=detailed pool/shard info)
         random_seed: Random seed for reproducible behavior
+        is_validation: Whether this is a validation dataset (enables special validation behavior)
     """
     
     def __init__(self,
@@ -136,7 +137,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                  enable_augmentation: bool = True,
                  max_examples_unaugmented: Optional[int] = None,
                  verbose: int = 2,
-                 random_seed: Optional[int] = None):
+                 random_seed: Optional[int] = None,
+                 is_validation: bool = False):
         super().__init__()
         
         # Validate inputs
@@ -162,6 +164,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.max_examples_unaugmented = max_examples_unaugmented
         self.verbose = verbose
         self.random_seed = random_seed
+        self.is_validation = is_validation
         
         # Set up random seed
         if random_seed is not None:
@@ -190,8 +193,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self._discover_shards()
         self._calculate_directory_weights()
         
+        # Validation-specific initialization
+        if self.is_validation:
+            self._initialize_validation_dataset()
+        
         if self.verbose:
-            self.logger.info(f"[StreamingMixedShardDataset] Initialized with {len(self.data_dirs)} directories, "
+            dataset_type = "validation" if self.is_validation else "training"
+            self.logger.info(f"[StreamingMixedShardDataset] Initialized {dataset_type} dataset with {len(self.data_dirs)} directories, "
                            f"pool_size={self.pool_size:,}, refill_threshold={self.refill_threshold:,}")
             for i, (dir_path, weight, shard_count) in enumerate(zip(self.data_dirs, self.directory_weights, [len(q) for q in self.shard_queues])):
                 if self.verbose >= 3:
@@ -205,6 +213,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         for i, (data_dir, shard_range) in enumerate(zip(self.data_dirs, self.shard_ranges)):
             try:
+                # Skip directories with "None" shard range
+                if shard_range.lower() == "none":
+                    if self.verbose >= 2:
+                        self.logger.info(f"Directory {i+1}: Skipping {data_dir} (range: {shard_range})")
+                    self.shard_queues.append([])  # Empty queue for this directory
+                    continue
+                
                 # Parse shard range for this directory
                 start, end = parse_shard_range(shard_range, data_dir)
                 
@@ -309,32 +324,43 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     def reset(self):
         """Reset dataset for new epoch."""
         if self.verbose >= 2:
-            self.logger.info(f"[StreamingMixedShardDataset] Resetting for new epoch...")
+            dataset_type = "validation" if self.is_validation else "training"
+            self.logger.info(f"[StreamingMixedShardDataset] Resetting {dataset_type} dataset for new epoch...")
         
-        # Restore original shard queues
-        self.shard_queues = [queue.copy() for queue in self._original_shard_queues]
-        
-        # Clear loaded shards tracking
-        self.loaded_shards = set()
-        
-        # Clear position pool and reset counters
-        self.position_pool = []
+        # Reset counters
         self.total_positions_yielded = 0
         self.total_shards_loaded = 0
         self.approx_batch_count = 0
         self._memory_warning_logged = False
         self._shards_exhausted_logged = False
         
-        # Shuffle shard queues for this epoch (using same random seed for reproducibility)
-        for queue in self.shard_queues:
-            random.shuffle(queue)
-        
-        # Refill initial pool
-        self._refill_pool()
-        
-        if self.verbose >= 2:
-            total_shards = sum(len(queue) for queue in self.shard_queues)
-            self.logger.info(f"[StreamingMixedShardDataset] Reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
+        if self.is_validation:
+            # For validation datasets, reset the position index
+            if hasattr(self, 'validation_positions'):
+                self.validation_position_index = 0
+                if self.verbose >= 2:
+                    self.logger.info(f"[StreamingMixedShardDataset] Validation dataset reset: {len(self.validation_positions):,} positions available")
+        else:
+            # Training dataset reset logic (original)
+            # Restore original shard queues
+            self.shard_queues = [queue.copy() for queue in self._original_shard_queues]
+            
+            # Clear loaded shards tracking
+            self.loaded_shards = set()
+            
+            # Clear position pool
+            self.position_pool = []
+            
+            # Shuffle shard queues for this epoch (using same random seed for reproducibility)
+            for queue in self.shard_queues:
+                random.shuffle(queue)
+            
+            # Refill initial pool
+            self._refill_pool()
+            
+            if self.verbose >= 2:
+                total_shards = sum(len(queue) for queue in self.shard_queues)
+                self.logger.info(f"[StreamingMixedShardDataset] Training dataset reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
     
     def _calculate_directory_weights(self):
         """Calculate proportional weights for each directory based on shard counts."""
@@ -348,6 +374,61 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         if self.verbose:
             self.logger.info(f"Directory weights: {[f'{w:.3f}' for w in self.directory_weights]}")
+    
+    def _initialize_validation_dataset(self):
+        """
+        Initialize validation dataset with memory guards and shuffling.
+        Loads all validation data into memory, applies memory guards, and shuffles deterministically.
+        """
+        # Load all validation data into memory for shuffling
+        all_validation_positions = []
+        
+        for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
+            if not shard_queue:
+                continue
+                
+            for shard_path in shard_queue:
+                try:
+                    with gzip.open(shard_path, 'rb') as f:
+                        data = pickle.load(f)
+                    
+                    if isinstance(data, dict) and 'examples' in data:
+                        all_validation_positions.extend(data['examples'])
+                        
+                except Exception as e:
+                    self.logger.error(f"Failed to load validation shard {shard_path}: {e}")
+                    raise RuntimeError(f"Failed to load validation shard {shard_path}: {e}")
+        
+        # Memory guards - crash if validation data is too large
+        estimated_memory_gb = len(all_validation_positions) * 0.0001  # Rough estimate: 100 bytes per position
+        estimated_positions = len(all_validation_positions)
+        
+        if estimated_memory_gb > 3.0:
+            raise RuntimeError(f"Validation data would use {estimated_memory_gb:.1f}GB, exceeds 3GB limit")
+        
+        if estimated_positions > 5_000_000:
+            raise RuntimeError(f"Validation data would have {estimated_positions:,} positions, exceeds 5M limit")
+        
+        # Shuffle validation data deterministically
+        if self.random_seed is not None:
+            random.seed(self.random_seed)
+        random.shuffle(all_validation_positions)
+        
+        # Limit to max_validation_examples if specified
+        if self.max_examples_unaugmented is not None and len(all_validation_positions) > self.max_examples_unaugmented:
+            all_validation_positions = all_validation_positions[:self.max_examples_unaugmented]
+        
+        # Store shuffled validation data
+        self.validation_positions = all_validation_positions
+        self.validation_position_index = 0
+        
+        # Small validation set warning
+        if len(all_validation_positions) < 10_000:
+            self.logger.warning(f"WARNING: Only {len(all_validation_positions):,} validation samples (recommended: >= 10,000)")
+        
+        if self.verbose:
+            self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
+                           f"estimated {estimated_memory_gb:.2f}GB memory usage")
     
     def _monitor_memory(self) -> bool:
         """
@@ -375,12 +456,19 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     def __iter__(self):
         """
         Main iteration logic - yields positions from the mixed pool.
+        For validation datasets, yields from pre-shuffled validation data.
         """
         # Reset statistics
         self.total_positions_yielded = 0
         self.total_shards_loaded = 0
         self.approx_batch_count = 0
         
+        # Handle validation datasets differently
+        if self.is_validation:
+            yield from self._iterate_validation_data()
+            return
+        
+        # Training dataset logic (original)
         # Initial pool fill
         self._refill_pool()
         
@@ -415,6 +503,26 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if self.verbose >= 5:
                 self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
                                f"yielded {self.total_positions_yielded:,} positions from {self.total_shards_loaded} shards")
+    
+    def _iterate_validation_data(self):
+        """
+        Iterate through pre-shuffled validation data.
+        Yields positions from the in-memory validation dataset in shuffled order.
+        """
+        if not hasattr(self, 'validation_positions'):
+            raise RuntimeError("Validation dataset not properly initialized")
+        
+        for position in self.validation_positions:
+            yield self._process_position(position)
+            self.total_positions_yielded += 1
+            
+            # Update batch count (approximate)
+            if self.total_positions_yielded % 256 == 0:
+                self.approx_batch_count += 1
+        
+        if self.verbose >= 2:
+            self.logger.info(f"[StreamingMixedShardDataset] Validation iteration complete: "
+                           f"yielded {self.total_positions_yielded:,} positions")
     
     def _refill_pool(self):
         """Load new shards and add positions to the pool."""

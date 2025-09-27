@@ -22,7 +22,6 @@ from pathlib import Path
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
-from hex_ai.data_collection import parse_shard_ranges
 from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
@@ -170,6 +169,14 @@ Examples:
         help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
     )
     
+    parser.add_argument(
+        '--validation-shard-ranges',
+        type=str,
+        nargs='+',
+        required=True,
+        help='Shard ranges for validation data. Format: "start-end", "all", or "None" (e.g., --validation-shard-ranges "None" "all" to skip first dir, use all shards from second). Use same values as --shard-ranges if you want identical ranges.'
+    )
+    
     # Resume training arguments
     parser.add_argument(
         '--use-current-best-model',
@@ -225,6 +232,11 @@ Examples:
     # Validate shard range arguments
     if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
         print(f"ERROR: Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
+        sys.exit(1)
+    
+    # Validate validation shard range arguments
+    if args.validation_shard_ranges and len(args.validation_shard_ranges) != len(args.data_dirs):
+        print(f"ERROR: Number of validation shard ranges ({len(args.validation_shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
         sys.exit(1)
 
     # Handle current best model option
@@ -312,6 +324,7 @@ Examples:
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=args.data_dirs,
+            validation_shard_ranges=args.validation_shard_ranges,
             results_dir=args.results_dir,
             train_ratio=0.8,
             num_epochs=args.epochs,
