@@ -561,7 +561,7 @@ class TrainingStep:
             data_dirs=all_data_dirs,
             results_dir=results_dir,
             train_ratio=0.8,
-            num_epochs=2,  # Default from hyperparam_sweep
+            num_epochs=4,  # Default from hyperparam_sweep
             early_stopping_patience=None,
             random_seed=42,
             max_examples_unaugmented=self.config.max_samples,

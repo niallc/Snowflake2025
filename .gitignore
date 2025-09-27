@@ -75,6 +75,8 @@ write_ups/gumbel_noise_temperature_fix.md
 write_ups/policy_logit_explosion_analysis.md
 write_ups/nan_validation_investigation.md
 write_ups/tournament_improvements_plan.md
+write_ups/validation_data_consistency_plan.md
+
 
 
 # VSCode
