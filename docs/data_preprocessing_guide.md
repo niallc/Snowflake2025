@@ -97,12 +97,12 @@ Use this when you have existing processed data and want to train:
 python scripts/training_pipeline.py \
   --use-current-best-model \
   --processed-data-dirs data/processed/sf18_shuffled data/processed/shuffled_my_new_data \
-  --shard_ranges "221-250" "all" \
+  --shard-ranges "221-250" "all" \
   --no-selfplay --no-preprocessing --no-trmph-processing --no-shuffling
 ```
 
 **Key points**:
-- `--shard_ranges` must match the number of `--processed-data-dirs`
+- `--shard-ranges` must match the number of `--processed-data-dirs`
 - Use `"all"` for new data, specific ranges like `"221-250"` for existing data
 - All processing steps are disabled with `--no-*` flags
 
@@ -115,7 +115,7 @@ python scripts/training_pipeline.py \
   --use-current-best-model \
   --raw-trmph-data-dirs data/sf25/sep13 data/sf25/sep14 \
   --processed-data-dirs data/processed/sf18_shuffled \
-  --shard_ranges "221-250" \
+  --shard-ranges "221-250" \
   --run-game-collection \
   --no-selfplay
 ```
@@ -184,7 +184,7 @@ python scripts/training_pipeline.py \
   --use-current-best-model \
   --raw-trmph-data-dirs data/sf25/sep15 data/sf25/sep16 \
   --processed-data-dirs data/processed/sf18_shuffled data/processed/previous_run \
-  --shard_ranges "221-250" "all" \
+  --shard-ranges "221-250" "all" \
   --run-game-collection \
   --no-selfplay
 ```
@@ -216,7 +216,7 @@ python scripts/training_pipeline.py \
    - Solution: Remove some `--no-*` flags or use `--cleaned-trmph-data-dirs` instead
 
 2. **"Number of shard ranges must match number of processed data directories"**
-   - Solution: Ensure `--shard_ranges` has the same number of entries as `--processed-data-dirs`
+   - Solution: Ensure `--shard-ranges` has the same number of entries as `--processed-data-dirs`
 
 3. **"No data files found"**
    - Solution: Check that directories exist and contain .trmph or .pkl.gz files

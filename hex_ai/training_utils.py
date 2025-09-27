@@ -595,7 +595,7 @@ class TrainingUtilities:
     @staticmethod
     def format_epoch_id(epoch: int, mini_epoch: int) -> str:
         """Format epoch and mini-epoch into a string identifier."""
-        return f"{epoch+1}_mini{mini_epoch+1}"
+        return f"{epoch}_mini{mini_epoch}"
     
     @staticmethod
     def calculate_mini_epoch_time(batch_times: List[float]) -> float:

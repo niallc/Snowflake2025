@@ -143,49 +143,49 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Single data directory (uses all shards by default)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled
 
   # Multiple data directories (uses all shards from each by default)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled data/processed/jul_29_shuffled
 
   # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard-ranges "251-300" "all"
 
   # Use current best model from model_config.py
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --use_current_best_model
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-current-best-model
 
   # Use data shards in sorted order (no shuffling)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --no_shuffle_shards
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --no-shuffle-shards
         """
     )
     
     # Data source arguments
-    parser.add_argument("--data_dirs", type=str, nargs='+', required=True,
+    parser.add_argument("--data-dirs", type=str, nargs='+', required=True,
                        help="One or more directories containing processed data files")
     
     parser.add_argument(
-        '--shard_ranges',
+        '--shard-ranges',
         type=str,
         nargs='+',
-        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
+        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
     )
     
     # Resume training arguments
     parser.add_argument(
-        '--use_current_best_model',
+        '--use-current-best-model',
         action='store_true',
         help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
     
     parser.add_argument(
-        '--override_checkpoint_hyperparameters',
+        '--override-checkpoint-hyperparameters',
         action='store_true',
         help='When resuming from checkpoint, override checkpoint hyperparameters with sweep hyperparameters. '
              'This resets optimizer state for clean hyperparameter experiments but may affect training stability.'
     )
     
     # Training arguments
-    parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
+    parser.add_argument("--results-dir", type=str, default="checkpoints/hyperparameter_tuning", 
                        help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
     parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, 

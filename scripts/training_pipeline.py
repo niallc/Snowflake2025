@@ -829,8 +829,8 @@ Examples:
     parser.add_argument("--processed-data-dirs", type=str, nargs='+', 
                        default=[str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS],
                        help="Existing processed data directories for training")
-    parser.add_argument("--shard_ranges", type=str, nargs='+',
-                       help='Shard ranges for processed data directories. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
+    parser.add_argument("--shard-ranges", type=str, nargs='+',
+                       help='Shard ranges for processed data directories. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
@@ -939,7 +939,7 @@ def main():
             raw_trmph_data_dirs=args.raw_trmph_data_dirs,
             cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
             processed_data_dirs=args.processed_data_dirs,
-            shard_ranges=args.shard_ranges,
+            shard_ranges=getattr(args, 'shard_ranges', None),
             selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
             position_selector=args.position_selector,
