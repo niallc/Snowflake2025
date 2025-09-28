@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 import os
 
-from hex_ai.inference.model_config import get_model_path, validate_model_path
+from hex_ai.inference.model_config import get_model_path, validate_model_path, get_available_models
 
 
 @dataclass
@@ -139,7 +139,7 @@ class TournamentModelConfig:
                 raise ValueError(
                     f"Model specification '{model_spec}' for participant '{participant_label}' "
                     f"is not a valid model registry name. "
-                    f"Available models: {list(get_all_model_info().keys())}. "
+                    f"Available models: {get_available_models()}. "
                     f"Original error: {e}"
                 )
         
@@ -225,6 +225,8 @@ class UnifiedTournamentConfig:
                  gumbel_sim_thresholds: Optional[TournamentParameterConfig] = None,
                  gumbel_candidate_log_bases: Optional[TournamentParameterConfig] = None,
                  gumbel_candidate_log_offsets: Optional[TournamentParameterConfig] = None,
+                 gumbel_progressive_widening: Optional[TournamentParameterConfig] = None,
+                 gumbel_batch_scaling_factors: Optional[TournamentParameterConfig] = None,
                  
                  # Tournament settings
                  num_games: int = 10,
@@ -242,6 +244,8 @@ class UnifiedTournamentConfig:
         self.gumbel_sim_thresholds = gumbel_sim_thresholds
         self.gumbel_candidate_log_bases = gumbel_candidate_log_bases
         self.gumbel_candidate_log_offsets = gumbel_candidate_log_offsets
+        self.gumbel_progressive_widening = gumbel_progressive_widening
+        self.gumbel_batch_scaling_factors = gumbel_batch_scaling_factors
         self.num_games = num_games
         self.board_size = board_size
         self.random_seed = random_seed
@@ -274,6 +278,10 @@ class UnifiedTournamentConfig:
             self.gumbel_candidate_log_bases.validate(num_strategies, participant_labels)
         if self.gumbel_candidate_log_offsets:
             self.gumbel_candidate_log_offsets.validate(num_strategies, participant_labels)
+        if self.gumbel_progressive_widening:
+            self.gumbel_progressive_widening.validate(num_strategies, participant_labels)
+        if self.gumbel_batch_scaling_factors:
+            self.gumbel_batch_scaling_factors.validate(num_strategies, participant_labels)
         
         # Validate basic tournament settings
         if self.num_games <= 0:
@@ -312,5 +320,9 @@ class UnifiedTournamentConfig:
             config['gumbel_candidate_log_base'] = self.gumbel_candidate_log_bases.get_value_for_participant(participant_label, strategy_index)
         if self.gumbel_candidate_log_offsets:
             config['gumbel_candidate_log_offset'] = self.gumbel_candidate_log_offsets.get_value_for_participant(participant_label, strategy_index)
+        if self.gumbel_progressive_widening:
+            config['gumbel_progressive_widening'] = self.gumbel_progressive_widening.get_value_for_participant(participant_label, strategy_index)
+        if self.gumbel_batch_scaling_factors:
+            config['gumbel_batch_scaling_factor'] = self.gumbel_batch_scaling_factors.get_value_for_participant(participant_label, strategy_index)
         
         return config

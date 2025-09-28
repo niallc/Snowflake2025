@@ -362,17 +362,30 @@ def gumbel_alpha_zero_root_batched(
     
     def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
         """
-        IMPROVEMENT: Allocate per round to fill batches, not per-sim.
-        This ensures we get full batches instead of tiny 1-off NN calls.
+        Progressive widening batching strategy that scales batch sizes based on available exploration.
+        
+        This implements a canonical progressive widening approach:
+        - Small batches when few arms are available (early exploration)
+        - Larger batches when many arms are available (rich exploration)
+        - Smooth scaling using square root of available arms
         """
-        # At least one full batch, try to split budget evenly across remaining rounds
-        per_round = max(batch_cap, sims_left // rounds_left)
-        per_round = min(per_round, sims_left)
+        A = len(arms_list)
+        
+        # Progressive widening: batch size scales with sqrt of available arms
+        # This is a canonical approach from MCTS literature
+        if mcts.cfg.gumbel_progressive_widening:
+            # Progressive widening: batch size = sqrt(arms) * scaling_factor
+            # Minimum batch size of 1, maximum of batch_cap
+            progressive_batch_size = int(math.sqrt(A) * mcts.cfg.gumbel_batch_scaling_factor)
+            target_batch = max(1, min(progressive_batch_size, batch_cap, sims_left))
+        else:
+            # Original strategy: try to fill batches evenly across rounds
+            target_batch = max(batch_cap, sims_left // rounds_left)
+            target_batch = min(target_batch, sims_left)
         
         # Distribute across arms as evenly as possible
-        A = len(arms_list)
-        base = per_round // max(1, A)
-        extra = per_round - base * A
+        base = target_batch // max(1, A)
+        extra = target_batch - base * A
         
         counts = {a: base for a in arms_list}
         for a in rng.permutation(arms_list)[:extra]:

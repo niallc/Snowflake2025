@@ -756,6 +756,10 @@ Examples:
                        help='Comma-separated log bases for Gumbel candidate scaling (e.g., "1.5,1.7,2.0")')
     parser.add_argument('--gumbel-candidate-log-offset', type=str,
                        help='Comma-separated log offsets for Gumbel candidate scaling (e.g., "-1.5,-2.0,-2.5")')
+    parser.add_argument('--gumbel-progressive-widening', type=str,
+                       help='Comma-separated boolean values to enable progressive widening batching for Gumbel strategies (e.g., "true,false,true")')
+    parser.add_argument('--gumbel-batch-scaling-factors', type=str,
+                       help='Comma-separated scaling factors for progressive widening batching (e.g., "0.5,1.0,2.0")')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -846,6 +850,8 @@ def main():
     gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
     gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
     gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    gumbel_progressive_widening = parsed_params.get('gumbel_progressive_widening', None)
+    gumbel_batch_scaling_factors = parsed_params.get('gumbel_batch_scaling_factors', None)
     temperatures = parsed_params['temperatures']
     
     # Create strategy configurations using new unified system
@@ -862,6 +868,8 @@ def main():
             gumbel_sim_thresholds=gumbel_sim_thresholds,
             gumbel_candidate_log_bases=gumbel_candidate_log_bases,
             gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
+            gumbel_progressive_widening=gumbel_progressive_widening,
+            gumbel_batch_scaling_factors=gumbel_batch_scaling_factors,
             num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
             board_size=13,
             random_seed=args.seed,

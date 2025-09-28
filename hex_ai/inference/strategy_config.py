@@ -132,6 +132,8 @@ def create_unified_config_from_args(
     gumbel_sim_thresholds: Optional[Union[int, List[int]]] = None,
     gumbel_candidate_log_bases: Optional[Union[float, List[float]]] = None,
     gumbel_candidate_log_offsets: Optional[Union[float, List[float]]] = None,
+    gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
+    gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
     num_games: int = 10,
     board_size: int = 13,
     random_seed: Optional[int] = None,
@@ -155,6 +157,8 @@ def create_unified_config_from_args(
         gumbel_sim_thresholds: Gumbel simulation threshold(s)
         gumbel_candidate_log_bases: Gumbel candidate log base(s)
         gumbel_candidate_log_offsets: Gumbel candidate log offset(s)
+        gumbel_progressive_widening: Gumbel progressive widening flag(s)
+        gumbel_batch_scaling_factors: Gumbel batch scaling factor(s)
         num_games: Number of games per pair
         board_size: Board size
         random_seed: Random seed
@@ -230,6 +234,20 @@ def create_unified_config_from_args(
             per_strategy_values=_to_list_if_needed(gumbel_candidate_log_offsets, num_strategies)
         )
     
+    gumbel_progressive_widening_config = None
+    if gumbel_progressive_widening is not None:
+        gumbel_progressive_widening_config = TournamentParameterConfig(
+            default_value=False,  # Default progressive widening disabled
+            per_strategy_values=_to_list_if_needed(gumbel_progressive_widening, num_strategies)
+        )
+    
+    gumbel_batch_scaling_factors_config = None
+    if gumbel_batch_scaling_factors is not None:
+        gumbel_batch_scaling_factors_config = TournamentParameterConfig(
+            default_value=1.0,  # Default scaling factor
+            per_strategy_values=_to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
+        )
+    
     return UnifiedTournamentConfig(
         models=model_config,
         strategies=strategies,
@@ -241,6 +259,8 @@ def create_unified_config_from_args(
         gumbel_sim_thresholds=gumbel_sim_thresholds_config,
         gumbel_candidate_log_bases=gumbel_candidate_log_bases_config,
         gumbel_candidate_log_offsets=gumbel_candidate_log_offsets_config,
+        gumbel_progressive_widening=gumbel_progressive_widening_config,
+        gumbel_batch_scaling_factors=gumbel_batch_scaling_factors_config,
         num_games=num_games,
         board_size=board_size,
         random_seed=random_seed,
