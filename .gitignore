@@ -78,7 +78,8 @@ write_ups/tournament_improvements_plan.md
 write_ups/validation_data_consistency_plan.md
 write_ups/temporary_improve_validation_data.md
 write_ups/enhanced_validation_data_design.md
-
+write_ups/gpt5_fixes_for_puct_based_mcts.txt
+write_ups/mcts_algorithm_analysis_for_gpt5.md
 
 # VSCode
 .vscode/

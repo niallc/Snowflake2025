@@ -101,11 +101,9 @@ DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 # Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
-# Default terminal move boost factor
-DEFAULT_TERMINAL_MOVE_BOOST = 2.0
-
-# Default virtual loss for non-terminal moves
-DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
+# DEPRECATED: These constants are no longer used
+# DEFAULT_TERMINAL_MOVE_BOOST = 2.0
+# DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
@@ -403,9 +401,20 @@ class BaselineMCTSConfig:
     temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
     # Terminal move detection parameters
     enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
-    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
-    virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
     terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
+    
+    # DEPRECATED: These fields are no longer used (kept for compatibility, set to 0.0)
+    terminal_move_boost: float = 0.0  # DEPRECATED: was misapplied to U
+    virtual_loss_for_non_terminal: float = 0.0  # DEPRECATED: remove all uses
+    
+    # New terminal move handling
+    prefer_immediate_terminal: bool = True  # Force immediate terminal wins deterministically
+    terminal_win_score_bonus: float = 0.25  # Small score bonus for terminal moves (only used if prefer_immediate_terminal=False)
+    
+    # Adaptive batch selection for low simulation counts
+    adaptive_distinct_target: bool = True  # Make distinct_target adaptive at low sims
+    distinct_target_min: int = 8  # Minimum distinct target
+    distinct_target_max: int = 16  # Maximum distinct target
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
     # Randomness should be controlled externally
 
@@ -472,10 +481,11 @@ class BaselineMCTSConfig:
             raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
         if self.temperature_decay_moves <= 0:
             raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
-        if self.terminal_move_boost < 0:
-            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
-        if self.virtual_loss_for_non_terminal < 0:
-            raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
+        # DEPRECATED: These validations are no longer needed since values are fixed at 0.0
+        # if self.terminal_move_boost < 0:
+        #     raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
+        # if self.virtual_loss_for_non_terminal < 0:
+        #     raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
         if self.terminal_detection_max_depth < 0:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
         if not 0 <= self.confidence_termination_threshold <= 1:
@@ -488,6 +498,14 @@ class BaselineMCTSConfig:
             raise ValueError(f"distinct_target must be positive, got {self.distinct_target}")
         if self.distinct_target > self.batch_cap:
             raise ValueError(f"distinct_target ({self.distinct_target}) cannot exceed batch_cap ({self.batch_cap})")
+        
+        # Validate new adaptive batch parameters
+        if self.distinct_target_min <= 0:
+            raise ValueError(f"distinct_target_min must be positive, got {self.distinct_target_min}")
+        if self.distinct_target_max <= 0:
+            raise ValueError(f"distinct_target_max must be positive, got {self.distinct_target_max}")
+        if self.distinct_target_min > self.distinct_target_max:
+            raise ValueError(f"distinct_target_min ({self.distinct_target_min}) cannot exceed distinct_target_max ({self.distinct_target_max})")
 
         # Validate Gumbel-AlphaZero parameters
         if self.gumbel_sim_threshold <= 0:
@@ -1310,8 +1328,15 @@ class BaselineMCTS:
             force_q = deque()
             select_budget = min(self.cfg.batch_cap, sims_remaining)
 
-        # Use configured distinct target (fixed value for consistent performance)
-        distinct_target = self.cfg.distinct_target
+        # Use adaptive distinct target for low simulation counts
+        if self.cfg.adaptive_distinct_target:
+            # Encourage earlier backprops at low sims; keep batches tidy.
+            # Example heuristic: ~1/8th of remaining sims, clamped to [min, max].
+            guess = max(1, sims_remaining // 8)
+            distinct_target = int(max(self.cfg.distinct_target_min,
+                                      min(self.cfg.distinct_target_max, guess)))
+        else:
+            distinct_target = int(self.cfg.distinct_target)
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
@@ -1859,21 +1884,37 @@ class BaselineMCTS:
         if self.cfg.enable_terminal_move_detection:
             self.terminal_detector.detect_terminal_moves(node, int(node.state.get_board_tensor().shape[-1]))
         
+        # If configured, force-pick an immediate terminal win regardless of N_sum
+        if (self.cfg.enable_terminal_move_detection 
+            and self.cfg.prefer_immediate_terminal 
+            and any(node.terminal_moves)):
+            terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
+            best = max(terminal_idxs, key=lambda i: float(node.P[i]))  # tie-break by prior
+            result = int(best)
+            # Record select action for detailed exploration (forced terminal win)
+            if self.detailed_exploration_enabled:
+                self._record_select_action(
+                    current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+                    terminal_flag_for_child=True, note="forced_terminal_win"
+                )
+            return result
+        
         # Start timing PUCT calculation
         t_puct_start = time.perf_counter()
         
         N_sum = np.sum(node.N, dtype=np.float64)
         if not safe_puct_denominator(N_sum):
-            # All U terms reduce to c*P; just pick argmax P
-            # But prioritize terminal moves
+            # Degenerate branch (N_sum ~ 0) - before any PUCT math, force immediate wins if present; otherwise argmax(P)
             if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
-                terminal_indices = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
-                result = terminal_indices[0]  # Return first terminal move
+                # Choose terminal child with highest prior as tie-breaker
+                terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
+                best = max(terminal_idxs, key=lambda i: float(node.P[i]))
+                result = int(best)
                 # Record select action for detailed exploration (degenerate case)
                 if self.detailed_exploration_enabled:
                     self._record_select_action(
                         current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                        terminal_flag_for_child=True, note="degenerate_argmax_p"
+                        terminal_flag_for_child=True, note="degenerate_terminal_win"
                     )
                 return result
             result = int(np.argmax(node.P))
@@ -1885,19 +1926,16 @@ class BaselineMCTS:
                 )
             return result
         
+        # Main branch (pure PUCT) - compute U and score without any constant offsets
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
-        
-        # Apply terminal move detection modifications
-        if self.cfg.enable_terminal_move_detection:
-            for i, is_terminal in enumerate(node.terminal_moves):
-                if is_terminal:
-                    # Boost terminal moves
-                    U[i] += self.cfg.terminal_move_boost
-                else:
-                    # Apply small penalty to non-terminal moves
-                    U[i] -= self.cfg.virtual_loss_for_non_terminal
-        
         score = node.Q + U
+        
+        # Optional: if you don't want to force-pick immediate wins, give a small bump to SCORE (not U) for terminal children
+        if self.cfg.enable_terminal_move_detection and not self.cfg.prefer_immediate_terminal:
+            for i, is_term in enumerate(node.terminal_moves):
+                if is_term:
+                    score[i] += float(self.cfg.terminal_win_score_bonus)
+        
         result = int(np.argmax(score))
         
         # Record select action for detailed exploration
@@ -2065,9 +2103,17 @@ def create_mcts_config(
         "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
         # Terminal move detection (always enabled)
         "enable_terminal_move_detection": True,
-        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
-        "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
         "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
+        # DEPRECATED: Set to 0.0 for compatibility
+        "terminal_move_boost": 0.0,
+        "virtual_loss_for_non_terminal": 0.0,
+        # New terminal move handling
+        "prefer_immediate_terminal": True,
+        "terminal_win_score_bonus": 0.25,
+        # Adaptive batch selection
+        "adaptive_distinct_target": True,
+        "distinct_target_min": 8,
+        "distinct_target_max": 16,
         # Confidence-based termination (always enabled)
         "enable_confidence_termination": True,
         # Depth-based discounting to encourage shorter wins
