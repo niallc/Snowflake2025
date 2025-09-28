@@ -113,13 +113,24 @@ class MCTSStrategy(MoveSelectionStrategy):
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         # Create MCTS configuration optimized for tournament play
+        # Pass all parameters through create_mcts_config for consistency
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
             confidence_termination_threshold=0.95,  # Conservative confidence termination for quality
             c_puct=config.mcts_c_puct,  # Pass the c_puct parameter from strategy config
             dirichlet_alpha=config.mcts_dirichlet_alpha,  # Pass the dirichlet_alpha parameter
             dirichlet_eps=config.mcts_dirichlet_eps,  # Pass the dirichlet_eps parameter
-            enable_depth_discounting=False  # Disable depth discounting for tournament play
+            enable_depth_discounting=False,  # Disable depth discounting for tournament play
+            enable_gumbel_root_selection=config.enable_gumbel_root_selection,  # Pass the gumbel parameter from strategy config
+            # Pass all Gumbel parameters through create_mcts_config for consistency
+            gumbel_sim_threshold=config.gumbel_sim_threshold,
+            gumbel_c_visit=config.gumbel_c_visit,
+            gumbel_c_scale=config.gumbel_c_scale,
+            gumbel_m_candidates=config.gumbel_m_candidates,
+            gumbel_candidate_log_base=config.gumbel_candidate_log_base,
+            gumbel_candidate_log_offset=config.gumbel_candidate_log_offset,
+            gumbel_candidate_min=config.gumbel_candidate_min,
+            gumbel_candidate_max=config.gumbel_candidate_max
         )
         
         # Override batch size if specified in config
@@ -135,18 +146,6 @@ class MCTSStrategy(MoveSelectionStrategy):
         # Disable Dirichlet noise for deterministic tournaments
         mcts_config.add_root_noise = False
         
-        # Configure Gumbel AlphaZero parameters if enabled
-        if config.enable_gumbel_root_selection:
-            mcts_config.enable_gumbel_root_selection = True
-            mcts_config.gumbel_sim_threshold = config.gumbel_sim_threshold
-            mcts_config.gumbel_c_visit = config.gumbel_c_visit
-            mcts_config.gumbel_c_scale = config.gumbel_c_scale
-            mcts_config.gumbel_m_candidates = config.gumbel_m_candidates
-            # Configure Gumbel candidate scaling parameters
-            mcts_config.gumbel_candidate_log_base = config.gumbel_candidate_log_base
-            mcts_config.gumbel_candidate_log_offset = config.gumbel_candidate_log_offset
-            mcts_config.gumbel_candidate_min = config.gumbel_candidate_min
-            mcts_config.gumbel_candidate_max = config.gumbel_candidate_max
         
         # Create required components
         engine = HexGameEngine()
