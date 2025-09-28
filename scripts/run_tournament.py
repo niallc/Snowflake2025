@@ -871,25 +871,52 @@ def main():
         # Create strategy configs from unified config
         strategy_configs = create_strategy_configs_from_unified_config(unified_config)
         
-        # Create unique strategy names by combining model file names with strategy names
-        # This preserves the old behavior where different model files create different strategy names
+        # Create unique strategy names by combining model file names with strategy names and key parameters
+        # This ensures strategies with different parameters get different names even with the same model
         for i, config in enumerate(strategy_configs):
             model_path = config.model_path
             model_file = os.path.basename(model_path)
             model_name = os.path.splitext(model_file)[0]  # Remove .pt.gz extension
-            unique_name = f"{model_name}_{config.original_name}"
+            
+            # Create a parameter suffix to distinguish strategies with different parameters
+            param_parts = []
+            if config.temperature is not None:
+                param_parts.append(f"t{config.temperature}")
+            if config.config.get('enable_gumbel_root_selection'):
+                param_parts.append("gumbel")
+            if config.config.get('mcts_c_puct') is not None:
+                param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
+            if config.config.get('mcts_sims') is not None:
+                param_parts.append(f"sims{config.config['mcts_sims']}")
+            
+            param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
+            unique_name = f"{model_name}_{config.original_name}{param_suffix}"
             config.name = unique_name
         
         # Validate that all strategy configurations are unique
-        # Check for duplicates by considering both strategy name and model path
+        # Check for duplicates by considering strategy name, model path, and all configuration parameters
         strategy_signatures = []
         for config in strategy_configs:
-            signature = f"{config.original_name}:{config.model_path}"
+            # Create a comprehensive signature that includes all relevant parameters
+            signature_parts = [
+                config.original_name,
+                config.model_path,
+                str(config.temperature),
+                str(config.config.get('mcts_sims', '')),
+                str(config.config.get('mcts_c_puct', '')),
+                str(config.config.get('batch_size', '')),
+                str(config.config.get('enable_gumbel_root_selection', '')),
+                str(config.config.get('gumbel_sim_threshold', '')),
+                str(config.config.get('gumbel_candidate_log_base', '')),
+                str(config.config.get('gumbel_candidate_log_offset', ''))
+            ]
+            signature = ':'.join(signature_parts)
             strategy_signatures.append(signature)
         
         if len(strategy_signatures) != len(set(strategy_signatures)):
             print("ERROR: Duplicate strategy configurations detected.")
-            print("Each strategy must be unique in both name and model path.")
+            print("Each strategy must be unique in name, model path, and all configuration parameters.")
+            print("Strategies that differ in any parameter (temperature, enable_gumbel, c_puct, etc.) are considered distinct.")
             sys.exit(1)
                 
     except ValueError as e:
