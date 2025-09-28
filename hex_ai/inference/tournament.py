@@ -59,34 +59,40 @@ class TournamentResult:
 
     def elo_ratings(self, base: float = 1500.0) -> Dict[str, float]:
         """
-        Calculate Elo ratings for all participants using order-independent win rate analysis.
+        Calculate Elo ratings using order-independent win rate analysis.
         
-        This method converts win rates to ELO ratings using a linear mapping:
-        - Win rate 0.5 = base rating (1500)
-        - Win rate 1.0 = base + 400 (1900) 
-        - Win rate 0.0 = base - 400 (1100)
+        This method uses the inverse of the ELO expected score formula to convert
+        win rates to rating differences: rating_diff = 400 * log10(win_rate / (1 - win_rate))
         
-        The results are order-independent and properly reflect relative player strengths.
+        The approach is order-independent, mathematically sound, and robust.
         """
+        import math
+        
         win_rates = self.win_rates()
         
-        # Convert win rates to Elo ratings
-        ratings = {}
+        # Convert win rates to rating differences using ELO formula
+        # If win_rate = 1/(1 + 10^(-rating_diff/400)), then rating_diff = 400 * log10(win_rate/(1-win_rate))
+        rating_diffs = {}
         for name, win_rate in win_rates.items():
             if win_rate == 0.5:
-                ratings[name] = base
-            elif win_rate > 0.5:
-                # Positive rating adjustment
-                ratings[name] = base + 400 * (win_rate - 0.5) * 2
-            else:
-                # Negative rating adjustment
-                ratings[name] = base - 400 * (0.5 - win_rate) * 2
+                rating_diffs[name] = 0.0
+            elif win_rate > 0.0 and win_rate < 1.0:
+                # Use ELO formula to convert win rate to rating difference
+                rating_diffs[name] = 400 * math.log10(win_rate / (1 - win_rate))
+            elif win_rate == 1.0:
+                # Perfect win rate: assign maximum reasonable rating difference
+                rating_diffs[name] = 400 * math.log10(0.99 / 0.01)  # ~800 points
+            else:  # win_rate == 0.0
+                # Perfect loss rate: assign minimum reasonable rating difference  
+                rating_diffs[name] = 400 * math.log10(0.01 / 0.99)  # ~-800 points
         
-        # Normalize so average is base
+        # Convert rating differences to absolute ratings, centered around base
+        ratings = {name: base + rating_diffs[name] for name in self.participants}
+        
+        # Normalize so average is base (handles edge cases and ensures consistency)
         avg_rating = sum(ratings.values()) / len(ratings)
-        avg_rating_diff = avg_rating - base
-        for name in ratings:
-            ratings[name] = base + (ratings[name] - base) - avg_rating_diff
+        avg_offset = avg_rating - base
+        ratings = {name: rating - avg_offset for name, rating in ratings.items()}
         
         return ratings
 
