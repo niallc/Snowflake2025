@@ -450,8 +450,8 @@ class BaselineMCTSConfig:
     gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
     
     # Gumbel progressive widening batching parameters
-    gumbel_progressive_widening: bool = False  # Enable progressive widening batching strategy
-    gumbel_batch_scaling_factor: float = 1.0  # Scaling factor for progressive widening (1.0 = standard, 2.0 = more aggressive)
+    gumbel_progressive_widening: bool = True  # Enable progressive widening batching strategy (default: enabled)
+    gumbel_batch_scaling_factor: float = 4.0  # Scaling factor for progressive widening (4.0 = aggressive batching for speed)
     
     # Batch flushing control parameters
     # DESIGN: Fixed values for consistent performance across simulation counts

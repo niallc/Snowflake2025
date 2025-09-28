@@ -82,6 +82,10 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 config_dict["gumbel_candidate_log_base"] = participant_config["gumbel_candidate_log_base"]
             if "gumbel_candidate_log_offset" in participant_config:
                 config_dict["gumbel_candidate_log_offset"] = participant_config["gumbel_candidate_log_offset"]
+            if "gumbel_progressive_widening" in participant_config:
+                config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
+            if "gumbel_batch_scaling_factor" in participant_config:
+                config_dict["gumbel_batch_scaling_factor"] = participant_config["gumbel_batch_scaling_factor"]
         
         
         # Create StrategyConfig
