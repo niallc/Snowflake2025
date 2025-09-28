@@ -57,42 +57,20 @@ class TournamentResult:
             win_rates[name] = wins / games if games > 0 else 0.0
         return win_rates
 
-    # Optional: Elo calculation (simple version)
-    def elo_ratings(self, base: float = 1500.0, k_factor: float = 32.0) -> Dict[str, float]:
+    def elo_ratings(self, base: float = 1500.0) -> Dict[str, float]:
         """
-        Calculate Elo ratings for all participants.
-        Uses a simple implementation that updates ratings after each game.
-        """
-        ratings = {name: base for name in self.participants}
+        Calculate Elo ratings for all participants using order-independent win rate analysis.
         
-        # Process all games in order
-        for name in self.participants:
-            for opponent in self.results[name]:
-                wins = self.results[name][opponent]['wins']
-                losses = self.results[name][opponent]['losses']
-                games = wins + losses
-                
-                if games > 0:
-                    # Calculate expected score
-                    expected = 1 / (1 + 10 ** ((ratings[opponent] - ratings[name]) / 400))
-                    actual = wins / games
-                    
-                    # Update rating
-                    ratings[name] += k_factor * (actual - expected)
+        This method converts win rates to ELO ratings using a linear mapping:
+        - Win rate 0.5 = base rating (1500)
+        - Win rate 1.0 = base + 400 (1900) 
+        - Win rate 0.0 = base - 400 (1100)
         
-        return ratings
-    
-    def _fallback_elo_ratings(self, base=1500) -> Dict[str, float]:
-        """
-        Fallback Elo calculation using win rates only.
-        This is used when the main Elo calculation fails.
+        The results are order-independent and properly reflect relative player strengths.
         """
         win_rates = self.win_rates()
         
         # Convert win rates to Elo ratings
-        # Win rate of 0.5 = base rating
-        # Win rate of 1.0 = base + 400
-        # Win rate of 0.0 = base - 400
         ratings = {}
         for name, win_rate in win_rates.items():
             if win_rate == 0.5:
