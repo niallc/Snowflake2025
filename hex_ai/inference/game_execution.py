@@ -326,7 +326,11 @@ def play_deterministic_game(
         end_time = time.perf_counter()
         
         if move is None:
-            raise ValueError(f"Move selection returned None for {strategy_obj.get_name()}")
+            raise ValueError(
+                f"Move selection returned None for {strategy_obj.get_name()}. "
+                f"This indicates a bug in the strategy implementation. "
+                f"Please check the strategy code and ensure it always returns a valid move."
+            )
         
         # Record timing for this strategy
         move_time = end_time - start_time
@@ -349,7 +353,11 @@ def play_deterministic_game(
     # Determine winner
     winner_enum = state.winner_enum
     if winner_enum is None:
-        raise ValueError("Game is not over or winner missing")
+        raise ValueError(
+            "Game is not over or winner missing. "
+            "This indicates a bug in the game engine. "
+            "Please check the game state and ensure the game has properly ended."
+        )
     
     if winner_enum.name == 'BLUE':
         winner_strategy = strategy_a.name if strategy_a_is_blue else strategy_b.name

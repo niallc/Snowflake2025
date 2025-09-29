@@ -51,9 +51,15 @@ class CheckpointDiscovery:
         """
         self.checkpoint_dir = Path(checkpoint_dir)
         if not self.checkpoint_dir.exists():
-            raise FileNotFoundError(f"Checkpoint directory does not exist: {checkpoint_dir}")
+            raise FileNotFoundError(
+                f"Checkpoint directory does not exist: {checkpoint_dir}. "
+                f"Please check the path and ensure the directory exists."
+            )
         if not self.checkpoint_dir.is_dir():
-            raise ValueError(f"Path is not a directory: {checkpoint_dir}")
+            raise ValueError(
+                f"Path is not a directory: {checkpoint_dir}. "
+                f"Please provide a directory path, not a file path."
+            )
         
         self.checkpoint_pattern = re.compile(r'epoch(\d+)_mini(\d+)\.pt\.gz$')
         self._discovered_checkpoints: Optional[List[CheckpointInfo]] = None
@@ -91,7 +97,11 @@ class CheckpointDiscovery:
                     checkpoints.append(checkpoint)
         
         if not checkpoints:
-            raise ValueError(f"No checkpoint files found in {self.checkpoint_dir}")
+            raise ValueError(
+                f"No checkpoint files found in {self.checkpoint_dir}. "
+                f"Expected files matching pattern 'epochN_miniJ.pt.gz' (e.g., epoch1_mini1.pt.gz). "
+                f"Please check that the directory contains valid checkpoint files."
+            )
         
         # Determine total mini epochs per epoch
         max_epoch = max(cp.epoch for cp in checkpoints)
@@ -165,7 +175,11 @@ class CheckpointDiscovery:
             if cp.checkpoint_number == checkpoint_number:
                 return cp
         
-        raise ValueError(f"Checkpoint #{checkpoint_number} not found")
+        raise ValueError(
+            f"Checkpoint #{checkpoint_number} not found. "
+            f"Available checkpoints: {[cp.checkpoint_number for cp in checkpoints]}. "
+            f"Please check the checkpoint number or ensure the checkpoint exists."
+        )
     
     def get_checkpoints_by_range(self, start: int, end: int) -> List[CheckpointInfo]:
         """

@@ -40,7 +40,10 @@ class TournamentParticipant:
         model_path = self.strategy_config.get("model_path")
         
         if not model_path:
-            raise ValueError(f"Participant {self.name} missing model_path in strategy_config")
+            raise ValueError(
+                f"Participant {self.name} missing model_path in strategy_config. "
+                f"Each participant must have a 'model_path' field specifying the checkpoint file path."
+            )
         
         # Create clean config with only MoveSelectionConfig parameters
         clean_config = {}
@@ -110,7 +113,10 @@ class KnockoutTournament:
             match_executor: Function to execute matches between participants
         """
         if len(participants) < 2:
-            raise ValueError("Tournament requires at least 2 participants")
+            raise ValueError(
+                f"Tournament requires at least 2 participants, got {len(participants)}. "
+                f"Please provide at least 2 participants to run a tournament."
+            )
         
         self.participants = participants
         self.games_per_match = games_per_match
@@ -183,7 +189,11 @@ class KnockoutTournament:
                 result = self.match_executor(p1, p2, games_per_match)
             else:
                 # Default behavior: raise error if no executor provided
-                raise ValueError("No match executor provided")
+                raise ValueError(
+                    "No match executor provided. "
+                    "A match executor function is required to run matches between participants. "
+                    "Please provide a match_executor function when creating the tournament."
+                )
             
             round_results.append(result)
             self.match_results.append(result)
