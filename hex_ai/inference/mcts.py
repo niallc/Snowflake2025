@@ -1886,7 +1886,6 @@ class BaselineMCTS:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
-        # TODO(step: tune): retune c_puct for signed Q values in [-1,1] range
         
         # Detect terminal moves if enabled and appropriate
         if self.cfg.enable_terminal_move_detection:

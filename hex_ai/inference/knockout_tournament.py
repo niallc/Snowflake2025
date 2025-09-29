@@ -1,0 +1,210 @@
+"""
+Abstract knockout tournament implementation.
+
+This module provides a strategy-agnostic knockout tournament system that can
+execute tournament brackets without knowing about specific strategy types.
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional, Callable
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TournamentParticipant:
+    """Represents a participant in a tournament."""
+    name: str
+    strategy_config: Dict[str, Any]
+    metadata: Optional[Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+
+
+@dataclass
+class MatchResult:
+    """Result of a single match between two participants."""
+    participant1: TournamentParticipant
+    participant2: TournamentParticipant
+    participant1_wins: int
+    participant2_wins: int
+    total_games: int
+    openings_used: List[str]
+    
+    @property
+    def winner(self) -> TournamentParticipant:
+        """Returns the winning participant."""
+        if self.participant1_wins > self.participant2_wins:
+            return self.participant1
+        elif self.participant2_wins > self.participant1_wins:
+            return self.participant2
+        else:
+            raise ValueError(f"Match ended in tie: {self.participant1_wins}-{self.participant2_wins}")
+    
+    @property
+    def is_tie(self) -> bool:
+        """Returns True if the match ended in a tie."""
+        return self.participant1_wins == self.participant2_wins
+
+
+class KnockoutTournament:
+    """
+    Abstract knockout tournament that executes tournament brackets.
+    
+    This class is strategy-agnostic and only knows how to execute matches
+    between participants. It doesn't know about model checkpoints or
+    specific strategy types.
+    """
+    
+    def __init__(self, 
+                 participants: List[TournamentParticipant],
+                 games_per_match: int = 50,
+                 semifinal_games_multiplier: int = 2,
+                 final_games_multiplier: int = 4,
+                 match_executor: Optional[Callable] = None):
+        """
+        Initialize the knockout tournament.
+        
+        Args:
+            participants: List of tournament participants
+            games_per_match: Number of games per match in early rounds
+            semifinal_games_multiplier: Multiplier for semifinal games
+            final_games_multiplier: Multiplier for final games
+            match_executor: Function to execute matches between participants
+        """
+        if len(participants) < 2:
+            raise ValueError("Tournament requires at least 2 participants")
+        
+        self.participants = participants
+        self.games_per_match = games_per_match
+        self.semifinal_games_multiplier = semifinal_games_multiplier
+        self.final_games_multiplier = final_games_multiplier
+        self.match_executor = match_executor
+        
+        # Tournament state
+        self.current_round = 0
+        self.active_participants = participants.copy()
+        self.match_results: List[MatchResult] = []
+        self.eliminated_participants: List[TournamentParticipant] = []
+        
+        logger.info(f"Initialized knockout tournament with {len(participants)} participants")
+    
+    def run_tournament(self) -> List[TournamentParticipant]:
+        """
+        Run the complete knockout tournament.
+        
+        Returns:
+            List of participants in order of elimination (last is winner)
+        """
+        logger.info("Starting knockout tournament")
+        
+        while len(self.active_participants) > 1:
+            self.current_round += 1
+            logger.info(f"Starting round {self.current_round} with {len(self.active_participants)} participants")
+            
+            # Determine games per match for this round
+            games_this_round = self._get_games_for_round()
+            
+            # Execute matches for this round
+            round_results = self._execute_round(games_this_round)
+            
+            # Update tournament state
+            self._update_tournament_state(round_results)
+            
+            logger.info(f"Round {self.current_round} complete. {len(self.active_participants)} participants remain")
+        
+        # Tournament complete
+        winner = self.active_participants[0]
+        logger.info(f"Tournament complete! Winner: {winner.name}")
+        
+        # Return participants in elimination order (winner last)
+        elimination_order = self.eliminated_participants + [winner]
+        return elimination_order
+    
+    def _get_games_for_round(self) -> int:
+        """Determine number of games for current round."""
+        remaining = len(self.active_participants)
+        
+        if remaining == 4:  # Semifinals
+            return self.games_per_match * self.semifinal_games_multiplier
+        elif remaining == 2:  # Finals
+            return self.games_per_match * self.final_games_multiplier
+        else:
+            return self.games_per_match
+    
+    def _execute_round(self, games_per_match: int) -> List[MatchResult]:
+        """Execute all matches in the current round."""
+        round_results = []
+        
+        # Pair participants for matches
+        matches = self._pair_participants()
+        
+        for i, (p1, p2) in enumerate(matches):
+            logger.info(f"Executing match {i+1}/{len(matches)}: {p1.name} vs {p2.name}")
+            
+            if self.match_executor:
+                result = self.match_executor(p1, p2, games_per_match)
+            else:
+                # Default behavior: raise error if no executor provided
+                raise ValueError("No match executor provided")
+            
+            round_results.append(result)
+            self.match_results.append(result)
+        
+        return round_results
+    
+    def _pair_participants(self) -> List[tuple[TournamentParticipant, TournamentParticipant]]:
+        """Pair participants for matches in current round."""
+        if len(self.active_participants) % 2 != 0:
+            raise ValueError(f"Odd number of participants ({len(self.active_participants)}) cannot be paired")
+        
+        # Simple pairing: adjacent participants
+        pairs = []
+        for i in range(0, len(self.active_participants), 2):
+            pairs.append((self.active_participants[i], self.active_participants[i + 1]))
+        
+        return pairs
+    
+    def _update_tournament_state(self, round_results: List[MatchResult]):
+        """Update tournament state after a round."""
+        new_active = []
+        
+        for result in round_results:
+            if result.is_tie:
+                # In case of tie, both participants are eliminated
+                # This should be rare with odd number of games
+                logger.warning(f"Tie in match {result.participant1.name} vs {result.participant2.name}")
+                self.eliminated_participants.extend([result.participant1, result.participant2])
+            else:
+                winner = result.winner
+                loser = result.participant2 if winner == result.participant1 else result.participant1
+                
+                new_active.append(winner)
+                self.eliminated_participants.append(loser)
+        
+        self.active_participants = new_active
+    
+    def get_tournament_summary(self) -> Dict[str, Any]:
+        """Get a summary of the tournament results."""
+        return {
+            "total_participants": len(self.participants),
+            "total_rounds": self.current_round,
+            "total_matches": len(self.match_results),
+            "elimination_order": [p.name for p in self.eliminated_participants],
+            "winner": self.active_participants[0].name if self.active_participants else None,
+            "match_results": [
+                {
+                    "participant1": r.participant1.name,
+                    "participant2": r.participant2.name,
+                    "score": f"{r.participant1_wins}-{r.participant2_wins}",
+                    "winner": r.winner.name
+                }
+                for r in self.match_results
+            ]
+        }
