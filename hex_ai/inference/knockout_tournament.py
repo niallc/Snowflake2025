@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable
 import json
 import logging
+import random
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,10 @@ class KnockoutTournament:
         self.match_results: List[MatchResult] = []
         self.eliminated_participants: List[TournamentParticipant] = []
         
+        # Track bracket positions to maintain diversity in later rounds
+        # Each participant gets a bracket_id that represents their "side" of the tournament
+        self.bracket_positions = {p.name: i for i, p in enumerate(participants)}
+        
         logger.info(f"Initialized knockout tournament with {len(participants)} participants")
     
     def run_tournament(self) -> List[TournamentParticipant]:
@@ -201,7 +206,7 @@ class KnockoutTournament:
         return round_results
     
     def _pair_participants(self) -> List[tuple[TournamentParticipant, TournamentParticipant]]:
-        """Pair participants for matches in current round."""
+        """Pair participants for matches in current round using bracket-aware seeding."""
         if len(self.active_participants) < 2:
             return []
         
@@ -212,18 +217,37 @@ class KnockoutTournament:
             bye_participant = self.active_participants[0]
             logger.info(f"Participant {bye_participant.name} gets a bye")
         
-        # Spaced pairing: first half vs second half for more efficient tournaments
-        # This ensures early checkpoints face later checkpoints (assuming sequential training)
-        pairs = []
-        n = len(self.active_participants)
-        half = n // 2
-        
-        for i in range(half):
-            pairs.append((self.active_participants[i], self.active_participants[i + half]))
-        
-        # Remove bye participant after pairing (so it doesn't affect the pairing logic)
+        participants_to_pair = self.active_participants.copy()
         if bye_participant:
-            self.active_participants = self.active_participants[1:]
+            participants_to_pair = participants_to_pair[1:]  # Remove bye participant
+        
+        # For first round, use snake draft to maximize distance
+        if self.current_round == 1:
+            # Snake draft pairing: pair participants with maximum distance
+            # For 6 participants: (1,6), (2,5), (3,4)
+            # For 4 participants: (1,4), (2,3)
+            # For 8 participants: (1,8), (2,7), (3,6), (4,5)
+            pairs = []
+            n = len(participants_to_pair)
+            
+            for i in range(n // 2):
+                # Pair first with last, second with second-to-last, etc.
+                pairs.append((participants_to_pair[i], participants_to_pair[n - 1 - i]))
+            
+            return pairs
+        
+        # For later rounds, use bracket-aware pairing to maintain diversity
+        # Sort participants by their original bracket position to maintain structure
+        participants_to_pair.sort(key=lambda p: self.bracket_positions[p.name])
+        
+        # Use snake draft again, but now on the sorted list
+        # This ensures winners from different "sides" of the bracket don't meet immediately
+        pairs = []
+        n = len(participants_to_pair)
+        
+        for i in range(n // 2):
+            # Pair first with last, second with second-to-last, etc.
+            pairs.append((participants_to_pair[i], participants_to_pair[n - 1 - i]))
         
         return pairs
     

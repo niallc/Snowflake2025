@@ -275,8 +275,11 @@ class TwoStageTournament:
                     print(".", end="", flush=True)
             
             # Log match result
+            total_games = games * 2  # Each opening played twice
             winner_name = p1.name if p1_wins > p2_wins else p2.name
-            print(f" {p1.name}:{p1_wins} {p2.name}:{p2_wins} -> {winner_name} wins")
+            p1_pct = (p1_wins / total_games) * 100
+            p2_pct = (p2_wins / total_games) * 100
+            print(f" {p1.name}:{p1_wins}/{total_games} ({p1_pct:.1f}%) {p2.name}:{p2_wins}/{total_games} ({p2_pct:.1f}%) -> {winner_name} wins")
             logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
             
             return MatchResult(
