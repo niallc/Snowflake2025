@@ -7,12 +7,14 @@ handling checkpoint discovery and strategy configuration.
 
 import json
 import logging
+import os
 import random
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
-from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
+from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +226,7 @@ class TwoStageTournament:
             model_cache = get_model_cache()
             
             # Import play_deterministic_game function
-            from scripts.run_tournament import play_deterministic_game
+            from .game_execution import play_deterministic_game
             
             # Track wins for each participant
             p1_wins = 0
@@ -307,29 +309,47 @@ class TwoStageTournament:
             temperature=participant.strategy_config.get("temperature")
         )
     
-    def _generate_match_openings(self, num_games: int):
-        """Generate opening positions for a match."""
-        from scripts.run_tournament import generate_diverse_openings, find_trmph_files
+    def _generate_openings(self, num_games: int, stage_name: str = "tournament"):
+        """
+        Generate opening positions for tournament stages.
+        
+        Args:
+            num_games: Number of games to generate openings for
+            stage_name: Name of the stage for error messages
+            
+        Returns:
+            List of opening positions
+            
+        Raises:
+            ValueError: If insufficient openings can be generated
+        """
+        from .game_execution import generate_diverse_openings, find_trmph_files
         
         # Use same TRMPH files as existing tournament system
         trmph_files = find_trmph_files("data/sf25/sep28")
+        
+        if not trmph_files:
+            raise ValueError(f"No TRMPH files found in data/sf25/sep28 for {stage_name} stage")
         
         # Generate 1.1x required openings (fail fast if insufficient)
         target_count = int(num_games * 1.1)
         openings = generate_diverse_openings(trmph_files, target_count=target_count)
         
         if len(openings) < num_games:
-            raise ValueError(f"Insufficient openings generated: {len(openings)} < {num_games}")
+            raise ValueError(
+                f"Insufficient openings generated for {stage_name} stage: "
+                f"{len(openings)} < {num_games}. "
+                f"Try using a different TRMPH source directory or reducing the number of games."
+            )
         
         return openings[:num_games]
     
+    def _generate_match_openings(self, num_games: int):
+        """Generate opening positions for a match."""
+        return self._generate_openings(num_games, "match")
+    
     def _generate_round_robin_openings(self):
         """Generate opening positions for the round-robin stage."""
-        from scripts.run_tournament import generate_diverse_openings, find_trmph_files
-        
-        # Use same TRMPH files as existing tournament system
-        trmph_files = find_trmph_files("data/sf25/sep28")
-        
         # Calculate total games needed for round-robin
         # Each pair plays round_robin_games * 2 (A vs B and B vs A)
         num_participants = len(self.knockout_winners) + len(self.round_robin_participants)
@@ -340,14 +360,7 @@ class TwoStageTournament:
         num_pairs = num_participants * (num_participants - 1) // 2
         total_games = num_pairs * self.round_robin_games * 2
         
-        # Generate 1.1x required openings (fail fast if insufficient)
-        target_count = int(total_games * 1.1)
-        openings = generate_diverse_openings(trmph_files, target_count=target_count)
-        
-        if len(openings) < total_games:
-            raise ValueError(f"Insufficient openings generated: {len(openings)} < {total_games}")
-        
-        return openings[:total_games]
+        return self._generate_openings(total_games, "round-robin")
     
     def get_tournament_summary(self) -> Dict[str, Any]:
         """Get a summary of the tournament configuration and results."""
@@ -372,8 +385,6 @@ class TwoStageTournament:
     
     def _save_tournament_summary(self, results: Dict[str, Any]) -> None:
         """Save tournament summary to JSON file."""
-        import os
-        from datetime import datetime
         
         # Create output directory
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
