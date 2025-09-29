@@ -143,15 +143,14 @@ class TwoStageTournament:
         all_participants = self.knockout_winners + self.round_robin_participants
         
         if len(all_participants) < 2:
-            logger.warning("Not enough participants for round-robin stage")
-            return {"ranking": [p.name for p in all_participants]}
+            raise ValueError(f"Round-robin stage requires at least 2 participants, got {len(all_participants)}")
         
         logger.info(f"Round-robin stage with {len(all_participants)} participants")
         
         # Convert participants to strategy configs
         strategy_configs = []
         for participant in all_participants:
-            strategy_config = self._create_strategy_config(participant)
+            strategy_config = participant.to_strategy_config()
             strategy_configs.append(strategy_config)
         
         # Generate opening positions for round-robin stage
@@ -215,8 +214,8 @@ class TwoStageTournament:
             logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
             
             # Convert TournamentParticipant to StrategyConfig
-            strategy_a = self._create_strategy_config(p1)
-            strategy_b = self._create_strategy_config(p2)
+            strategy_a = p1.to_strategy_config()
+            strategy_b = p2.to_strategy_config()
             
             # Generate opening positions for this match
             openings = self._generate_match_openings(games)
@@ -291,23 +290,6 @@ class TwoStageTournament:
         
         return execute_match
     
-    def _create_strategy_config(self, participant: TournamentParticipant):
-        """Create a StrategyConfig from a TournamentParticipant."""
-        from hex_ai.inference.strategy_config import StrategyConfig
-        
-        # Clean the strategy config to only include MoveSelectionConfig parameters
-        clean_config = {}
-        for key, value in participant.strategy_config.items():
-            if key not in ["strategy", "model_path"]:  # Remove non-MoveSelectionConfig keys
-                clean_config[key] = value
-        
-        return StrategyConfig(
-            name=participant.name,
-            strategy_type="mcts",
-            config=clean_config,
-            model_path=participant.strategy_config["model_path"],
-            temperature=participant.strategy_config.get("temperature")
-        )
     
     def _generate_openings(self, num_games: int, stage_name: str = "tournament"):
         """

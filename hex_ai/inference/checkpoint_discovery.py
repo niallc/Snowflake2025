@@ -102,9 +102,20 @@ class CheckpointDiscovery:
             else:
                 max_mini_per_epoch[cp.epoch] = max(max_mini_per_epoch[cp.epoch], cp.mini)
         
-        # Set total mini epochs (assuming all epochs have the same number of mini epochs)
-        if len(set(max_mini_per_epoch.values())) > 1:
-            logger.warning("Different epochs have different numbers of mini epochs")
+        # Set total mini epochs (all completed epochs must have the same number of mini epochs)
+        # The most recent epoch is allowed to have fewer mini epochs (incomplete training)
+        if len(max_mini_per_epoch) > 1:
+            # Check all epochs except the most recent one
+            sorted_epochs = sorted(max_mini_per_epoch.keys())
+            completed_epochs = sorted_epochs[:-1]  # All except the most recent
+            
+            if len(completed_epochs) > 1:
+                completed_mini_counts = [max_mini_per_epoch[epoch] for epoch in completed_epochs]
+                if len(set(completed_mini_counts)) > 1:
+                    raise ValueError(
+                        f"Completed epochs have different numbers of mini epochs: {dict(zip(completed_epochs, completed_mini_counts))}. "
+                        f"This indicates inconsistent training configuration and is not supported."
+                    )
         
         total_mini_epochs = max(max_mini_per_epoch.values()) + 1
         
@@ -115,7 +126,7 @@ class CheckpointDiscovery:
         # Sort by creation time to ensure proper ordering
         checkpoints.sort(key=lambda cp: cp.creation_time)
         
-        # Validate ordering
+        # Validate ordering (fail fast on invalid state)
         self._validate_checkpoint_ordering(checkpoints)
         
         self._discovered_checkpoints = checkpoints
@@ -132,9 +143,10 @@ class CheckpointDiscovery:
             # Check that checkpoint numbers are sequential
             expected_number = prev_cp.checkpoint_number + 1
             if curr_cp.checkpoint_number != expected_number:
-                logger.warning(
-                    f"Non-sequential checkpoint numbers: {prev_cp.name} (#{prev_cp.checkpoint_number}) "
-                    f"followed by {curr_cp.name} (#{curr_cp.checkpoint_number}), expected #{expected_number}"
+                raise ValueError(
+                    f"Non-sequential checkpoint numbers detected: {prev_cp.name} (#{prev_cp.checkpoint_number}) "
+                    f"followed by {curr_cp.name} (#{curr_cp.checkpoint_number}), expected #{expected_number}. "
+                    f"This indicates missing or corrupted checkpoints in the training sequence."
                 )
     
     def get_checkpoint_by_number(self, checkpoint_number: int) -> CheckpointInfo:
@@ -198,11 +210,20 @@ class CheckpointDiscovery:
         epochs = set(cp.epoch for cp in checkpoints)
         min_epoch, max_epoch = min(epochs), max(epochs)
         
+        # Calculate mini epochs per epoch for summary
+        max_mini_per_epoch = {}
+        for cp in checkpoints:
+            if cp.epoch not in max_mini_per_epoch:
+                max_mini_per_epoch[cp.epoch] = cp.mini
+            else:
+                max_mini_per_epoch[cp.epoch] = max(max_mini_per_epoch[cp.epoch], cp.mini)
+        
         return {
             "total_checkpoints": len(checkpoints),
             "epoch_range": (min_epoch, max_epoch),
             "total_epochs": len(epochs),
             "mini_epochs_per_epoch": checkpoints[0].total_mini_epochs,
+            "mini_epochs_by_epoch": max_mini_per_epoch,
             "first_checkpoint": checkpoints[0].name,
             "last_checkpoint": checkpoints[-1].name,
             "checkpoint_numbers": [cp.checkpoint_number for cp in checkpoints]

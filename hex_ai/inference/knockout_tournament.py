@@ -25,6 +25,36 @@ class TournamentParticipant:
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+    
+    def to_strategy_config(self):
+        """
+        Convert this participant to a StrategyConfig object.
+        
+        Returns:
+            StrategyConfig object for use in tournament execution
+        """
+        from hex_ai.inference.strategy_config import StrategyConfig
+        
+        # Extract strategy type and model path
+        strategy_type = self.strategy_config.get("strategy", "mcts")
+        model_path = self.strategy_config.get("model_path")
+        
+        if not model_path:
+            raise ValueError(f"Participant {self.name} missing model_path in strategy_config")
+        
+        # Create clean config with only MoveSelectionConfig parameters
+        clean_config = {}
+        for key, value in self.strategy_config.items():
+            if key not in ["strategy", "model_path"]:
+                clean_config[key] = value
+        
+        return StrategyConfig(
+            name=self.name,
+            strategy_type=strategy_type,
+            config=clean_config,
+            model_path=model_path,
+            temperature=self.strategy_config.get("temperature")
+        )
 
 
 @dataclass
