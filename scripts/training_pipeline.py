@@ -52,7 +52,6 @@ class PipelineConfig:
     # Self-play configuration
     num_games: int = 100000
     num_workers: int = 3  # Number of self-play workers
-    search_widths: List[int] = field(default_factory=lambda: [13, 8])
     temperature: float = 1.5
     batch_size: int = 128
     cache_size: int = 60000
@@ -261,10 +260,8 @@ class SelfPlayStep:
             # Create self-play engine
             engine = SelfPlayEngine(
                 model_path=self.config.model_full_path,
-                num_workers=1,  # Each process is a single worker
                 batch_size=self.config.batch_size,
                 cache_size=self.config.cache_size,
-                search_widths=self.config.search_widths,
                 temperature=self.config.temperature,
                 verbose=1,
                 streaming_save=True,
@@ -834,7 +831,6 @@ Examples:
     # Self-play configuration
     parser.add_argument("--num-games", type=int, default=100000, help="Number of games to generate")
     parser.add_argument("--num-workers", type=int, default=3, help="Number of self-play workers")
-    parser.add_argument("--search-widths", type=int, nargs='+', default=[13, 8], help="Search widths for minimax")
     parser.add_argument("--temperature", type=float, default=1.5, help="Temperature for move sampling")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
     parser.add_argument("--cache-size", type=int, default=60000, help="Cache size for model inference")
@@ -975,7 +971,6 @@ def main():
             model_mini=args.model_mini,
             num_games=args.num_games,
             num_workers=args.num_workers,
-            search_widths=args.search_widths,
             temperature=args.temperature,
             batch_size=args.batch_size,
             cache_size=args.cache_size,
