@@ -80,6 +80,7 @@ from hex_ai.utils.format_conversion import (
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.deterministic_tournament_utils import (
     setup_tournament_output,
     save_opening_positions,
@@ -784,6 +785,160 @@ Examples:
     return parser.parse_args()
 
 
+def is_knockout_only_tournament(args) -> bool:
+    """Check if this is a knockout-only tournament (no round-robin participants)."""
+    return args.knockout_dir and not args.models and not args.model_files
+
+
+def parse_model_specifications(args, strategy_names):
+    """Parse and validate model specifications from command line arguments."""
+    if args.models:
+        # Use model registry names
+        model_names = [name.strip() for name in args.models.split(',')]
+        
+        # Validate that we have the same number of models and strategies (only if both are specified)
+        if strategy_names and len(model_names) != len(strategy_names):
+            print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
+            sys.exit(1)
+        
+        # Validate model paths using registry
+        model_paths = []
+        for model_name in model_names:
+            try:
+                model_path = get_model_path(model_name)
+                if not validate_model_path(model_path):
+                    print(f"ERROR: Model file does not exist: {model_path}")
+                    sys.exit(1)
+                model_paths.append(model_path)
+            except ValueError as e:
+                print(f"ERROR: {e}")
+                sys.exit(1)
+        return model_paths
+    
+    else:
+        # Use direct model file specification
+        model_files = [file.strip() for file in args.model_files.split(',')]
+        model_dirs = [dir.strip() for dir in args.model_dirs.split(',')]
+        
+        # Validate that we have the same number of files, directories, and strategies (only if strategies are specified)
+        if strategy_names and (len(model_files) != len(model_dirs) or len(model_files) != len(strategy_names)):
+            print(f"ERROR: Number of model files ({len(model_files)}), directories ({len(model_dirs)}), and strategies ({len(strategy_names)}) must all match")
+            sys.exit(1)
+        elif len(model_files) != len(model_dirs):
+            print(f"ERROR: Number of model files ({len(model_files)}) must match number of model directories ({len(model_dirs)})")
+            sys.exit(1)
+        
+        # Build model paths
+        model_paths = []
+        for model_file, model_dir in zip(model_files, model_dirs):
+            model_path = os.path.join(model_dir, model_file)
+            
+            # Validate model path exists
+            if not os.path.exists(model_path):
+                print(f"ERROR: Model file does not exist: {model_path}")
+                sys.exit(1)
+            
+            model_paths.append(model_path)
+        return model_paths
+
+
+def create_strategy_configurations(args, strategy_names, model_paths):
+    """Create strategy configurations for the tournament."""
+    if is_knockout_only_tournament(args):
+        return []
+    
+    # Parse optional parameters using shared utility
+    parsed_params = parse_tournament_parameters(args)
+    mcts_sims = parsed_params['mcts_sims']
+    batch_sizes = parsed_params['batch_sizes']
+    c_pucts = parsed_params['c_pucts']
+    enable_gumbel = parsed_params['enable_gumbel']
+    gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
+    gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
+    gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    gumbel_progressive_widening = parsed_params.get('gumbel_progressive_widening', None)
+    gumbel_batch_scaling_factors = parsed_params.get('gumbel_batch_scaling_factors', None)
+    temperatures = parsed_params['temperatures']
+    
+    try:
+        # Create unified config
+        unified_config = create_unified_config_from_args(
+            strategies=strategy_names,
+            model_paths=model_paths,
+            mcts_sims=mcts_sims,
+            temperatures=temperatures,
+            batch_sizes=batch_sizes,
+            c_pucts=c_pucts,
+            enable_gumbel=enable_gumbel,
+            gumbel_sim_thresholds=gumbel_sim_thresholds,
+            gumbel_candidate_log_bases=gumbel_candidate_log_bases,
+            gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
+            gumbel_progressive_widening=gumbel_progressive_widening,
+            gumbel_batch_scaling_factors=gumbel_batch_scaling_factors,
+            num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
+            board_size=13,
+            random_seed=args.seed,
+            pie_rule=False  # Deterministic tournaments don't use pie rule
+        )
+        
+        # Create strategy configs from unified config
+        strategy_configs = create_strategy_configs_from_unified_config(unified_config)
+        
+        # Create unique strategy names by combining model file names with strategy names and key parameters
+        # This ensures strategies with different parameters get different names even with the same model
+        for i, config in enumerate(strategy_configs):
+            model_path = config.model_path
+            model_file = os.path.basename(model_path)
+            model_name = os.path.splitext(model_file)[0]  # Remove .pt.gz extension
+            
+            # Create a parameter suffix to distinguish strategies with different parameters
+            param_parts = []
+            if config.temperature is not None:
+                param_parts.append(f"t{config.temperature}")
+            if config.config.get('enable_gumbel_root_selection'):
+                param_parts.append("gumbel")
+            if config.config.get('mcts_c_puct') is not None:
+                param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
+            if config.config.get('mcts_sims') is not None:
+                param_parts.append(f"sims{config.config['mcts_sims']}")
+            
+            param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
+            unique_name = f"{model_name}_{config.original_name}{param_suffix}"
+            config.name = unique_name
+        
+        # Validate that all strategy configurations are unique
+        # Check for duplicates by considering strategy name, model path, and all configuration parameters
+        strategy_signatures = []
+        for config in strategy_configs:
+            # Create a comprehensive signature that includes all relevant parameters
+            signature_parts = [
+                config.original_name,
+                config.model_path,
+                str(config.temperature),
+                str(config.config.get('mcts_sims', '')),
+                str(config.config.get('mcts_c_puct', '')),
+                str(config.config.get('batch_size', '')),
+                str(config.config.get('enable_gumbel_root_selection', '')),
+                str(config.config.get('gumbel_sim_threshold', '')),
+                str(config.config.get('gumbel_candidate_log_base', '')),
+                str(config.config.get('gumbel_candidate_log_offset', ''))
+            ]
+            signature = ':'.join(signature_parts)
+            strategy_signatures.append(signature)
+        
+        if len(strategy_signatures) != len(set(strategy_signatures)):
+            print("ERROR: Duplicate strategy configurations detected.")
+            print("Each strategy must be unique in name, model path, and all configuration parameters.")
+            print("Strategies that differ in any parameter (temperature, enable_gumbel, c_puct, etc.) are considered distinct.")
+            sys.exit(1)
+                
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    
+    return strategy_configs
+
+
 def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
     """
     Run a 2-stage tournament: knockout elimination followed by round-robin.
@@ -799,7 +954,6 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
     """
     from hex_ai.inference.two_stage_tournament import TwoStageTournament
     from hex_ai.inference.knockout_tournament import TournamentParticipant
-    import json
     
     # Parse knockout configuration
     knockout_config = {}
@@ -918,152 +1072,13 @@ def main():
         strategy_names = []
     
     # Parse model specifications
-    if args.models:
-        # Use model registry names
-        model_names = [name.strip() for name in args.models.split(',')]
-        
-        # Validate that we have the same number of models and strategies (only if both are specified)
-        if strategy_names and len(model_names) != len(strategy_names):
-            print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
-            sys.exit(1)
-        
-        # Validate model paths using registry
-        model_paths = []
-        for model_name in model_names:
-            try:
-                model_path = get_model_path(model_name)
-                if not validate_model_path(model_path):
-                    print(f"ERROR: Model file does not exist: {model_path}")
-                    sys.exit(1)
-                model_paths.append(model_path)
-            except ValueError as e:
-                print(f"ERROR: {e}")
-                sys.exit(1)
+    model_paths = parse_model_specifications(args, strategy_names)
     
-    else:
-        # Use direct model file specification
-        model_files = [file.strip() for file in args.model_files.split(',')]
-        model_dirs = [dir.strip() for dir in args.model_dirs.split(',')]
-        
-        # Validate that we have the same number of files, directories, and strategies (only if strategies are specified)
-        if strategy_names and (len(model_files) != len(model_dirs) or len(model_files) != len(strategy_names)):
-            print(f"ERROR: Number of model files ({len(model_files)}), directories ({len(model_dirs)}), and strategies ({len(strategy_names)}) must all match")
-            sys.exit(1)
-        elif len(model_files) != len(model_dirs):
-            print(f"ERROR: Number of model files ({len(model_files)}) must match number of model directories ({len(model_dirs)})")
-            sys.exit(1)
-        
-        # Build model paths
-        model_paths = []
-        for model_file, model_dir in zip(model_files, model_dirs):
-            model_path = os.path.join(model_dir, model_file)
-            
-            # Validate model path exists
-            if not os.path.exists(model_path):
-                print(f"ERROR: Model file does not exist: {model_path}")
-                sys.exit(1)
-            
-            model_paths.append(model_path)
-    
-    # Handle knockout-only tournaments (no round-robin participants)
-    if args.knockout_dir and not args.models and not args.model_files:
-        model_paths = []
-        strategy_configs = []
-    else:
-        # Parse optional parameters using shared utility
-        from hex_ai.utils.tournament_utils import parse_tournament_parameters
-        parsed_params = parse_tournament_parameters(args)
-        mcts_sims = parsed_params['mcts_sims']
-        batch_sizes = parsed_params['batch_sizes']
-        c_pucts = parsed_params['c_pucts']
-        enable_gumbel = parsed_params['enable_gumbel']
-        gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
-        gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
-        gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
-        gumbel_progressive_widening = parsed_params.get('gumbel_progressive_widening', None)
-        gumbel_batch_scaling_factors = parsed_params.get('gumbel_batch_scaling_factors', None)
-        temperatures = parsed_params['temperatures']
-    
-    # Create strategy configurations using new unified system
-    if not (args.knockout_dir and not args.models and not args.model_files):
-        try:
-            # Create unified config
-            unified_config = create_unified_config_from_args(
-            strategies=strategy_names,
-            model_paths=model_paths,
-            mcts_sims=mcts_sims,
-            temperatures=temperatures,
-            batch_sizes=batch_sizes,
-            c_pucts=c_pucts,
-            enable_gumbel=enable_gumbel,
-            gumbel_sim_thresholds=gumbel_sim_thresholds,
-            gumbel_candidate_log_bases=gumbel_candidate_log_bases,
-            gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
-            gumbel_progressive_widening=gumbel_progressive_widening,
-            gumbel_batch_scaling_factors=gumbel_batch_scaling_factors,
-            num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
-            board_size=13,
-            random_seed=args.seed,
-            pie_rule=False  # Deterministic tournaments don't use pie rule
-        )
-        
-            # Create strategy configs from unified config
-            strategy_configs = create_strategy_configs_from_unified_config(unified_config)
-        
-            # Create unique strategy names by combining model file names with strategy names and key parameters
-            # This ensures strategies with different parameters get different names even with the same model
-            for i, config in enumerate(strategy_configs):
-                model_path = config.model_path
-                model_file = os.path.basename(model_path)
-                model_name = os.path.splitext(model_file)[0]  # Remove .pt.gz extension
-                
-                # Create a parameter suffix to distinguish strategies with different parameters
-                param_parts = []
-                if config.temperature is not None:
-                    param_parts.append(f"t{config.temperature}")
-                if config.config.get('enable_gumbel_root_selection'):
-                    param_parts.append("gumbel")
-                if config.config.get('mcts_c_puct') is not None:
-                    param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
-                if config.config.get('mcts_sims') is not None:
-                    param_parts.append(f"sims{config.config['mcts_sims']}")
-                
-                param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
-                unique_name = f"{model_name}_{config.original_name}{param_suffix}"
-                config.name = unique_name
-        
-            # Validate that all strategy configurations are unique
-            # Check for duplicates by considering strategy name, model path, and all configuration parameters
-            strategy_signatures = []
-            for config in strategy_configs:
-                # Create a comprehensive signature that includes all relevant parameters
-                signature_parts = [
-                    config.original_name,
-                    config.model_path,
-                    str(config.temperature),
-                    str(config.config.get('mcts_sims', '')),
-                    str(config.config.get('mcts_c_puct', '')),
-                    str(config.config.get('batch_size', '')),
-                    str(config.config.get('enable_gumbel_root_selection', '')),
-                    str(config.config.get('gumbel_sim_threshold', '')),
-                    str(config.config.get('gumbel_candidate_log_base', '')),
-                    str(config.config.get('gumbel_candidate_log_offset', ''))
-                ]
-                signature = ':'.join(signature_parts)
-                strategy_signatures.append(signature)
-        
-            if len(strategy_signatures) != len(set(strategy_signatures)):
-                print("ERROR: Duplicate strategy configurations detected.")
-                print("Each strategy must be unique in name, model path, and all configuration parameters.")
-                print("Strategies that differ in any parameter (temperature, enable_gumbel, c_puct, etc.) are considered distinct.")
-                sys.exit(1)
-                
-        except ValueError as e:
-            print(f"ERROR: {e}")
-            sys.exit(1)
+    # Create strategy configurations
+    strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
     
     # Generate or load opening positions (skip for knockout-only tournaments)
-    if args.knockout_dir and not args.models and not args.model_files:
+    if is_knockout_only_tournament(args):
         # Knockout-only tournament - no openings needed
         all_openings = []
         openings = []
@@ -1092,7 +1107,7 @@ def main():
             cache_file=args.cache_file
         )
     
-    if not (args.knockout_dir and not args.models and not args.model_files):
+    if not is_knockout_only_tournament(args):
         if not all_openings:
             print("ERROR: No opening positions generated")
             sys.exit(1)
@@ -1137,7 +1152,7 @@ def main():
         gumbel_m_candidates = None
     
     # Create unified script config (skip for knockout-only tournaments)
-    if not (args.knockout_dir and not args.models and not args.model_files):
+    if not is_knockout_only_tournament(args):
         script_config = ScriptConfig(
             script_type="tournament",
             models=model_paths,
@@ -1164,10 +1179,10 @@ def main():
     
     if script_config:
         print_script_configuration(script_config)
-        
-        # Print additional deterministic tournament specific info
-        print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
-        print()
+    
+    # Print additional deterministic tournament specific info
+    print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
+    print()
     
     # Check if this is a 2-stage tournament
     if args.knockout_dir:

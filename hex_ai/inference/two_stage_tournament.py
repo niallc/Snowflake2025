@@ -7,6 +7,7 @@ handling checkpoint discovery and strategy configuration.
 
 import json
 import logging
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
@@ -142,13 +143,12 @@ class TwoStageTournament:
             return {"ranking": [p.name for p in all_participants]}
         
         # Create round-robin tournament
-        # Note: This will need to be adapted to work with the existing Tournament class
-        # For now, we'll create a simple ranking based on participant names
-        # TODO: Integrate with existing Tournament class
+        # TODO: Integrate with existing Tournament class for proper round-robin execution
+        # For now, return participants in order as placeholder ranking
         
         logger.info(f"Round-robin stage with {len(all_participants)} participants")
         
-        # Placeholder implementation
+        # Placeholder: return participants in order (will be replaced with actual tournament results)
         ranking = [p.name for p in all_participants]
         
         return {
@@ -187,15 +187,12 @@ class TwoStageTournament:
             """
             Execute a match between two participants.
             
-            This is a placeholder implementation that will need to be integrated
-            with the existing game execution infrastructure.
+            TODO: Integrate with existing game execution infrastructure.
+            This placeholder implementation randomly assigns winners for testing.
             """
-            # TODO: Integrate with existing game execution code
-            # For now, return a placeholder result
             logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
             
-            # Placeholder: randomly assign winner
-            import random
+            # Placeholder: randomly assign winner (will be replaced with actual game execution)
             p1_wins = random.randint(0, games)
             p2_wins = games - p1_wins
             
@@ -205,7 +202,7 @@ class TwoStageTournament:
                 participant1_wins=p1_wins,
                 participant2_wins=p2_wins,
                 total_games=games,
-                openings_used=[]  # TODO: Implement opening generation
+                openings_used=[]  # TODO: Generate and use actual opening positions
             )
         
         return execute_match
