@@ -13,7 +13,6 @@ from typing import List, Dict, Any, Optional, Callable
 
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
-from .tournament import Tournament
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,6 @@ class TwoStageTournament:
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
-        self.round_robin_tournament: Optional[Tournament] = None
         
         logger.info(f"Initialized two-stage tournament: knockout_dir={knockout_dir}, top_k={top_k}")
     
@@ -97,6 +95,10 @@ class TwoStageTournament:
             logger.info("Round-robin stage complete")
         
         logger.info("Two-stage tournament complete")
+        
+        # Generate and save tournament summary
+        self._save_tournament_summary(results)
+        
         return results
     
     def _run_knockout_stage(self) -> Dict[str, Any]:
@@ -142,18 +144,39 @@ class TwoStageTournament:
             logger.warning("Not enough participants for round-robin stage")
             return {"ranking": [p.name for p in all_participants]}
         
-        # Create round-robin tournament
-        # TODO: Integrate with existing Tournament class for proper round-robin execution
-        # For now, return participants in order as placeholder ranking
-        
         logger.info(f"Round-robin stage with {len(all_participants)} participants")
         
-        # Placeholder: return participants in order (will be replaced with actual tournament results)
-        ranking = [p.name for p in all_participants]
+        # Convert participants to strategy configs
+        strategy_configs = []
+        for participant in all_participants:
+            strategy_config = self._create_strategy_config(participant)
+            strategy_configs.append(strategy_config)
+        
+        # Generate opening positions for round-robin stage
+        openings = self._generate_round_robin_openings()
+        
+        # Run the round-robin tournament using existing infrastructure
+        from scripts.run_tournament import run_tournament
+        
+        tournament_result = run_tournament(
+            strategy_configs=strategy_configs,
+            openings=openings,
+            temperature=self.knockout_config.get("temperature", 1.0),
+            verbose=1,
+            seed=None
+        )
+        
+        # Extract ranking from tournament results
+        win_rates = tournament_result.win_rates()
+        ranking = sorted(win_rates.items(), key=lambda x: x[1], reverse=True)
+        ranking_names = [name for name, _ in ranking]
         
         return {
             "total_participants": len(all_participants),
-            "ranking": ranking,
+            "ranking": ranking_names,
+            "win_rates": win_rates,
+            "elo_ratings": tournament_result.elo_ratings(),
+            "total_games": tournament_result.total_games,
             "participants": [{"name": p.name, "metadata": p.metadata} for p in all_participants]
         }
     
@@ -185,27 +208,146 @@ class TwoStageTournament:
         """Create a match executor function for the knockout tournament."""
         def execute_match(p1: TournamentParticipant, p2: TournamentParticipant, games: int) -> MatchResult:
             """
-            Execute a match between two participants.
-            
-            TODO: Integrate with existing game execution infrastructure.
-            This placeholder implementation randomly assigns winners for testing.
+            Execute a match between two participants using existing game execution infrastructure.
             """
             logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
             
-            # Placeholder: randomly assign winner (will be replaced with actual game execution)
-            p1_wins = random.randint(0, games)
-            p2_wins = games - p1_wins
+            # Convert TournamentParticipant to StrategyConfig
+            strategy_a = self._create_strategy_config(p1)
+            strategy_b = self._create_strategy_config(p2)
+            
+            # Generate opening positions for this match
+            openings = self._generate_match_openings(games)
+            
+            # Get model cache
+            from hex_ai.inference.model_cache import get_model_cache
+            model_cache = get_model_cache()
+            
+            # Import play_deterministic_game function
+            from scripts.run_tournament import play_deterministic_game
+            
+            # Track wins for each participant
+            p1_wins = 0
+            p2_wins = 0
+            openings_used = []
+            
+            # Play games
+            for i, opening in enumerate(openings):
+                # Game 1: p1 (Blue) vs p2 (Red)
+                result_1 = play_deterministic_game(
+                    model_cache=model_cache,
+                    strategy_a=strategy_a,
+                    strategy_b=strategy_b,
+                    opening=opening,
+                    temperature=self.knockout_config.get("temperature", 1.0),
+                    verbose=0,
+                    strategy_a_is_blue=True
+                )
+                
+                # Game 2: p2 (Blue) vs p1 (Red) 
+                result_2 = play_deterministic_game(
+                    model_cache=model_cache,
+                    strategy_a=strategy_b,
+                    strategy_b=strategy_a,
+                    opening=opening,
+                    temperature=self.knockout_config.get("temperature", 1.0),
+                    verbose=0,
+                    strategy_a_is_blue=True
+                )
+                
+                # Record results
+                openings_used.append(opening.get_trmph_string())
+                
+                # Count wins
+                if result_1['winner_strategy'] == p1.name:
+                    p1_wins += 1
+                else:
+                    p2_wins += 1
+                    
+                if result_2['winner_strategy'] == p1.name:
+                    p1_wins += 1
+                else:
+                    p2_wins += 1
+                
+                # Progress reporting
+                if i % 10 == 0:
+                    print(".", end="", flush=True)
+            
+            # Log match result
+            winner_name = p1.name if p1_wins > p2_wins else p2.name
+            print(f" {p1.name}:{p1_wins} {p2.name}:{p2_wins} -> {winner_name} wins")
+            logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
             
             return MatchResult(
                 participant1=p1,
                 participant2=p2,
                 participant1_wins=p1_wins,
                 participant2_wins=p2_wins,
-                total_games=games,
-                openings_used=[]  # TODO: Generate and use actual opening positions
+                total_games=games * 2,  # Each opening played twice
+                openings_used=openings_used
             )
         
         return execute_match
+    
+    def _create_strategy_config(self, participant: TournamentParticipant):
+        """Create a StrategyConfig from a TournamentParticipant."""
+        from hex_ai.inference.strategy_config import StrategyConfig
+        
+        # Clean the strategy config to only include MoveSelectionConfig parameters
+        clean_config = {}
+        for key, value in participant.strategy_config.items():
+            if key not in ["strategy", "model_path"]:  # Remove non-MoveSelectionConfig keys
+                clean_config[key] = value
+        
+        return StrategyConfig(
+            name=participant.name,
+            strategy_type="mcts",
+            config=clean_config,
+            model_path=participant.strategy_config["model_path"],
+            temperature=participant.strategy_config.get("temperature")
+        )
+    
+    def _generate_match_openings(self, num_games: int):
+        """Generate opening positions for a match."""
+        from scripts.run_tournament import generate_diverse_openings, find_trmph_files
+        
+        # Use same TRMPH files as existing tournament system
+        trmph_files = find_trmph_files("data/sf25/sep28")
+        
+        # Generate 1.1x required openings (fail fast if insufficient)
+        target_count = int(num_games * 1.1)
+        openings = generate_diverse_openings(trmph_files, target_count=target_count)
+        
+        if len(openings) < num_games:
+            raise ValueError(f"Insufficient openings generated: {len(openings)} < {num_games}")
+        
+        return openings[:num_games]
+    
+    def _generate_round_robin_openings(self):
+        """Generate opening positions for the round-robin stage."""
+        from scripts.run_tournament import generate_diverse_openings, find_trmph_files
+        
+        # Use same TRMPH files as existing tournament system
+        trmph_files = find_trmph_files("data/sf25/sep28")
+        
+        # Calculate total games needed for round-robin
+        # Each pair plays round_robin_games * 2 (A vs B and B vs A)
+        num_participants = len(self.knockout_winners) + len(self.round_robin_participants)
+        if num_participants < 2:
+            return []
+        
+        # Number of unique pairs
+        num_pairs = num_participants * (num_participants - 1) // 2
+        total_games = num_pairs * self.round_robin_games * 2
+        
+        # Generate 1.1x required openings (fail fast if insufficient)
+        target_count = int(total_games * 1.1)
+        openings = generate_diverse_openings(trmph_files, target_count=target_count)
+        
+        if len(openings) < total_games:
+            raise ValueError(f"Insufficient openings generated: {len(openings)} < {total_games}")
+        
+        return openings[:total_games]
     
     def get_tournament_summary(self) -> Dict[str, Any]:
         """Get a summary of the tournament configuration and results."""
@@ -227,3 +369,44 @@ class TwoStageTournament:
                 summary["checkpoint_discovery_error"] = str(e)
         
         return summary
+    
+    def _save_tournament_summary(self, results: Dict[str, Any]) -> None:
+        """Save tournament summary to JSON file."""
+        import os
+        from datetime import datetime
+        
+        # Create output directory
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = f"data/tournament_play/two_stage_tournament_{timestamp}"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create comprehensive summary
+        summary = {
+            "tournament_type": "two_stage",
+            "timestamp": timestamp,
+            "configuration": {
+                "knockout_dir": self.knockout_dir,
+                "knockout_config": self.knockout_config,
+                "games_per_match": self.games_per_match,
+                "top_k": self.top_k,
+                "round_robin_games": self.round_robin_games,
+                "round_robin_participants": len(self.round_robin_participants)
+            },
+            "results": results
+        }
+        
+        # Save to JSON file
+        summary_file = os.path.join(output_dir, "tournament_summary.json")
+        with open(summary_file, 'w') as f:
+            json.dump(summary, f, indent=2, default=str)
+        
+        logger.info(f"Tournament summary saved to: {summary_file}")
+        
+        # Print final ranking
+        if results.get("final_ranking"):
+            print("\n" + "="*60)
+            print("FINAL TOURNAMENT RANKING")
+            print("="*60)
+            for i, participant in enumerate(results["final_ranking"], 1):
+                print(f"{i:2d}. {participant}")
+            print("="*60)

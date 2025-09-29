@@ -45,7 +45,8 @@ class MatchResult:
         elif self.participant2_wins > self.participant1_wins:
             return self.participant2
         else:
-            raise ValueError(f"Match ended in tie: {self.participant1_wins}-{self.participant2_wins}")
+            # Tie: use first participant as winner (deterministic tiebreaker)
+            return self.participant1
     
     @property
     def is_tie(self) -> bool:
@@ -161,13 +162,28 @@ class KnockoutTournament:
     
     def _pair_participants(self) -> List[tuple[TournamentParticipant, TournamentParticipant]]:
         """Pair participants for matches in current round."""
-        if len(self.active_participants) % 2 != 0:
-            raise ValueError(f"Odd number of participants ({len(self.active_participants)}) cannot be paired")
+        if len(self.active_participants) < 2:
+            return []
         
-        # Simple pairing: adjacent participants
+        # Handle odd number of participants by giving first participant a bye
+        bye_participant = None
+        if len(self.active_participants) % 2 != 0:
+            # Give first participant a bye (advance automatically)
+            bye_participant = self.active_participants[0]
+            logger.info(f"Participant {bye_participant.name} gets a bye")
+        
+        # Spaced pairing: first half vs second half for more efficient tournaments
+        # This ensures early checkpoints face later checkpoints (assuming sequential training)
         pairs = []
-        for i in range(0, len(self.active_participants), 2):
-            pairs.append((self.active_participants[i], self.active_participants[i + 1]))
+        n = len(self.active_participants)
+        half = n // 2
+        
+        for i in range(half):
+            pairs.append((self.active_participants[i], self.active_participants[i + half]))
+        
+        # Remove bye participant after pairing (so it doesn't affect the pairing logic)
+        if bye_participant:
+            self.active_participants = self.active_participants[1:]
         
         return pairs
     
