@@ -257,10 +257,14 @@ class KnockoutTournament:
         
         for result in round_results:
             if result.is_tie:
-                # In case of tie, both participants are eliminated
-                # This should be rare with odd number of games
-                logger.warning(f"Tie in match {result.participant1.name} vs {result.participant2.name}")
-                self.eliminated_participants.extend([result.participant1, result.participant2])
+                # In case of tie, use deterministic tiebreaker: first participant wins
+                # This preserves tournament structure and avoids eliminating both participants
+                winner = result.participant1
+                loser = result.participant2
+                logger.info(f"Tie in match {result.participant1.name} vs {result.participant2.name} - {winner.name} advances (tiebreaker)")
+                
+                new_active.append(winner)
+                self.eliminated_participants.append(loser)
             else:
                 winner = result.winner
                 loser = result.participant2 if winner == result.participant1 else result.participant1

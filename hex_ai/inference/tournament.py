@@ -1,36 +1,7 @@
-import os
-import itertools
-from typing import List, Dict, Tuple, Optional, Any, Union
-from dataclasses import dataclass
 import numpy as np
-from hex_ai.inference.simple_model_inference import SimpleModelInference
-from hex_ai.utils.format_conversion import rowcol_to_trmph
-from hex_ai.value_utils import (
-    Winner, 
-    ValuePredictor,
-    # Add new utilities
-    policy_logits_to_probs,
-    get_legal_policy_probs,
-    select_top_k_moves,
-    sample_move_by_value,
-    select_policy_move,  # Add the new public function
-)
-from hex_ai.inference.game_engine import (
-    HexGameState,
-    apply_move_to_state,  # Add move application utilities
-)
-from hex_ai.config import (
-    BOARD_SIZE,
-    TRMPH_BLUE_WIN, TRMPH_RED_WIN, EMPTY_PIECE
-)
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, log_game_csv, write_tournament_trmph_header, find_available_csv_filename
-from hex_ai.utils.tournament_utils import get_player_label_for_checkpoint, extract_model_name_from_label, determine_winner_labels, determine_winner_labels_simple
 import random
+from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
-import csv
-from pathlib import Path
-from hex_ai.enums import Player, Piece
-from hex_ai.value_utils import int_to_player
 
 # NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
 # returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
@@ -198,42 +169,4 @@ class TournamentPlayConfig:
         return self.temperature
 
 
-def log_game_result(result, model_1: SimpleModelInference, 
-                   model_2: SimpleModelInference, play_config: TournamentPlayConfig,
-                   log_file: Optional[str], csv_file: Optional[str],
-                   model_1_label: Optional[str] = None, model_2_label: Optional[str] = None) -> None:
-    """
-    Log game result to both TRMPH and CSV files.
-    """
-    if log_file:
-        append_trmph_winner_line(result.trmph_str, result.winner_char, log_file)
-    
-    if csv_file:
-        # Create CSV row
-        row = {
-            'model_a': model_1_label or get_player_label_for_checkpoint(model_1.checkpoint_path),
-            'model_b': model_2_label or get_player_label_for_checkpoint(model_2.checkpoint_path),
-            'color_a': 'blue',  # model_1 is always blue in this context
-            'trmph': result.trmph_str,
-            'winner': result.winner_char,
-            'swap_decision': result.swap_decision or 'none',
-            'temperature': play_config.temperature,
-            'pie_rule': play_config.pie_rule,
-            'strategy': play_config.strategy
-        }
-        
-        log_game_csv(row, csv_file)
-
-
-# Example usage (to be moved to CLI or script):
-if __name__ == "__main__":
-    # Example tournament result
-    checkpoints = [
-        "checkpoints/model1.pt.gz",
-        "checkpoints/model2.pt.gz"
-    ]
-    
-    result = TournamentResult(checkpoints)
-    
-    print("Example tournament result:")
-    result.print_summary()
+# Legacy functions removed - game logging is now handled by the new tournament system
