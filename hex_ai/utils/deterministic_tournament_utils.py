@@ -297,7 +297,8 @@ def report_strategy_pair_results(
     verbose: int,
     strategy_a: StrategyConfig,
     strategy_b: StrategyConfig,
-    result: Any
+    result: Any,
+    duplicate_tracker: GameDuplicateTracker
 ) -> None:
     """
     Report results for a strategy pair.
@@ -307,28 +308,23 @@ def report_strategy_pair_results(
         strategy_a: First strategy configuration
         strategy_b: Second strategy configuration
         result: Tournament result object
+        duplicate_tracker: Game duplicate tracker for unique games count
     """
     if verbose >= 1:
-        # Get win rates using the correct API
-        win_rates = result.win_rates()
+        # Calculate wins and total games for this specific pair only
+        wins_a = result.results[strategy_a.name][strategy_b.name]['wins']
+        games_a = result.results[strategy_a.name][strategy_b.name]['games']
+        wins_b = result.results[strategy_b.name][strategy_a.name]['wins']
+        games_b = result.results[strategy_b.name][strategy_a.name]['games']
         
-        # Calculate wins and total games for each strategy
-        def get_wins_and_games(strategy_name):
-            wins = 0
-            games = 0
-            for opponent in result.participants:
-                if opponent != strategy_name:
-                    wins += result.results[strategy_name][opponent]['wins']
-                    games += result.results[strategy_name][opponent]['games']
-            return wins, games
+        # Calculate win rates for this specific pair
+        win_rate_a = wins_a / games_a if games_a > 0 else 0.0
+        win_rate_b = wins_b / games_b if games_b > 0 else 0.0
         
-        wins_a, games_a = get_wins_and_games(strategy_a.name)
-        wins_b, games_b = get_wins_and_games(strategy_b.name)
-        
-        print(f" {strategy_a.name}: {win_rates[strategy_a.name]:.1%} ({wins_a}/{games_a})")
-        print(f" {strategy_b.name}: {win_rates[strategy_b.name]:.1%} ({wins_b}/{games_b})")
+        print(f" {strategy_a.name}: {win_rate_a:.1%} ({wins_a}/{games_a})")
+        print(f" {strategy_b.name}: {win_rate_b:.1%} ({wins_b}/{games_b})")
         print(f"  Timing: {strategy_a.name}={result.strategy_timings[strategy_a.name]:.3f}s, {strategy_b.name}={result.strategy_timings[strategy_b.name]:.3f}s")
-        print(f"  Total unique games played: {len(result.seen_games) if hasattr(result, 'seen_games') else 'unknown'}")
+        print(f"  Total unique games played: {len(duplicate_tracker.seen_games)}")
 
 
 def play_strategy_pair_games(

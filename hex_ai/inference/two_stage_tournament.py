@@ -56,6 +56,7 @@ class TwoStageTournament:
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
+        self.output_dir: Optional[str] = None
         
         logger.info(f"Initialized two-stage tournament: knockout_dir={knockout_dir}, top_k={top_k}")
     
@@ -75,6 +76,12 @@ class TwoStageTournament:
             Dictionary containing tournament results and summary
         """
         logger.info("Starting two-stage tournament")
+        
+        # Create output directory early for game streaming
+        if self.output_dir is None:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.output_dir = f"data/tournament_play/two_stage_tournament_{timestamp}"
+            os.makedirs(self.output_dir, exist_ok=True)
         
         results = {
             "knockout_results": None,
@@ -238,8 +245,7 @@ class TwoStageTournament:
             from hex_ai.config import BOARD_SIZE
             play_config = TournamentPlayConfig(
                 temperature=self.knockout_config.get("temperature", 1.0),
-                seed=42,  # Fixed seed for reproducibility
-                board_size=BOARD_SIZE
+                random_seed=42  # Fixed seed for reproducibility
             )
             pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
             pair_strategy_configs = [strategy_a, strategy_b]
@@ -362,17 +368,16 @@ class TwoStageTournament:
     
     def _generate_round_robin_openings(self):
         """Generate opening positions for the round-robin stage."""
-        # Calculate total games needed for round-robin
+        # Generate openings for round-robin stage
+        # The run_tournament function will use these openings for each strategy pair
         # Each pair plays round_robin_games * 2 (A vs B and B vs A)
         num_participants = len(self.knockout_winners) + len(self.round_robin_participants)
         if num_participants < 2:
             return []
         
-        # Number of unique pairs
-        num_pairs = num_participants * (num_participants - 1) // 2
-        total_games = num_pairs * self.round_robin_games * 2
-        
-        return self._generate_openings(total_games, "round-robin")
+        # Generate round_robin_games openings (not total games)
+        # The run_tournament function handles the pairing and game execution
+        return self._generate_openings(self.round_robin_games, "round-robin")
     
     def get_tournament_summary(self) -> Dict[str, Any]:
         """Get a summary of the tournament configuration and results."""
@@ -398,13 +403,11 @@ class TwoStageTournament:
     def _save_tournament_summary(self, results: Dict[str, Any]) -> None:
         """Save tournament summary to JSON file."""
         
-        # Create output directory
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = f"data/tournament_play/two_stage_tournament_{timestamp}"
-        os.makedirs(output_dir, exist_ok=True)
+        # Use existing output directory (created in run_tournament)
+        output_dir = self.output_dir
         
-        # Store output directory for game streaming
-        self.output_dir = output_dir
+        # Extract timestamp from output directory path
+        timestamp = output_dir.split('_')[-1] if output_dir else "unknown"
         
         # Create comprehensive summary
         summary = {

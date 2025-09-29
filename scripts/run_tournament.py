@@ -696,7 +696,7 @@ def run_tournament(
         
         # Report results for this pair
         print()  # Add line break before match summary
-        report_strategy_pair_results(verbose, strategy_a, strategy_b, result)
+        report_strategy_pair_results(verbose, strategy_a, strategy_b, result, duplicate_tracker)
     
     logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
     return result
