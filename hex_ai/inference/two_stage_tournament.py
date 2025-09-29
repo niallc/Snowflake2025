@@ -15,6 +15,8 @@ from typing import List, Dict, Any, Optional, Callable
 
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
+from hex_ai.utils.tournament_logging import write_tournament_trmph_header, append_trmph_winner_line
+from hex_ai.utils.deterministic_tournament_utils import setup_strategy_pair_files
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +166,8 @@ class TwoStageTournament:
             openings=openings,
             temperature=self.knockout_config.get("temperature", 1.0),
             verbose=1,
-            seed=None
+            seed=None,
+            output_dir=self.output_dir  # Use the same output directory as knockout stage
         )
         
         # Extract ranking from tournament results
@@ -227,6 +230,24 @@ class TwoStageTournament:
             # Import play_deterministic_game function
             from .game_execution import play_deterministic_game
             
+            # Set up output files for this match
+            trmph_file, csv_file = setup_strategy_pair_files(self.output_dir, strategy_a, strategy_b)
+            
+            # Write TRMPH header
+            from hex_ai.inference.tournament import TournamentPlayConfig
+            from hex_ai.config import BOARD_SIZE
+            play_config = TournamentPlayConfig(
+                temperature=self.knockout_config.get("temperature", 1.0),
+                seed=42,  # Fixed seed for reproducibility
+                board_size=BOARD_SIZE
+            )
+            pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
+            pair_strategy_configs = [strategy_a, strategy_b]
+            actual_trmph_file = write_tournament_trmph_header(
+                trmph_file, pair_model_paths, games * 2, play_config, BOARD_SIZE, 
+                strategy_configs=pair_strategy_configs
+            )
+            
             # Track wins for each participant
             p1_wins = 0
             p2_wins = 0
@@ -245,6 +266,9 @@ class TwoStageTournament:
                     strategy_a_is_blue=True
                 )
                 
+                # Stream game 1 to file
+                append_trmph_winner_line(actual_trmph_file, result_1['trmph_str'], result_1['winner_char'])
+                
                 # Game 2: p2 (Blue) vs p1 (Red) 
                 result_2 = play_deterministic_game(
                     model_cache=model_cache,
@@ -255,6 +279,9 @@ class TwoStageTournament:
                     verbose=0,
                     strategy_a_is_blue=True
                 )
+                
+                # Stream game 2 to file
+                append_trmph_winner_line(actual_trmph_file, result_2['trmph_str'], result_2['winner_char'])
                 
                 # Record results
                 openings_used.append(opening.get_trmph_string())
@@ -375,6 +402,9 @@ class TwoStageTournament:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = f"data/tournament_play/two_stage_tournament_{timestamp}"
         os.makedirs(output_dir, exist_ok=True)
+        
+        # Store output directory for game streaming
+        self.output_dir = output_dir
         
         # Create comprehensive summary
         summary = {

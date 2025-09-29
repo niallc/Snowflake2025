@@ -26,11 +26,11 @@ class ModelCache:
         self._simple_models: Dict[str, SimpleModelInference] = {}
         self._wrapper_models: Dict[str, ModelWrapper] = {}
     
-    def get_simple_model(self, checkpoint_path: str) -> SimpleModelInference:
+    def get_simple_model(self, checkpoint_path: str, verbose: int = 1) -> SimpleModelInference:
         """Get or create a SimpleModelInference instance."""
         normalized_path = get_normalized_path(checkpoint_path)
         if normalized_path not in self._simple_models:
-            self._simple_models[normalized_path] = SimpleModelInference(checkpoint_path)
+            self._simple_models[normalized_path] = SimpleModelInference(checkpoint_path, verbose=verbose)
         return self._simple_models[normalized_path]
     
     def get_wrapper_model(self, checkpoint_path: str) -> ModelWrapper:

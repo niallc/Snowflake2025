@@ -622,7 +622,8 @@ def run_tournament(
     openings: List[OpeningPosition],
     temperature: float = DEFAULT_TEMPERATURE,
     verbose: int = DEFAULT_VERBOSE,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    output_dir: Optional[str] = None
 ) -> DeterministicTournamentResult:
     """
     Run a deterministic tournament using pre-generated opening positions.
@@ -632,6 +633,8 @@ def run_tournament(
         openings: List of opening positions to use
         temperature: Temperature for move selection (0.0 = deterministic)
         verbose: Verbosity level
+        seed: Random seed for reproducibility (default: None, uses time-based seed)
+        output_dir: Output directory for tournament files (default: None, auto-generated)
     
     Returns:
         TournamentResult with results
@@ -653,7 +656,12 @@ def run_tournament(
     model_cache = get_model_cache()
     
     # Set up tournament output using utilities
-    output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
+    if output_dir is None:
+        output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
+    else:
+        # Use provided output directory
+        os.makedirs(output_dir, exist_ok=True)
+        openings_file = os.path.join(output_dir, "openings.txt")
     save_opening_positions(openings, openings_file)
     
     # Initialize game duplicate tracker
