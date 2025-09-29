@@ -294,6 +294,8 @@ class DataShuffler:
         3. Shuffles the examples to break any remaining correlations
         4. Writes the final shuffled file
         5. Optionally cleans up the temporary bucket files
+        
+        Returns the bucket_idx for progress tracking in the main process.
         """
         logger.info(f"Processing bucket {bucket_idx}")
         
@@ -303,7 +305,7 @@ class DataShuffler:
         
         if not bucket_files:
             logger.warning(f"No files found for bucket {bucket_idx}")
-            return
+            return bucket_idx
         
         # Load and consolidate examples from all bucket files
         all_examples = []
@@ -324,7 +326,7 @@ class DataShuffler:
         
         if not all_examples:
             logger.warning(f"No examples found for bucket {bucket_idx}")
-            return
+            return bucket_idx
         
         # Shuffle examples to break any remaining correlations
         # This is the final randomization step that addresses value head fingerprinting
@@ -334,11 +336,6 @@ class DataShuffler:
         # Write final shuffled file with complete source tracking
         self._write_shuffled_file(bucket_idx, all_examples, source_files)
         
-        # Update progress tracking
-        self.progress['completed_buckets'].append(bucket_idx)
-        self.stats['buckets_completed'] += 1
-        self._save_progress()
-        
         # Clean up temporary bucket files if requested
         if self.cleanup_temp:
             for bucket_file in bucket_files:
@@ -347,6 +344,8 @@ class DataShuffler:
                 except Exception as e:
                     logger.error(f"Failed to delete {bucket_file}: {e}")
                     raise  # Make cleanup errors fatal
+        
+        return bucket_idx
     
     def _consolidate_and_shuffle_all_buckets(self):
         logger.info(f"Starting Phase 2: Consolidation and shuffling of {self.num_buckets} buckets (parallelized)")
@@ -355,8 +354,12 @@ class DataShuffler:
             for future in as_completed(futures):
                 bucket_idx = futures[future]
                 try:
-                    future.result()
-                    logger.info(f"Bucket {bucket_idx} consolidated and shuffled")
+                    completed_bucket_idx = future.result()
+                    logger.info(f"Bucket {completed_bucket_idx} consolidated and shuffled")
+                    # Update progress tracking in main process to avoid race conditions
+                    self.progress['completed_buckets'].append(completed_bucket_idx)
+                    self.stats['buckets_completed'] += 1
+                    self._save_progress()
                 except Exception as e:
                     logger.error(f"Error in parallel processing of bucket {bucket_idx}: {e}")
                     raise

@@ -17,8 +17,8 @@ DEFAULT_VALIDATION_DIRS = [
 ]
 
 DEFAULT_VALIDATION_RANGES = [
-    "490-499", 
-    "99-99"
+    "498-498",  # Use only 1 shard from sf18_shuffled (the last one)
+    "99-99"     # Keep 1 shard from selfplay directory
 ]
 
 

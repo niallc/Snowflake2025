@@ -564,9 +564,9 @@ class TrainingStep:
         if new_shuffled_dir:
             all_data_dirs = [new_shuffled_dir] + self.config.processed_data_dirs
             all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
-            # For validation, use "all" for new data and existing validation ranges
-            all_validation_dirs = [new_shuffled_dir] + self.config.resolved_validation_dirs
-            all_validation_shard_ranges = ["all"] + self.config.resolved_validation_ranges
+            # For validation, use only the predefined validation directories (don't add new data)
+            all_validation_dirs = self.config.resolved_validation_dirs
+            all_validation_shard_ranges = self.config.resolved_validation_ranges
         else:
             all_data_dirs = self.config.processed_data_dirs
             all_shard_ranges = self.config.shard_ranges
@@ -871,6 +871,7 @@ Examples:
         action='store_true',
         help='Disable validation entirely'
     )
+    
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")

@@ -252,18 +252,17 @@ def run_single_experiment(
         trainer.load_checkpoint(checkpoint_path, override_checkpoint_hyperparameters=override_checkpoint_hyperparameters)
         logger.info(f"Loaded checkpoint from {checkpoint_path}")
     
-    # Create experiment-specific checkpoint directory
+    # Use results_path directly (no extra directory nesting)
     experiment_name = exp_config.get('experiment_name', 'unknown_experiment')
-    experiment_checkpoint_dir = results_path / experiment_name
-    experiment_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Created experiment checkpoint directory: {experiment_checkpoint_dir}")
+    results_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Using checkpoint directory: {results_path}")
     
     # Create orchestrator
     orchestrator = MiniEpochOrchestrator(
         trainer=trainer,
         train_loader=train_loader,
         val_loader=val_loader,
-        checkpoint_dir=experiment_checkpoint_dir,
+        checkpoint_dir=results_path,
         num_epochs=num_epochs,
         mini_epoch_samples=mini_epoch_samples,
         start_epoch=start_epoch,
@@ -322,23 +321,33 @@ def save_experiment_metadata(
         experiment_name: Name of the experiment
         hyperparameters: Model hyperparameters
         training_config: Training configuration
+        
+    Raises:
+        Exception: If metadata saving fails (no silent failures)
     """
     from datetime import datetime
     
-    metadata = {
-        'experiment_name': experiment_name,
-        'timestamp': datetime.now().isoformat(),
-        'hyperparameters': hyperparameters,
-        'training_config': training_config
-    }
-    
-    metadata_file = results_path / experiment_name / "experiment_metadata.json"
-    metadata_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(metadata_file, 'w') as f:
-        json.dump(metadata, f, indent=2, default=str)
-    
-    logger.info(f"Saved experiment metadata to {metadata_file}")
+    try:
+        metadata = {
+            'experiment_name': experiment_name,
+            'timestamp': datetime.now().isoformat(),
+            'hyperparameters': hyperparameters,
+            'training_config': training_config
+        }
+        
+        # Save metadata directly in results_path (no extra directory)
+        metadata_file = results_path / "experiment_metadata.json"
+        results_path.mkdir(parents=True, exist_ok=True)
+        
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2, default=str)
+        
+        logger.info(f"Saved experiment metadata to {metadata_file}")
+        
+    except Exception as e:
+        error_msg = f"Failed to save experiment metadata to {results_path}: {e}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg) from e
 
 
 def save_overall_results(results_path, overall_results):

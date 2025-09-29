@@ -400,7 +400,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     raise RuntimeError(f"Failed to load validation shard {shard_path}: {e}")
         
         # Memory guards - crash if validation data is too large
-        estimated_memory_gb = len(all_validation_positions) * 0.0001  # Rough estimate: 100 bytes per position
+        # Based on actual testing: ~4.5 KB per position in memory
+        estimated_memory_gb = len(all_validation_positions) * 0.0045 / 1024  # 4.5 KB per position
         estimated_positions = len(all_validation_positions)
         
         if estimated_memory_gb > 3.0:
