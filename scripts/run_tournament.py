@@ -92,6 +92,9 @@ from hex_ai.utils.deterministic_tournament_utils import (
 )
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.random_utils import set_deterministic_seeds
+from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_configs as generate_gumbel_summary
+from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
+from hex_ai.inference.model_cache import create_temporary_model_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -648,13 +651,7 @@ def run_tournament(
     # Use unique strategy names for tournament tracking (after parameter modifications)
     unique_strategy_names = [config.name for config in strategy_configs]
     result = DeterministicTournamentResult(unique_strategy_names)
-    
-    # Preload all models for efficiency
-    from hex_ai.inference.model_cache import preload_tournament_models, get_model_cache
-    model_paths = [config.model_path for config in strategy_configs]
-    preload_tournament_models(model_paths)
-    model_cache = get_model_cache()
-    
+        
     # Set up tournament output using utilities
     if output_dir is None:
         output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
@@ -670,6 +667,10 @@ def run_tournament(
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
         logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
+        
+        # Load models temporarily for this match only
+        match_model_paths = [strategy_a.model_path, strategy_b.model_path]
+        model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
         
         # Set up output files for this strategy pair
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
@@ -697,14 +698,16 @@ def run_tournament(
         # Report results for this pair
         print()  # Add line break before match summary
         report_strategy_pair_results(verbose, strategy_a, strategy_b, result, duplicate_tracker)
+        
+        # Clean up temporary models to free memory
+        # The temporary models will be garbage collected when this iteration ends
+        logger.debug(f"Cleaning up temporary models for match: {strategy_a.name} vs {strategy_b.name}")
     
     logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
     return result
 
 
-# Import the utility function
-from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_configs as generate_gumbel_summary
-from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
+# Utility functions are now imported at the top
 
 
 def parse_args():

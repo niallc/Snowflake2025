@@ -14,6 +14,18 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.model_config import get_normalized_path
 
 
+class TemporaryModelCache:
+    """Temporary model cache for per-match model loading."""
+    
+    def __init__(self, models_dict: Dict[str, SimpleModelInference]):
+        self.models = models_dict
+    
+    def get_simple_model(self, checkpoint_path: str, verbose: int = 1) -> SimpleModelInference:
+        """Get a model from the temporary cache."""
+        normalized_path = get_normalized_path(checkpoint_path)
+        return self.models[normalized_path]
+
+
 class ModelCache:
     """
     Cache for model instances to avoid reloading during tournaments.
@@ -46,19 +58,27 @@ class ModelCache:
             )
         return self._wrapper_models[normalized_path]
     
-    def preload_models(self, checkpoint_paths: list) -> None:
-        """Preload all models for a tournament."""
-        print(f"Preloading {len(checkpoint_paths)} models...")
-        for path in checkpoint_paths:
-            # Load both types to ensure they're cached
-            self.get_simple_model(path)
-            self.get_wrapper_model(path)
-        print("Model preloading complete.")
-    
     def clear_cache(self) -> None:
         """Clear all cached models to free memory."""
         self._simple_models.clear()
         self._wrapper_models.clear()
+    
+    def get_temporary_models(self, checkpoint_paths: list, verbose: int = 1) -> Dict[str, SimpleModelInference]:
+        """
+        Get models temporarily for a match, without caching them.
+        
+        Args:
+            checkpoint_paths: List of model paths to load
+            verbose: Verbosity level for model loading
+            
+        Returns:
+            Dictionary mapping normalized paths to SimpleModelInference instances
+        """
+        models = {}
+        for path in checkpoint_paths:
+            normalized_path = get_normalized_path(path)
+            models[normalized_path] = SimpleModelInference(path, verbose=verbose)
+        return models
 
 
 # Global cache instance
@@ -70,11 +90,15 @@ def get_model_cache() -> ModelCache:
     return _model_cache
 
 
-def preload_tournament_models(checkpoint_paths: list) -> None:
-    """Preload models for a tournament."""
-    _model_cache.preload_models(checkpoint_paths)
-
-
 def clear_tournament_cache() -> None:
     """Clear the tournament model cache."""
     _model_cache.clear_cache()
+
+def get_temporary_models_for_match(checkpoint_paths: list, verbose: int = 1) -> Dict[str, SimpleModelInference]:
+    """Get models temporarily for a match, without caching them."""
+    return _model_cache.get_temporary_models(checkpoint_paths, verbose)
+
+def create_temporary_model_cache(checkpoint_paths: list, verbose: int = 1) -> TemporaryModelCache:
+    """Create a temporary model cache for a match."""
+    temporary_models = get_temporary_models_for_match(checkpoint_paths, verbose)
+    return TemporaryModelCache(temporary_models)

@@ -15,8 +15,10 @@ from typing import List, Dict, Any, Optional, Callable
 
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
+from .game_execution import play_deterministic_game
 from hex_ai.utils.tournament_logging import write_tournament_trmph_header, append_trmph_winner_line
 from hex_ai.utils.deterministic_tournament_utils import setup_strategy_pair_files
+from hex_ai.inference.model_cache import create_temporary_model_cache
 
 logger = logging.getLogger(__name__)
 
@@ -185,12 +187,8 @@ class TwoStageTournament:
         # Calculate individual game counts for each participant
         participant_games = {}
         for name in ranking_names:
-            # Count total games for this participant
-            total_games_for_participant = 0
-            for opponent in ranking_names:
-                if opponent != name:
-                    # Each pair plays 2 games (A vs B and B vs A)
-                    total_games_for_participant += 2
+            # Count total games for this participant from actual tournament results
+            total_games_for_participant = sum(tournament_result.results[name][op]['games'] for op in tournament_result.results[name])
             participant_games[name] = total_games_for_participant
         
         return {
@@ -242,12 +240,9 @@ class TwoStageTournament:
             # Generate opening positions for this match
             openings = self._generate_match_openings(games)
             
-            # Get model cache
-            from hex_ai.inference.model_cache import get_model_cache
-            model_cache = get_model_cache()
-            
-            # Import play_deterministic_game function
-            from .game_execution import play_deterministic_game
+            # Load models temporarily for this match only
+            match_model_paths = [strategy_a.model_path, strategy_b.model_path]
+            model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
             
             # Set up output files for this match
             trmph_file, csv_file = setup_strategy_pair_files(self.output_dir, strategy_a, strategy_b)
@@ -333,6 +328,11 @@ class TwoStageTournament:
             p2_pct = (p2_wins / total_games) * 100
             print(f" {p1.name}:{p1_wins}/{total_games} ({p1_pct:.1f}%) {p2.name}:{p2_wins}/{total_games} ({p2_pct:.1f}%) -> {winner_name} wins")
             logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
+            
+            # Clean up temporary models to free memory
+            # The temporary models will be garbage collected when this function returns
+            # and the temporary_models dict goes out of scope
+            logger.debug(f"Cleaning up temporary models for match: {p1.name} vs {p2.name}")
             
             return MatchResult(
                 participant1=p1,
