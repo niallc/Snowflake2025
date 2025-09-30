@@ -214,6 +214,26 @@ class CheckpointDiscovery:
         checkpoints = self.discover_checkpoints()
         return checkpoints[-count:] if count <= len(checkpoints) else checkpoints
     
+    def get_checkpoints_by_epoch_range(self, start_epoch: int, end_epoch: int) -> List[CheckpointInfo]:
+        """
+        Get checkpoints within a range of epoch numbers.
+        
+        Args:
+            start_epoch: Start epoch number (inclusive)
+            end_epoch: End epoch number (exclusive)
+            
+        Returns:
+            List of CheckpointInfo objects in the specified epoch range
+        """
+        checkpoints = self.discover_checkpoints()
+        
+        result = []
+        for cp in checkpoints:
+            if start_epoch <= cp.epoch < end_epoch:
+                result.append(cp)
+        
+        return result
+    
     def get_checkpoint_summary(self) -> Dict[str, Any]:
         """Get a summary of discovered checkpoints."""
         checkpoints = self.discover_checkpoints()

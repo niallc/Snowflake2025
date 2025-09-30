@@ -786,6 +786,8 @@ Examples:
                        help='Directory containing checkpoints for knockout stage')
     parser.add_argument('--knockout-config', type=str,
                        help='JSON configuration for knockout stage MCTS strategy (e.g., \'{"mcts_sims": 100, "enable_gumbel_root_selection": true}\')')
+    parser.add_argument('--epoch-range', type=str,
+                       help='Epoch range for knockout stage (e.g., "14,15" for epochs 14 and 15)')
     parser.add_argument('--games-per-match', type=int, default=50,
                        help='Number of games per knockout match (default: 50)')
     parser.add_argument('--top-k', type=int, default=2,
@@ -794,6 +796,42 @@ Examples:
                        help='Number of games per round-robin match (default: 100)')
     
     return parser.parse_args()
+
+
+def parse_epoch_range(epoch_range_str: str) -> Tuple[int, int]:
+    """
+    Parse epoch range string into start and end epoch numbers.
+    
+    Args:
+        epoch_range_str: String like "14,15" or "14" for single epoch
+        
+    Returns:
+        Tuple of (start_epoch, end_epoch) where end_epoch is exclusive
+        
+    Raises:
+        ValueError: If format is invalid
+    """
+    if not epoch_range_str:
+        raise ValueError("Epoch range string cannot be empty")
+    
+    parts = epoch_range_str.split(',')
+    if len(parts) == 1:
+        # Single epoch: "14" -> start=14, end=15
+        start_epoch = int(parts[0].strip())
+        end_epoch = start_epoch + 1
+    elif len(parts) == 2:
+        # Range: "14,15" -> start=14, end=16
+        start_epoch = int(parts[0].strip())
+        end_epoch = int(parts[1].strip()) + 1
+    else:
+        raise ValueError(f"Invalid epoch range format: {epoch_range_str}. Expected 'N' or 'N,M'")
+    
+    if start_epoch < 1:
+        raise ValueError(f"Start epoch must be >= 1, got {start_epoch}")
+    if end_epoch <= start_epoch:
+        raise ValueError(f"End epoch must be > start epoch, got start={start_epoch}, end={end_epoch}")
+    
+    return start_epoch, end_epoch
 
 
 def is_knockout_only_tournament(args) -> bool:
@@ -975,6 +1013,16 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
             print(f"ERROR: Invalid JSON in --knockout-config: {e}")
             sys.exit(1)
     
+    # Parse epoch range if specified
+    epoch_range = None
+    if args.epoch_range:
+        try:
+            epoch_range = parse_epoch_range(args.epoch_range)
+            print(f"Using epoch range: {epoch_range[0]}-{epoch_range[1]-1}")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+    
     # Create round-robin participants from existing strategy configs
     round_robin_participants = []
     for i, (strategy_config, model_path) in enumerate(zip(strategy_configs, model_paths)):
@@ -998,7 +1046,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
         round_robin_participants=round_robin_participants,
         games_per_match=args.games_per_match,
         top_k=args.top_k,
-        round_robin_games=args.round_robin_games
+        round_robin_games=args.round_robin_games,
+        epoch_range=epoch_range
     )
     
     print("Running 2-stage tournament...")

@@ -11,7 +11,7 @@ import os
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
@@ -37,7 +37,8 @@ class TwoStageTournament:
                  round_robin_participants: Optional[List[TournamentParticipant]] = None,
                  games_per_match: int = 50,
                  top_k: int = 2,
-                 round_robin_games: int = 100):
+                 round_robin_games: int = 100,
+                 epoch_range: Optional[Tuple[int, int]] = None):
         """
         Initialize the two-stage tournament.
         
@@ -48,6 +49,7 @@ class TwoStageTournament:
             games_per_match: Number of games per knockout match
             top_k: Number of winners from knockout stage to advance
             round_robin_games: Number of games per round-robin match
+            epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints
         """
         self.knockout_dir = knockout_dir
         self.knockout_config = knockout_config or self._get_default_knockout_config()
@@ -55,6 +57,7 @@ class TwoStageTournament:
         self.games_per_match = games_per_match
         self.top_k = top_k
         self.round_robin_games = round_robin_games
+        self.epoch_range = epoch_range
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
@@ -118,9 +121,15 @@ class TwoStageTournament:
         """Run the knockout elimination stage."""
         # Discover checkpoints
         discovery = CheckpointDiscovery(self.knockout_dir)
-        checkpoints = discovery.discover_checkpoints()
         
-        logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
+        # Filter by epoch range if specified
+        if self.epoch_range:
+            start_epoch, end_epoch = self.epoch_range
+            checkpoints = discovery.get_checkpoints_by_epoch_range(start_epoch, end_epoch)
+            logger.info(f"Filtered to {len(checkpoints)} checkpoints for epochs {start_epoch}-{end_epoch-1}")
+        else:
+            checkpoints = discovery.discover_checkpoints()
+            logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
         
         # Create participants from checkpoints
         participants = []
@@ -407,7 +416,8 @@ class TwoStageTournament:
             "top_k": self.top_k,
             "round_robin_games": self.round_robin_games,
             "round_robin_participants": len(self.round_robin_participants),
-            "knockout_winners": [p.name for p in self.knockout_winners]
+            "knockout_winners": [p.name for p in self.knockout_winners],
+            "epoch_range": self.epoch_range
         }
         
         if self.knockout_dir:
@@ -438,7 +448,8 @@ class TwoStageTournament:
                 "games_per_match": self.games_per_match,
                 "top_k": self.top_k,
                 "round_robin_games": self.round_robin_games,
-                "round_robin_participants": len(self.round_robin_participants)
+                "round_robin_participants": len(self.round_robin_participants),
+                "epoch_range": self.epoch_range
             },
             "results": results
         }
