@@ -6,6 +6,7 @@ including opening position generation and deterministic game play.
 """
 
 import glob
+import itertools
 import json
 import logging
 import os
@@ -23,8 +24,20 @@ from hex_ai.enums import Player, Piece
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig
+from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
+from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_to_moves
+)
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.deterministic_tournament_utils import (
+    setup_tournament_output,
+    save_opening_positions,
+    setup_strategy_pair_files,
+    create_play_config_for_pair,
+    GameDuplicateTracker,
+    play_strategy_pair_games,
+    report_strategy_pair_results
 )
 
 logger = logging.getLogger(__name__)
@@ -32,8 +45,94 @@ logger = logging.getLogger(__name__)
 # Constants
 DEFAULT_OPENING_LENGTH = 5
 DEFAULT_TEMPERATURE = 0.0
+DEFAULT_VERBOSE = 1
+OUTPUT_DIR_PREFIX = "data/tournament_play/tournament_"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 TRMPH_FILE_PATTERN = "*.trmph"
+
+
+class DeterministicTournamentResult(BaseTournamentResult):
+    """Extended tournament result with timing tracking."""
+    
+    def __init__(self, participants: List[str]):
+        super().__init__(participants)
+        # Track timing data for each strategy
+        self.strategy_timings = {name: 0.0 for name in participants}
+        self.strategy_move_counts = {name: 0 for name in participants}
+        self.game_timings = []  # List of individual game timing data
+        self.start_time = time.time()
+        self.end_time: Optional[float] = None
+    
+    def record_game_with_timing(self, winner: str, loser: str, game_timing_data: Dict[str, Any]):
+        """Record a game result with timing information."""
+        # Record the basic game result
+        self.record_game(winner, loser)
+        
+        # Record timing data
+        strategy_timings = game_timing_data.get('strategy_timings', {})
+        for strategy_name, time_taken in strategy_timings.items():
+            if strategy_name in self.strategy_timings:
+                self.strategy_timings[strategy_name] += time_taken
+        
+        # Record move counts
+        total_moves = game_timing_data.get('total_moves', 0)
+        for strategy_name in strategy_timings:
+            if strategy_name in self.strategy_move_counts:
+                self.strategy_move_counts[strategy_name] += total_moves
+        
+        # Store individual game timing data
+        self.game_timings.append(game_timing_data)
+    
+    def get_timing_summary(self) -> Dict[str, Any]:
+        """Get a summary of timing statistics."""
+        summary = {}
+        
+        for strategy_name in self.participants:
+            total_time = self.strategy_timings.get(strategy_name, 0.0)
+            total_moves = self.strategy_move_counts.get(strategy_name, 0)
+            
+            summary[strategy_name] = {
+                'total_time': total_time,
+                'total_moves': total_moves,
+                'avg_time_per_move': total_time / max(1, total_moves),
+                'total_games': sum(1 for game in self.game_timings 
+                                 if strategy_name in game.get('strategy_timings', {}))
+            }
+        
+        return summary
+    
+    def print_timing_summary(self):
+        """Print a formatted timing summary."""
+        summary = self.get_timing_summary()
+        
+        print("\n" + "="*60)
+        print("TIMING SUMMARY")
+        print("="*60)
+        
+        # Sort strategies by total time
+        sorted_strategies = sorted(summary.items(), key=lambda x: x[1]['total_time'], reverse=True)
+        
+        for strategy_name, stats in sorted_strategies:
+            print(f"{strategy_name}:")
+            print(f"  Total time: {stats['total_time']:.3f}s")
+            print(f"  Total moves: {stats['total_moves']}")
+            print(f"  Average time per move: {stats['avg_time_per_move']:.3f}s")
+            print(f"  Games played: {stats['total_games']}")
+            print()
+        
+        # Print overall tournament timing
+        total_tournament_time = sum(stats['total_time'] for stats in summary.values())
+        print(f"Total tournament time: {total_tournament_time:.3f}s")
+        print("="*60)
+    
+    def finish(self):
+        """Mark tournament as finished and record end time."""
+        self.end_time = time.time()
+    
+    def get_duration(self) -> float:
+        """Get tournament duration in seconds."""
+        end_time = self.end_time or time.time()
+        return end_time - self.start_time
 
 
 class OpeningPosition:
@@ -382,3 +481,93 @@ def play_deterministic_game(
         'strategy_timings': strategy_timings,
         'total_moves': move_count
     }
+
+
+def run_round_robin_tournament(
+    strategy_configs: List[StrategyConfig],
+    openings: List[OpeningPosition],
+    temperature: float = DEFAULT_TEMPERATURE,
+    verbose: int = DEFAULT_VERBOSE,
+    seed: Optional[int] = None,
+    output_dir: Optional[str] = None
+) -> DeterministicTournamentResult:
+    """
+    Run a round-robin tournament using pre-generated opening positions.
+    
+    This function executes a round-robin tournament where each strategy plays
+    against every other strategy using the same set of opening positions.
+    
+    Args:
+        strategy_configs: List of strategy configurations (each with its own model)
+        openings: List of opening positions to use
+        temperature: Temperature for move selection (0.0 = deterministic)
+        verbose: Verbosity level
+        seed: Random seed for reproducibility (default: None, uses time-based seed)
+        output_dir: Output directory for tournament files (default: None, auto-generated)
+    
+    Returns:
+        DeterministicTournamentResult with results
+    """
+    # TODO: Add progress tracking and resume functionality
+    # TODO: Add parallel processing for multiple strategy pairs
+    # TODO: Add memory usage monitoring for large tournaments
+    # TODO: Consider adding early termination if one strategy dominates
+    
+    # Create tournament result tracking strategy names
+    # Use unique strategy names for tournament tracking (after parameter modifications)
+    unique_strategy_names = [config.name for config in strategy_configs]
+    result = DeterministicTournamentResult(unique_strategy_names)
+        
+    # Set up tournament output using utilities
+    if output_dir is None:
+        output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
+    else:
+        # Use provided output directory
+        os.makedirs(output_dir, exist_ok=True)
+        openings_file = os.path.join(output_dir, "openings.txt")
+    save_opening_positions(openings, openings_file)
+    
+    # Initialize game duplicate tracker
+    duplicate_tracker = GameDuplicateTracker()
+    
+    # Run round-robin between all strategy pairs
+    for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
+        logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
+        
+        # Load models temporarily for this match only
+        match_model_paths = [strategy_a.model_path, strategy_b.model_path]
+        model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
+        
+        # Set up output files for this strategy pair
+        trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
+        
+        # Create play configuration
+        play_config = create_play_config_for_pair(strategy_a, strategy_b, temperature, seed)
+        
+        # Write TRMPH header
+        pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
+        pair_strategy_configs = [strategy_a, strategy_b]
+        actual_trmph_file = write_tournament_trmph_header(
+            trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, 
+            strategy_configs=pair_strategy_configs
+        )
+        
+        # Find available CSV filename
+        actual_csv_file = find_available_csv_filename(csv_file)
+        
+        # Play all games for this strategy pair using utility function
+        game_results = play_strategy_pair_games(
+            model_cache, strategy_a, strategy_b, openings, temperature, verbose,
+            duplicate_tracker, actual_trmph_file, actual_csv_file, play_deterministic_game, result
+        )
+        
+        # Report results for this pair
+        print()  # Add line break before match summary
+        report_strategy_pair_results(verbose, strategy_a, strategy_b, result, duplicate_tracker)
+        
+        # Clean up temporary models to free memory
+        # The temporary models will be garbage collected when this iteration ends
+        logger.debug(f"Cleaning up temporary models for match: {strategy_a.name} vs {strategy_b.name}")
+    
+    logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
+    return result

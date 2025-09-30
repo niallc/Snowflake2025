@@ -15,7 +15,9 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
-from .game_execution import play_deterministic_game
+from .game_execution import play_deterministic_game, generate_diverse_openings, find_trmph_files, run_round_robin_tournament
+from .tournament import TournamentPlayConfig
+from hex_ai.config import BOARD_SIZE
 from hex_ai.utils.tournament_logging import write_tournament_trmph_header, append_trmph_winner_line
 from hex_ai.utils.deterministic_tournament_utils import setup_strategy_pair_files
 from hex_ai.inference.model_cache import create_temporary_model_cache
@@ -177,9 +179,7 @@ class TwoStageTournament:
         openings = self._generate_round_robin_openings()
         
         # Run the round-robin tournament using existing infrastructure
-        from scripts.run_tournament import run_tournament
-        
-        tournament_result = run_tournament(
+        tournament_result = run_round_robin_tournament(
             strategy_configs=strategy_configs,
             openings=openings,
             temperature=self.knockout_config.get("temperature", 1.0),
@@ -257,8 +257,6 @@ class TwoStageTournament:
             trmph_file, csv_file = setup_strategy_pair_files(self.output_dir, strategy_a, strategy_b)
             
             # Write TRMPH header
-            from hex_ai.inference.tournament import TournamentPlayConfig
-            from hex_ai.config import BOARD_SIZE
             play_config = TournamentPlayConfig(
                 temperature=self.knockout_config.get("temperature", 1.0),
                 random_seed=42  # Fixed seed for reproducibility
@@ -369,8 +367,6 @@ class TwoStageTournament:
         Raises:
             ValueError: If insufficient openings can be generated
         """
-        from .game_execution import generate_diverse_openings, find_trmph_files
-        
         # Use same TRMPH files as existing tournament system
         trmph_files = find_trmph_files("data/sf25/sep28")
         

@@ -130,9 +130,7 @@ class MCTSStrategy(MoveSelectionStrategy):
             gumbel_candidate_log_base=config.gumbel_candidate_log_base,
             gumbel_candidate_log_offset=config.gumbel_candidate_log_offset,
             gumbel_candidate_min=config.gumbel_candidate_min,
-            gumbel_candidate_max=config.gumbel_candidate_max,
-            gumbel_progressive_widening=config.gumbel_progressive_widening,
-            gumbel_batch_scaling_factor=config.gumbel_batch_scaling_factor
+            gumbel_candidate_max=config.gumbel_candidate_max
         )
         
         # Override batch size if specified in config
