@@ -521,7 +521,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if self.total_positions_yielded % 256 == 0:
                 self.approx_batch_count += 1
         
-        if self.verbose >= 2:
+        if self.verbose >= 3:
             self.logger.info(f"[StreamingMixedShardDataset] Validation iteration complete: "
                            f"yielded {self.total_positions_yielded:,} positions")
     

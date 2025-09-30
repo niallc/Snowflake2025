@@ -159,6 +159,15 @@ class KnockoutTournament:
             # Update tournament state
             self._update_tournament_state(round_results)
             
+            # Print round summary
+            if len(self.active_participants) > 1:
+                advancing_names = [p.name for p in self.active_participants]
+                print(f"\nEnd of Round {self.current_round}: {len(self.active_participants)} participants advance to next round: {', '.join(advancing_names)}")
+            else:
+                # Final round - tournament complete
+                winner = self.active_participants[0]
+                print(f"\nEnd of Round {self.current_round}: Tournament complete! Winner: {winner.name}")
+            
             logger.info(f"Round {self.current_round} complete. {len(self.active_participants)} participants remain")
         
         # Tournament complete
@@ -255,6 +264,7 @@ class KnockoutTournament:
         """Update tournament state after a round."""
         new_active = []
         
+        # Handle match results
         for result in round_results:
             if result.is_tie:
                 # In case of tie, use deterministic tiebreaker: first participant wins
@@ -271,6 +281,13 @@ class KnockoutTournament:
                 
                 new_active.append(winner)
                 self.eliminated_participants.append(loser)
+        
+        # Handle bye participant (if any)
+        if len(self.active_participants) % 2 != 0:
+            # There was a bye participant in this round
+            bye_participant = self.active_participants[0]
+            new_active.append(bye_participant)
+            logger.info(f"Bye participant {bye_participant.name} advances to next round")
         
         self.active_participants = new_active
     

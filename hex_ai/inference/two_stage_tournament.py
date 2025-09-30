@@ -182,12 +182,24 @@ class TwoStageTournament:
         ranking = sorted(win_rates.items(), key=lambda x: x[1], reverse=True)
         ranking_names = [name for name, _ in ranking]
         
+        # Calculate individual game counts for each participant
+        participant_games = {}
+        for name in ranking_names:
+            # Count total games for this participant
+            total_games_for_participant = 0
+            for opponent in ranking_names:
+                if opponent != name:
+                    # Each pair plays 2 games (A vs B and B vs A)
+                    total_games_for_participant += 2
+            participant_games[name] = total_games_for_participant
+        
         return {
             "total_participants": len(all_participants),
             "ranking": ranking_names,
             "win_rates": win_rates,
             "elo_ratings": tournament_result.elo_ratings(),
             "total_games": tournament_result.total_games,
+            "participant_games": participant_games,
             "participants": [{"name": p.name, "metadata": p.metadata} for p in all_participants]
         }
     
@@ -273,7 +285,7 @@ class TwoStageTournament:
                 )
                 
                 # Stream game 1 to file
-                append_trmph_winner_line(actual_trmph_file, result_1['trmph_str'], result_1['winner_char'])
+                append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
                 
                 # Game 2: p2 (Blue) vs p1 (Red) 
                 result_2 = play_deterministic_game(
@@ -287,7 +299,7 @@ class TwoStageTournament:
                 )
                 
                 # Stream game 2 to file
-                append_trmph_winner_line(actual_trmph_file, result_2['trmph_str'], result_2['winner_char'])
+                append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
                 
                 # Record results
                 openings_used.append(opening.get_trmph_string())
@@ -309,7 +321,14 @@ class TwoStageTournament:
             
             # Log match result
             total_games = games * 2  # Each opening played twice
-            winner_name = p1.name if p1_wins > p2_wins else p2.name
+            # Use the same tie-breaking logic as MatchResult.winner property
+            if p1_wins > p2_wins:
+                winner_name = p1.name
+            elif p2_wins > p1_wins:
+                winner_name = p2.name
+            else:
+                # Tie: use first participant as winner (deterministic tiebreaker)
+                winner_name = p1.name
             p1_pct = (p1_wins / total_games) * 100
             p2_pct = (p2_wins / total_games) * 100
             print(f" {p1.name}:{p1_wins}/{total_games} ({p1_pct:.1f}%) {p2.name}:{p2_wins}/{total_games} ({p2_pct:.1f}%) -> {winner_name} wins")
@@ -431,11 +450,28 @@ class TwoStageTournament:
         
         logger.info(f"Tournament summary saved to: {summary_file}")
         
-        # Print final ranking
-        if results.get("final_ranking"):
-            print("\n" + "="*60)
+        # Print final ranking with quantitative measures
+        if results.get("final_ranking") and results.get("round_robin_results"):
+            print("\n" + "="*80)
             print("FINAL TOURNAMENT RANKING")
-            print("="*60)
+            print("="*80)
+            
+            # Get quantitative data from round-robin results
+            rr_results = results["round_robin_results"]
+            win_rates = rr_results.get("win_rates", {})
+            elo_ratings = rr_results.get("elo_ratings", {})
+            participant_games = rr_results.get("participant_games", {})
+            total_games = rr_results.get("total_games", 0)
+            
+            print(f"{'Rank':<4} {'Player':<25} {'Win Rate':<10} {'Elo':<8} {'Games':<6}")
+            print("-" * 80)
+            
             for i, participant in enumerate(results["final_ranking"], 1):
-                print(f"{i:2d}. {participant}")
-            print("="*60)
+                win_rate = win_rates.get(participant, 0.0)
+                elo = elo_ratings.get(participant, 0.0)
+                games = participant_games.get(participant, 0)
+                
+                print(f"{i:<4} {participant:<25} {win_rate:<10.3f} {elo:<8.0f} {games:<6}")
+            
+            print(f"\nTotal games played: {total_games}")
+            print("="*80)

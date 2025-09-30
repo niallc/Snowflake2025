@@ -15,7 +15,7 @@ TwoStageTournament (orchestrator)
 │   ├── Calculates sequential checkpoint numbers
 │   └── Validates ordering and completeness
 ├── KnockoutTournament
-│   ├── Executes spaced pairing strategy
+│   ├── Executes snake draft pairing strategy
 │   ├── Handles byes for odd participant counts
 │   └── Manages tournament bracket progression
 └── Round-Robin Integration
@@ -37,11 +37,11 @@ CheckpointDiscovery.discover_checkpoints()
   ↓
 TwoStageTournament._run_knockout_stage()
   ├── Create TournamentParticipant objects from CheckpointInfo
-  ├── Initialize KnockoutTournament with spaced pairing
+  ├── Initialize KnockoutTournament with snake draft pairing
   └── Execute tournament with progressive game counts
   ↓
 KnockoutTournament.run_tournament()
-  ├── _pair_participants() - spaced pairing (1v5, 2v6, 3v7, 4v8, 9 gets bye)
+  ├── _pair_participants() - snake draft pairing (1v9, 2v8, 3v7, 4v6, 5 gets bye)
   ├── _execute_round() - play matches using match_executor
   ├── _update_tournament_state() - advance winners
   └── Repeat until top_k winners remain
@@ -76,19 +76,19 @@ Output: Final rankings with win rates and Elo ratings
 
 ### 2. KnockoutTournament (`hex_ai/inference/knockout_tournament.py`)
 
-**Purpose**: Executes knockout elimination tournaments with spaced pairing
+**Purpose**: Executes knockout elimination tournaments with snake draft pairing
 
 **Key Features**:
-- **Spaced Pairing Strategy**: First half vs second half (1v5, 2v6, 3v7, 4v8)
-- **Bye Handling**: Last participant gets bye for odd numbers
+- **Snake Draft Pairing Strategy**: First with last, second with second-to-last (1v9, 2v8, 3v7, 4v6)
+- **Bye Handling**: First participant gets bye for odd numbers
 - **Progressive Game Counts**: Semifinals (2x), Finals (4x)
 - **Tie Handling**: Deterministic tiebreaker (first participant wins)
 
 **Pairing Logic**:
 ```python
 # For 9 participants: [1,2,3,4,5,6,7,8,9]
-# Pairs: (1,5), (2,6), (3,7), (4,8)
-# Bye: 9 advances automatically
+# Pairs: (1,9), (2,8), (3,7), (4,6)
+# Bye: 5 advances automatically
 ```
 
 ### 3. TwoStageTournament (`hex_ai/inference/two_stage_tournament.py`)
@@ -136,6 +136,7 @@ strategy_config = StrategyConfig(
 )
 
 # Execute games using existing infrastructure
+from hex_ai.inference.game_execution import play_deterministic_game
 result = play_deterministic_game(
     model_cache=model_cache,
     strategy_a=strategy_a,
@@ -157,6 +158,7 @@ result = play_deterministic_game(
 **Implementation**:
 ```python
 # Generate 1.1x required openings (fail fast if insufficient)
+from hex_ai.inference.game_execution import generate_diverse_openings
 target_count = int(num_games * 1.1)
 openings = generate_diverse_openings(trmph_files, target_count=target_count)
 
@@ -164,18 +166,19 @@ if len(openings) < num_games:
     raise ValueError(f"Insufficient openings generated: {len(openings)} < {num_games}")
 ```
 
-### 3. Spaced Pairing Strategy
+### 3. Snake Draft Pairing Strategy
 
-**Decision**: Pair first half with second half instead of adjacent participants
+**Decision**: Pair first with last, second with second-to-last instead of adjacent participants
 
 **Rationale**:
 - More efficient tournament structure
 - Early checkpoints face later checkpoints (assuming sequential training)
 - Avoids pitting very similar models against each other
+- Maximizes distance between paired participants
 
 **Example**:
 - **Before**: 1v2, 3v4, 5v6, 7v8, 9 gets bye
-- **After**: 1v5, 2v6, 3v7, 4v8, 9 gets bye
+- **After**: 1v9, 2v8, 3v7, 4v6, 5 gets bye
 
 ### 4. Round-Robin Integration
 
@@ -272,7 +275,7 @@ python scripts/run_tournament.py \
 ### 🧪 Tested Scenarios
 
 - **9 checkpoints**: Successfully demonstrated knockout → round-robin flow
-- **Spaced pairing**: Verified correct pairing strategy (1v5, 2v6, 3v7, 4v8, 9 gets bye)
+- **Snake draft pairing**: Verified correct pairing strategy (1v9, 2v8, 3v7, 4v6, 5 gets bye)
 - **Tie handling**: Deterministic tiebreakers working correctly
 - **Bye handling**: Odd participant counts handled properly
 - **Integration**: Full end-to-end tournament execution successful
@@ -281,12 +284,12 @@ python scripts/run_tournament.py \
 
 ### 1. **Import Dependencies**
 
-**Issue**: The system imports from `scripts/run_tournament.py` for game execution functions
+**Issue**: The system imports from `scripts/run_tournament.py` for round-robin execution
 
 **Complexity**:
 ```python
 # In two_stage_tournament.py
-from scripts.run_tournament import play_deterministic_game, generate_diverse_openings
+from scripts.run_tournament import run_tournament
 ```
 
 **Why Suboptimal**:
@@ -294,7 +297,7 @@ from scripts.run_tournament import play_deterministic_game, generate_diverse_ope
 - Makes the system less modular
 - Could cause import issues in different contexts
 
-**Potential Solution**: Move core game execution functions to a dedicated module in `hex_ai/inference/`
+**Current Status**: Game execution functions have been moved to `hex_ai/inference/game_execution.py`, but round-robin integration still depends on scripts
 
 ### 2. **Strategy Configuration Mapping**
 
@@ -324,9 +327,11 @@ def _create_strategy_config(self, participant: TournamentParticipant):
 **Complexity**:
 ```python
 # In _generate_match_openings()
+from hex_ai.inference.game_execution import generate_diverse_openings
 openings = generate_diverse_openings(trmph_files, target_count=target_count)
 
 # In _generate_round_robin_openings()  
+from hex_ai.inference.game_execution import generate_diverse_openings
 openings = generate_diverse_openings(trmph_files, target_count=target_count)
 ```
 

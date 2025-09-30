@@ -127,7 +127,7 @@ class CheckpointDiscovery:
                         f"This indicates inconsistent training configuration and is not supported."
                     )
         
-        total_mini_epochs = max(max_mini_per_epoch.values()) + 1
+        total_mini_epochs = max(max_mini_per_epoch.values())
         
         # Update checkpoint info
         for cp in checkpoints:
