@@ -105,9 +105,9 @@ class DeterministicTournamentResult(BaseTournamentResult):
         """Print a formatted timing summary."""
         summary = self.get_timing_summary()
         
-        print("\n" + "="*60)
+        print("\n" + "="*30)
         print("TIMING SUMMARY")
-        print("="*60)
+        print("="*30)
         
         # Sort strategies by total time
         sorted_strategies = sorted(summary.items(), key=lambda x: x[1]['total_time'], reverse=True)

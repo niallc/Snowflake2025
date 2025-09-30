@@ -42,7 +42,7 @@ def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.r
     return -np.log(-np.log(u))
 
 
-def gumbel_alpha_zero_root_select(
+def OBSOLETE_gumbel_alpha_zero_root_select(
     policy_logits: np.ndarray,
     total_sims: int,
     run_one_sim: Callable[[int], None],
@@ -55,6 +55,12 @@ def gumbel_alpha_zero_root_select(
     rng: Optional[np.random.RandomState] = None
 ) -> int:
     """
+    ⚠️  OBSOLETE FUNCTION - DO NOT USE ⚠️
+    
+    This function is dead code and should be removed. The production code uses
+    gumbel_alpha_zero_root_batched() instead. This function had a critical bug
+    where it returned only policy logits instead of the full Gumbel score.
+    
     Gumbel-AlphaZero root selection algorithm for small simulation budgets.
     
     This function implements the root-only Gumbel-AlphaZero selection procedure.
