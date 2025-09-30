@@ -184,6 +184,22 @@ def normalize_q_values(q_values: np.ndarray, min_val: float = -1.0, max_val: flo
     return (q_clipped - min_val) / (max_val - min_val)
 
 
+def balanced_cycle(actions: List[int], batch_size: int) -> List[int]:
+    """
+    Create a balanced batch by cycling through actions.
+    Ensures equal visits per action within the batch.
+    """
+    if not actions:
+        return []
+    
+    result = []
+    for i in range(batch_size):
+        action = actions[i % len(actions)]
+        result.append(action)
+    
+    return result
+
+
 def gumbel_alpha_zero_root_batched(
     *,
     mcts,                    # your BaselineMCTS instance
@@ -302,10 +318,18 @@ def gumbel_alpha_zero_root_batched(
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # Configurable logarithmic candidate scaling: grows slowly with simulation count
-        # Formula: m = min(max, max(min, log_base(total_sims) + offset))
-        m_auto = int(min(candidate_max, max(candidate_min, math.log(total_sims, candidate_log_base) + candidate_log_offset)))
-        m = min(len(legal_actions), total_sims, m_auto)
+        # SH budget constraint - choose largest m such that m * ⌈log₂(m)⌉ ≤ total_sims
+        # This ensures we can give at least one visit per action per phase
+        max_m = 1
+        for candidate_m in [2**i for i in range(1, 12)]:  # Powers of 2 up to 2048
+            if candidate_m * math.ceil(math.log2(candidate_m)) <= total_sims:
+                max_m = candidate_m
+            else:
+                break
+        
+        # Clamp to legal actions and config limits
+        m = min(len(legal_actions), max_m, candidate_max)
+        m = max(m, candidate_min)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start
     
@@ -334,10 +358,11 @@ def gumbel_alpha_zero_root_batched(
     
     # Sequential Halving over the candidate set
     cand = list(top_idx)
-    R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
+    R = math.ceil(math.log2(m))  # rounds
     sims_used = 0
     
-    # print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
+    if verbose >= 5:
+        print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
     
     # Performance tracking
     nn_calls_per_move = 0
@@ -360,76 +385,47 @@ def gumbel_alpha_zero_root_batched(
         
         return score_val
     
-    def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
-        """
-        Progressive widening batching strategy that scales batch sizes based on available exploration.
-        
-        This implements a canonical progressive widening approach:
-        - Small batches when few arms are available (early exploration)
-        - Larger batches when many arms are available (rich exploration)
-        - Smooth scaling using square root of available arms
-        """
-        A = len(arms_list)
-        
-        # Progressive widening: batch size scales with sqrt of available arms
-        # This is a canonical approach from MCTS literature
-        if mcts.cfg.gumbel_progressive_widening:
-            # Progressive widening: batch size = sqrt(arms) * scaling_factor
-            # Minimum batch size of 1, maximum of batch_cap
-            progressive_batch_size = int(math.sqrt(A) * mcts.cfg.gumbel_batch_scaling_factor)
-            target_batch = max(1, min(progressive_batch_size, batch_cap, sims_left))
-        else:
-            # Original strategy: try to fill batches evenly across rounds
-            target_batch = max(batch_cap, sims_left // rounds_left)
-            target_batch = min(target_batch, sims_left)
-        
-        # Distribute across arms as evenly as possible
-        base = target_batch // max(1, A)
-        extra = target_batch - base * A
-        
-        counts = {a: base for a in arms_list}
-        for a in rng.permutation(arms_list)[:extra]:
-            counts[a] += 1
-        
-        # Flatten into one list for this round (no shuffling - deterministic order)
-        actions = [a for a in arms_list for _ in range(counts[a])]
-        return actions
-    
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
     mcts_execution_start = time.perf_counter()
     
+    # Sequential Halving with proper phase budgeting
+    per_round = math.ceil(total_sims / R)  # phase budget
+    
+    if verbose >= 5:
+        print(f"GUMBEL PHASE BUDGETING: {per_round} simulations per round")
+    
     for r in range(R):
         if not cand or sims_used >= total_sims:
             break
-        rounds_left = R - r
-        arms = len(cand)
         
-        # IMPROVEMENT: Use round-based allocation instead of per-arm
-        actions_this_round = schedule_round(
-            cand, 
-            total_sims - sims_used, 
-            rounds_left, 
-            mcts.cfg.batch_cap
-        )
+        sims_for_this_round = 0
+        while sims_for_this_round < per_round and sims_used < total_sims:
+            # Build a batch that balances visits across surviving actions
+            remaining = min(per_round - sims_for_this_round, total_sims - sims_used)
+            batch_size = min(mcts.cfg.batch_cap, remaining)
+            batch_actions = balanced_cycle(cand, batch_size)  # round-robin over cand
+            
+            if batch_actions:
+                if verbose >= 5:
+                    print(f"GUMBEL ROUND {r+1}: Executing {len(batch_actions)} actions, sims_used so far: {sims_used}")
+                # Track performance metrics from this batch
+                stats = mcts.run_forced_root_actions(root, batch_actions, verbose=0)
+                # Track batch metrics more accurately
+                nn_calls_per_move += stats.get("batch_count", 0)
+                total_leaves_evaluated += len(batch_actions)  # Each action = one simulation
+                sims_for_this_round += len(batch_actions)
+                sims_used += len(batch_actions)
+                if verbose >= 5:
+                    print(f"GUMBEL ROUND {r+1} BATCH COMPLETE: sims_for_this_round: {sims_for_this_round}, sims_used: {sims_used}")
         
-        if actions_this_round:
-            # Track performance metrics from this round
-            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
-            # Track batch metrics more accurately
-            nn_calls_per_move += stats.get("batch_count", 0)
-            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
-            # Note: unique_evals_total is not available in individual batch stats
-            # We'll track this separately by looking at the final MCTS metrics
-            sims_used += len(actions_this_round)
-        
-        if arms <= 1 or sims_used >= total_sims:
-            break
-        
-        # Halve: keep the top half by the current score
-        cand.sort(key=rank_key, reverse=True)
-        keep = max(1, (arms + 1) // 2)
-        cand = cand[:keep]
+        # Score and eliminate after spending phase budget
+        if len(cand) > 1:
+            cand.sort(key=rank_key, reverse=True)
+            keep = max(1, (len(cand) + 1) // 2)
+            cand = cand[:keep]
+            if verbose >= 5:
+                print(f"GUMBEL ROUND {r+1} ELIMINATION: Kept {len(cand)} candidates")
     
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start

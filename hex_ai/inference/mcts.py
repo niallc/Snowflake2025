@@ -449,10 +449,6 @@ class BaselineMCTSConfig:
     temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
     gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
     
-    # Gumbel progressive widening batching parameters
-    gumbel_progressive_widening: bool = True  # Enable progressive widening batching strategy (default: enabled)
-    gumbel_batch_scaling_factor: float = 4.0  # Scaling factor for progressive widening (4.0 = aggressive batching for speed)
-    
     # Batch flushing control parameters
     # DESIGN: Fixed values for consistent performance across simulation counts
     # The original dynamic logic caused performance drops at higher simulation counts
@@ -534,10 +530,6 @@ class BaselineMCTSConfig:
         # Validate Gumbel temperature control parameters
         if self.temperature_deterministic_cutoff <= 0:
             raise ValueError(f"temperature_deterministic_cutoff must be positive, got {self.temperature_deterministic_cutoff}")
-        
-        # Validate Gumbel progressive widening parameters
-        if self.gumbel_batch_scaling_factor <= 0:
-            raise ValueError(f"gumbel_batch_scaling_factor must be positive, got {self.gumbel_batch_scaling_factor}")
         
         # Validate temperature step parameters if using step decay
         if self.temperature_decay_type == "step":

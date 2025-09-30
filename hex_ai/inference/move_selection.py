@@ -38,9 +38,6 @@ class MoveSelectionConfig:
     gumbel_candidate_log_offset: float = -2.0  # Offset for logarithmic candidate scaling
     gumbel_candidate_min: int = 2  # Minimum number of candidates
     gumbel_candidate_max: int = 48  # Maximum number of candidates
-    # Gumbel progressive widening parameters
-    gumbel_progressive_widening: bool = True  # Enable progressive widening batching strategy (default: enabled)
-    gumbel_batch_scaling_factor: float = 4.0  # Scaling factor for progressive widening (4.0 = aggressive batching for speed)
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
