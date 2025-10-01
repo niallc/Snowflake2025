@@ -119,6 +119,11 @@ def gumbel_alpha_zero_root_batched(
     
     # Interpret temperature as noise scale beta (no scaling of logits or value terms)
     beta = float(temperature)
+    temp_tol = 0.15
+    if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
+        message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
+        message += f"For now, temperature must be between 0.95 and 1.05, got {temperature}"
+        raise ValueError(message)
     
     # DEBUG: Log noise scaling effects
     if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
