@@ -122,7 +122,7 @@ def gumbel_alpha_zero_root_batched(
     temp_tol = 0.15
     if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
         message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
-        message += f"For now, temperature must be between 0.95 and 1.05, got {temperature}"
+        message += f"For now, temperature must be between {1.0 - temp_tol} and {1.0 + temp_tol}, got {temperature}"
         raise ValueError(message)
     
     # DEBUG: Log noise scaling effects
@@ -220,26 +220,24 @@ def gumbel_alpha_zero_root_batched(
         
         return score_val
     
+    def per_arm_allocation(total_left, rounds_left, num_arms):
+        """
+        Calculate per-arm allocation for equal budgeting per round.
+        This restores the behavior from 5760a837: each surviving arm gets
+        exactly per_arm targeted root simulations during the current round.
+        """
+        return max(1, total_left // max(1, rounds_left * num_arms))
+    
     def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
         """
-        IMPROVEMENT: Allocate per round to fill batches, not per-sim.
-        This ensures we get full batches instead of tiny 1-off NN calls.
+        REVERTED: Use per-arm equal allocation per round (restore behavior from 5760a837).
+        This removes early-round asymmetries that were introduced by the batch-fill strategy.
         """
-        # At least one full batch, try to split budget evenly across remaining rounds
-        per_round = max(batch_cap, sims_left // rounds_left)
-        per_round = min(per_round, sims_left)
+        # Calculate exactly per_arm sims per arm in this round
+        per_arm = per_arm_allocation(sims_left, rounds_left, len(arms_list))
         
-        # Distribute across arms as evenly as possible
-        A = len(arms_list)
-        base = per_round // max(1, A)
-        extra = per_round - base * A
-        
-        counts = {a: base for a in arms_list}
-        for a in rng.permutation(arms_list)[:extra]:
-            counts[a] += 1
-        
-        # Flatten into one list for this round (no shuffling - deterministic order)
-        actions = [a for a in arms_list for _ in range(counts[a])]
+        # Create exactly per_arm simulations for each arm
+        actions = [a for a in arms_list for _ in range(per_arm)]
         return actions
     
     # Round allocation and MCTS execution timing
