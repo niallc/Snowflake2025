@@ -413,7 +413,7 @@ class BaselineMCTSConfig:
     terminal_win_score_bonus: float = 0.25  # Small score bonus for terminal moves (only used if prefer_immediate_terminal=False)
     
     # Adaptive batch selection for low simulation counts
-    adaptive_distinct_target: bool = True  # Make distinct_target adaptive at low sims
+    adaptive_distinct_target: bool = False  # Make distinct_target adaptive at low sims
     distinct_target_min: int = 8  # Minimum distinct target
     distinct_target_max: int = 16  # Maximum distinct target
     # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
@@ -2113,7 +2113,7 @@ def create_mcts_config(
         "prefer_immediate_terminal": True,
         "terminal_win_score_bonus": 0.25,
         # Adaptive batch selection
-        "adaptive_distinct_target": True,
+        "adaptive_distinct_target": False,
         "distinct_target_min": 8,
         "distinct_target_max": 16,
         # Confidence-based termination (always enabled)
