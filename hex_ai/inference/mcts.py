@@ -219,7 +219,17 @@ class TerminalMoveDetector:
         return True
     
     def detect_terminal_moves(self, node: MCTSNode, board_size: int) -> bool:
-        """Detect terminal moves for a node. Returns True if any found."""
+        """
+        Detect terminal moves for a given node.
+
+        This method uses the underlying game logic to check, for each legal move,
+        whether it results in an immediate win for the current player. It provides
+        a definitive proof of a win, rather than relying on heuristics or neural
+        network evaluations.
+
+        Returns:
+            bool: True if any terminal (winning) moves are found, False otherwise.
+        """
         if not self.should_detect_terminal_moves(node):
             return False
         
