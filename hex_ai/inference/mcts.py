@@ -101,9 +101,11 @@ DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
 # Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
-# DEPRECATED: These constants are no longer used
-# DEFAULT_TERMINAL_MOVE_BOOST = 2.0
-# DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
+# Default terminal move boost factor
+DEFAULT_TERMINAL_MOVE_BOOST = 2.0
+
+# Default virtual loss for non-terminal moves
+DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
@@ -403,9 +405,8 @@ class BaselineMCTSConfig:
     enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
     terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     
-    # DEPRECATED: These fields are no longer used (kept for compatibility, set to 0.0)
-    terminal_move_boost: float = 0.0  # DEPRECATED: was misapplied to U
-    virtual_loss_for_non_terminal: float = 0.0  # DEPRECATED: remove all uses
+    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
+    virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
     
     # New terminal move handling
     prefer_immediate_terminal: bool = True  # Force immediate terminal wins deterministically
@@ -481,11 +482,10 @@ class BaselineMCTSConfig:
             raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
         if self.temperature_decay_moves <= 0:
             raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
-        # DEPRECATED: These validations are no longer needed since values are fixed at 0.0
-        # if self.terminal_move_boost < 0:
-        #     raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
-        # if self.virtual_loss_for_non_terminal < 0:
-        #     raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
+        if self.terminal_move_boost < 0:
+            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
+        if self.virtual_loss_for_non_terminal < 0:
+            raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
         if self.terminal_detection_max_depth < 0:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
         if not 0 <= self.confidence_termination_threshold <= 1:
@@ -1925,15 +1925,19 @@ class BaselineMCTS:
                 )
             return result
         
-        # Main branch (pure PUCT) - compute U and score without any constant offsets
         U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
-        score = node.Q + U
         
-        # Optional: if you don't want to force-pick immediate wins, give a small bump to SCORE (not U) for terminal children
-        if self.cfg.enable_terminal_move_detection and not self.cfg.prefer_immediate_terminal:
-            for i, is_term in enumerate(node.terminal_moves):
-                if is_term:
-                    score[i] += float(self.cfg.terminal_win_score_bonus)
+        # Apply terminal move detection modifications
+        if self.cfg.enable_terminal_move_detection:
+            for i, is_terminal in enumerate(node.terminal_moves):
+                if is_terminal:
+                    # Boost terminal moves
+                    U[i] += self.cfg.terminal_move_boost
+                else:
+                    # Apply small penalty to non-terminal moves
+                    U[i] -= self.cfg.virtual_loss_for_non_terminal
+        
+        score = node.Q + U
         
         result = int(np.argmax(score))
         
@@ -2102,10 +2106,9 @@ def create_mcts_config(
         "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
         # Terminal move detection (always enabled)
         "enable_terminal_move_detection": True,
+        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
+        "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
         "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
-        # DEPRECATED: Set to 0.0 for compatibility
-        "terminal_move_boost": 0.0,
-        "virtual_loss_for_non_terminal": 0.0,
         # New terminal move handling
         "prefer_immediate_terminal": True,
         "terminal_win_score_bonus": 0.25,
