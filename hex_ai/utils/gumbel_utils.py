@@ -117,6 +117,13 @@ def gumbel_alpha_zero_root_batched(
     if temperature < 0:
         raise ValueError(f"temperature must be non-negative, got {temperature}")
     
+    # NOTE: Temperature scaling with Gumbel root selection is currently broken.
+    # The game uses automatic temperature scaling throughout the game (decreasing from 1.0),
+    # but the Gumbel implementation doesn't handle this properly. Using beta (temperature)
+    # as noise scale causes later moves to have lower performance due to reduced randomness.
+    # For now, we disable temperature scaling in Gumbel to maintain consistent performance.
+    # TODO: Implement proper temperature handling for Gumbel root selection.
+    
     # Interpret temperature as noise scale beta (no scaling of logits or value terms)
     beta = float(temperature)
     temp_tol = 0.15
@@ -126,10 +133,11 @@ def gumbel_alpha_zero_root_batched(
         raise ValueError(message)
     
     # DEBUG: Log noise scaling effects
-    if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
-        print(f"GUMBEL NOISE SCALE DEBUG: beta={beta}")
-        print(f"  Original logits range: [{np.min(policy_logits):.3f}, {np.max(policy_logits):.3f}]")
-        print(f"  Noise scale: {beta}")
+    # DISABLED: beta-based debug logging due to temperature scaling issues
+    # if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
+    #     print(f"GUMBEL NOISE SCALE DEBUG: beta={beta}")
+    #     print(f"  Original logits range: [{np.min(policy_logits):.3f}, {np.max(policy_logits):.3f}]")
+    #     print(f"  Noise scale: {beta}")
     
     K = policy_logits.shape[0]
     
@@ -172,12 +180,13 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Scale Gumbel noise by beta (temperature as noise scale)
+    # DISABLED: Scale Gumbel noise by beta (temperature as noise scale)
+    # NOTE: Temperature scaling disabled due to automatic game temperature scaling issues
     g = sample_gumbel(K, rng=rng)
-    if beta <= 0.0:
-        g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
-    else:
-        g *= beta
+    # if beta <= 0.0:
+    #     g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
+    # else:
+    #     g *= beta  # DISABLED: causes performance issues with automatic temperature scaling
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
@@ -214,9 +223,10 @@ def gumbel_alpha_zero_root_batched(
         score_val = g[a] + logits[a] + sigma * q_val
         
         # DEBUG: Print Q-values and visit counts for low temperatures
-        if beta <= 0.1 and verbose >= 5:
-            print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
-            print(f"    Components: gumbel={g[a]:.3f}, prior={logits[a]:.3f}, value={sigma * q_val:.3f}")
+        # DISABLED: beta-based debug logging due to temperature scaling issues
+        # if beta <= 0.1 and verbose >= 5:
+        #     print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
+        #     print(f"    Components: gumbel={g[a]:.3f}, prior={logits[a]:.3f}, value={sigma * q_val:.3f}")
         
         return score_val
     
@@ -228,10 +238,13 @@ def gumbel_alpha_zero_root_batched(
         """
         return max(1, total_left // max(1, rounds_left * num_arms))
     
-    def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
+    def schedule_round(arms_list, sims_left, rounds_left):
         """
         REVERTED: Use per-arm equal allocation per round (restore behavior from 5760a837).
         This removes early-round asymmetries that were introduced by the batch-fill strategy.
+        
+        Each surviving arm gets exactly per_arm targeted root simulations during this round.
+        Batching is handled internally by MCTS and does not affect per-arm counts.
         """
         # Calculate exactly per_arm sims per arm in this round
         per_arm = per_arm_allocation(sims_left, rounds_left, len(arms_list))
@@ -239,6 +252,13 @@ def gumbel_alpha_zero_root_batched(
         # Create exactly per_arm simulations for each arm
         actions = [a for a in arms_list for _ in range(per_arm)]
         return actions
+    
+    # Guards for degenerate cases
+    if not cand:
+        raise RuntimeError("No candidates available for Gumbel selection")
+    if R <= 0:
+        # Single candidate case - just return it
+        return cand[0], {"nn_calls_per_move": 0, "total_leaves_evaluated": 0, "distinct_leaves_evaluated": 0, "candidates_m": m, "rounds_R": R, "avg_nn_batch_size": 0, "leaves_distinct_ratio": 0, "timing_breakdown": timing_data}
     
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
@@ -250,13 +270,21 @@ def gumbel_alpha_zero_root_batched(
         rounds_left = R - r
         arms = len(cand)
         
-        # IMPROVEMENT: Use round-based allocation instead of per-arm
+        # Allocate exactly per_arm per arm for this round (equal budgeting)
         actions_this_round = schedule_round(
             cand, 
             total_sims - sims_used, 
-            rounds_left, 
-            mcts.cfg.batch_cap
+            rounds_left
         )
+        
+        # Assertion-based test for equal allocation
+        if actions_this_round:
+            from collections import Counter
+            action_counts = Counter(actions_this_round)
+            per_arm = per_arm_allocation(total_sims - sims_used, rounds_left, arms)
+            for a in cand:
+                assert action_counts[a] == per_arm, f"Arm {a} got {action_counts[a]} sims, expected {per_arm}"
+            assert len(actions_this_round) <= total_sims - sims_used, f"Round used {len(actions_this_round)} sims, only {total_sims - sims_used} left"
         
         if actions_this_round:
             # Track performance metrics from this round
@@ -267,6 +295,11 @@ def gumbel_alpha_zero_root_batched(
             # Note: unique_evals_total is not available in individual batch stats
             # We'll track this separately by looking at the final MCTS metrics
             sims_used += len(actions_this_round)
+            
+            # Log per_arm and len(cand) per round at verbose>=2
+            if verbose >= 4:
+                per_arm = per_arm_allocation(total_sims - sims_used + len(actions_this_round), rounds_left, arms)
+                print(f"GUMBEL Round {r+1}: {arms} candidates, {per_arm} sims/arm, {len(actions_this_round)} total sims")
         
         if arms <= 1 or sims_used >= total_sims:
             break
@@ -279,6 +312,9 @@ def gumbel_alpha_zero_root_batched(
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start
     
+    # Final assertion: ensure we didn't exceed total_sims
+    assert sims_used <= total_sims, f"Used {sims_used} sims, but only {total_sims} were allocated"
+    
     # Final ranking timing
     ranking_start = time.perf_counter()
     
@@ -287,15 +323,16 @@ def gumbel_alpha_zero_root_batched(
         cand.sort(key=rank_key, reverse=True)
     
     # DEBUG: Compare final selection with top policy move
-    if beta <= 0.1 and verbose >= 5:
-        selected_action = cand[0]
-        top_policy_action = int(np.argmax(logits))
-        print(f"GUMBEL FINAL SELECTION DEBUG:")
-        print(f"  Selected action: {selected_action} (score: {rank_key(selected_action):.3f})")
-        print(f"  Top policy action: {top_policy_action} (score: {rank_key(top_policy_action):.3f})")
-        print(f"  Same as top policy: {selected_action == top_policy_action}")
-        if selected_action != top_policy_action:
-            print(f"  Difference in scores: {rank_key(selected_action) - rank_key(top_policy_action):.3f}")
+    # DISABLED: beta-based debug logging due to temperature scaling issues
+    # if beta <= 0.1 and verbose >= 5:
+    #     selected_action = cand[0]
+    #     top_policy_action = int(np.argmax(logits))
+    #     print(f"GUMBEL FINAL SELECTION DEBUG:")
+    #     print(f"  Selected action: {selected_action} (score: {rank_key(selected_action):.3f})")
+    #     print(f"  Top policy action: {top_policy_action} (score: {rank_key(top_policy_action):.3f})")
+    #     print(f"  Same as top policy: {selected_action == top_policy_action}")
+    #     if selected_action != top_policy_action:
+    #         print(f"  Difference in scores: {rank_key(selected_action) - rank_key(top_policy_action):.3f}")
     
     timing_data['ranking_time'] = time.perf_counter() - ranking_start
     timing_data['total_time'] = time.perf_counter() - total_start
