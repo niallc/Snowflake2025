@@ -125,12 +125,12 @@ def gumbel_alpha_zero_root_batched(
     # TODO: Implement proper temperature handling for Gumbel root selection.
     
     # Interpret temperature as noise scale beta (no scaling of logits or value terms)
-    beta = float(temperature)
-    temp_tol = 0.15
-    if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
-        message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
-        message += f"For now, temperature must be between {1.0 - temp_tol} and {1.0 + temp_tol}, got {temperature}"
-        raise ValueError(message)
+    # beta = float(temperature)
+    # temp_tol = 0.15
+    # if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
+    #     message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
+    #     message += f"For now, temperature must be between {1.0 - temp_tol} and {1.0 + temp_tol}, got {temperature}"
+    #     raise ValueError(message)
     
     # DEBUG: Log noise scaling effects
     # DISABLED: beta-based debug logging due to temperature scaling issues
