@@ -581,9 +581,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
     # Create round-robin participants from existing strategy configs
     round_robin_participants = []
     for i, (strategy_config, model_path) in enumerate(zip(strategy_configs, model_paths)):
-        # Create strategy_config with model_path included
+        # Create strategy_config with model_path and strategy type included
         participant_strategy_config = strategy_config.config.copy()
         participant_strategy_config["model_path"] = model_path
+        participant_strategy_config["strategy"] = strategy_config.strategy_type  # FIX: Add strategy type
         
         participant = TournamentParticipant(
             name=f"round_robin_{i}",
