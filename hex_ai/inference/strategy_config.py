@@ -86,6 +86,10 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
             if "gumbel_batch_scaling_factor" in participant_config:
                 config_dict["gumbel_batch_scaling_factor"] = participant_config["gumbel_batch_scaling_factor"]
+        elif strategy_type == "policy":
+            # Policy strategies need minimal config - just temperature for consistency
+            # The temperature is also stored as a separate field on StrategyConfig
+            pass  # Temperature is handled separately, policy strategies don't need other params
         
         
         # Create StrategyConfig
