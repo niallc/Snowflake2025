@@ -284,7 +284,9 @@ def check_gumbel_configurations(args, strategy_configs):
     
     # Add any simulation counts from command line arguments
     if hasattr(args, 'mcts_sims') and args.mcts_sims:
-        sim_counts.add(args.mcts_sims)
+        # Parse comma-separated mcts_sims values
+        parsed_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
+        sim_counts.update(parsed_sims)
     
     # Convert to sorted list of integers
     sim_counts = sorted([int(s) for s in sim_counts])
