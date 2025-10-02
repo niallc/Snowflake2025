@@ -2070,7 +2070,7 @@ def create_mcts_config(
             "sims": 200,
             "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
             "temperature_start": 1.0,
-            "temperature_end": 0.1,
+            "temperature_end": 1.0,  # Fixed: No temperature decay in tournaments
             "add_root_noise": True,
         },
         "selfplay": {
