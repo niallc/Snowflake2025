@@ -235,8 +235,25 @@ def gumbel_alpha_zero_root_batched(
         Calculate per-arm allocation for equal budgeting per round.
         This restores the behavior from 5760a837: each surviving arm gets
         exactly per_arm targeted root simulations during the current round.
+        
+        Handles cases where we can't allocate even 1 simulation per arm.
         """
-        return max(1, total_left // max(1, rounds_left * num_arms))
+        if num_arms == 0:
+            return 0
+        
+        # Calculate the theoretical per-arm allocation
+        theoretical_per_arm = total_left // max(1, rounds_left * num_arms)
+        
+        # But ensure we don't exceed the available simulations
+        max_per_arm = total_left // num_arms
+        
+        # If we can't allocate even 1 simulation per arm, return 0
+        # This will cause the algorithm to terminate early
+        if max_per_arm == 0:
+            return 0
+        
+        # Return the minimum of theoretical allocation and budget constraint
+        return max(1, min(theoretical_per_arm, max_per_arm))
     
     def schedule_round(arms_list, sims_left, rounds_left):
         """
@@ -445,3 +462,5 @@ def generate_gumbel_summary_from_mcts_config(mcts_config: Any) -> str:
         gumbel_sim_threshold=gumbel_sim_threshold,
         strategy_name="selfplay"
     )
+
+

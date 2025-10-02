@@ -81,7 +81,9 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
     DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
     DEFAULT_GUMBEL_CANDIDATE_MIN,
-    DEFAULT_GUMBEL_CANDIDATE_MAX
+    DEFAULT_GUMBEL_CANDIDATE_MAX,
+    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_C_SCALE
 )
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
@@ -443,8 +445,8 @@ class BaselineMCTSConfig:
     # Gumbel-AlphaZero root selection parameters
     enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
     gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
-    gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
-    gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
+    gumbel_c_visit: float = DEFAULT_GUMBEL_C_VISIT  # Gumbel-AlphaZero c_visit parameter
+    gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
     
     # Gumbel candidate scaling parameters (for auto candidate selection)

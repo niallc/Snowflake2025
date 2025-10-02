@@ -69,6 +69,7 @@ from hex_ai.config import (
 from hex_ai.enums import Player
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
+from hex_ai.utils.gumbel_validation import validate_gumbel_configurations, print_gumbel_warnings, check_gumbel_configurations
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
@@ -693,6 +694,9 @@ def main():
     
     # Create strategy configurations
     strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
+    
+    # Check for Gumbel algorithm issues and print warnings
+    check_gumbel_configurations(args, strategy_configs)
     
     # Determine how many games to play
     # Always use --round-robin-games for the unified tournament system

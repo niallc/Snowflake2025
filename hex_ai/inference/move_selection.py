@@ -15,29 +15,42 @@ from hex_ai.value_utils import select_policy_move
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.config import (
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
+    DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX,
+    DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_MCTS_DIRICHLET_ALPHA,
+    DEFAULT_MCTS_DIRICHLET_EPS,
+    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_C_SCALE
+)
 
 
 @dataclass
 class MoveSelectionConfig:
     """Configuration for move selection strategies."""
-    temperature: float = 1.0
+    temperature: float  # No default - must be specified
     # For MCTS
-    mcts_sims: int = 200
-    mcts_c_puct: float = 1.5
-    mcts_dirichlet_alpha: float = 0.3
-    mcts_dirichlet_eps: float = 0.25
+    mcts_sims: int = DEFAULT_MCTS_SIMS
+    mcts_c_puct: float = DEFAULT_C_PUCT
+    mcts_dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
+    mcts_dirichlet_eps: float = DEFAULT_MCTS_DIRICHLET_EPS
     batch_size: Optional[int] = None  # Override default batch size for MCTS
     # For Gumbel AlphaZero root selection
-    enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 90003  # Use Gumbel selection when sims <= this threshold
-    gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
-    gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
+    enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
+    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
+    gumbel_c_visit: float = DEFAULT_GUMBEL_C_VISIT  # Gumbel-AlphaZero c_visit parameter
+    gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
     # Gumbel candidate scaling parameters (for auto candidate selection)
-    gumbel_candidate_log_base: float = 1.7  # Base for logarithmic candidate scaling
-    gumbel_candidate_log_offset: float = -2.0  # Offset for logarithmic candidate scaling
-    gumbel_candidate_min: int = 2  # Minimum number of candidates
-    gumbel_candidate_max: int = 48  # Maximum number of candidates
+    gumbel_candidate_log_base: float = DEFAULT_GUMBEL_CANDIDATE_LOG_BASE  # Base for logarithmic candidate scaling
+    gumbel_candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET  # Offset for logarithmic candidate scaling
+    gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
+    gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
