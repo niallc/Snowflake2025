@@ -1033,7 +1033,7 @@ class BaselineMCTS:
             leaves, paths = self._select_leaves_batch(root, sims_remaining, timing_tracker)
             
             # Process leaves (expand and backpropagate)
-            batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker)
+            batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker, root)
             sims_remaining -= batch_simulations
             self._effective_sims_total += batch_simulations
         
@@ -1465,7 +1465,7 @@ class BaselineMCTS:
         leaves, paths = self._select_leaves_batch(root, sims_remaining=len(actions),
                                                   timing_tracker=timing_tracker,
                                                   forced_root_actions=actions)
-        return self._process_leaves_batch(leaves, paths, timing_tracker)
+        return self._process_leaves_batch(leaves, paths, timing_tracker, root)
 
     def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
         """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
@@ -1479,7 +1479,7 @@ class BaselineMCTS:
         return timing_tracker.get_final_stats()
 
     def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
-                            timing_tracker: MCTSTimingTracker) -> int:
+                            timing_tracker: MCTSTimingTracker, root: MCTSNode) -> int:
         """Process a batch of leaves: expand and backpropagate."""
         if not leaves:
             return 0
@@ -1495,8 +1495,14 @@ class BaselineMCTS:
         self._expand_cached_leaves(cached_expansions, leaves, timing_tracker)
         
         # Backpropagate values
+        prev_root_sum = int(np.sum(root.N))
         simulations_completed = self._backpropagate_batch(leaves, paths, timing_tracker)
         
+        # Expect root sum to increase by simulations_completed
+        delta = int(np.sum(root.N)) - prev_root_sum
+        if not (delta == simulations_completed):
+            raise ValueError(f"Expected +{simulations_completed} at root, got +{delta}")
+
         return simulations_completed
 
     def _prepare_leaf_evaluations(
