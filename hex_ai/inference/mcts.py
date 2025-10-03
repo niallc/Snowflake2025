@@ -1460,6 +1460,24 @@ class BaselineMCTS:
         timing_tracker.end_timing("select")
         return leaves, paths
 
+    def _run_forced_root_batch(self, root: MCTSNode, actions: List[int], timing_tracker: MCTSTimingTracker) -> int:
+        """Run exactly len(actions) simulations, forcing each root action once, using the batched pipeline."""
+        leaves, paths = self._select_leaves_batch(root, sims_remaining=len(actions),
+                                                  timing_tracker=timing_tracker,
+                                                  forced_root_actions=actions)
+        return self._process_leaves_batch(leaves, paths, timing_tracker)
+
+    def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
+        """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
+        timing_tracker = MCTSTimingTracker()
+        i = 0
+        while i < len(actions):
+            j = min(i + self.cfg.batch_cap, len(actions))
+            sims_done = self._run_forced_root_batch(root, actions[i:j], timing_tracker)
+            self._effective_sims_total += sims_done
+            i = j
+        return timing_tracker.get_final_stats()
+
     def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
                             timing_tracker: MCTSTimingTracker) -> int:
         """Process a batch of leaves: expand and backpropagate."""
