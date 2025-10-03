@@ -25,16 +25,16 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
 # CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
-# CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
+CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
 # CURRENT_BEST_MODEL_FILE = "epoch13_mini5.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250924_151002/pipeline_sweep_exp0__99914b_20250924_151002"
 # CURRENT_BEST_MODEL_FILE = "epoch14_mini34.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning//pipeline_20250926_003151/pipeline_sweep_0"
 # CURRENT_BEST_MODEL_FILE = "epoch18_mini30.pt.gz"
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250929_142959/pipeline_sweep_0"
-CURRENT_BEST_MODEL_FILE = "epoch13_mini19.pt.gz" #epoch14_mini9.pt.gz
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250929_142959/pipeline_sweep_0"
+# CURRENT_BEST_MODEL_FILE = "epoch13_mini19.pt.gz" #epoch14_mini9.pt.gz
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
