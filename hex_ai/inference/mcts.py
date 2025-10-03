@@ -1860,7 +1860,7 @@ class BaselineMCTS:
                 note="standard_puct_selection"
             )
         
-        U = self.cfg.c_puct * node.P * math.sqrt(N_sum_adjusted) / node.N
+        U = self.cfg.c_puct * node.P * math.sqrt(N_sum_adjusted) / (1.0 + node.N)
         
         # Apply terminal move detection modifications
         if self.cfg.enable_terminal_move_detection:
