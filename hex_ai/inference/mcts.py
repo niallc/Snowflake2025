@@ -1270,13 +1270,14 @@ class BaselineMCTS:
         board_size = int(root.state.get_board_tensor().shape[-1])
 
         # Handle early exploration at the root:
-        legal_count = len(current.legal_moves)
+        legal_count = len(root.legal_moves)
         root_total_N = int(np.sum(root.N))
 
         # 1) Early-phase smaller batches (until a few backprops happen)
         warmup_cap = 16                      # conservative early cap
         is_early = root_total_N < 64         # ~ first few backprops at root
-        effective_select_budget = min(self.cfg.select_budget, warmup_cap) if is_early else self.cfg.select_budget
+        general_select_budget = min(self.cfg.batch_cap, sims_remaining)
+        effective_select_budget = min(general_select_budget, warmup_cap) if is_early else general_select_budget
         # 2) Never try to collect more distinct leaves than there are legal root moves or sims left
         effective_distinct_target = min(
             int(self.cfg.distinct_target),
