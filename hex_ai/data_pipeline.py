@@ -30,6 +30,7 @@ from hex_ai.error_handling import check_data_loading_errors, get_board_state_err
 logger = logging.getLogger(__name__)
 
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
+MAX_VALIDATION_MEMORY_GB = 6.0
 
 
 def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:
@@ -404,8 +405,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         estimated_memory_gb = len(all_validation_positions) * 0.0045 / 1024  # 4.5 KB per position
         estimated_positions = len(all_validation_positions)
         
-        if estimated_memory_gb > 3.0:
-            raise RuntimeError(f"Validation data would use {estimated_memory_gb:.1f}GB, exceeds 3GB limit")
+        if estimated_memory_gb > MAX_VALIDATION_MEMORY_GB:
+            raise RuntimeError(f"Validation data would use {estimated_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
         
         if estimated_positions > 5_000_000:
             raise RuntimeError(f"Validation data would have {estimated_positions:,} positions, exceeds 5M limit")

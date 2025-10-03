@@ -879,7 +879,7 @@ Examples:
     
     # Training configuration
     parser.add_argument("--max-samples", type=int, default=35000000, help="Max training samples")
-    parser.add_argument("--max-validation-samples", type=int, default=137000, help="Max validation samples")
+    parser.add_argument("--max-validation-samples", type=int, default=189000, help="Max validation samples")
     parser.add_argument("--results-dir", default="checkpoints/hyperparameter_tuning", help="Results directory")
     parser.add_argument("--override-checkpoint-hyperparameters", action="store_true", 
                        help="Override checkpoint hyperparameters with current sweep settings (resets optimizer state)")
