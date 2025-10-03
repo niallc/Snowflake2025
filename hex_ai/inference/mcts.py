@@ -663,63 +663,6 @@ class BaselineMCTS:
         )
         self.exploration_trace.append(step_info)
 
-    def _record_node_selection(self, available_nodes: List[MCTSNode], selected_node: MCTSNode, 
-                              simulation_num: int, selection_type: str = "UCB1") -> None:
-        """
-        Record node selection decisions for detailed exploration tracking.
-        
-        IMPORTANT: This method ONLY records debug information and does NOT affect
-        the actual MCTS algorithm. The UCB1 calculation here is an approximation
-        for display purposes only.
-        """
-        if not self.detailed_exploration_enabled:
-            return
-        
-        # Calculate UCB1 scores for all available nodes
-        node_scores = []
-        for node in available_nodes:
-            if node is not None:
-                # NOTE: This is an APPROXIMATION for debug output only
-                # The actual MCTS algorithm uses proper UCB1 with parent visit counts
-                # We can't access parent.N here, so we use a simplified formula for display
-                N_node = sum(node.N) if len(node.N) > 0 else 1
-                Q_node = np.mean(node.Q) if len(node.Q) > 0 else 0.0
-                C = self.cfg.c_puct
-                # APPROXIMATION: Using sqrt(1/N_node) instead of sqrt(ln(N_parent)/N_node)
-                # Add safety check to avoid division by zero and infinite values
-                if N_node <= 0:
-                    ucb1_approximation = Q_node + C * 1.0  # Safe fallback
-                else:
-                    ucb1_approximation = Q_node + C * math.sqrt(1.0 / N_node)
-                
-                # Ensure the result is finite for JSON serialization
-                if not math.isfinite(ucb1_approximation):
-                    ucb1_approximation = Q_node  # Fallback to just Q value
-                
-                node_scores.append({
-                    'depth': int(node.depth),  # Convert to Python int
-                    'ucb1_approximation': float(ucb1_approximation),  # Convert to Python float
-                    'q_value': float(Q_node),  # Convert to Python float
-                    'visits': int(N_node),  # Convert to Python int
-                    'is_selected': bool(node == selected_node)  # Convert to Python bool
-                })
-        
-        # Sort by UCB1 approximation
-        node_scores.sort(key=lambda x: x['ucb1_approximation'], reverse=True)
-        
-        # Create selection info
-        selection_info = {
-            'type': 'node_selection',
-            'simulation': int(simulation_num),  # Convert to Python int
-            'selection_type': str(selection_type),  # Convert to Python str
-            'available_nodes': int(len(available_nodes)),  # Convert to Python int
-            'selected_node_depth': int(selected_node.depth),  # Convert to Python int
-            'node_scores': node_scores[:5],  # Top 5 nodes
-            'selection_reason': f"Selected depth {selected_node.depth} node with highest UCB1 score"
-        }
-        
-        self.exploration_trace.append(selection_info)
-
     def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
         """Record the start of a descent."""
         if not self.detailed_exploration_enabled:
@@ -2159,8 +2102,6 @@ def create_mcts_config(
 
 def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
     """Run MCTS for one move and return (row,col), stats, tree_data, algorithm_termination_info."""
-    if cfg is None:
-        cfg = BaselineMCTSConfig()
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
     return result.move, result.stats, result.tree_data, result.algorithm_termination_info

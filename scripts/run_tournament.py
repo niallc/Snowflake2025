@@ -728,7 +728,9 @@ def main():
             sys.exit(1)
         
         # Generate diverse openings (generate more than needed to allow for random selection)
-        target_generation = max(games_to_play * 2, 500)  # Generate at least 2x what we need
+        # target_generation = max(games_to_play * 2, 500)  # Generate at least 2x what we need
+        # TODO: Figure out whether we need to generate more that we're planning to use for anything.
+        target_generation = games_to_play
         all_openings = generate_diverse_openings(
             trmph_files, 
             opening_length=args.opening_length,

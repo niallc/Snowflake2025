@@ -687,38 +687,38 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
         total_wall_time = time.time() - total_start_time
         post_mcts_time = total_wall_time - mcts_search_time
         
-        app.logger.info(f"=== MCTS MOVE COMPLETE ===")
-        app.logger.info(f"=== WALL TIME BREAKDOWN ===")
-        app.logger.info(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
-        app.logger.info(f"MCTS search time: {mcts_search_time:.3f}s")
-        app.logger.info(f"Post-MCTS processing: {post_mcts_time:.3f}s")
-        app.logger.info(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.info(f"=== END WALL TIME BREAKDOWN ===")
-        app.logger.info(f"Final result keys: {list(result.keys())}")
-        app.logger.info(f"Move made: {result['move_made']}")
-        app.logger.info(f"Game over: {result['game_over']}")
-        app.logger.info(f"Winner: {result['winner']}")
+        app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
+        app.logger.debug(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
+        app.logger.debug(f"MCTS search time: {mcts_search_time:.3f}s")
+        app.logger.debug(f"Post-MCTS processing: {post_mcts_time:.3f}s")
+        app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
+        app.logger.debug(f"=== END WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"Final result keys: {list(result.keys())}")
+        app.logger.debug(f"Move made: {result['move_made']}")
+        app.logger.debug(f"Game over: {result['game_over']}")
+        app.logger.debug(f"Winner: {result['winner']}")
         
         # Log detailed exploration info if available
         if 'tree_data' in result and 'detailed_exploration' in result['tree_data']:
             de = result['tree_data']['detailed_exploration']
-            app.logger.info(f"Detailed exploration: enabled={de.get('enabled')}, "
+            app.logger.debug(f"Detailed exploration: enabled={de.get('enabled')}, "
                            f"simulations={de.get('total_simulations')}, "
                            f"trace_length={len(de.get('trace', []))}")
         else:
-            app.logger.info("No detailed exploration data found in tree_data")
+            app.logger.debug("No detailed exploration data found in tree_data")
         
         # Log response size for debugging
         import json
         try:
             response_json = json.dumps(result)
             response_size = len(response_json)
-            app.logger.info(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
+            app.logger.debug(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
         except Exception as e:
             app.logger.warning(f"Could not serialize response for size measurement: {e}")
         
         json_time = time.time() - json_start_time
-        app.logger.info(f"JSON serialization timing took {json_time:.3f}s")
+        app.logger.debug(f"JSON serialization timing took {json_time:.3f}s")
         
         return result
     except Exception as e:

@@ -366,10 +366,11 @@ def calculate_temperature_scaled_probs(root_node, root_state, cfg) -> Dict[str, 
     total_visits = counts.sum()
     
     if total_visits <= 0:
-        # No visits - return uniform probabilities
-        legal_moves = root_node.legal_moves
-        uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0.0
-        return {rowcol_to_trmph(row, col): uniform_prob for row, col in legal_moves}
+        raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
+        # # No visits - return uniform probabilities
+        # legal_moves = root_node.legal_moves
+        # uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0.0
+        # return {rowcol_to_trmph(row, col): uniform_prob for row, col in legal_moves}
     
     # Calculate temperature with decay
     move_count = len(root_state.move_history)
