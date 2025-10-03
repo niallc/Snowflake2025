@@ -83,7 +83,9 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_MIN,
     DEFAULT_GUMBEL_CANDIDATE_MAX,
     DEFAULT_GUMBEL_C_VISIT,
-    DEFAULT_GUMBEL_C_SCALE
+    DEFAULT_MCTS_DIRICHLET_ALPHA,
+    DEFAULT_GUMBEL_C_SCALE,
+    DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION
 )
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
@@ -174,7 +176,6 @@ def safe_puct_denominator(n_sum: float) -> bool:
 DEFAULT_CACHE_SIZE = 100000  # 100k entries
 
 # Default Dirichlet noise parameters
-DEFAULT_DIRICHLET_ALPHA = 0.3
 DEFAULT_DIRICHLET_EPS = 0.25
 
 # Default temperature parameters
@@ -401,7 +402,7 @@ class BaselineMCTSConfig:
     batch_cap: int = DEFAULT_BATCH_CAP
     c_puct: float = DEFAULT_C_PUCT
     cache_size: int = DEFAULT_CACHE_SIZE
-    dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
+    dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
     dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
     add_root_noise: bool = False
     # Temperature scaling parameters (always used)
@@ -412,7 +413,7 @@ class BaselineMCTSConfig:
     temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
     temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
     # Terminal move detection parameters
-    enable_terminal_move_detection: bool = True  # Enable immediate terminal move detection
+    enable_terminal_move_detection: bool = DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION  # Enable immediate terminal move detection
     terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     
     terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
@@ -1881,17 +1882,6 @@ class BaselineMCTS:
         if not safe_puct_denominator(N_sum_adjusted):
             raise RuntimeError(f"N_sum is 0, which should never happen. Need to debug how this happens.")
 
-        if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
-            # Choose terminal child with highest prior as tie-breaker
-            terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
-            best = max(terminal_idxs, key=lambda i: float(node.P[i]))
-            result = int(best)
-            if self.detailed_exploration_enabled:
-                self._record_select_action(
-                    current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                    terminal_flag_for_child=True, note="terminal_win"
-                )
-            return result
         # Record select action for detailed exploration (degenerate case)
         if self.detailed_exploration_enabled:
             self._record_select_action(
@@ -2071,12 +2061,12 @@ def create_mcts_config(
     # Only set defaults for parameters that weren't provided in kwargs
     common_params = {
         "batch_cap": DEFAULT_BATCH_CAP,
-        "dirichlet_alpha": DEFAULT_DIRICHLET_ALPHA,
+        "dirichlet_alpha": DEFAULT_MCTS_DIRICHLET_ALPHA,
         "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
         "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
         "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
         # Terminal move detection (always enabled)
-        "enable_terminal_move_detection": True,
+        "enable_terminal_move_detection": DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
         "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
         "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
         # New terminal move handling
@@ -2104,7 +2094,7 @@ def create_mcts_config(
     if "c_puct" not in config_params:
         common_params["c_puct"] = DEFAULT_C_PUCT
     if "dirichlet_alpha" not in config_params:
-        common_params["dirichlet_alpha"] = DEFAULT_DIRICHLET_ALPHA
+        common_params["dirichlet_alpha"] = DEFAULT_MCTS_DIRICHLET_ALPHA
     if "dirichlet_eps" not in config_params:
         common_params["dirichlet_eps"] = DEFAULT_DIRICHLET_EPS
     
