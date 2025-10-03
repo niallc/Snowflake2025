@@ -106,8 +106,6 @@ TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 # Default terminal move boost factor
 DEFAULT_TERMINAL_MOVE_BOOST = 2.0
 
-# Default virtual loss for non-terminal moves
-DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL = 0.01
 
 # Default depth discount factor
 DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
@@ -418,7 +416,6 @@ class BaselineMCTSConfig:
     terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
     
     terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
-    virtual_loss_for_non_terminal: float = DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL  # Small penalty for non-terminal moves
     
     # New terminal move handling
     prefer_immediate_terminal: bool = True  # Force immediate terminal wins deterministically
@@ -496,8 +493,6 @@ class BaselineMCTSConfig:
             raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
         if self.terminal_move_boost < 0:
             raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
-        if self.virtual_loss_for_non_terminal < 0:
-            raise ValueError(f"virtual_loss_for_non_terminal must be non-negative, got {self.virtual_loss_for_non_terminal}")
         if self.terminal_detection_max_depth < 0:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
         if not 0 <= self.confidence_termination_threshold <= 1:
@@ -1274,6 +1269,22 @@ class BaselineMCTS:
 
         board_size = int(root.state.get_board_tensor().shape[-1])
 
+        # Handle early exploration at the root:
+        legal_count = len(current.legal_moves)
+        root_total_N = int(np.sum(root.N))
+
+        # 1) Early-phase smaller batches (until a few backprops happen)
+        warmup_cap = 16                      # conservative early cap
+        is_early = root_total_N < 64         # ~ first few backprops at root
+        effective_select_budget = min(self.cfg.select_budget, warmup_cap) if is_early else self.cfg.select_budget
+        # 2) Never try to collect more distinct leaves than there are legal root moves or sims left
+        effective_distinct_target = min(
+            int(self.cfg.distinct_target),
+            effective_select_budget,
+            legal_count,
+            max(1, sims_remaining)
+        )
+
         # If caller supplies forced actions (likely as part of Gumbel), we must collect exactly that many leaves for this batch
         if forced_root_actions is not None:
             force_q = deque(forced_root_actions)
@@ -1281,7 +1292,8 @@ class BaselineMCTS:
         else:
             # Non-Gumbel code path
             force_q = deque()
-            select_budget = min(self.cfg.batch_cap, sims_remaining)
+            # select_budget = min(self.cfg.batch_cap, sims_remaining)
+            select_budget = int(effective_select_budget)
 
         # Use adaptive distinct target for low simulation counts
         if self.cfg.adaptive_distinct_target:
@@ -1291,13 +1303,15 @@ class BaselineMCTS:
             distinct_target = int(max(self.cfg.distinct_target_min,
                                       min(self.cfg.distinct_target_max, guess)))
         else:
-            distinct_target = int(self.cfg.distinct_target)
+            # distinct_target = int(self.cfg.distinct_target)
+            # distinct_target = max(1, min(distinct_target, select_budget))  # <- clamp
+            distinct_target = max(1, int(effective_distinct_target))
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
 
         # Cheap guardrail on selection work
-        max_selection_descents = 4 * select_budget
+        max_selection_descents = max(select_budget * 4, 64)  # 4x is a good default
         descents = 0
 
         while len(leaves) < select_budget and descents < max_selection_descents:
@@ -1868,9 +1882,6 @@ class BaselineMCTS:
                 if is_terminal:
                     # Boost terminal moves
                     U[i] += self.cfg.terminal_move_boost
-                else:
-                    # Apply small penalty to non-terminal moves
-                    U[i] -= self.cfg.virtual_loss_for_non_terminal
         
         score = node.Q + U
         
@@ -2042,7 +2053,6 @@ def create_mcts_config(
         # Terminal move detection (always enabled)
         "enable_terminal_move_detection": True,
         "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
-        "virtual_loss_for_non_terminal": DEFAULT_VIRTUAL_LOSS_FOR_NON_TERMINAL,
         "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
         # New terminal move handling
         "prefer_immediate_terminal": True,
