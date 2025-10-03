@@ -1838,32 +1838,29 @@ class BaselineMCTS:
         # Start timing PUCT calculation
         t_puct_start = time.perf_counter()
         
-        N_sum = np.sum(node.N, dtype=np.float64)
-        #TODO: Why do we have this? Why would N_sum be 0? Should the code just crash?
-        if not safe_puct_denominator(N_sum):
-            # Degenerate branch (N_sum ~ 0) - before any PUCT math, force immediate wins if present; otherwise argmax(P)
-            if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
-                # Choose terminal child with highest prior as tie-breaker
-                terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
-                best = max(terminal_idxs, key=lambda i: float(node.P[i]))
-                result = int(best)
-                # Record select action for detailed exploration (degenerate case)
-                if self.detailed_exploration_enabled:
-                    self._record_select_action(
-                        current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                        terminal_flag_for_child=True, note="degenerate_terminal_win"
-                    )
-                return result
-            result = int(np.argmax(node.P))
-            # Record select action for detailed exploration (degenerate case)
+        N_sum_adjusted = 1.0 + np.sum(node.N, dtype=np.float64)
+        if not safe_puct_denominator(N_sum_adjusted):
+            raise RuntimeError(f"N_sum is 0, which should never happen. Need to debug how this happens.")
+
+        if self.cfg.enable_terminal_move_detection and any(node.terminal_moves):
+            # Choose terminal child with highest prior as tie-breaker
+            terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
+            best = max(terminal_idxs, key=lambda i: float(node.P[i]))
+            result = int(best)
             if self.detailed_exploration_enabled:
                 self._record_select_action(
                     current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                    note="degenerate_argmax_p"
+                    terminal_flag_for_child=True, note="terminal_win"
                 )
             return result
+        # Record select action for detailed exploration (degenerate case)
+        if self.detailed_exploration_enabled:
+            self._record_select_action(
+                current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+                note="standard_puct_selection"
+            )
         
-        U = self.cfg.c_puct * node.P * math.sqrt(N_sum) / (1.0 + node.N)
+        U = self.cfg.c_puct * node.P * math.sqrt(N_sum_adjusted) / node.N
         
         # Apply terminal move detection modifications
         if self.cfg.enable_terminal_move_detection:
@@ -1890,7 +1887,7 @@ class BaselineMCTS:
             terminal_flag = node.terminal_moves[result] if hasattr(node, 'terminal_moves') and len(node.terminal_moves) > result else False
             
             self._record_select_action(
-                current_depth, N_sum, q, p, n, u, score_val, terminal_flag
+                current_depth, N_sum_adjusted, q, p, n, u, score_val, terminal_flag
             )
         
         # End timing PUCT calculation
