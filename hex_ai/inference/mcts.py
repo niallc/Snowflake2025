@@ -1262,6 +1262,11 @@ class BaselineMCTS:
         - This ensures consistent neural network batch sizes for optimal GPU utilization
         - Low distinct ratio flush is disabled by default to prevent performance drops
         - Fixed distinct_target (32) provides consistent behavior across simulation counts
+        
+        Root reservation strategy:
+        - During early phase (first ~64 root visits), prevent overexploration of top policy moves
+        - Use batch-local reservation to spread first batch across top-K root actions
+        - This provides earlier feedback and more balanced tree growth
         """
         timing_tracker.start_timing("select")
 
@@ -1311,6 +1316,11 @@ class BaselineMCTS:
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
+
+        # Root-only batch-local "reservation" for early phase
+        # This prevents overexploration of top policy moves before any backpropagations occur
+        use_root_reservation = (root_total_N < 64)  # only early phase
+        used_root_actions: Set[int] = set()  # tracks root actions used in this batch
 
         # Cheap guardrail on selection work
         max_selection_descents = max(select_budget * 4, 64)  # 4x is a good default
@@ -1423,10 +1433,18 @@ class BaselineMCTS:
                         # Fallback if forced action is illegal: normal PUCT
                         loc_idx = self._select_child_puct(node, node.depth)
                 else:
-                    # Non-Gumbel code path
-                    loc_idx = self._select_child_puct(node, node.depth)
+                    # Non-Gumbel code path with root reservation logic
+                    if node is root and use_root_reservation:
+                        loc_idx = self._select_child_puct(node, node.depth, used_root_actions)
+                    else:
+                        loc_idx = self._select_child_puct(node, node.depth)
 
                 path.append((node, loc_idx))
+                
+                # Track root action usage for reservation mechanism
+                if node is root and use_root_reservation:
+                    used_root_actions.add(loc_idx)
+                
                 child = node.children[loc_idx]
 
                 if child is None:
@@ -1851,7 +1869,7 @@ class BaselineMCTS:
                 prior_mass_top3, value_signed_red_ref
             )
 
-    def _select_child_puct(self, node: MCTSNode, current_depth: int = 0) -> int:
+    def _select_child_puct(self, node: MCTSNode, current_depth: int = 0, used_root_actions: Optional[Set[int]] = None) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
@@ -1899,6 +1917,15 @@ class BaselineMCTS:
                     U[i] += self.cfg.terminal_move_boost
         
         score = node.Q + U
+        
+        # Apply root reservation mechanism if provided
+        if used_root_actions is not None and len(used_root_actions) > 0:
+            # Set scores of already-chosen root actions to -inf
+            mask = np.zeros_like(score, dtype=bool)
+            for j in used_root_actions:
+                if j < len(score):  # safety check
+                    mask[j] = True
+            score = np.where(mask, -np.inf, score)
         
         result = int(np.argmax(score))
         
