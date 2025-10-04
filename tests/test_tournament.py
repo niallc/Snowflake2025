@@ -3,7 +3,7 @@ import pytest
 import tempfile
 import os
 import time
-from hex_ai.utils import tournament_logging
+import hex_ai.utils.tournament_logging as tournament_logging
 from hex_ai.inference import tournament
 from hex_ai.value_utils import ValuePredictor, Winner
 from hex_ai.enums import Piece, Player

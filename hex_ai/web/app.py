@@ -9,7 +9,7 @@ from datetime import datetime
 import time # Added for time.time()
 
 
-from hex_ai.utils import format_conversion as fc
+import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
