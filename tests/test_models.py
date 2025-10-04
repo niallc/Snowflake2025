@@ -11,8 +11,7 @@ import torch.nn as nn
 from pathlib import Path
 import sys
 
-# Add the parent directory to the path so we can import hex_ai
-sys.path.append(str(Path(__file__).parent.parent))
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.models import (
     ResNetBlock, TwoHeadedResNet, create_model, 

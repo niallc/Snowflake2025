@@ -9,8 +9,7 @@ import pytest
 import sys
 import os
 
-# Add the project root to the path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.inference.game_engine import HexGameState

@@ -37,7 +37,7 @@ from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SH
 # Script imports (moved to top level)
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
 from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
-from scripts.shuffle_processed_data import DataShuffler
+from hex_ai.data_pipeline import DataShuffler
 
 
 @dataclass

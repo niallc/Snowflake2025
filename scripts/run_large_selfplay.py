@@ -11,8 +11,7 @@ import sys
 import time
 from datetime import datetime
 
-# Add the project root to the path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD
 from hex_ai.inference.model_config import get_model_path

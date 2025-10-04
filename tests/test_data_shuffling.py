@@ -21,7 +21,7 @@ from typing import List, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from scripts.shuffle_processed_data import DataShuffler
+from hex_ai.data_pipeline import DataShuffler
 
 
 def create_test_data(num_files: int = 3, examples_per_file: int = 100, games_per_file: int = 5) -> Path:
@@ -617,7 +617,7 @@ def test_phase2_consolidation_on_small_real_file():
     num_buckets = 8
 
     try:
-        from scripts.shuffle_processed_data import DataShuffler
+        from hex_ai.data_pipeline import DataShuffler
         shuffler = DataShuffler(
             input_dir=input_file.parent,
             output_dir=temp_dir,
