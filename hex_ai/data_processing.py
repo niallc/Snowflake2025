@@ -15,7 +15,6 @@ import numpy as np
 from tqdm import tqdm
 
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from .data_utils import validate_game, extract_training_examples_from_game
 from hex_ai.utils.format_conversion import trmph_to_moves
 from hex_ai.value_utils import trmph_winner_to_training_value
 from hex_ai.enums import Player
