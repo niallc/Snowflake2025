@@ -25,6 +25,8 @@ write_ups/
 gemini
 exclude_files.txt
 
+dead_code_analysis_log.json
+
 docs/data_weights_explanation.md
 docs/hyperparam_sweep_improvements_summary.md
 docs/hyperparam_sweep_productionization_summary.md

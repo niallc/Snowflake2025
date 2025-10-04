@@ -348,7 +348,7 @@ Examples:
     parser.add_argument('--knockout-config', type=str,
                        help='JSON configuration for knockout stage MCTS strategy (e.g., \'{"mcts_sims": 100, "enable_gumbel_root_selection": true}\')')
     parser.add_argument('--epoch-range', type=str,
-                       help='Epoch range for knockout stage (e.g., "14,15" for epochs 14 and 15)')
+                       help='Epoch range for knockout stage. Format: "N" for single epoch, "N,M" for range N to M-1 (e.g., "16" for epoch 16 only, "16,19" for epochs 16,17,18)')
     parser.add_argument('--games-per-match', type=int, default=50,
                        help='Number of games per knockout match (default: 50)')
     parser.add_argument('--top-k', type=int, default=2,
@@ -364,10 +364,13 @@ def parse_epoch_range(epoch_range_str: str) -> Tuple[int, int]:
     Parse epoch range string into start and end epoch numbers.
     
     Args:
-        epoch_range_str: String like "14,15" or "14" for single epoch
+        epoch_range_str: String like "16" for single epoch or "16,19" for range 16-18
         
     Returns:
         Tuple of (start_epoch, end_epoch) where end_epoch is exclusive
+        Examples:
+            "16" -> (16, 17)  # Just epoch 16
+            "16,19" -> (16, 19)  # Epochs 16, 17, 18
         
     Raises:
         ValueError: If format is invalid
@@ -385,7 +388,7 @@ def parse_epoch_range(epoch_range_str: str) -> Tuple[int, int]:
         start_epoch = int(parts[0].strip())
         end_epoch = int(parts[1].strip()) + 1
     else:
-        raise ValueError(f"Invalid epoch range format: {epoch_range_str}. Expected 'N' or 'N,M'")
+        raise ValueError(f"Invalid epoch range format: '{epoch_range_str}'. Expected format: 'N' for single epoch (e.g., '16') or 'N,M' for range N to M-1 (e.g., '16,19' for epochs 16,17,18)")
     
     if start_epoch < 1:
         raise ValueError(f"Start epoch must be >= 1, got {start_epoch}")
