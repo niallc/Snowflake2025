@@ -4,7 +4,7 @@ import tempfile
 import os
 import time
 import hex_ai.utils.tournament_logging as tournament_logging
-from hex_ai.inference import tournament
+import hex_ai.inference.tournament as tournament
 from hex_ai.value_utils import ValuePredictor, Winner
 from hex_ai.enums import Piece, Player
 from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state

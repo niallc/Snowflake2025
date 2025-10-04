@@ -15,18 +15,6 @@ from pathlib import Path
 __version__ = "2025.1.0"
 __author__ = "Snowflake2025 Team"
 
-# Core modules that should be available
-__all__ = [
-    "models",
-    "training_orchestration", 
-    "inference",
-    "selfplay",
-    "data_processing",
-    "system_utils",
-    "training_utils",
-    "value_utils",
-]
-
 def _validate_environment():
     """Validate the environment and fail fast if setup is incorrect."""
     # Check virtual environment
@@ -75,11 +63,5 @@ def _validate_environment():
 
 # Validate environment on import
 _validate_environment()
-
-# Import core modules - let import errors propagate
-from . import models
-from . import training_orchestration
-from . import inference
-from . import selfplay
 
  
