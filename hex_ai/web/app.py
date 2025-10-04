@@ -10,29 +10,30 @@ import time # Added for time.time()
 
 
 import hex_ai.utils.format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState, HexGameEngine
+from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, temperature_scaled_softmax, ValuePredictor
-from hex_ai.enums import Player
 from hex_ai.value_utils import (
+    Winner, 
+    winner_to_color, 
+    get_policy_probs_from_logits, 
+    temperature_scaled_softmax, 
+    ValuePredictor,
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
     signed_to_prob,
 )
+from hex_ai.enums import Player, Piece
 from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.enums import Piece
-from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
-from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
