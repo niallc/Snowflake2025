@@ -1220,7 +1220,7 @@ class BaselineMCTS:
         legal_mask[legal_indices] = True
         
         # Get policy logits from cache or re-evaluate
-        cached = self._get_from_cache(root_state.state_hash)
+        cached = self._get_from_cache(board_key(root_state))
         if cached is not None:
             policy_logits_full, _ = cached
         else:
