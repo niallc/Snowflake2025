@@ -143,19 +143,17 @@ class TwoStageTournament:
         knockout_tournament = KnockoutTournament(
             participants=participants,
             games_per_match=self.games_per_match,
-            match_executor=self._create_match_executor()
+            match_executor=self._create_match_executor(),
+            top_k=self.top_k
         )
         
         # Run knockout tournament
         elimination_order = knockout_tournament.run_tournament()
         
-        # Get top k winners
-        winners = elimination_order[-self.top_k:] if len(elimination_order) >= self.top_k else elimination_order
-        
         return {
             "total_participants": len(participants),
             "elimination_order": [p.name for p in elimination_order],
-            "winners": winners,
+            "winners": elimination_order,
             "tournament_summary": knockout_tournament.get_tournament_summary()
         }
     

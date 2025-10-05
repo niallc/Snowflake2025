@@ -102,7 +102,8 @@ class KnockoutTournament:
                  games_per_match: int = 50,
                  semifinal_games_multiplier: int = 2,
                  final_games_multiplier: int = 4,
-                 match_executor: Optional[Callable] = None):
+                 match_executor: Optional[Callable] = None,
+                 top_k: Optional[int] = None):
         """
         Initialize the knockout tournament.
         
@@ -112,6 +113,7 @@ class KnockoutTournament:
             semifinal_games_multiplier: Multiplier for semifinal games
             final_games_multiplier: Multiplier for final games
             match_executor: Function to execute matches between participants
+            top_k: Optional number of top participants to advance (stops early when <= k remain)
         """
         if len(participants) < 2:
             raise ValueError(
@@ -124,6 +126,7 @@ class KnockoutTournament:
         self.semifinal_games_multiplier = semifinal_games_multiplier
         self.final_games_multiplier = final_games_multiplier
         self.match_executor = match_executor
+        self.top_k = top_k
         
         # Tournament state
         self.current_round = 0
@@ -146,7 +149,7 @@ class KnockoutTournament:
         """
         logger.info("Starting knockout tournament")
         
-        while len(self.active_participants) > 1:
+        while not self._should_stop_tournament():
             self.current_round += 1
             logger.info(f"Starting round {self.current_round} with {len(self.active_participants)} participants")
             
@@ -160,23 +163,31 @@ class KnockoutTournament:
             self._update_tournament_state(round_results)
             
             # Print round summary
-            if len(self.active_participants) > 1:
-                advancing_names = [p.name for p in self.active_participants]
-                print(f"\nEnd of Round {self.current_round}: {len(self.active_participants)} participants advance to next round: {', '.join(advancing_names)}")
+            advancing_names = [p.name for p in self.active_participants]
+            if self._should_stop_tournament():
+                # Tournament complete
+                print(f"\nEnd of Round {self.current_round}: Tournament complete! {len(self.active_participants)} participants advance to round-robin: {', '.join(advancing_names)}")
             else:
-                # Final round - tournament complete
-                winner = self.active_participants[0]
-                print(f"\nEnd of Round {self.current_round}: Tournament complete! Winner: {winner.name}")
+                # More rounds to come
+                print(f"\nEnd of Round {self.current_round}: {len(self.active_participants)} participants advance to next round: {', '.join(advancing_names)}")
             
             logger.info(f"Round {self.current_round} complete. {len(self.active_participants)} participants remain")
         
-        # Tournament complete
-        winner = self.active_participants[0]
-        logger.info(f"Tournament complete! Winner: {winner.name}")
+        # Tournament complete - all remaining participants are winners
+        winners = self.active_participants
+        logger.info(f"Tournament complete! {len(winners)} participants advance: {[p.name for p in winners]}")
         
-        # Return participants in elimination order (winner last)
-        elimination_order = self.eliminated_participants + [winner]
+        elimination_order = self.eliminated_participants + winners
         return elimination_order
+    
+    def _should_stop_tournament(self) -> bool:
+        """Determine if the tournament should stop based on remaining participants and top_k setting."""
+        if self.top_k is not None and self.top_k > 1:
+            # Stop when we have <= k participants remaining
+            return len(self.active_participants) <= self.top_k
+        else:
+            # Default behavior: continue until 1 winner remains
+            return len(self.active_participants) <= 1
     
     def _get_games_for_round(self) -> int:
         """Determine number of games for current round."""
