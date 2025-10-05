@@ -18,7 +18,6 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import (
     Winner, 
     winner_to_color, 
-    get_policy_probs_from_logits, 
     temperature_scaled_softmax, 
     ValuePredictor,
     policy_logits_to_probs,

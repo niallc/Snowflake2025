@@ -60,7 +60,8 @@ from hex_ai.inference.mcts_utils import (
     should_enable_detailed_exploration,
     create_exploration_step_info,
     add_detailed_exploration_to_tree_data,
-    calculate_temperature_scaled_probs,
+    calculate_visit_count_probs,
+    calculate_policy_probs,
     select_move_index
 )
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
@@ -888,8 +889,8 @@ class BaselineMCTS:
         timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
         
         # Compute results directly
-        move, temperature_scaled_probs = self._compute_move(root, root_state, verbose)
-        tree_data = self.get_tree_data(root, temperature_scaled_probs)
+        move, move_probs = self._compute_move(root, root_state, verbose)
+        tree_data = self.get_tree_data(root, move_probs)
         win_probability = self.get_win_probability(root, root_state)
         
         # Create base stats
@@ -923,18 +924,18 @@ class BaselineMCTS:
 
     # ---------- Data Access (Getters) ----------
     
-    def get_tree_data(self, root: MCTSNode, temperature_scaled_probs: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    def get_tree_data(self, root: MCTSNode, move_probs: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
         Get formatted tree data for API consumption.
         
         Args:
             root: Root node of the MCTS tree
-            temperature_scaled_probs: Temperature-scaled probabilities for all legal moves
+            move_probs: Move probabilities for all legal moves (policy or temperature-scaled)
         
         Returns:
             Dictionary containing formatted tree data for API consumption
         """
-        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH, temperature_scaled_probs)
+        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH, move_probs)
         
         # Add detailed exploration data if available
         tree_data = add_detailed_exploration_to_tree_data(
@@ -1331,37 +1332,7 @@ class BaselineMCTS:
 
             node = root
             path: List[Tuple[MCTSNode, int]] = []
-            
-            # Record descent start for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root visit count
-                root_visits = int(np.sum(root.N)) if root.N is not None else 0
-                # Check if Gumbel is forcing actions
-                gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
-                # Get PV hint (first 2-3 moves)
-                pv_hint = None
-                if root.is_expanded and len(root.children) > 0:
-                    pv_moves = []
-                    current = root
-                    for _ in range(3):  # Get up to 3 moves
-                        if current.is_expanded and len(current.children) > 0:
-                            best_child_idx = int(np.argmax(current.N))
-                            if best_child_idx < len(current.legal_moves):
-                                r, c = current.legal_moves[best_child_idx]
-                                # TODO: Investigate why we have this literal '97' (should we use move_to_index?)
-                                pv_moves.append(f"{chr(97 + c)}{r + 1}")
-                                current = current.children[best_child_idx]
-                                if current is None:
-                                    break
-                        else:
-                            break
-                    if pv_moves:
-                        pv_hint = pv_moves
-                
-                self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
-            
-
-
+                    
             # Gumbel specific code path: Pop the forced action for THIS descent (if any)
             forced_a_full = force_q.popleft() if force_q else None
             
@@ -1463,11 +1434,36 @@ class BaselineMCTS:
                         r, c = node.legal_moves[loc_idx]
                         move_str = f"{chr(97 + c)}{r + 1}"
                         self._record_node_realized(child.depth, move_str, child.state_hash)
-                    
-
 
                 node = child
 
+            # Record descent start for detailed exploration
+            if self.detailed_exploration_enabled:
+                # Get root visit count
+                root_visits = int(np.sum(root.N)) if root.N is not None else 0
+                # Check if Gumbel is forcing actions
+                gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
+                # Get PV hint (first 2-3 moves)
+                pv_hint = None
+                if root.is_expanded and len(root.children) > 0:
+                    pv_moves = []
+                    current = root
+                    for _ in range(3):  # Get up to 3 moves
+                        if current.is_expanded and len(current.children) > 0:
+                            best_child_idx = int(np.argmax(current.N))
+                            if best_child_idx < len(current.legal_moves):
+                                r, c = current.legal_moves[best_child_idx]
+                                # TODO: Investigate why we have this literal '97' (should we use move_to_index?)
+                                pv_moves.append(f"{chr(97 + c)}{r + 1}")
+                                current = current.children[best_child_idx]
+                                if current is None:
+                                    break
+                        else:
+                            break
+                    if pv_moves:
+                        pv_hint = pv_moves
+                
+                self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
                 # Outer budget guard (kept from original)
                 if len(leaves) >= select_budget:
                     break
@@ -1768,9 +1764,10 @@ class BaselineMCTS:
             selected_move = root.legal_moves[selected_action]
             if verbose >= 2:
                 print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
-            # For Gumbel selection, create temperature-scaled probabilities from visit counts
-            temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
-            return selected_move, temperature_scaled_probs
+            # For Gumbel selection, use policy probabilities (not temperature-scaled visit counts)
+            # since Gumbel doesn't use visit counts for selection
+            move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
+            return selected_move, move_probs
         
         # Check if a terminal move was found during pre-check
         if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
@@ -1780,8 +1777,8 @@ class BaselineMCTS:
                 if verbose >= 2:
                     print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
                 # For terminal moves, create temperature-scaled probabilities from visit counts
-                temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
-                return terminal_move, temperature_scaled_probs
+                move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
+                return terminal_move, move_probs
 
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
@@ -1797,12 +1794,12 @@ class BaselineMCTS:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
         
-        # Create temperature-scaled probabilities for all moves (for debugging/analysis)
-        temperature_scaled_probs = calculate_temperature_scaled_probs(root, root_state, self.cfg)
+        # Create temperature-scaled probabilities from visit counts (for debugging/analysis)
+        move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
         
         # Select move using the same logic as the utility function
         a_idx = select_move_index(counts, temp, self.cfg)
-        return root.legal_moves[a_idx], temperature_scaled_probs
+        return root.legal_moves[a_idx], move_probs
 
 
     # ---------- Internal Implementation ----------

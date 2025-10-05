@@ -144,7 +144,7 @@ def gumbel_alpha_zero_root_batched(
     # Setup phase timing
     setup_start = time.perf_counter()
     
-    # CRITICAL FIX: Validate that legal_actions are actually legal at current root state
+    # Validate that legal_actions are actually legal at current root state
     # This prevents Gumbel from selecting actions that became illegal due to state changes
     current_legal_indices = set(root.legal_indices)
     validated_legal_actions = [a for a in legal_actions if a in current_legal_indices]
@@ -155,7 +155,13 @@ def gumbel_alpha_zero_root_batched(
         
         # If no actions remain valid, this is a critical error
         if not validated_legal_actions:
-            raise RuntimeError(f"All Gumbel legal actions became illegal. Root state may have changed unexpectedly.")
+            raise RuntimeError(
+                f"Gumbel legal actions became illegal. "
+                f"Root state may have changed unexpectedly.\n"
+                f"Illegal actions: {illegal_actions}\n"
+                f"Validated legal actions (after filtering): {validated_legal_actions}\n"
+                f"Current legal indices at root: {sorted(current_legal_indices)}"
+            )
         
         # Update legal_actions to only include valid ones
         legal_actions = validated_legal_actions
