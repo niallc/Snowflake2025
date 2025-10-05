@@ -662,7 +662,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
             
             print("="*60)
     
-    return TwoStageTournamentResult(results)
+    return TwoStageTournamentResult(results), tournament.output_dir
 
 
 def main():
@@ -821,14 +821,12 @@ def main():
     
     # Always use the unified 2-stage tournament system
     # If knockout_dir is None, it will skip the knockout stage and go straight to round-robin
-    result = run_two_stage_tournament(args, strategy_configs, model_paths, openings)
+    result, actual_output_dir = run_two_stage_tournament(args, strategy_configs, model_paths, openings)
     
     # Print results using unified analyzer
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-    output_dir = f"{OUTPUT_DIR_PREFIX}{timestamp}"
-    
+    # Use the actual output directory from the tournament, not a new timestamp
     output_files = {
-        "directory": output_dir
+        "directory": actual_output_dir
     }
     
     if script_config:
