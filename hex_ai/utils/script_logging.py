@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_configs, generate_gumbel_summary_from_params
+from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
 
 
 @dataclass
@@ -323,8 +324,6 @@ def _print_tournament_results(results: Any, config: ScriptConfig, output_files: 
     
     # Use existing tournament analysis if available
     if hasattr(results, 'win_rates') and hasattr(results, 'elo_ratings'):
-        from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
-        
         # Extract participant temperatures if available
         participant_temperatures = None
         if isinstance(config.temperatures, dict):
