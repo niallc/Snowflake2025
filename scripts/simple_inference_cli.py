@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.config import TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.value_utils import ValuePerspective, ValuePredictor, Winner, get_policy_probs_from_logits
+from hex_ai.value_utils import ValuePerspective, ValuePredictor, Winner
 from hex_ai.models import TwoHeadedResNet
 
 def main():

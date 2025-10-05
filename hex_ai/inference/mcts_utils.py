@@ -7,6 +7,7 @@ separate from general value processing utilities.
 
 import math
 import numpy as np
+import torch
 from typing import List, Tuple, Dict, Any, Optional
 
 from hex_ai.utils.format_conversion import rowcol_to_trmph
@@ -436,9 +437,8 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     Returns:
         Dictionary mapping move TRMPH strings to policy probabilities
     """
-    # Get the policy logits that were used for Gumbel selection
-    policy_logits_full = mcts_instance._get_policy_logits(root_state)
-    legal_mask = mcts_instance._get_legal_mask(root_state)
+    # Get policy logits and legal mask using the same shared utility as Gumbel
+    policy_logits_full, legal_mask = mcts_instance._get_policy_logits_and_legal_mask(root_state, root_node.legal_indices)
     
     # Convert to probabilities using the same method as Gumbel
     priors_full = mcts_instance._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)

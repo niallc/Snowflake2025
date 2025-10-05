@@ -37,28 +37,17 @@ logger = logging.getLogger(__name__)
 # Tournament directory naming patterns
 # These regex patterns are used to identify and parse tournament directories
 TOURNAMENT_PATTERNS = {
-    # Pattern: deterministic_tournament_YYYYMMDD_HHMM
-    # Example: deterministic_tournament_20250908_1625
-    'deterministic': {
-        'pattern': re.compile(r'deterministic_tournament_(\d{8})_(\d{4})'),
-        'date_format': '%Y%m%d_%H%M',
-        'description': 'Deterministic tournament directories with full timestamp'
-    },
-    
-    # Pattern: tournament_*games_*models_YYMMDD_HH
-    # Example: tournament_50games_2models_250908_09
-    'tournament': {
-        'pattern': re.compile(r'tournament_.*_(\d{6})_(\d{2})'),
-        'date_format': '%Y%m%d_%H%M',  # Will be converted from YYMMDD to YYYYMMDD
-        'description': 'General tournament directories with abbreviated date'
+    # Pattern: two_stage_tournament_YYYYMMDD_HHMMSS
+    # Example: two_stage_tournament_20251004_155127
+    'two_stage': {
+        'pattern': re.compile(r'two_stage_tournament_(\d{8})_(\d{6})'),
+        'date_format': '%Y%m%d_%H%M%S',
+        'description': 'Two-stage tournament directories with full timestamp including seconds'
     }
 }
 
 # File extensions to look for
 TRMPH_EXTENSION = '.trmph'
-
-# Default date assumptions
-DEFAULT_CENTURY_PREFIX = '20'  # For YYMMDD -> YYYYMMDD conversion
 
 # Validation settings
 MIN_TOURNAMENT_DIRS_FOR_WARNING = 5  # Warn if fewer than this many tournament dirs found
@@ -88,15 +77,9 @@ def parse_tournament_date_from_dirname(dirname: str) -> Optional[datetime]:
         match = pattern.match(dirname)
         if match:
             try:
-                if pattern_name == 'tournament':
-                    # Handle abbreviated date format (YYMMDD -> YYYYMMDD)
-                    date_str, hour_str = match.groups()
-                    full_date_str = f"{DEFAULT_CENTURY_PREFIX}{date_str}"
-                    date_time_str = f"{full_date_str}_{hour_str}00"
-                else:
-                    # Handle full date format
-                    date_str, time_str = match.groups()
-                    date_time_str = f"{date_str}_{time_str}"
+                # Handle full date format for two_stage pattern
+                date_str, time_str = match.groups()
+                date_time_str = f"{date_str}_{time_str}"
                 
                 return datetime.strptime(date_time_str, date_format)
                 
@@ -141,12 +124,8 @@ def validate_tournament_patterns() -> List[str]:
                 errors.append(f"Pattern '{pattern_name}' has invalid date format '{date_format}': {e}")
             
             # Test that the pattern has the expected number of groups
-            if pattern_name == 'deterministic':
-                if pattern.groups != 2:
-                    errors.append(f"Pattern '{pattern_name}' should have 2 groups (date, time), but has {pattern.groups}")
-            elif pattern_name == 'tournament':
-                if pattern.groups != 2:
-                    errors.append(f"Pattern '{pattern_name}' should have 2 groups (date, hour), but has {pattern.groups}")
+            if pattern.groups != 2:
+                errors.append(f"Pattern '{pattern_name}' should have 2 groups (date, time), but has {pattern.groups}")
                     
         except Exception as e:
             errors.append(f"Error validating pattern '{pattern_name}': {e}")
@@ -325,10 +304,9 @@ def test_tournament_patterns_with_examples() -> Dict[str, List[str]]:
     # Example directory names for testing
     # Add your actual directory names here to test the patterns
     test_examples = [
-        "deterministic_tournament_20250908_1625",
-        "deterministic_tournament_20250903_0750", 
-        "tournament_50games_2models_250908_09",
-        "tournament_400games_3models_250907_01",
+        "two_stage_tournament_20251004_155127",
+        "two_stage_tournament_20251004_150537",
+        "two_stage_tournament_20251004_125408",
         "not_a_tournament_dir",
         "some_other_directory",
     ]

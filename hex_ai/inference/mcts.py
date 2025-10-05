@@ -1059,16 +1059,8 @@ class BaselineMCTS:
         board_size = int(root.state.get_board_tensor().shape[-1])
         action_size = board_size * board_size
         
-        # Get the full policy logits from cache or re-evaluate
-        cached = self._get_from_cache(root.state_hash)
-        if cached is not None:
-            policy_logits_full, _ = cached
-        else:
-            # Re-evaluate to get full tensor logits
-            root_enc = root.state.get_board_tensor().to(dtype=torch.float32)
-            batch = torch.stack([root_enc], dim=0)
-            policy_cpu, _, _ = self.model.infer_timed(batch)
-            policy_logits_full = policy_cpu[0].numpy()
+        # Get policy logits and legal mask using shared utility
+        policy_logits_full, legal_mask = self._get_policy_logits_and_legal_mask(root.state, root.legal_indices)
         
         timing_tracker.end_timing("gumbel_policy_retrieval")
         
@@ -1078,12 +1070,6 @@ class BaselineMCTS:
         # Compute shared values once using helper methods
         move_idx = len(root.state.move_history)
         tau = self._root_temperature(move_idx) if self.cfg.gumbel_temperature_enabled else 1.0
-        
-        # Create legal mask for full action space
-        board_size = int(root.state.get_board_tensor().shape[-1])
-        action_size = board_size * board_size
-        legal_mask = np.zeros(action_size, dtype=bool)
-        legal_mask[root.legal_indices] = True
         
         # Get priors WITHOUT Dirichlet noise for Gumbel
         # Gumbel has its own inherent randomness, so we don't add artificial Dirichlet noise
@@ -1212,6 +1198,39 @@ class BaselineMCTS:
             temperature_step_values=self.cfg.temperature_step_values,
             move_count=move_idx,
         )
+
+    def _get_policy_logits_and_legal_mask(self, root_state: HexGameState, legal_indices: List[int]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get policy logits and legal mask for a given state.
+        
+        This is a shared utility used by both Gumbel selection and policy probability calculation.
+        
+        Args:
+            root_state: Game state to get policy for
+            legal_indices: List of legal action indices
+            
+        Returns:
+            Tuple of (policy_logits_full, legal_mask)
+        """
+        board_size = int(root_state.get_board_tensor().shape[-1])
+        action_size = board_size * board_size
+        
+        # Create legal mask
+        legal_mask = np.zeros(action_size, dtype=bool)
+        legal_mask[legal_indices] = True
+        
+        # Get policy logits from cache or re-evaluate
+        cached = self._get_from_cache(root_state.state_hash)
+        if cached is not None:
+            policy_logits_full, _ = cached
+        else:
+            # Re-evaluate to get full tensor logits
+            root_enc = root_state.get_board_tensor().to(dtype=torch.float32)
+            batch = torch.stack([root_enc], dim=0)
+            policy_cpu, _, _ = self.model.infer_timed(batch)
+            policy_logits_full = policy_cpu[0].numpy()
+        
+        return policy_logits_full, legal_mask
 
     def _root_priors_from_logits(
         self,

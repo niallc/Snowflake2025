@@ -22,7 +22,6 @@ from hex_ai.value_utils import (
     ValuePerspective,
     winner_to_color,
     ValuePredictor,
-    get_policy_probs_from_logits,
     temperature_scaled_softmax,
     # Add new utilities
     policy_logits_to_probs,
