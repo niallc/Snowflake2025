@@ -129,6 +129,8 @@ class TournamentPlayConfig:
     Temperature can be either:
     - A single float: applies to all participants
     - A list of floats: applies to participants in order (must match number of participants)
+    
+    Command line is stored for reproducibility and debugging purposes.
     """
     def __init__(
         self,
@@ -138,7 +140,8 @@ class TournamentPlayConfig:
         swap_threshold: float = 0.5,
         strategy: str = "policy",
         strategy_config: Optional[Dict[str, Any]] = None,
-        participant_temperatures: Optional[Dict[str, float]] = None
+        participant_temperatures: Optional[Dict[str, float]] = None,
+        command_line: Optional[str] = None
     ):
         self.temperature = temperature
         self.participant_temperatures = participant_temperatures or {}
@@ -150,6 +153,7 @@ class TournamentPlayConfig:
         self.swap_threshold = swap_threshold  # Red swaps if Blue's win prob >= this threshold
         self.strategy = strategy
         self.strategy_config = strategy_config or {}
+        self.command_line = command_line
         random.seed(random_seed)
         np.random.seed(random_seed)
     

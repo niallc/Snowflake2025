@@ -71,7 +71,7 @@ from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.utils.gumbel_validation import validate_gumbel_configurations, print_gumbel_warnings, check_gumbel_configurations
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config
+from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.format_conversion import (
@@ -294,11 +294,14 @@ Examples:
   
   # Compare same strategy with different temperatures
   %(prog)s --models=current_best,current_best --strategies=policy,policy --temperatures=0.1,1.0 --num-openings=100
+  
+  # Use single model for multiple strategies (convenience feature)
+  %(prog)s --models=current_best --strategies=policy,mcts,mcts --mcts-sims=100,200 --num-openings=100
         """
     )
     
     parser.add_argument('--models', type=str,
-                       help='Comma-separated list of model registry names (e.g., "current_best,model1,model2")')
+                       help='Comma-separated list of model registry names (e.g., "current_best,model1,model2"). If only one model is provided, it will be used for all strategies.')
     parser.add_argument('--model-files', type=str,
                        help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz")')
     parser.add_argument('--model-dirs', type=str,
@@ -409,10 +412,20 @@ def parse_model_specifications(args, strategy_names):
         # Use model registry names
         model_names = [name.strip() for name in args.models.split(',')]
         
-        # Validate that we have the same number of models and strategies (only if both are specified)
-        if strategy_names and len(model_names) != len(strategy_names):
-            print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
-            sys.exit(1)
+        # Use existing utility for consistency with other parameters
+        # This handles single value replication and validation automatically
+        original_model_names = model_names.copy()
+        model_names = to_list_if_needed(
+            model_names, 
+            len(strategy_names),
+            parameter_name="models",
+            original_values=original_model_names,
+            strategy_names=strategy_names
+        )
+        
+        # Show info message if single model was replicated
+        if len([name.strip() for name in args.models.split(',')]) == 1 and len(strategy_names) > 1:
+            print(f"INFO: Using single model '{model_names[0]}' for all {len(strategy_names)} strategies")
         
         # Validate model paths using registry
         model_paths = []

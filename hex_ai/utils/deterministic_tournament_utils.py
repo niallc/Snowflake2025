@@ -75,7 +75,8 @@ def create_play_config_for_pair(
     strategy_a: StrategyConfig, 
     strategy_b: StrategyConfig, 
     temperature: float, 
-    seed: Optional[int]
+    seed: Optional[int],
+    command_line: Optional[str] = None
 ) -> TournamentPlayConfig:
     """
     Create a TournamentPlayConfig for a strategy pair.
@@ -85,6 +86,7 @@ def create_play_config_for_pair(
         strategy_b: Second strategy configuration
         temperature: Global temperature fallback
         seed: Random seed
+        command_line: Command line that was used to run the tournament
         
     Returns:
         TournamentPlayConfig for the pair
@@ -104,7 +106,8 @@ def create_play_config_for_pair(
         random_seed=seed,
         pie_rule=False,  # Deterministic tournaments don't use pie rule
         strategy="deterministic",
-        participant_temperatures=participant_temperatures
+        participant_temperatures=participant_temperatures,
+        command_line=command_line
     )
 
 

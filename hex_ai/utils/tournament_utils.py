@@ -363,6 +363,9 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     temperatures = None
     if args.temperatures:
         temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
+    elif hasattr(args, 'temperature') and args.temperature is not None:
+        # Use global temperature as default for all strategies
+        temperatures = args.temperature
     
     return {
         'mcts_sims': mcts_sims,

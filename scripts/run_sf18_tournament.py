@@ -57,14 +57,14 @@ from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config
+from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_to_moves
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.deterministic_tournament_utils import (
     setup_tournament_output,
@@ -454,7 +454,8 @@ def run_sf18_tournament(
     temperature: float = DEFAULT_TEMPERATURE,
     verbose: int = DEFAULT_VERBOSE,
     seed: Optional[int] = None,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    command_line: str = None
 ) -> SF18TournamentResult:
     """
     Run a tournament between SF25 models and SF18 AI.
@@ -468,6 +469,7 @@ def run_sf18_tournament(
         verbose: Verbosity level
         seed: Random seed for reproducibility
         output_dir: Output directory for tournament files
+        command_line: Command line that was used to run the tournament
         
     Returns:
         SF18TournamentResult with tournament results
@@ -498,7 +500,7 @@ def run_sf18_tournament(
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_config, sf18_player)
         
         # Write TRMPH header
-        play_config = create_play_config_for_pair(strategy_config, sf18_player, temperature, seed)
+        play_config = create_play_config_for_pair(strategy_config, sf18_player, temperature, seed, command_line)
         pair_model_paths = [strategy_config.model_path, "SF18"]
         pair_strategy_configs = [strategy_config, sf18_player]
         actual_trmph_file = write_tournament_trmph_header(
@@ -537,10 +539,6 @@ def run_sf18_tournament(
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner'][0], actual_trmph_file)
             append_trmph_winner_line(result_2['trmph_str'], result_2['winner'][0], actual_trmph_file)
             
-            if verbose >= 1:
-                print(f"    Game 1: {result_1['winner_strategy']} wins")
-                print(f"    Game 2: {result_2['winner_strategy']} wins")
-        
         # Report results for this model
         print()
         print(f"Results for {strategy_config.name}:")
@@ -642,10 +640,20 @@ def parse_model_specifications(args, strategy_names):
         # Use model registry names
         model_names = [name.strip() for name in args.models.split(',')]
         
-        # Validate that we have the same number of models and strategies
-        if len(model_names) != len(strategy_names):
-            print(f"ERROR: Number of models ({len(model_names)}) must match number of strategies ({len(strategy_names)})")
-            sys.exit(1)
+        # Use existing utility for consistency with other parameters
+        # This handles single value replication and validation automatically
+        original_model_names = model_names.copy()
+        model_names = to_list_if_needed(
+            model_names, 
+            len(strategy_names),
+            parameter_name="models",
+            original_values=original_model_names,
+            strategy_names=strategy_names
+        )
+        
+        # Show info message if single model was replicated
+        if len(original_model_names) == 1 and len(strategy_names) > 1:
+            print(f"INFO: Using single model '{model_names[0]}' for all {len(strategy_names)} strategies")
         
         # Validate model paths using registry
         model_paths = []
@@ -774,6 +782,13 @@ def create_strategy_configurations(args, strategy_names, model_paths):
 def main():
     args = parse_args()
     
+    # Get command line early - crash if not available
+    try:
+        command_line = get_command_line()
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    
     # Generate seed if none provided
     if args.seed is None:
         args.seed = int(time.time())
@@ -869,7 +884,8 @@ def main():
         openings=openings,
         temperature=args.temperature,
         verbose=args.verbose,
-        seed=args.seed
+        seed=args.seed,
+        command_line=command_line
     )
     
     # Print results

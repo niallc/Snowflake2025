@@ -191,12 +191,12 @@ def create_unified_config_from_args(
     # Create parameter configurations
     mcts_sims_config = TournamentParameterConfig(
         default_value=200,  # Default MCTS simulations
-        per_strategy_values=_to_list_if_needed(mcts_sims, num_strategies)
+        per_strategy_values=to_list_if_needed(mcts_sims, num_strategies)
     )
     
     temperatures_config = TournamentParameterConfig(
         default_value=0.0,  # Default temperature
-        per_strategy_values=_to_list_if_needed(temperatures, num_strategies)
+        per_strategy_values=to_list_if_needed(temperatures, num_strategies)
     )
     
     # Optional parameter configurations
@@ -204,56 +204,56 @@ def create_unified_config_from_args(
     if batch_sizes is not None:
         batch_sizes_config = TournamentParameterConfig(
             default_value=64,  # Default batch size
-            per_strategy_values=_to_list_if_needed(batch_sizes, num_strategies)
+            per_strategy_values=to_list_if_needed(batch_sizes, num_strategies)
         )
     
     c_pucts_config = None
     if c_pucts is not None:
         c_pucts_config = TournamentParameterConfig(
             default_value=1.5,  # Default C_PUCT
-            per_strategy_values=_to_list_if_needed(c_pucts, num_strategies)
+            per_strategy_values=to_list_if_needed(c_pucts, num_strategies)
         )
     
     enable_gumbel_config = None
     if enable_gumbel is not None:
         enable_gumbel_config = TournamentParameterConfig(
             default_value=False,  # Default Gumbel disabled
-            per_strategy_values=_to_list_if_needed(enable_gumbel, num_strategies)
+            per_strategy_values=to_list_if_needed(enable_gumbel, num_strategies)
         )
     
     gumbel_sim_thresholds_config = None
     if gumbel_sim_thresholds is not None:
         gumbel_sim_thresholds_config = TournamentParameterConfig(
             default_value=200,  # Default Gumbel threshold
-            per_strategy_values=_to_list_if_needed(gumbel_sim_thresholds, num_strategies)
+            per_strategy_values=to_list_if_needed(gumbel_sim_thresholds, num_strategies)
         )
     
     gumbel_candidate_log_bases_config = None
     if gumbel_candidate_log_bases is not None:
         gumbel_candidate_log_bases_config = TournamentParameterConfig(
             default_value=1.5,  # Default log base
-            per_strategy_values=_to_list_if_needed(gumbel_candidate_log_bases, num_strategies)
+            per_strategy_values=to_list_if_needed(gumbel_candidate_log_bases, num_strategies)
         )
     
     gumbel_candidate_log_offsets_config = None
     if gumbel_candidate_log_offsets is not None:
         gumbel_candidate_log_offsets_config = TournamentParameterConfig(
             default_value=-1.5,  # Default log offset
-            per_strategy_values=_to_list_if_needed(gumbel_candidate_log_offsets, num_strategies)
+            per_strategy_values=to_list_if_needed(gumbel_candidate_log_offsets, num_strategies)
         )
     
     gumbel_progressive_widening_config = None
     if gumbel_progressive_widening is not None:
         gumbel_progressive_widening_config = TournamentParameterConfig(
             default_value=False,  # Default progressive widening disabled
-            per_strategy_values=_to_list_if_needed(gumbel_progressive_widening, num_strategies)
+            per_strategy_values=to_list_if_needed(gumbel_progressive_widening, num_strategies)
         )
     
     gumbel_batch_scaling_factors_config = None
     if gumbel_batch_scaling_factors is not None:
         gumbel_batch_scaling_factors_config = TournamentParameterConfig(
             default_value=1.0,  # Default scaling factor
-            per_strategy_values=_to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
+            per_strategy_values=to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
         )
     
     return UnifiedTournamentConfig(
@@ -276,19 +276,30 @@ def create_unified_config_from_args(
     )
 
 
-def _to_list_if_needed(value: Optional[Union[Any, List[Any]]], num_strategies: int) -> Optional[List[Any]]:
+def to_list_if_needed(
+    value: Optional[Union[Any, List[Any]]], 
+    num_strategies: int,
+    parameter_name: str = "parameter",
+    original_values: Optional[List[Any]] = None,
+    strategy_names: Optional[List[str]] = None,
+    exit_on_error: bool = True
+) -> Optional[List[Any]]:
     """
     Convert a single value to a list if needed, or return None if value is None.
     
     Args:
         value: Single value or list of values
         num_strategies: Number of strategies (used for validation)
+        parameter_name: Name of the parameter for error messages (e.g., "models", "mcts_sims")
+        original_values: Original values before processing (for error display)
+        strategy_names: List of strategy names (for error display)
+        exit_on_error: Whether to call sys.exit(1) on validation error (default: True)
     
     Returns:
         List of values or None
     
     Raises:
-        ValueError: If list length doesn't match number of strategies
+        ValueError: If list length doesn't match number of strategies and exit_on_error=False
     """
     if value is None:
         return None
@@ -298,7 +309,20 @@ def _to_list_if_needed(value: Optional[Union[Any, List[Any]]], num_strategies: i
             # Single value in list - apply to all strategies
             return [value[0]] * num_strategies
         elif len(value) != num_strategies:
-            raise ValueError(f"List length ({len(value)}) must match number of strategies ({num_strategies})")
+            error_msg = f"List length ({len(value)}) must match number of strategies ({num_strategies})"
+            if original_values is not None:
+                error_msg += f"\n  Provided {parameter_name}: {original_values}"
+            if strategy_names is not None:
+                error_msg += f"\n  Strategies: {strategy_names}"
+            error_msg += f"\n  Tip: You can provide a single {parameter_name} to use for all strategies"
+            
+            if exit_on_error:
+                print(f"ERROR: {error_msg}")
+                import sys
+                sys.exit(1)
+            else:
+                raise ValueError(error_msg)
         return value
+    else:
         # Single value - apply to all strategies
         return [value] * num_strategies

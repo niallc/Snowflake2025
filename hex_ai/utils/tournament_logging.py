@@ -1,10 +1,34 @@
 import os
+import sys
 from pathlib import Path
 import csv
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from hex_ai.file_utils import validate_output_directory
 from hex_ai.system_utils import get_git_commit_info
+
+def get_command_line() -> str:
+    """
+    Get the command line that was used to run the current script.
+    
+    Returns:
+        The command line as a string
+        
+    Raises:
+        RuntimeError: If command line information is not available
+    """
+    if len(sys.argv) < 1:
+        raise RuntimeError("Command line information is not available (sys.argv is empty)")
+    
+    # Join all arguments with spaces, but wrap in quotes if they contain spaces
+    cmd_parts = []
+    for arg in sys.argv:
+        if ' ' in arg:
+            cmd_parts.append(f'"{arg}"')
+        else:
+            cmd_parts.append(arg)
+    
+    return ' '.join(cmd_parts)
 
 def find_available_filename(base_path: str) -> str:
     """
@@ -40,7 +64,7 @@ def find_available_filename(base_path: str) -> str:
         index += 1
 
 def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, Any], 
-                      random_seed: Optional[int] = None):
+                      random_seed: Optional[int] = None, command_line: str = None):
     """
     Write a generic header to a .trmph file.
     
@@ -49,6 +73,7 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         header_type: Type of header (e.g., "Self-play games", "Tournament games")
         metadata: Dictionary of metadata to include in header
         random_seed: Random seed to include (if provided)
+        command_line: Command line to include (required)
     """
     output_path = Path(trmph_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +91,11 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         # Write random seed if provided
         if random_seed is not None:
             f.write(f"# Random seed: {random_seed}\n")
+        
+        # Write command line - crash if not provided
+        if command_line is None:
+            raise RuntimeError("Command line must be provided to write_trmph_header - this indicates a bug in the calling code")
+        f.write(f"# Command: {command_line}\n")
         
         f.write(f"# Git commit: {git_info['status']}\n")
         f.write("# Format: trmph_string winner\n")
@@ -92,7 +122,7 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         trmph_file: Path to the .trmph file
         checkpoint_paths: List of checkpoint file paths
         num_games: Number of games per pair
-        play_config: TournamentPlayConfig object
+        play_config: TournamentPlayConfig object (contains command line and other metadata)
         board_size: Board size (default 13)
         player_labels: List of player labels (for duplicate model support)
         participant_temperatures: Dict mapping player labels to their temperatures
@@ -176,7 +206,7 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
             metadata[key] = value
     
     # Use generic header writer
-    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed)
+    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed, play_config.command_line)
     
     return actual_file_path
 
