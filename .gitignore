@@ -25,6 +25,7 @@ write_ups/
 gemini
 exclude_files.txt
 
+sf18_tournament_results*
 dead_code_analysis_log.json
 
 docs/data_weights_explanation.md

@@ -1,0 +1,15 @@
+Slightly more formal record of all SF'25 vs SF'18 games. 
+
+Mon Oct 6th
+Setup 
+  git: 23fe5d065
+  model: pipeline_20251003_205950, epoch22_mini19
+  MCTS: Gumbel, 27 sims, temp = 1.01 (other consts as in the code)
+  Compute: SF'25 <20ms / move, SF'18 ~1000ms.
+
+1.
+ a. SF'25 (blue, taking a3)
+ b. 
+
+ Game records
+ 1a: a3i5d10e6f6e8c9c10b10d7c7d5f8e9e5c8f9e10f10g11h9i10h11h10f11f5h5i3i4j3j4k3g4g5h4f3h2g3h3i1g7g6h6f12e12e13d13h1g2g1f2f1e2e1d2d1c2c1a2b12b2c12a1
