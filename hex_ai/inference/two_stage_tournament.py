@@ -40,7 +40,8 @@ class TwoStageTournament:
                  games_per_match: int = 50,
                  top_k: int = 2,
                  round_robin_games: int = 100,
-                 epoch_range: Optional[Tuple[int, int]] = None):
+                 epoch_range: Optional[Tuple[int, int]] = None,
+                 command_line: Optional[str] = None):
         """
         Initialize the two-stage tournament.
         
@@ -52,6 +53,7 @@ class TwoStageTournament:
             top_k: Number of winners from knockout stage to advance
             round_robin_games: Number of games per round-robin match
             epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints
+            command_line: Command line that was used to run the tournament
         """
         self.knockout_dir = knockout_dir
         self.knockout_config = knockout_config or self._get_default_knockout_config()
@@ -60,6 +62,7 @@ class TwoStageTournament:
         self.top_k = top_k
         self.round_robin_games = round_robin_games
         self.epoch_range = epoch_range
+        self.command_line = command_line
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
@@ -186,7 +189,8 @@ class TwoStageTournament:
             temperature=self.knockout_config.get("temperature", 1.0),
             verbose=1,
             seed=None,
-            output_dir=self.output_dir  # Use the same output directory as knockout stage
+            output_dir=self.output_dir,  # Use the same output directory as knockout stage
+            command_line=self.command_line
         )
         
         # Extract ranking from tournament results

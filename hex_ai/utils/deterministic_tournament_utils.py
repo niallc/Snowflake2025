@@ -76,7 +76,7 @@ def create_play_config_for_pair(
     strategy_b: StrategyConfig, 
     temperature: float, 
     seed: Optional[int],
-    command_line: Optional[str] = None
+    command_line: str
 ) -> TournamentPlayConfig:
     """
     Create a TournamentPlayConfig for a strategy pair.
@@ -100,6 +100,7 @@ def create_play_config_for_pair(
     
     # Use the first strategy's temperature as the global temperature for the play config
     global_temp = strategy_a.temperature if strategy_a.temperature is not None else temperature
+    
     
     return TournamentPlayConfig(
         temperature=global_temp,

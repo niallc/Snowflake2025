@@ -78,7 +78,7 @@ from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_to_moves
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
+from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.deterministic_tournament_utils import (
     setup_tournament_output,
@@ -561,7 +561,7 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     return strategy_configs
 
 
-def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
+def run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line):
     """
     Run a 2-stage tournament: knockout elimination followed by round-robin.
     
@@ -570,6 +570,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
         strategy_configs: Strategy configurations for round-robin stage
         model_paths: Model paths for round-robin stage
         openings: Opening positions for the tournament
+        command_line: Command line that was used to run the tournament
         
     Returns:
         Tournament result object
@@ -620,7 +621,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
         games_per_match=args.games_per_match,
         top_k=args.top_k,
         round_robin_games=args.round_robin_games,
-        epoch_range=epoch_range
+        epoch_range=epoch_range,
+        command_line=command_line
     )
     
     print("Running 2-stage tournament...")
@@ -680,6 +682,13 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings):
 
 def main():
     args = parse_args()
+    
+    # Get command line early - crash if not available
+    try:
+        command_line = get_command_line()
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
     
     # Generate seed if none provided, or use provided seed
     if args.seed is None:
@@ -834,7 +843,7 @@ def main():
     
     # Always use the unified 2-stage tournament system
     # If knockout_dir is None, it will skip the knockout stage and go straight to round-robin
-    result, actual_output_dir = run_two_stage_tournament(args, strategy_configs, model_paths, openings)
+    result, actual_output_dir = run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line)
     
     # Print results using unified analyzer
     # Use the actual output directory from the tournament, not a new timestamp

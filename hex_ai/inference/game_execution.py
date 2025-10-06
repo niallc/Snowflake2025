@@ -489,7 +489,8 @@ def run_round_robin_tournament(
     temperature: float = DEFAULT_TEMPERATURE,
     verbose: int = DEFAULT_VERBOSE,
     seed: Optional[int] = None,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    command_line: str = None
 ) -> DeterministicTournamentResult:
     """
     Run a round-robin tournament using pre-generated opening positions.
@@ -542,7 +543,7 @@ def run_round_robin_tournament(
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
         
         # Create play configuration
-        play_config = create_play_config_for_pair(strategy_a, strategy_b, temperature, seed)
+        play_config = create_play_config_for_pair(strategy_a, strategy_b, temperature, seed, command_line)
         
         # Write TRMPH header
         pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
