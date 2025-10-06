@@ -94,6 +94,8 @@ python scripts/run_sf18_tournament.py \
 - `--sf18-server-url`: SF18 server URL (default: http://localhost:8088)
 - `--sf18-timeout`: Request timeout in seconds (default: 30)
 
+**Note**: The system includes a configurable delay between SF18 server requests (default: 0 seconds for local servers). This can be increased for remote/internet servers by modifying `SF18_REQUEST_DELAY` in `hex_ai/inference/sf18_client.py`.
+
 ### Opening Arguments
 
 - `--num-openings`: Number of openings to generate (default: 100)

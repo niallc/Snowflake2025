@@ -100,7 +100,7 @@ DEFAULT_SF18_DIFFICULTY = 9
 DEFAULT_SF18_SERVER_URL = "http://localhost:8088"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 TRMPH_FILE_PATTERN = "*.trmph"
-OUTPUT_DIR_PREFIX = "data/tournament_play/sf18_tournament_"
+OUTPUT_DIR_PREFIX = "data/tournament_play/sf18_vs_sf25/sf18_tournament_"
 
 
 class OpeningPosition:
@@ -350,10 +350,11 @@ def play_sf18_vs_sf25_game(
             break
         
         try:
-            if (state.current_player == Player.BLUE and sf25_is_blue) or \
-               (state.current_player == Player.RED and not sf25_is_blue):
+            if (state.current_player_enum == Player.BLUE and sf25_is_blue) or \
+               (state.current_player_enum == Player.RED and not sf25_is_blue):
                 # SF25's turn
-                row, col = sf25_strategy_obj.select_move(state, model_cache, move_config, verbose=verbose)
+                model = model_cache.get_simple_model(sf25_strategy.model_path)
+                row, col = sf25_strategy_obj.select_move(state, model, move_config, verbose=verbose)
             else:
                 # SF18's turn
                 row, col = sf18_player.get_move(state)
@@ -363,7 +364,7 @@ def play_sf18_vs_sf25_game(
             move_count += 1
             
             if verbose >= 2:
-                print(f"  Move {move_count}: {rowcol_to_trmph(row, col, board_size)} by {'SF25' if ((state.current_player == Player.RED and sf25_is_blue) or (state.current_player == Player.BLUE and not sf25_is_blue)) else 'SF18'}")
+                print(f"  Move {move_count}: {rowcol_to_trmph(row, col, board_size)} by {'SF25' if ((state.current_player_enum == Player.RED and sf25_is_blue) or (state.current_player_enum == Player.BLUE and not sf25_is_blue)) else 'SF18'}")
         
         except Exception as e:
             logger.error(f"Error during game play: {e}")
@@ -512,7 +513,7 @@ def run_sf18_tournament(
             print(f"  SF25 Win Rate: {win_rate:.3f}")
         print()
     
-    return result
+    return result, output_dir
 
 
 def parse_args():
@@ -821,7 +822,7 @@ def main():
     print()
     
     # Run the tournament
-    result = run_sf18_tournament(
+    result, output_dir = run_sf18_tournament(
         strategy_configs=strategy_configs,
         sf18_client=sf18_client,
         sf18_difficulty=args.sf18_difficulty,
@@ -834,9 +835,9 @@ def main():
     # Print results
     result.print_results()
     
-    # Save results to file
+    # Save results to file in the tournament output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = f"sf18_tournament_results_{timestamp}.json"
+    results_file = os.path.join(output_dir, f"sf18_tournament_results_{timestamp}.json")
     with open(results_file, 'w') as f:
         json.dump(result.get_summary(), f, indent=2)
     print(f"Results saved to: {results_file}")

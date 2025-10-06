@@ -13,9 +13,13 @@ import logging
 from typing import Optional, Dict, Any, Tuple
 from hex_ai.config import BOARD_SIZE
 from hex_ai.enums import Player
-from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
+from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph, trmph_move_to_rowcol
 
 logger = logging.getLogger(__name__)
+
+# Delay between SF18 server requests (seconds)
+# Set to 0 for local server, increase for remote/internet servers
+SF18_REQUEST_DELAY = 0.0
 
 
 class SF18Client:
@@ -118,11 +122,11 @@ class SF18Client:
         
         # Convert TRMPH move to row, col
         move_trmph = result['move']
-        moves = trmph_to_moves(move_trmph, BOARD_SIZE)
-        if not moves:
-            raise ValueError(f"Invalid move format from SF18: {move_trmph}")
-        
-        return moves[0]  # Return the single move as (row, col)
+        try:
+            row, col = trmph_move_to_rowcol(move_trmph, BOARD_SIZE)
+            return (row, col)
+        except Exception as e:
+            raise ValueError(f"Invalid move format from SF18: {move_trmph} - {e}")
     
     
     def play_complete_game(self, initial_moves: str = "", max_moves: int = 100, 
@@ -151,7 +155,8 @@ class SF18Client:
                 moves += next_move
                 
                 # Small delay to avoid overwhelming the server
-                time.sleep(0.1)
+                if SF18_REQUEST_DELAY > 0:
+                    time.sleep(SF18_REQUEST_DELAY)
                 
             except Exception as e:
                 logger.error(f"Error on move {move_num + 1}: {e}")

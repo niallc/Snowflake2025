@@ -150,10 +150,13 @@ class TwoStageTournament:
         # Run knockout tournament
         elimination_order = knockout_tournament.run_tournament()
         
+        # Get top k winners (last k participants in elimination order)
+        winners = elimination_order[-self.top_k:] if len(elimination_order) >= self.top_k else elimination_order
+        
         return {
             "total_participants": len(participants),
             "elimination_order": [p.name for p in elimination_order],
-            "winners": elimination_order,
+            "winners": winners,
             "tournament_summary": knockout_tournament.get_tournament_summary()
         }
     
