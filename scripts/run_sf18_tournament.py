@@ -341,7 +341,9 @@ def play_sf18_vs_sf25_game(
     # Get strategy object for SF25
     sf25_strategy_obj = get_strategy(sf25_strategy.strategy_type)
     
-    move_count = 0
+    # Track move sequence for TRMPH generation
+    move_sequence = list(opening.moves)  # Start with opening moves
+    move_count = len(opening.moves)
     max_moves = board_size * board_size
     
     # Play the game
@@ -349,51 +351,89 @@ def play_sf18_vs_sf25_game(
         if state.game_over:
             break
         
+        # Show progress for verbose >= 3
+        if verbose >= 3 and move_count % 10 == 0 and move_count > 0:
+            print(f"    Move {move_count}...", end="", flush=True)
+        
         try:
             if (state.current_player_enum == Player.BLUE and sf25_is_blue) or \
                (state.current_player_enum == Player.RED and not sf25_is_blue):
                 # SF25's turn
                 model = model_cache.get_simple_model(sf25_strategy.model_path)
-                row, col = sf25_strategy_obj.select_move(state, model, move_config, verbose=verbose)
+                # Only show detailed MCTS output at very high verbosity
+                mcts_verbose = max(0, verbose - 2) if verbose >= 4 else 0
+                row, col = sf25_strategy_obj.select_move(state, model, move_config, verbose=mcts_verbose)
             else:
                 # SF18's turn
                 row, col = sf18_player.get_move(state)
             
             # Apply the move
             state = apply_move_to_state(state, row, col)
+            move_sequence.append((row, col))  # Track the move
             move_count += 1
             
-            if verbose >= 2:
+            if verbose >= 4:
                 print(f"  Move {move_count}: {rowcol_to_trmph(row, col, board_size)} by {'SF25' if ((state.current_player_enum == Player.RED and sf25_is_blue) or (state.current_player_enum == Player.BLUE and not sf25_is_blue)) else 'SF18'}")
         
         except Exception as e:
             logger.error(f"Error during game play: {e}")
             break
     
-    # Determine winner
-    if state.game_over:
-        winner = state.winner
-        if winner == Winner.BLUE:
-            winner_str = "blue"
-            winner_strategy = "SF25" if sf25_is_blue else "SF18"
-        else:
-            winner_str = "red"
-            winner_strategy = "SF18" if sf25_is_blue else "SF25"
-    else:
-        winner_str = "no winner"
-        winner_strategy = "draw"
+    # Add newline after progress indicator if we were showing progress
+    if verbose >= 3 and move_count > 10:
+        print()  # Newline after progress dots
     
-    # Convert final state to TRMPH
-    final_moves = []
-    board = state.board
-    for row in range(board_size):
-        for col in range(board_size):
-            if board[row, col] != ' ':
-                final_moves.append((row, col))
-    
-    final_moves.sort()
-    trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in final_moves])
+    # Convert move sequence to TRMPH (preserving move order) - do this before error checking
+    trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in move_sequence])
     trmph_str = f"{TRMPH_PREFIX}{trmph_moves}"
+    
+    # Determine winner - this should always be valid in Hex
+    if not state.game_over:
+        # Game didn't finish - this indicates a serious bug
+        print(f"\nERROR: Game did not finish properly!")
+        print(f"Game state debug info:")
+        print(f"  - Game over: {state.game_over}")
+        print(f"  - Winner: {state.winner}")
+        print(f"  - Current player: {state.current_player_enum}")
+        print(f"  - Move count: {move_count}")
+        print(f"  - Max moves: {max_moves}")
+        print(f"  - Final TRMPH: {trmph_str}")
+        print(f"  - Opening: {opening}")
+        raise RuntimeError("Game did not finish - this should never happen in Hex")
+    
+    if state.winner is None:
+        # Winner is None but game is over - this is a serious bug
+        print(f"\nERROR: Game is over but winner is None!")
+        print(f"Game state debug info:")
+        print(f"  - Game over: {state.game_over}")
+        print(f"  - Winner: {state.winner}")
+        print(f"  - Winner type: {type(state.winner)}")
+        print(f"  - Current player: {state.current_player_enum}")
+        print(f"  - Move count: {move_count}")
+        print(f"  - Final TRMPH: {trmph_str}")
+        raise RuntimeError("Game is over but winner is None - this is a bug in the game engine")
+    
+    winner = state.winner
+    if winner == Winner.BLUE:
+        winner_str = "blue"
+        winner_strategy = "SF25" if sf25_is_blue else "SF18"
+    elif winner == Winner.RED:
+        winner_str = "red"
+        winner_strategy = "SF18" if sf25_is_blue else "SF25"
+    else:
+        # Unknown winner enum - this is a serious bug
+        print(f"\nERROR: Unknown winner enum: {winner} (type: {type(winner)})")
+        print(f"Game state debug info:")
+        print(f"  - Game over: {state.game_over}")
+        print(f"  - Winner: {state.winner}")
+        print(f"  - Current player: {state.current_player_enum}")
+        print(f"  - Move count: {move_count}")
+        print(f"  - Final TRMPH: {trmph_str}")
+        raise RuntimeError(f"Unknown winner enum: {winner} - this is a bug in the game engine")
+        
+    # Show game summary at verbose >= 1
+    if verbose >= 1:
+        print(f"    Game complete: {winner_strategy} wins in {move_count} moves")
     
     return {
         'winner': winner_str,
