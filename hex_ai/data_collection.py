@@ -43,6 +43,13 @@ TOURNAMENT_PATTERNS = {
         'pattern': re.compile(r'two_stage_tournament_(\d{8})_(\d{6})'),
         'date_format': '%Y%m%d_%H%M%S',
         'description': 'Two-stage tournament directories with full timestamp including seconds'
+    },
+    # Pattern: sf18_tournament_YYYYMMDD_HHMM
+    # Example: sf18_tournament_20251006_1707
+    'sf18_tournament': {
+        'pattern': re.compile(r'sf18_tournament_(\d{8})_(\d{4})'),
+        'date_format': '%Y%m%d_%H%M',
+        'description': 'SF18 tournament directories with date and time (no seconds)'
     }
 }
 
@@ -77,7 +84,7 @@ def parse_tournament_date_from_dirname(dirname: str) -> Optional[datetime]:
         match = pattern.match(dirname)
         if match:
             try:
-                # Handle full date format for two_stage pattern
+                # Handle different date formats based on pattern
                 date_str, time_str = match.groups()
                 date_time_str = f"{date_str}_{time_str}"
                 
@@ -181,7 +188,8 @@ def find_tournament_directories(
     parse_errors = []
     
     try:
-        for item in source_dir.iterdir():
+        # Search recursively for tournament directories
+        for item in source_dir.rglob("*"):
             if not item.is_dir():
                 continue
                 
