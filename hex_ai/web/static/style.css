@@ -652,8 +652,3 @@ button:hover {
   border-color: #ff6b35 !important;
   box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3) !important;
 }
-
-/* Auto-managed settings styling - clean and minimal */
-input:not(.user-modified) {
-  /* Auto-managed settings have normal styling */
-} 
