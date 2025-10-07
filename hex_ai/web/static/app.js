@@ -103,6 +103,9 @@ let state = {
   red_enable_gumbel: true,
   blue_gumbel_max_sims: 49999,
   red_gumbel_max_sims: 49999,
+  // Policy play settings
+  blue_use_policy: false,
+  red_use_policy: false,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
@@ -120,12 +123,14 @@ const userModifiedSettings = {
   blue: {
     temperature: false,
     num_simulations: false,
-    gumbel_enabled: false
+    gumbel_enabled: false,
+    use_policy: false
   },
   red: {
     temperature: false,
     num_simulations: false,
-    gumbel_enabled: false
+    gumbel_enabled: false,
+    use_policy: false
   }
 };
 
@@ -138,6 +143,9 @@ const SMART_DEFAULTS = {
   mcts: {
     num_simulations: 480,
     temperature: 0.25
+  },
+  policy: {
+    temperature: 0.15
   }
 };
 
@@ -162,7 +170,8 @@ function getCurrentPlayerSettings() {
       num_simulations: state.blue_num_simulations,
       exploration_constant: state.blue_exploration_constant,
       enable_gumbel: state.blue_enable_gumbel,
-      gumbel_max_sims: state.blue_gumbel_max_sims
+      gumbel_max_sims: state.blue_gumbel_max_sims,
+      use_policy: state.blue_use_policy
     };
   } else {
     return {
@@ -171,7 +180,8 @@ function getCurrentPlayerSettings() {
       num_simulations: state.red_num_simulations,
       exploration_constant: state.red_exploration_constant,
       enable_gumbel: state.red_enable_gumbel,
-      gumbel_max_sims: state.red_gumbel_max_sims
+      gumbel_max_sims: state.red_gumbel_max_sims,
+      use_policy: state.red_use_policy
     };
   }
 }
@@ -240,6 +250,41 @@ function onGumbelToggle(player, enabled) {
   updateUIElement(`${player}-enable-gumbel`, enabled);
   
   console.log(`Smart update for ${player}: ${mode} mode - sims: ${state[`${player}_num_simulations`]}, temp: ${state[`${player}_temperature`]}`);
+}
+
+// Smart update when Policy play is toggled
+function onPolicyToggle(player, enabled) {
+  if (enabled) {
+    // Policy mode: set temperature to 0.15, disable Gumbel
+    if (!userModifiedSettings[player].temperature) {
+      state[`${player}_temperature`] = SMART_DEFAULTS.policy.temperature;
+      updateUIElement(`${player}-temperature`, SMART_DEFAULTS.policy.temperature);
+    }
+    
+    // Disable Gumbel when using policy play
+    if (!userModifiedSettings[player].gumbel_enabled) {
+      state[`${player}_enable_gumbel`] = false;
+      updateUIElement(`${player}-enable-gumbel`, false);
+    }
+    
+    console.log(`Smart update for ${player}: policy mode - temp: ${state[`${player}_temperature`]}, gumbel: ${state[`${player}_enable_gumbel`]}`);
+  } else {
+    // Return to previous mode (Gumbel or MCTS)
+    const gumbelEnabled = state[`${player}_enable_gumbel`];
+    const mode = gumbelEnabled ? 'gumbel' : 'mcts';
+    const defaults = SMART_DEFAULTS[mode];
+    
+    if (!userModifiedSettings[player].temperature) {
+      state[`${player}_temperature`] = defaults.temperature;
+      updateUIElement(`${player}-temperature`, defaults.temperature);
+    }
+    
+    console.log(`Smart update for ${player}: returning to ${mode} mode - temp: ${state[`${player}_temperature`]}`);
+  }
+  
+  // Always update the Policy setting itself
+  state[`${player}_use_policy`] = enabled;
+  updateUIElement(`${player}-use-policy`, enabled);
 }
 
 // Helper to update UI element value
@@ -344,26 +389,42 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
 
 async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
                                num_simulations = 200, exploration_constant = 1.4,
-                               enable_gumbel = false, gumbel_max_sims = 4996) {
-  console.log(`makeComputerMove called with model_id: ${model_id}`);
+                               enable_gumbel = false, gumbel_max_sims = 4996, use_policy = false) {
+  console.log(`makeComputerMove called with model_id: ${model_id}, use_policy: ${use_policy}`);
   
-  // Always use MCTS endpoint
-  const resp = await fetch('/api/mcts_move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      trmph, 
-      model_id, 
-      num_simulations, 
-      exploration_constant, 
-      temperature, 
-      verbose,
-      enable_gumbel,
-      gumbel_max_sims
-    }),
-  });
-  if (!resp.ok) throw new Error('API error');
-  return await resp.json();
+  if (use_policy) {
+    // Use policy endpoint for fast policy sampling
+    const resp = await fetch('/api/policy_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        trmph, 
+        model_id, 
+        temperature, 
+        verbose
+      }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  } else {
+    // Use MCTS endpoint
+    const resp = await fetch('/api/mcts_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        trmph, 
+        model_id, 
+        num_simulations, 
+        exploration_constant, 
+        temperature, 
+        verbose,
+        enable_gumbel,
+        gumbel_max_sims
+      }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
+  }
 }
 
 // --- Board Rendering ---
@@ -636,6 +697,13 @@ function updateUI() {
   if (redEnableGumbel) redEnableGumbel.checked = state.red_enable_gumbel;
   if (redGumbelMaxSims) redGumbelMaxSims.value = state.red_gumbel_max_sims;
   
+  // Update Policy play controls
+  const blueUsePolicy = document.getElementById('blue-use-policy');
+  const redUsePolicy = document.getElementById('red-use-policy');
+  
+  if (blueUsePolicy) blueUsePolicy.checked = state.blue_use_policy;
+  if (redUsePolicy) redUsePolicy.checked = state.red_use_policy;
+  
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
   if (debugOutput) {
@@ -713,7 +781,8 @@ async function onCellClick(e) {
         computerNumSimulations,
         computerExplorationConstant,
         computerEnableGumbel,
-        computerGumbelMaxSims
+        computerGumbelMaxSims,
+        computerPlayer === 'blue' ? state.blue_use_policy : state.red_use_policy
       );
       
       if (computerResult.success) {
@@ -730,6 +799,11 @@ async function onCellClick(e) {
         displayDebugInfo(computerResult.debug_info);
       } else if (computerResult.mcts_debug_info) {
         displayMCTSDebugInfo(computerResult.mcts_debug_info);
+      }
+      
+      // Display policy information if available
+      if (computerResult.policy_info) {
+        displayPolicyInfo(computerResult.policy_info);
       }
       
       // Display detailed exploration if tree_data exists
@@ -752,7 +826,7 @@ async function onCellClick(e) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims, use_policy } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Save state for undo functionality before computer move
@@ -767,7 +841,8 @@ async function stepComputerMove() {
       num_simulations,
       exploration_constant,
       enable_gumbel,
-      gumbel_max_sims
+      gumbel_max_sims,
+      use_policy
     );
     
     if (result.success) {
@@ -784,6 +859,11 @@ async function stepComputerMove() {
         displayDebugInfo(result.debug_info);
       } else if (result.mcts_debug_info) {
         displayMCTSDebugInfo(result.mcts_debug_info);
+      }
+      
+      // Display policy information if available
+      if (result.policy_info) {
+        displayPolicyInfo(result.policy_info);
       }
       
       // Display detailed exploration if tree_data exists
@@ -963,6 +1043,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('red-gumbel-max-sims').addEventListener('input', (e) => {
     state.red_gumbel_max_sims = parseInt(e.target.value);
+  });
+
+  // Policy play controls
+  document.getElementById('blue-use-policy').addEventListener('change', (e) => {
+    markSettingAsModified('blue', 'use_policy');
+    onPolicyToggle('blue', e.target.checked);
+  });
+  document.getElementById('red-use-policy').addEventListener('change', (e) => {
+    markSettingAsModified('red', 'use_policy');
+    onPolicyToggle('red', e.target.checked);
   });
 
   // Step button handler
@@ -1375,6 +1465,33 @@ function displayDebugInfo(debugInfo) {
   
   // Display detailed exploration if available
   displayDetailedExploration(debugInfo);
+}
+
+function displayPolicyInfo(policyInfo) {
+  if (!policyInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // Policy move information
+  output += '=== POLICY MOVE ===\n';
+  output += `Selected Move: ${policyInfo.selected_move}\n`;
+  output += `Probability: ${(policyInfo.selected_probability * 100).toFixed(2)}%\n`;
+  output += `Temperature: ${policyInfo.temperature}\n\n`;
+  
+  // Top moves
+  if (policyInfo.top_moves && policyInfo.top_moves.length > 0) {
+    output += 'Top Policy Moves:\n';
+    policyInfo.top_moves.forEach(([move, prob], index) => {
+      const probPercent = (prob * 100).toFixed(2);
+      output += `  ${index + 1}. ${move}: ${probPercent}%\n`;
+    });
+    output += '\n';
+  }
+  
+  debugContent.textContent = output;
 }
 
 function displayDetailedExploration(debugInfo) {

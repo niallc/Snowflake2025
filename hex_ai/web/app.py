@@ -1106,6 +1106,92 @@ def api_apply_trmph_sequence():
 
 
 
+@app.route("/api/policy_move", methods=["POST"])
+def api_policy_move():
+    """Make a computer move using policy sampling."""
+    data = request.get_json()
+    app.logger.info(f"=== POLICY API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
+    trmph = data.get("trmph")
+    model_id = data.get("model_id", "model1")
+    temperature = data.get("temperature", 0.15)  # Default policy temperature
+    verbose = data.get("verbose", 0)
+    
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
+    
+    try:
+        # Parse TRMPH and get game state
+        state = HexGameState.from_trmph(trmph)
+        
+        # Get model and make policy move
+        model = get_model(model_id)
+        move = select_policy_move(state, model, temperature)
+        
+        if move is None:
+            return jsonify({"success": False, "error": "No valid moves available"}), 400
+        
+        # Apply the move
+        new_state = apply_move_to_state_trmph(state, move[0], move[1])
+        new_trmph = new_state.to_trmph()
+        
+        # Get move in TRMPH format
+        move_trmph = fc.rowcol_to_trmph(move[0], move[1])
+        
+        # Get policy information for debug output
+        policy_logits, value_signed = model.simple_infer(trmph)
+        policy_probs = policy_logits_to_probs(policy_logits, temperature)
+        legal_moves = state.get_legal_moves()
+        legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+        
+        # Create policy dictionary for debug
+        policy_dict = {}
+        for i, (row, col) in enumerate(legal_moves):
+            trmph_move = fc.rowcol_to_trmph(row, col)
+            policy_dict[trmph_move] = float(legal_policy[i])
+        
+        # Sort by probability for debug output
+        sorted_policy = sorted(policy_dict.items(), key=lambda x: x[1], reverse=True)
+        
+        result = {
+            "success": True,
+            "new_trmph": new_trmph,
+            "board": new_state.board.tolist(),
+            "player": winner_to_color(new_state.current_player_enum),
+            "legal_moves": [fc.rowcol_to_trmph(r, c) for r, c in new_state.get_legal_moves()],
+            "winner": new_state.winner,
+            "move_made": move_trmph,
+            "policy_info": {
+                "selected_move": move_trmph,
+                "selected_probability": policy_dict.get(move_trmph, 0.0),
+                "top_moves": sorted_policy[:5],  # Top 5 moves for debug
+                "temperature": temperature
+            }
+        }
+        
+        if verbose >= 1:
+            result["debug_info"] = {
+                "algorithm_info": {
+                    "algorithm": "policy",
+                    "parameters": {
+                        "temperature": temperature
+                    }
+                },
+                "policy_analysis": {
+                    "top_moves": sorted_policy[:10],
+                    "total_legal_moves": len(legal_moves)
+                }
+            }
+        
+        app.logger.info(f"=== POLICY API RESPONSE ===")
+        app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Policy move error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route("/api/mcts_move", methods=["POST"])
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
