@@ -18,7 +18,10 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
     DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
     DEFAULT_GUMBEL_CANDIDATE_MIN,
-    DEFAULT_GUMBEL_CANDIDATE_MAX
+    DEFAULT_GUMBEL_CANDIDATE_MAX,
+    DEFAULT_GUMBEL_SIGMA_GROWTH,
+    DEFAULT_GUMBEL_SQRT_SCALE,
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
 
 
@@ -63,9 +66,9 @@ def gumbel_alpha_zero_root_batched(
     candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
     candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
     # Gumbel ranking stabilization parameters
-    sigma_growth: str = "constant",  # Options: "constant", "sqrt"
-    sqrt_scale: float = 0.10,  # Used only if sigma_growth == "sqrt"
-    use_gumbel_in_final_eval: bool = False,  # Remove Gumbel noise in final evaluation
+    sigma_growth: str = DEFAULT_GUMBEL_SIGMA_GROWTH,  # Options: "constant", "sqrt"
+    sqrt_scale: float = DEFAULT_GUMBEL_SQRT_SCALE,  # Used only if sigma_growth == "sqrt"
+    use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,  # Remove Gumbel noise in final evaluation
     eval_mode: bool = False,  # Whether this is evaluation mode (affects Gumbel noise usage)
 ):
     """
@@ -83,15 +86,15 @@ def gumbel_alpha_zero_root_batched(
         q_of_child: Function that returns current empirical mean value for root child a in [0,1]
         n_of_child: Function that returns current visit count for root child a
         m: Number of actions to consider via Top-m (None for auto)
-        c_visit: Gumbel-AlphaZero parameter (default: 50.0)
-        c_scale: Gumbel-AlphaZero parameter (default: 1.0)
-        temperature: Noise scale for Gumbel sampling (beta, default: 1.0)
-        verbose: Verbosity level for debug output (default: 0)
+        c_visit: Gumbel-AlphaZero parameter
+        c_scale: Gumbel-AlphaZero parameter
+        temperature: Noise scale for Gumbel sampling (beta)
+        verbose: Verbosity level for debug output
         rng: Random number generator (uses numpy.random if None)
-        sigma_growth: Sigma growth strategy - "constant" or "sqrt" (default: "constant")
-        sqrt_scale: Scale factor for sqrt growth (default: 0.10)
-        use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation (default: False)
-        eval_mode: Whether this is evaluation mode (default: False)
+        sigma_growth: Sigma growth strategy - "constant" or "sqrt"
+        sqrt_scale: Scale factor for sqrt growth
+        use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation
+        eval_mode: Whether this is evaluation mode
         
     Returns:
         Tuple of (selected_action_index, performance_metrics_dict)
