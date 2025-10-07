@@ -229,7 +229,13 @@ def gumbel_alpha_zero_root_batched(
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
     # DISABLED: Scale Gumbel noise by beta (temperature as noise scale)
     # NOTE: Temperature scaling disabled due to automatic game temperature scaling issues
-    g = sample_gumbel(K, rng=rng)
+    
+    # Sample Gumbel noise only for legal actions (optimization: skip illegal actions)
+    g = np.zeros(K, dtype=np.float64)
+    g_legal = sample_gumbel(len(legal_actions), rng=rng)
+    for i, a in enumerate(legal_actions):
+        g[a] = g_legal[i]
+    
     # if beta <= 0.0:
     #     g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
     # else:
@@ -240,10 +246,10 @@ def gumbel_alpha_zero_root_batched(
     # Top-m selection timing
     top_m_start = time.perf_counter()
     
-    top_scores = g + logits
-    
-    # Get indices of top-m actions (unordered)
-    top_idx = np.argpartition(top_scores, -m)[-m:]
+    # Micro-optimization: compute top-m on legal slice only (avoids argpartition over illegal entries)
+    top_scores_legal = g[legal_actions] + logits[legal_actions]
+    idx_local = np.argpartition(top_scores_legal, -m)[-m:]  # unordered
+    top_idx = np.array([legal_actions[i] for i in idx_local], dtype=int)
     
     timing_data['top_m_selection_time'] = time.perf_counter() - top_m_start
     
