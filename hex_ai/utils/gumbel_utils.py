@@ -405,9 +405,21 @@ def gumbel_alpha_zero_root_batched(
     # Final ranking timing
     ranking_start = time.perf_counter()
     
-    # Final pick
+    # Final pick - use deterministic ranking without Gumbel noise
     if len(cand) > 1:
-        cand.sort(key=rank_key, reverse=True)
+        # Before sorting
+        if sigma_growth == "sqrt":
+            current_maxN = max((n_of_child(x) for x in cand), default=0)
+            final_sigma = (c_visit + math.sqrt(current_maxN)) * sqrt_scale
+        else:
+            final_sigma = c_scale
+
+        def final_rank_key(a: int) -> float:
+            # advantage with cached v_pi and completion for unvisited
+            adv = completed_q(a) - v_pi
+            return logits[a] + final_sigma * adv  # no gumbel in final ranking
+
+        cand.sort(key=final_rank_key, reverse=True)
     
     # DEBUG: Compare final selection with top policy move
     # DISABLED: beta-based debug logging due to temperature scaling issues
