@@ -86,7 +86,7 @@ DEFAULT_MCTS_DIRICHLET_ALPHA = 0.3  # Default Dirichlet noise alpha parameter
 DEFAULT_MCTS_DIRICHLET_EPS = 0.25  # Default Dirichlet noise epsilon parameter
 DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel AlphaZero root selection
 DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
-DEFAULT_GUMBEL_C_SCALE = 1.0  # Default Gumbel-AlphaZero c_scale parameter
+DEFAULT_GUMBEL_C_SCALE = 5000.0  # Default Gumbel-AlphaZero c_scale parameter
 DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
 
 # Gumbel candidate scaling defaults
