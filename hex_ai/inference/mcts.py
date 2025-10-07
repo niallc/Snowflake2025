@@ -86,7 +86,10 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_C_VISIT,
     DEFAULT_MCTS_DIRICHLET_ALPHA,
     DEFAULT_GUMBEL_C_SCALE,
-    DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION
+    DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
+    DEFAULT_GUMBEL_SIGMA_GROWTH,
+    DEFAULT_GUMBEL_SQRT_SCALE,
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
@@ -453,6 +456,10 @@ class BaselineMCTSConfig:
     gumbel_candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET  # Offset for logarithmic candidate scaling
     gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
     gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
+    # Gumbel ranking stabilization parameters
+    gumbel_sigma_growth: str = DEFAULT_GUMBEL_SIGMA_GROWTH  # Options: "constant", "sqrt"
+    gumbel_sqrt_scale: float = DEFAULT_GUMBEL_SQRT_SCALE  # Used only if sigma_growth == "sqrt"
+    gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
     # NOTE: Gumbel now validates legal actions and crashes on illegal forced actions instead of falling back to PUCT
     # This exposes desync bugs between the action list and root state rather than masking them
     
@@ -1142,7 +1149,11 @@ class BaselineMCTS:
             candidate_log_base=self.cfg.gumbel_candidate_log_base,
             candidate_log_offset=self.cfg.gumbel_candidate_log_offset,
             candidate_min=self.cfg.gumbel_candidate_min,
-            candidate_max=self.cfg.gumbel_candidate_max
+            candidate_max=self.cfg.gumbel_candidate_max,
+            sigma_growth=self.cfg.gumbel_sigma_growth,
+            sqrt_scale=self.cfg.gumbel_sqrt_scale,
+            use_gumbel_in_final_eval=self.cfg.gumbel_use_gumbel_in_final_eval,
+            eval_mode=False  # MCTS is not evaluation mode by default
         )
         
         # Record Gumbel performance metrics

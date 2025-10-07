@@ -62,6 +62,11 @@ def gumbel_alpha_zero_root_batched(
     candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
     candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
     candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
+    # Gumbel ranking stabilization parameters
+    sigma_growth: str = "constant",  # Options: "constant", "sqrt"
+    sqrt_scale: float = 0.10,  # Used only if sigma_growth == "sqrt"
+    use_gumbel_in_final_eval: bool = False,  # Remove Gumbel noise in final evaluation
+    eval_mode: bool = False,  # Whether this is evaluation mode (affects Gumbel noise usage)
 ):
     """
     Batched Gumbel-AlphaZero root selection that reuses existing MCTS batching infrastructure.
@@ -83,6 +88,10 @@ def gumbel_alpha_zero_root_batched(
         temperature: Noise scale for Gumbel sampling (beta, default: 1.0)
         verbose: Verbosity level for debug output (default: 0)
         rng: Random number generator (uses numpy.random if None)
+        sigma_growth: Sigma growth strategy - "constant" or "sqrt" (default: "constant")
+        sqrt_scale: Scale factor for sqrt growth (default: 0.10)
+        use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation (default: False)
+        eval_mode: Whether this is evaluation mode (default: False)
         
     Returns:
         Tuple of (selected_action_index, performance_metrics_dict)
@@ -268,13 +277,29 @@ def gumbel_alpha_zero_root_batched(
     
     # Precompute maxN_all once per root (across ALL legal children)
     maxN_all = max(1, max(n_of_child(a) for a in legal_actions))
+    
+    # Compute v_pi once per root and cache it
+    v_pi = completed_baseline_v_pi()
 
     def rank_key(a):
-        """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
-        # sigma = (c_visit + maxN_all) ** c_scale, with root-wide scale
-        sigma = (c_visit + maxN_all) ** c_scale
+        """Score function for action a: g[a] + logits[a] + σ(q̂[a] - v_pi)"""
+        # Calculate sigma based on growth strategy
+        if sigma_growth == "sqrt":
+            # Optional mild growth: recompute per round over current candidates
+            current_maxN = max(n_of_child(x) for x in legal_actions) if legal_actions else 0
+            sigma = (c_visit + math.sqrt(current_maxN)) * sqrt_scale
+        else:
+            # Constant sigma (recommended default)
+            sigma = c_scale
+        
+        # Use advantage form: (q_tilde - v_pi) instead of just q_tilde
         q_tilde = completed_q(a)
-        return g[a] + logits[a] + sigma * q_tilde
+        advantage = q_tilde - v_pi
+        
+        # Optional: Remove Gumbel noise in final evaluation for deterministic results
+        g_eval = 0.0 if (eval_mode and not use_gumbel_in_final_eval) else g[a]
+        
+        return g_eval + logits[a] + sigma * advantage
     
     def per_arm_allocation(total_left, rounds_left, num_arms):
         """
