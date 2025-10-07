@@ -326,42 +326,38 @@ def gumbel_alpha_zero_root_batched(
             break
         rounds_left = R - r
         arms = len(cand)
-        
-        # Allocate exactly per_arm per arm for this round (equal budgeting)
-        actions_this_round = schedule_round(
-            cand, 
-            total_sims - sims_used, 
-            rounds_left
-        )
-        
-        # Assertion-based test for equal allocation
+
+        # Compute this stage's per-arm allocation (equal budgeting)
+        per_arm = per_arm_allocation(total_sims - sims_used, rounds_left, arms)
+
+        # NEW: if we cannot afford even 1 sim per arm, do not prune on stale evidence
+        if per_arm == 0:
+            break  # exit SH loop; proceed to final ranking over 'cand' as-is
+
+        # Create exactly per_arm simulations for each arm
+        actions_this_round = [a for a in cand for _ in range(per_arm)]
+
+        # (Optional assertion) each arm gets per_arm sims
         if actions_this_round:
             from collections import Counter
-            action_counts = Counter(actions_this_round)
-            per_arm = per_arm_allocation(total_sims - sims_used, rounds_left, arms)
+            counts = Counter(actions_this_round)
             for a in cand:
-                assert action_counts[a] == per_arm, f"Arm {a} got {action_counts[a]} sims, expected {per_arm}"
-            assert len(actions_this_round) <= total_sims - sims_used, f"Round used {len(actions_this_round)} sims, only {total_sims - sims_used} left"
-        
-        if actions_this_round:
-            # Track performance metrics from this round
-            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
-            # Track batch metrics more accurately
-            nn_calls_per_move += stats.get("batch_count", 0)
-            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
-            # Note: unique_evals_total is not available in individual batch stats
-            # We'll track this separately by looking at the final MCTS metrics
-            sims_used += len(actions_this_round)
-            
-            # Log per_arm and len(cand) per round at verbose>=2
-            if verbose >= 4:
-                per_arm = per_arm_allocation(total_sims - sims_used + len(actions_this_round), rounds_left, arms)
-                print(f"GUMBEL Round {r+1}: {arms} candidates, {per_arm} sims/arm, {len(actions_this_round)} total sims")
-        
+                assert counts[a] == per_arm
+
+        # Run the forced actions
+        stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+        nn_calls_per_move += stats.get("batch_count", 0)
+        total_leaves_evaluated += len(actions_this_round)
+        sims_used += len(actions_this_round)
+
+        # Log per_arm and len(cand) per round at verbose>=4
+        if verbose >= 4:
+            print(f"GUMBEL Round {r+1}: {arms} candidates, {per_arm} sims/arm, {len(actions_this_round)} total sims")
+
         if arms <= 1 or sims_used >= total_sims:
             break
-        
-        # Halve: keep the top half by the current score
+
+        # Halve after NEW evidence
         cand.sort(key=rank_key, reverse=True)
         keep = max(1, (arms + 1) // 2)
         cand = cand[:keep]
