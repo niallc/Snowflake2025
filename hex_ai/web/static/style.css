@@ -653,18 +653,7 @@ button:hover {
   box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3) !important;
 }
 
-/* Auto-managed settings get a subtle indicator */
+/* Auto-managed settings styling - clean and minimal */
 input:not(.user-modified) {
-  position: relative;
-}
-
-input:not(.user-modified)::after {
-  content: "🤖";
-  position: absolute;
-  right: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 12px;
-  opacity: 0.6;
-  pointer-events: none;
+  /* Auto-managed settings have normal styling */
 } 
