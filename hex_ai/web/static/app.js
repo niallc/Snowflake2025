@@ -91,11 +91,11 @@ let state = {
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'model1',
   red_model_id: 'model1',  // Use current best model for both players by default
-  blue_temperature: 1.002,
-  red_temperature: 1.002,
+  blue_temperature: 1.0,
+  red_temperature: 1.0,
   // MCTS settings
-  blue_num_simulations: 45,
-  red_num_simulations: 45,
+  blue_num_simulations: 80,
+  red_num_simulations: 80,
   blue_exploration_constant: 2.9,
   red_exploration_constant: 2.9,
   // Gumbel settings
@@ -111,6 +111,34 @@ let state = {
   move_history: [], // Track move history for undo functionality
   redo_history: [], // Track undone moves for redo functionality
   constants: null // Will be populated from backend
+};
+
+// --- User Modification Tracking ---
+// Track which settings have been manually modified by the user
+// This allows smart auto-updates while preserving user customizations
+const userModifiedSettings = {
+  blue: {
+    temperature: false,
+    num_simulations: false,
+    gumbel_enabled: false
+  },
+  red: {
+    temperature: false,
+    num_simulations: false,
+    gumbel_enabled: false
+  }
+};
+
+// Smart defaults for different modes
+const SMART_DEFAULTS = {
+  gumbel: {
+    num_simulations: 80,
+    temperature: 1.0
+  },
+  mcts: {
+    num_simulations: 480,
+    temperature: 0.25
+  }
 };
 
 // --- Game Constants (will be populated from backend) ---
@@ -146,6 +174,94 @@ function getCurrentPlayerSettings() {
       gumbel_max_sims: state.red_gumbel_max_sims
     };
   }
+}
+
+// --- Smart Settings Management ---
+// Mark a setting as user-modified
+function markSettingAsModified(player, setting) {
+  if (userModifiedSettings[player] && userModifiedSettings[player].hasOwnProperty(setting)) {
+    userModifiedSettings[player][setting] = true;
+    updateSettingVisualState(player, setting, true);
+  }
+}
+
+// Reset user modification tracking (useful for testing or reset functionality)
+function resetUserModifications(player = null) {
+  if (player) {
+    // Reset specific player
+    Object.keys(userModifiedSettings[player]).forEach(setting => {
+      userModifiedSettings[player][setting] = false;
+      updateSettingVisualState(player, setting, false);
+    });
+  } else {
+    // Reset all players
+    Object.keys(userModifiedSettings).forEach(p => {
+      Object.keys(userModifiedSettings[p]).forEach(setting => {
+        userModifiedSettings[p][setting] = false;
+        updateSettingVisualState(p, setting, false);
+      });
+    });
+  }
+}
+
+// Update visual state to show if setting is auto-managed or user-modified
+function updateSettingVisualState(player, setting, isModified) {
+  const elementId = `${player}-${setting.replace('_', '-')}`;
+  const element = document.getElementById(elementId);
+  if (element) {
+    if (isModified) {
+      element.classList.add('user-modified');
+      element.title = 'This setting has been manually modified by you';
+    } else {
+      element.classList.remove('user-modified');
+      element.title = 'This setting is auto-managed based on Gumbel mode';
+    }
+  }
+}
+
+// Smart update when Gumbel is toggled
+function onGumbelToggle(player, enabled) {
+  const mode = enabled ? 'gumbel' : 'mcts';
+  const defaults = SMART_DEFAULTS[mode];
+  
+  // Only update settings that haven't been manually modified
+  if (!userModifiedSettings[player].num_simulations) {
+    state[`${player}_num_simulations`] = defaults.num_simulations;
+    updateUIElement(`${player}-num-simulations`, defaults.num_simulations);
+  }
+  
+  if (!userModifiedSettings[player].temperature) {
+    state[`${player}_temperature`] = defaults.temperature;
+    updateUIElement(`${player}-temperature`, defaults.temperature);
+  }
+  
+  // Always update the Gumbel setting itself
+  state[`${player}_enable_gumbel`] = enabled;
+  updateUIElement(`${player}-enable-gumbel`, enabled);
+  
+  console.log(`Smart update for ${player}: ${mode} mode - sims: ${state[`${player}_num_simulations`]}, temp: ${state[`${player}_temperature`]}`);
+}
+
+// Helper to update UI element value
+function updateUIElement(elementId, value) {
+  const element = document.getElementById(elementId);
+  if (element) {
+    if (element.type === 'checkbox') {
+      element.checked = value;
+    } else {
+      element.value = value;
+    }
+  }
+}
+
+// Initialize visual states for all smart settings
+function initializeSmartSettingsVisualStates() {
+  // Initialize visual states for all tracked settings
+  Object.keys(userModifiedSettings).forEach(player => {
+    Object.keys(userModifiedSettings[player]).forEach(setting => {
+      updateSettingVisualState(player, setting, userModifiedSettings[player][setting]);
+    });
+  });
 }
 
 // --- Utility: Convert (row, col) to TRMPH move ---
@@ -776,6 +892,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('Failed to load models:', err);
   }
 
+  // Initialize visual states for smart settings
+  initializeSmartSettingsVisualStates();
+
   // Initial state fetch
   try {
     // Use blue's settings for initial fetch
@@ -802,16 +921,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Blue temperature
   document.getElementById('blue-temperature').addEventListener('input', (e) => {
+    markSettingAsModified('blue', 'temperature');
     state.blue_temperature = parseFloat(e.target.value);
   });
   // Red temperature
   document.getElementById('red-temperature').addEventListener('input', (e) => {
+    markSettingAsModified('red', 'temperature');
     state.red_temperature = parseFloat(e.target.value);
   });
 
   // MCTS controls
 
   document.getElementById('blue-num-simulations').addEventListener('input', (e) => {
+    markSettingAsModified('blue', 'num_simulations');
     state.blue_num_simulations = parseInt(e.target.value);
   });
   document.getElementById('blue-exploration-constant').addEventListener('input', (e) => {
@@ -820,6 +942,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   document.getElementById('red-num-simulations').addEventListener('input', (e) => {
+    markSettingAsModified('red', 'num_simulations');
     state.red_num_simulations = parseInt(e.target.value);
   });
   document.getElementById('red-exploration-constant').addEventListener('input', (e) => {
@@ -828,13 +951,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Gumbel controls
   document.getElementById('blue-enable-gumbel').addEventListener('change', (e) => {
-    state.blue_enable_gumbel = e.target.checked;
+    markSettingAsModified('blue', 'gumbel_enabled');
+    onGumbelToggle('blue', e.target.checked);
   });
   document.getElementById('blue-gumbel-max-sims').addEventListener('input', (e) => {
     state.blue_gumbel_max_sims = parseInt(e.target.value);
   });
   document.getElementById('red-enable-gumbel').addEventListener('change', (e) => {
-    state.red_enable_gumbel = e.target.checked;
+    markSettingAsModified('red', 'gumbel_enabled');
+    onGumbelToggle('red', e.target.checked);
   });
   document.getElementById('red-gumbel-max-sims').addEventListener('input', (e) => {
     state.red_gumbel_max_sims = parseInt(e.target.value);

@@ -31,20 +31,26 @@
       <!-- Computer Move Controls - Moved up since it's commonly used -->
       <div id="computer-move-controls" class="control-panel">
         <h3>Computer Move Settings</h3>
+        <div style="font-size: 0.9em; color: #666; margin-bottom: 12px; padding: 8px; background: #f8f9fa; border-radius: 4px; border-left: 3px solid #0077cc;">
+          <strong>Smart Settings:</strong> Temperature and simulations are auto-managed based on Gumbel mode. 
+          <br>• <strong>Gumbel ON:</strong> 80 simulations, temperature 1.0
+          <br>• <strong>Gumbel OFF:</strong> 480 simulations, temperature 0.25
+          <br>Settings you modify manually will be preserved and highlighted in orange.
+        </div>
         <div class="player-settings">
           <div class="player-label">Blue:</div>
 
           <div class="mcts-row">
             <label for="blue-num-simulations">MCTS Simulations:</label>
-            <input id="blue-num-simulations" type="number" value="35" min="1" max="100000" step="1000">
+            <input id="blue-num-simulations" type="number" value="80" min="1" max="100000" step="1000" title="Auto-managed based on Gumbel mode">
             <label for="blue-exploration-constant">Exploration Constant:</label>
             <input id="blue-exploration-constant" type="number" value="2.95" min="0.1" max="5.0" step="0.1">
             <label for="blue-temperature">Temperature:</label>
-            <input id="blue-temperature" type="number" value="1.01" min="0.0" max="5.0" step="0.1">
+            <input id="blue-temperature" type="number" value="1.0" min="0.0" max="5.0" step="0.1" title="Auto-managed based on Gumbel mode">
           </div>
           <div class="gumbel-row">
             <label for="blue-enable-gumbel">Enable Gumbel:</label>
-            <input id="blue-enable-gumbel" type="checkbox">
+            <input id="blue-enable-gumbel" type="checkbox" checked>
             <label for="blue-gumbel-max-sims">Max Sims for Gumbel:</label>
             <input id="blue-gumbel-max-sims" type="number" value="50003" min="1" max="1000003" step="1000">
           </div>
@@ -54,15 +60,15 @@
 
           <div class="mcts-row">
             <label for="red-num-simulations">MCTS Simulations:</label>
-            <input id="red-num-simulations" type="number" value="35" min="1" max="1000000" step="1000">
+            <input id="red-num-simulations" type="number" value="80" min="1" max="1000000" step="1000" title="Auto-managed based on Gumbel mode">
             <label for="red-exploration-constant">Exploration Constant:</label>
             <input id="red-exploration-constant" type="number" value="2.95" min="0.1" max="5.0" step="0.1">
             <label for="red-temperature">Temperature:</label>
-            <input id="red-temperature" type="number" value="1.01" min="0.0" max="5.0" step="0.1">
+            <input id="red-temperature" type="number" value="1.0" min="0.0" max="5.0" step="0.1" title="Auto-managed based on Gumbel mode">
           </div>
           <div class="gumbel-row">
             <label for="red-enable-gumbel">Enable Gumbel:</label>
-            <input id="red-enable-gumbel" type="checkbox">
+            <input id="red-enable-gumbel" type="checkbox" checked>
             <label for="red-gumbel-max-sims">Max Sims for Gumbel:</label>
             <input id="red-gumbel-max-sims" type="number" value="50003" min="1" max="1000003" step="1000">
           </div>

@@ -639,4 +639,32 @@ button:hover {
 .selected-move {
   font-weight: bold;
   color: #0077cc;
+}
+
+/* Smart Settings Visual Feedback */
+.user-modified {
+  border: 2px solid #ff6b35 !important;
+  background-color: #fff5f2 !important;
+  box-shadow: 0 0 0 1px rgba(255, 107, 53, 0.2) !important;
+}
+
+.user-modified:focus {
+  border-color: #ff6b35 !important;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3) !important;
+}
+
+/* Auto-managed settings get a subtle indicator */
+input:not(.user-modified) {
+  position: relative;
+}
+
+input:not(.user-modified)::after {
+  content: "🤖";
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  opacity: 0.6;
+  pointer-events: none;
 } 
