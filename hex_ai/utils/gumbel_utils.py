@@ -173,6 +173,47 @@ def gumbel_alpha_zero_root_batched(
     # Apply mask to logits (no temperature scaling)
     logits = policy_logits + mask
     
+    # Softmax over legal actions
+    pi = np.zeros(K, dtype=np.float64)
+    logits_legal = logits[legal_actions]  # logits already has -inf for illegal
+    # stable softmax for legal slice
+    shift = np.max(logits_legal)
+    exp_legal = np.exp(logits_legal - shift)
+    Z = np.sum(exp_legal)
+    if Z == 0.0:
+        # All -inf or degenerate; assign uniform over legal to avoid NaNs
+        uniform = 1.0 / max(1, len(legal_actions))
+        for a in legal_actions:
+            pi[a] = uniform
+    else:
+        pi_legal = exp_legal / Z
+        for a, p in zip(legal_actions, pi_legal):
+            pi[a] = p
+
+    # Completion helpers
+    def completed_baseline_v_pi():
+        pi_unvisited = 0.0
+        num = 0.0
+        for a in legal_actions:
+            if n_of_child(a) > 0:
+                num += pi[a] * q_of_child(a)
+            else:
+                pi_unvisited += pi[a]
+        denom = 1.0 - pi_unvisited
+        if denom <= 1e-12:
+            # Degenerate (e.g., all unvisited). Fallback: 0.5 in [0,1] or use root value head if available.
+            return 0.5
+        return num / denom
+
+    # Cache v_pi once per root call
+    _v_pi_cache = [None]
+    def completed_q(a: int) -> float:
+        if n_of_child(a) > 0:
+            return q_of_child(a)
+        if _v_pi_cache[0] is None:
+            _v_pi_cache[0] = completed_baseline_v_pi()
+        return _v_pi_cache[0]
+    
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
         # Configurable logarithmic candidate scaling: grows slowly with simulation count
@@ -202,7 +243,7 @@ def gumbel_alpha_zero_root_batched(
     top_scores = g + logits
     
     # Get indices of top-m actions (unordered)
-    top_idx = np.argpartition(-top_scores, range(m))[:m]
+    top_idx = np.argpartition(top_scores, -m)[-m:]
     
     timing_data['top_m_selection_time'] = time.perf_counter() - top_m_start
     
@@ -219,22 +260,15 @@ def gumbel_alpha_zero_root_batched(
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
     
+    # Precompute maxN_all once per root (across ALL legal children)
+    maxN_all = max(1, max(n_of_child(a) for a in legal_actions))
+
     def rank_key(a):
         """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
-        # σ(q) = (c_visit + max_b N(b))^c_scale * q
-        maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
-        sigma = (c_visit + maxN) ** c_scale
-        q_val = q_of_child(a)
-        n_val = n_of_child(a)
-        score_val = g[a] + logits[a] + sigma * q_val
-        
-        # DEBUG: Print Q-values and visit counts for low temperatures
-        # DISABLED: beta-based debug logging due to temperature scaling issues
-        # if beta <= 0.1 and verbose >= 5:
-        #     print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
-        #     print(f"    Components: gumbel={g[a]:.3f}, prior={logits[a]:.3f}, value={sigma * q_val:.3f}")
-        
-        return score_val
+        # sigma = (c_visit + maxN_all) ** c_scale, with root-wide scale
+        sigma = (c_visit + maxN_all) ** c_scale
+        q_tilde = completed_q(a)
+        return g[a] + logits[a] + sigma * q_tilde
     
     def per_arm_allocation(total_left, rounds_left, num_arms):
         """
