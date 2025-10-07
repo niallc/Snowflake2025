@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 import hex_ai
+from hex_ai.config import DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_START
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.trmph_processing.cli import create_config_from_args, process_files
 from hex_ai.file_utils import GracefulShutdown
@@ -52,13 +53,13 @@ class PipelineConfig:
     # Self-play configuration
     num_games: int = 100000
     num_workers: int = 3  # Number of self-play workers
-    temperature: float = 1.5
+    temperature: float = DEFAULT_TEMPERATURE_START
     batch_size: int = 128
-    cache_size: int = 60000
+    cache_size: int = DEFAULT_CACHE_SIZE
     
     # Data directories - explicit types to avoid confusion
     base_data_dir: str = "data"
-    raw_trmph_data_dirs: List[str] = field(default_factory=list)  # Raw .trmph files to collect
+    raw_trmph_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_SOURCE_DIRS])  # Raw .trmph files to collect
     cleaned_trmph_data_dirs: List[str] = field(default_factory=list)  # Already cleaned .trmph files
     processed_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])  # Existing processed data
     shard_ranges: List[str] = field(default_factory=lambda: ["all"])
@@ -801,8 +802,11 @@ Examples:
   # Use current best model from model_config.py
   python scripts/training_pipeline.py --use-current-best-model
   
-  # Collect raw data and train
-  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 data/tournament_play --run-game-collection --no-selfplay
+  # Collect raw data and train (tournament_play and sf25 included by default)
+  python scripts/training_pipeline.py --use-current-best-model --run-game-collection --no-selfplay
+  
+  # Collect from specific directories only
+  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 --run-game-collection --no-selfplay
   
   # Use existing cleaned data
   python scripts/training_pipeline.py --use-current-best-model --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 data/collected/sep8_games --no-selfplay --no-preprocessing --no-trmph-processing --no-shuffling
@@ -831,17 +835,18 @@ Examples:
     # Self-play configuration
     parser.add_argument("--num-games", type=int, default=100000, help="Number of games to generate")
     parser.add_argument("--num-workers", type=int, default=3, help="Number of self-play workers")
-    parser.add_argument("--temperature", type=float, default=1.5, help="Temperature for move sampling")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE_START, help=f"Temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
-    parser.add_argument("--cache-size", type=int, default=60000, help="Cache size for model inference")
+    parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE, help=f"Cache size for model inference (default: {DEFAULT_CACHE_SIZE})")
     
     # Data configuration
     parser.add_argument("--base-data-dir", default="data", help="Base directory for data")
     parser.add_argument("--selfplay-dir", help="Use existing raw self-play directory (skip self-play generation)")
     
     # Explicit data type arguments
-    parser.add_argument("--raw-trmph-data-dirs", type=str, nargs='+', default=[],
-                       help="Raw .trmph files to collect and clean (for game collection step)")
+    parser.add_argument("--raw-trmph-data-dirs", type=str, nargs='+', 
+                       default=[str(d) for d in hex_ai.data_config.DEFAULT_SOURCE_DIRS],
+                       help="Raw .trmph files to collect and clean (for game collection step). Defaults to tournament_play and sf25 directories.")
     parser.add_argument("--cleaned-trmph-data-dirs", type=str, nargs='+', default=[],
                        help="Already cleaned .trmph files to process (for preprocessing step)")
     parser.add_argument("--processed-data-dirs", type=str, nargs='+', 

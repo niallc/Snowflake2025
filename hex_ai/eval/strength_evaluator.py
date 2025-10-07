@@ -28,7 +28,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import ValuePredictor, red_ref_signed_to_ptm_ref_signed, policy_logits_to_probs
 from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
 from hex_ai.utils.state_utils import board_key
-from hex_ai.config import BOARD_SIZE
+from hex_ai.config import BOARD_SIZE, DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_END
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ class EvaluatorConfig:
     downweight_function: Optional[Callable[[int], float]] = None
     
     # Caching
-    cache_size: int = 60000
+    cache_size: int = DEFAULT_CACHE_SIZE
 
 
 @dataclass
@@ -253,8 +253,8 @@ class StrengthEvaluator:
             c_puct=self.cfg.mcts_c_puct,
             batch_cap=self.cfg.mcts_batch_cap if self.cfg.mcts_batch_cap is not None else 100,
             add_root_noise=False,  # Deterministic for analysis
-            temperature_start=0.01,  # Very low temperature for deterministic play
-            temperature_end=0.01,
+            temperature_start=DEFAULT_TEMPERATURE_END,  # Very low temperature for deterministic play
+            temperature_end=DEFAULT_TEMPERATURE_END,
             enable_gumbel_root_selection=self.cfg.enable_gumbel_root,
             confidence_termination_threshold=0.95,  # Conservative for quality
             enable_depth_discounting=False  # Disable for analysis

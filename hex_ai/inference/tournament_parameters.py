@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 import os
 
+from hex_ai.config import BOARD_SIZE
 from hex_ai.inference.model_config import get_model_path, validate_model_path, get_available_models
 
 
@@ -230,7 +231,7 @@ class UnifiedTournamentConfig:
                  
                  # Tournament settings
                  num_games: int = 10,
-                 board_size: int = 13,
+                 board_size: int = BOARD_SIZE,
                  random_seed: Optional[int] = None,
                  pie_rule: bool = False):
         

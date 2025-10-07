@@ -9,6 +9,7 @@ import os
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 
+from hex_ai.config import DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, BOARD_SIZE
 from hex_ai.inference.tournament_parameters import (
     TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
 )
@@ -70,7 +71,7 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
         # Add strategy-specific parameters
         if strategy_type == "mcts":
             config_dict["mcts_sims"] = participant_config["mcts_sims"]
-            config_dict["mcts_c_puct"] = participant_config.get("c_puct", 1.5)
+            config_dict["mcts_c_puct"] = participant_config.get("c_puct", DEFAULT_C_PUCT)
             config_dict["batch_size"] = participant_config.get("batch_size", 64)
             
             # Add Gumbel parameters if specified
@@ -143,7 +144,7 @@ def create_unified_config_from_args(
     gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
     gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
     num_games: int = 10,
-    board_size: int = 13,
+    board_size: int = BOARD_SIZE,
     random_seed: Optional[int] = None,
     pie_rule: bool = False
 ) -> UnifiedTournamentConfig:
@@ -190,7 +191,7 @@ def create_unified_config_from_args(
     
     # Create parameter configurations
     mcts_sims_config = TournamentParameterConfig(
-        default_value=200,  # Default MCTS simulations
+        default_value=DEFAULT_MCTS_SIMS,  # Default MCTS simulations
         per_strategy_values=to_list_if_needed(mcts_sims, num_strategies)
     )
     
@@ -210,7 +211,7 @@ def create_unified_config_from_args(
     c_pucts_config = None
     if c_pucts is not None:
         c_pucts_config = TournamentParameterConfig(
-            default_value=1.5,  # Default C_PUCT
+            default_value=DEFAULT_C_PUCT,  # Default C_PUCT
             per_strategy_values=to_list_if_needed(c_pucts, num_strategies)
         )
     

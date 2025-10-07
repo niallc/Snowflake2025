@@ -78,7 +78,10 @@ CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 # MCTS inference defaults
 DEFAULT_BATCH_CAP = 64  # Default batch size for neural network evaluation
 DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
-DEFAULT_MCTS_SIMS = 200  # Default number of MCTS simulations
+DEFAULT_MCTS_SIMS = 50  # Default number of MCTS simulations
+DEFAULT_CACHE_SIZE = 60000  # Default cache size for model inference
+DEFAULT_TEMPERATURE_START = 1.0  # Default starting temperature for move sampling
+DEFAULT_TEMPERATURE_END = 1.0  # Default ending temperature for move sampling
 DEFAULT_MCTS_DIRICHLET_ALPHA = 0.3  # Default Dirichlet noise alpha parameter
 DEFAULT_MCTS_DIRICHLET_EPS = 0.25  # Default Dirichlet noise epsilon parameter
 DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel AlphaZero root selection

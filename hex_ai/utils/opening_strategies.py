@@ -8,7 +8,8 @@ explore the kinds of configurations that high-level play would focus on.
 
 import random
 from typing import List, Optional, Tuple
-from hex_ai.inference.game_engine import HexGameState
+from hex_ai.config import BOARD_SIZE
+from hex_ai.inference.game_engine import HexGameState, make_empty_hex_state
 from hex_ai.utils.format_conversion import trmph_move_to_rowcol
 from hex_ai.enums import Player
 
@@ -16,7 +17,7 @@ from hex_ai.enums import Player
 class OpeningStrategy:
     """Base class for opening strategies."""
     
-    def __init__(self, board_size: int = 13):
+    def __init__(self, board_size: int = BOARD_SIZE):
         self.board_size = board_size
     
     def get_opening_move(self, game_index: int) -> Optional[Tuple[int, int]]:
@@ -47,7 +48,7 @@ class PieRuleOpeningStrategy(OpeningStrategy):
     4. Bad moves (b1, c1, d1, ..., l1) at reduced frequency
     """
     
-    def __init__(self, board_size: int = 13, bad_move_frequency: float = 0.1):
+    def __init__(self, board_size: int = BOARD_SIZE, bad_move_frequency: float = 0.1):
         super().__init__(board_size)
         self.bad_move_frequency = bad_move_frequency
         
@@ -147,7 +148,7 @@ class PieRuleOpeningStrategy(OpeningStrategy):
 class RandomOpeningStrategy(OpeningStrategy):
     """Opening strategy that randomly selects from a set of moves."""
     
-    def __init__(self, moves: List[Tuple[int, int]], board_size: int = 13, 
+    def __init__(self, moves: List[Tuple[int, int]], board_size: int = BOARD_SIZE, 
                  empty_board_prob: float = 0.1):
         super().__init__(board_size)
         self.moves = moves
@@ -165,7 +166,7 @@ class RandomOpeningStrategy(OpeningStrategy):
 
 
 def create_board_with_opening(opening_move: Optional[Tuple[int, int]], 
-                            board_size: int = 13) -> HexGameState:
+                            board_size: int = BOARD_SIZE) -> HexGameState:
     """
     Create a game state with a specific opening move.
     
@@ -191,7 +192,7 @@ def create_board_with_opening(opening_move: Optional[Tuple[int, int]],
 
 
 def get_trmph_opening_move(opening_move: Optional[Tuple[int, int]], 
-                          board_size: int = 13) -> Optional[str]:
+                          board_size: int = BOARD_SIZE) -> Optional[str]:
     """
     Convert opening move coordinates to TRMPH format.
     
@@ -210,7 +211,7 @@ def get_trmph_opening_move(opening_move: Optional[Tuple[int, int]],
     return rowcol_to_trmph(row, col, board_size)
 
 
-def create_pie_rule_strategy(board_size: int = 13, bad_move_frequency: float = 0.1) -> PieRuleOpeningStrategy:
+def create_pie_rule_strategy(board_size: int = BOARD_SIZE, bad_move_frequency: float = 0.1) -> PieRuleOpeningStrategy:
     """
     Create a pie rule opening strategy.
     

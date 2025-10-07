@@ -13,11 +13,12 @@ from datetime import datetime
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
-from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD
+from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
+from hex_ai.utils.tournament_logging import get_command_line
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 
@@ -31,15 +32,15 @@ def main():
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
-    parser.add_argument('--cache_size', type=int, default=60000, help='Cache size for model inference')
-    parser.add_argument('--mcts_sims', type=int, default=500, 
-                       help='Number of MCTS simulations per move')
-    parser.add_argument('--c-puct', type=float, default=1.5, 
-                       help='PUCT exploration constant for MCTS (default: 1.5)')
+    parser.add_argument('--cache_size', type=int, default=DEFAULT_CACHE_SIZE, help=f'Cache size for model inference (default: {DEFAULT_CACHE_SIZE})')
+    parser.add_argument('--mcts_sims', type=int, default=DEFAULT_MCTS_SIMS, 
+                       help=f'Number of MCTS simulations per move (default: {DEFAULT_MCTS_SIMS})')
+    parser.add_argument('--c-puct', type=float, default=DEFAULT_C_PUCT, 
+                       help=f'PUCT exploration constant for MCTS (default: {DEFAULT_C_PUCT})')
     parser.add_argument('--disable-gumbel', action='store_true',
                        help='Disable Gumbel-AlphaZero root selection for MCTS (enabled by default)')
-    parser.add_argument('--temperature', type=float, default=0.5, help='Starting temperature for move sampling')
-    parser.add_argument('--temperature_end', type=float, default=0.01, help='Final temperature for move sampling (for decay)')
+    parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE_START, help=f'Starting temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})')
+    parser.add_argument('--temperature_end', type=float, default=DEFAULT_TEMPERATURE_END, help=f'Final temperature for move sampling (for decay) (default: {DEFAULT_TEMPERATURE_END})')
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'random', 'none'],
                        help='Opening strategy: pie_rule (default), random, or none')
@@ -54,6 +55,13 @@ def main():
                        help='How often to print progress updates')
     
     args = parser.parse_args()
+    
+    # Get command line early - crash if not available
+    try:
+        command_line = get_command_line()
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
     
     # Don't set global seeds - let each game use different randomness
     # This ensures games are diverse while maintaining reproducibility within each game
@@ -108,13 +116,13 @@ def main():
     if args.opening_strategy != 'none':
         if args.opening_strategy == 'pie_rule':
             opening_strategy = create_pie_rule_strategy(
-                board_size=13,
+                board_size=BOARD_SIZE,
                 bad_move_frequency=args.bad_move_frequency
             )
         elif args.opening_strategy == 'random':
             # Create random strategy with some common opening moves
             common_moves = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (9, 9), (10, 10), (11, 11), (12, 12)]
-            opening_strategy = RandomOpeningStrategy(common_moves, board_size=13, empty_board_prob=0.1)
+            opening_strategy = RandomOpeningStrategy(common_moves, board_size=BOARD_SIZE, empty_board_prob=0.1)
     
     # Initialize self-play engine
     engine = SelfPlayEngine(
@@ -129,7 +137,8 @@ def main():
         output_dir=args.output_dir,
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
-        enable_gumbel=not args.disable_gumbel
+        enable_gumbel=not args.disable_gumbel,
+        command_line=command_line
     )
     
     start_time = time.time()
@@ -139,14 +148,14 @@ def main():
         if args.streaming_save:
             games = engine.generate_games_streaming(
                 num_games=args.num_games,
-                board_size=13,
+                board_size=BOARD_SIZE,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
         else:
             games = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
-                board_size=13,
+                board_size=BOARD_SIZE,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )

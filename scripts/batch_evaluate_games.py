@@ -33,7 +33,7 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.enums import Player
 from hex_ai.data_processing import extract_games_from_file_flexible, parse_trmph_to_gamerecord
-from hex_ai.config import BOARD_SIZE
+from hex_ai.config import BOARD_SIZE, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -337,8 +337,8 @@ Examples:
                        help="Use neural network only evaluation (faster but lower quality)")
     
     # MCTS parameters
-    parser.add_argument("--mcts-sims", type=int, default=200,
-                       help="MCTS simulations per move (default: 200)")
+    parser.add_argument("--mcts-sims", type=int, default=DEFAULT_MCTS_SIMS,
+                       help=f"MCTS simulations per move (default: {DEFAULT_MCTS_SIMS})")
     parser.add_argument("--c-puct", type=float, default=3.0,
                        help="MCTS C_PUCT parameter (default: 3.0)")
     parser.add_argument("--batch-cap", type=int, help="MCTS batch size limit")
@@ -377,8 +377,8 @@ Examples:
     parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
     parser.add_argument("--batch-nn", action="store_true", default=True,
                        help="Use batched neural network inference (default: True)")
-    parser.add_argument("--cache-size", type=int, default=60000,
-                       help="Cache size for evaluations (default: 60000)")
+    parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE,
+                       help=f"Cache size for evaluations (default: {DEFAULT_CACHE_SIZE})")
     
     # Verbosity
     parser.add_argument("--verbose", "-v", action="count", default=0,
