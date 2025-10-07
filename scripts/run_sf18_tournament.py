@@ -744,6 +744,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
             if config.config.get('mcts_sims') is not None:
                 param_parts.append(f"sims{config.config['mcts_sims']}")
+            if config.config.get('gumbel_c_scale') is not None:
+                param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
             
             param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
             unique_name = f"{model_name}_{config.original_name}{param_suffix}"
@@ -762,7 +764,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 str(config.config.get('enable_gumbel_root_selection', '')),
                 str(config.config.get('gumbel_sim_threshold', '')),
                 str(config.config.get('gumbel_candidate_log_base', '')),
-                str(config.config.get('gumbel_candidate_log_offset', ''))
+                str(config.config.get('gumbel_candidate_log_offset', '')),
+                str(config.config.get('gumbel_c_scale', ''))
             ]
             signature = ':'.join(signature_parts)
             strategy_signatures.append(signature)

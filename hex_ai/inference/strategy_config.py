@@ -9,7 +9,7 @@ import os
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 
-from hex_ai.config import DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, BOARD_SIZE
+from hex_ai.config import DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_GUMBEL_C_SCALE, BOARD_SIZE
 from hex_ai.inference.tournament_parameters import (
     TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
 )
@@ -87,6 +87,8 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
             if "gumbel_batch_scaling_factor" in participant_config:
                 config_dict["gumbel_batch_scaling_factor"] = participant_config["gumbel_batch_scaling_factor"]
+            if "gumbel_c_scale" in participant_config:
+                config_dict["gumbel_c_scale"] = participant_config["gumbel_c_scale"]
         elif strategy_type == "policy":
             # Policy strategies need minimal config - just temperature for consistency
             # The temperature is also stored as a separate field on StrategyConfig
@@ -143,6 +145,7 @@ def create_unified_config_from_args(
     gumbel_candidate_log_offsets: Optional[Union[float, List[float]]] = None,
     gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
     gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
+    gumbel_c_scales: Optional[Union[float, List[float]]] = None,
     num_games: int = 10,
     board_size: int = BOARD_SIZE,
     random_seed: Optional[int] = None,
@@ -168,6 +171,7 @@ def create_unified_config_from_args(
         gumbel_candidate_log_offsets: Gumbel candidate log offset(s)
         gumbel_progressive_widening: Gumbel progressive widening flag(s)
         gumbel_batch_scaling_factors: Gumbel batch scaling factor(s)
+        gumbel_c_scales: Gumbel c_scale parameter(s)
         num_games: Number of games per pair
         board_size: Board size
         random_seed: Random seed
@@ -257,6 +261,13 @@ def create_unified_config_from_args(
             per_strategy_values=to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
         )
     
+    gumbel_c_scales_config = None
+    if gumbel_c_scales is not None:
+        gumbel_c_scales_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_C_SCALE,  # Default c_scale from config
+            per_strategy_values=to_list_if_needed(gumbel_c_scales, num_strategies)
+        )
+    
     return UnifiedTournamentConfig(
         models=model_config,
         strategies=strategies,
@@ -270,6 +281,7 @@ def create_unified_config_from_args(
         gumbel_candidate_log_offsets=gumbel_candidate_log_offsets_config,
         gumbel_progressive_widening=gumbel_progressive_widening_config,
         gumbel_batch_scaling_factors=gumbel_batch_scaling_factors_config,
+        gumbel_c_scales=gumbel_c_scales_config,
         num_games=num_games,
         board_size=board_size,
         random_seed=random_seed,

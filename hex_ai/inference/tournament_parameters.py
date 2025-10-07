@@ -228,6 +228,7 @@ class UnifiedTournamentConfig:
                  gumbel_candidate_log_offsets: Optional[TournamentParameterConfig] = None,
                  gumbel_progressive_widening: Optional[TournamentParameterConfig] = None,
                  gumbel_batch_scaling_factors: Optional[TournamentParameterConfig] = None,
+                 gumbel_c_scales: Optional[TournamentParameterConfig] = None,
                  
                  # Tournament settings
                  num_games: int = 10,
@@ -247,6 +248,7 @@ class UnifiedTournamentConfig:
         self.gumbel_candidate_log_offsets = gumbel_candidate_log_offsets
         self.gumbel_progressive_widening = gumbel_progressive_widening
         self.gumbel_batch_scaling_factors = gumbel_batch_scaling_factors
+        self.gumbel_c_scales = gumbel_c_scales
         self.num_games = num_games
         self.board_size = board_size
         self.random_seed = random_seed
@@ -325,5 +327,7 @@ class UnifiedTournamentConfig:
             config['gumbel_progressive_widening'] = self.gumbel_progressive_widening.get_value_for_participant(participant_label, strategy_index)
         if self.gumbel_batch_scaling_factors:
             config['gumbel_batch_scaling_factor'] = self.gumbel_batch_scaling_factors.get_value_for_participant(participant_label, strategy_index)
+        if self.gumbel_c_scales:
+            config['gumbel_c_scale'] = self.gumbel_c_scales.get_value_for_participant(participant_label, strategy_index)
         
         return config

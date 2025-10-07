@@ -359,6 +359,10 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     if hasattr(args, 'gumbel_batch_scaling_factors') and args.gumbel_batch_scaling_factors:
         gumbel_batch_scaling_factors = [float(s.strip()) for s in args.gumbel_batch_scaling_factors.split(',')]
     
+    gumbel_c_scales = None
+    if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale:
+        gumbel_c_scales = [float(s.strip()) for s in args.gumbel_c_scale.split(',')]
+    
     # Parse per-strategy temperatures
     temperatures = None
     if args.temperatures:
@@ -377,5 +381,6 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
         'gumbel_candidate_log_offsets': gumbel_candidate_log_offsets,
         'gumbel_progressive_widening': gumbel_progressive_widening,
         'gumbel_batch_scaling_factors': gumbel_batch_scaling_factors,
+        'gumbel_c_scales': gumbel_c_scales,
         'temperatures': temperatures
     }

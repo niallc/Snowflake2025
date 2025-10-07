@@ -73,7 +73,7 @@ from hex_ai.utils.gumbel_validation import validate_gumbel_configurations, print
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
-from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
+from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT, DEFAULT_GUMBEL_C_SCALE
 from hex_ai.utils.format_conversion import (
     rowcol_to_trmph, trmph_to_moves
 )
@@ -336,6 +336,8 @@ Examples:
                        help='Comma-separated boolean values to enable progressive widening batching for Gumbel strategies (e.g., "true,false,true")')
     parser.add_argument('--gumbel-batch-scaling-factors', type=str,
                        help='Comma-separated scaling factors for progressive widening batching (e.g., "0.5,1.0,2.0")')
+    parser.add_argument('--gumbel-c-scale', type=str,
+                       help=f'Comma-separated c_scale parameters for Gumbel AlphaZero root selection (e.g., "1000,5000,10000", default: {DEFAULT_GUMBEL_C_SCALE})')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -482,6 +484,7 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
     gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
     gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    gumbel_c_scales = parsed_params['gumbel_c_scales']
     temperatures = parsed_params['temperatures']
     
     try:
@@ -497,6 +500,7 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_sim_thresholds=gumbel_sim_thresholds,
             gumbel_candidate_log_bases=gumbel_candidate_log_bases,
             gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
+            gumbel_c_scales=gumbel_c_scales,
             num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
             board_size=13,
             random_seed=args.seed,
@@ -523,6 +527,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
             if config.config.get('mcts_sims') is not None:
                 param_parts.append(f"sims{config.config['mcts_sims']}")
+            if config.config.get('gumbel_c_scale') is not None:
+                param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
             
             param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
             unique_name = f"{model_name}_{config.original_name}{param_suffix}"
@@ -543,7 +549,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 str(config.config.get('enable_gumbel_root_selection', '')),
                 str(config.config.get('gumbel_sim_threshold', '')),
                 str(config.config.get('gumbel_candidate_log_base', '')),
-                str(config.config.get('gumbel_candidate_log_offset', ''))
+                str(config.config.get('gumbel_candidate_log_offset', '')),
+                str(config.config.get('gumbel_c_scale', ''))
             ]
             signature = ':'.join(signature_parts)
             strategy_signatures.append(signature)
