@@ -8,6 +8,13 @@ from typing import Dict, List, Tuple, Set
 from collections import defaultdict
 
 from hex_ai.utils.gumbel_utils import calculate_power_law_candidates
+from hex_ai.config import (
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX
+)
 
 def simulate_sequential_halving(
     total_sims: int,
@@ -211,15 +218,17 @@ def check_tournament_gumbel_configs(sim_counts: List[int] = None):
     configs = [
         {
             'name': 'Tournament (MoveSelectionConfig)',
-            'candidate_log_base': MoveSelectionConfig.gumbel_candidate_log_base,
-            'candidate_log_offset': MoveSelectionConfig.gumbel_candidate_log_offset,
+            'candidate_power_scale': MoveSelectionConfig.gumbel_candidate_power_scale,
+            'candidate_power_rate': MoveSelectionConfig.gumbel_candidate_power_rate,
+            'candidate_power_offset': MoveSelectionConfig.gumbel_candidate_power_offset,
             'candidate_min': MoveSelectionConfig.gumbel_candidate_min,
             'candidate_max': MoveSelectionConfig.gumbel_candidate_max
         },
         {
             'name': 'Web App (config.py defaults)',
-            'candidate_log_base': DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
-            'candidate_log_offset': DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+            'candidate_power_scale': DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+            'candidate_power_rate': DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+            'candidate_power_offset': DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
             'candidate_min': DEFAULT_GUMBEL_CANDIDATE_MIN,
             'candidate_max': DEFAULT_GUMBEL_CANDIDATE_MAX
         }
@@ -258,14 +267,15 @@ def check_gumbel_configurations(args, strategy_configs):
             # Create a config dict for this strategy
             # Use command line values if specified, otherwise use defaults from config
             config_dict = {
-                'candidate_log_base': strategy_config.config.get('gumbel_candidate_log_base', MoveSelectionConfig.gumbel_candidate_log_base),
-                'candidate_log_offset': strategy_config.config.get('gumbel_candidate_log_offset', MoveSelectionConfig.gumbel_candidate_log_offset),
+                'candidate_power_scale': strategy_config.config.get('gumbel_candidate_power_scale', MoveSelectionConfig.gumbel_candidate_power_scale),
+                'candidate_power_rate': strategy_config.config.get('gumbel_candidate_power_rate', MoveSelectionConfig.gumbel_candidate_power_rate),
+                'candidate_power_offset': strategy_config.config.get('gumbel_candidate_power_offset', MoveSelectionConfig.gumbel_candidate_power_offset),
                 'candidate_min': MoveSelectionConfig.gumbel_candidate_min,  # Always use default from config
                 'candidate_max': MoveSelectionConfig.gumbel_candidate_max   # Always use default from config
             }
             
             # Create a unique name for this configuration
-            config_name = f"log_base={config_dict['candidate_log_base']}, offset={config_dict['candidate_log_offset']}"
+            config_name = f"power_scale={config_dict['candidate_power_scale']}, rate={config_dict['candidate_power_rate']}, offset={config_dict['candidate_power_offset']}"
             
             if config_name not in config_names:
                 config_dict['name'] = config_name

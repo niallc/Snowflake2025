@@ -145,8 +145,9 @@ class MCTSStrategy(MoveSelectionStrategy):
             gumbel_c_visit=config.gumbel_c_visit,
             gumbel_c_scale=config.gumbel_c_scale,
             gumbel_m_candidates=config.gumbel_m_candidates,
-            gumbel_candidate_log_base=config.gumbel_candidate_log_base,
-            gumbel_candidate_log_offset=config.gumbel_candidate_log_offset,
+            gumbel_candidate_power_scale=config.gumbel_candidate_power_scale,
+            gumbel_candidate_power_rate=config.gumbel_candidate_power_rate,
+            gumbel_candidate_power_offset=config.gumbel_candidate_power_offset,
             gumbel_candidate_min=config.gumbel_candidate_min,
             gumbel_candidate_max=config.gumbel_candidate_max
         )

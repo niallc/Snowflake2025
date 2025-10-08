@@ -532,8 +532,10 @@ class BaselineMCTSConfig:
             raise ValueError(f"gumbel_m_candidates must be positive, got {self.gumbel_m_candidates}")
         
         # Validate Gumbel candidate scaling parameters
-        if self.gumbel_candidate_log_base <= 1.0:
-            raise ValueError(f"gumbel_candidate_log_base must be > 1.0, got {self.gumbel_candidate_log_base}")
+        if self.gumbel_candidate_power_scale <= 0.0:
+            raise ValueError(f"gumbel_candidate_power_scale must be > 0.0, got {self.gumbel_candidate_power_scale}")
+        if self.gumbel_candidate_power_rate <= 0.0:
+            raise ValueError(f"gumbel_candidate_power_rate must be > 0.0, got {self.gumbel_candidate_power_rate}")
         if self.gumbel_candidate_min <= 0:
             raise ValueError(f"gumbel_candidate_min must be positive, got {self.gumbel_candidate_min}")
         if self.gumbel_candidate_max <= 0:
@@ -1144,8 +1146,9 @@ class BaselineMCTS:
             c_scale=self.cfg.gumbel_c_scale,
             temperature=tau,
             verbose=verbose,
-            candidate_log_base=self.cfg.gumbel_candidate_log_base,
-            candidate_log_offset=self.cfg.gumbel_candidate_log_offset,
+            candidate_power_scale=self.cfg.gumbel_candidate_power_scale,
+            candidate_power_rate=self.cfg.gumbel_candidate_power_rate,
+            candidate_power_offset=self.cfg.gumbel_candidate_power_offset,
             candidate_min=self.cfg.gumbel_candidate_min,
             candidate_max=self.cfg.gumbel_candidate_max,
             use_gumbel_in_final_eval=self.cfg.gumbel_use_gumbel_in_final_eval,

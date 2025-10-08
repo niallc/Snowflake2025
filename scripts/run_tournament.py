@@ -484,8 +484,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     c_pucts = parsed_params['c_pucts']
     enable_gumbel = parsed_params['enable_gumbel']
     gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
-    gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
-    gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    gumbel_candidate_power_scales = parsed_params['gumbel_candidate_power_scales']
+    gumbel_candidate_power_rates = parsed_params['gumbel_candidate_power_rates']
+    gumbel_candidate_power_offsets = parsed_params['gumbel_candidate_power_offsets']
     gumbel_c_scales = parsed_params['gumbel_c_scales']
     temperatures = parsed_params['temperatures']
     
@@ -500,8 +501,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             c_pucts=c_pucts,
             enable_gumbel=enable_gumbel,
             gumbel_sim_thresholds=gumbel_sim_thresholds,
-            gumbel_candidate_log_bases=gumbel_candidate_log_bases,
-            gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
+            gumbel_candidate_power_scales=gumbel_candidate_power_scales,
+            gumbel_candidate_power_rates=gumbel_candidate_power_rates,
+            gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             gumbel_c_scales=gumbel_c_scales,
             num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
             board_size=13,
@@ -550,8 +552,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 str(config.config.get('batch_size', '')),
                 str(config.config.get('enable_gumbel_root_selection', '')),
                 str(config.config.get('gumbel_sim_threshold', '')),
-                str(config.config.get('gumbel_candidate_log_base', '')),
-                str(config.config.get('gumbel_candidate_log_offset', '')),
+                str(config.config.get('gumbel_candidate_power_scale', '')),
+                str(config.config.get('gumbel_candidate_power_rate', '')),
+                str(config.config.get('gumbel_candidate_power_offset', '')),
                 str(config.config.get('gumbel_c_scale', ''))
             ]
             signature = ':'.join(signature_parts)
@@ -795,8 +798,9 @@ def main():
         gumbel_sim_threshold = None
         gumbel_c_visit = None
         gumbel_c_scale = None
-        gumbel_candidate_log_base = None
-        gumbel_candidate_log_offset = None
+        gumbel_candidate_power_scale = None
+        gumbel_candidate_power_rate = None
+        gumbel_candidate_power_offset = None
         gumbel_m_candidates = None
         
         for config in strategy_configs:
@@ -804,8 +808,9 @@ def main():
                 gumbel_sim_threshold = config.config.get('gumbel_sim_threshold', gumbel_sim_threshold)
                 gumbel_c_visit = config.config.get('gumbel_c_visit', gumbel_c_visit)
                 gumbel_c_scale = config.config.get('gumbel_c_scale', gumbel_c_scale)
-                gumbel_candidate_log_base = config.config.get('gumbel_candidate_log_base', gumbel_candidate_log_base)
-                gumbel_candidate_log_offset = config.config.get('gumbel_candidate_log_offset', gumbel_candidate_log_offset)
+                gumbel_candidate_power_scale = config.config.get('gumbel_candidate_power_scale', gumbel_candidate_power_scale)
+                gumbel_candidate_power_rate = config.config.get('gumbel_candidate_power_rate', gumbel_candidate_power_rate)
+                gumbel_candidate_power_offset = config.config.get('gumbel_candidate_power_offset', gumbel_candidate_power_offset)
                 gumbel_m_candidates = config.config.get('gumbel_m_candidates', gumbel_m_candidates)
     else:
         # No strategy configs for knockout-only tournaments
@@ -813,8 +818,9 @@ def main():
         gumbel_sim_threshold = None
         gumbel_c_visit = None
         gumbel_c_scale = None
-        gumbel_candidate_log_base = None
-        gumbel_candidate_log_offset = None
+        gumbel_candidate_power_scale = None
+        gumbel_candidate_power_rate = None
+        gumbel_candidate_power_offset = None
         gumbel_m_candidates = None
     
     # Create unified script config (skip for knockout-only tournaments)
@@ -835,8 +841,9 @@ def main():
             gumbel_sim_threshold=gumbel_sim_threshold,
             gumbel_c_visit=gumbel_c_visit,
             gumbel_c_scale=gumbel_c_scale,
-            gumbel_candidate_log_base=gumbel_candidate_log_base,
-            gumbel_candidate_log_offset=gumbel_candidate_log_offset,
+            gumbel_candidate_power_scale=gumbel_candidate_power_scale,
+            gumbel_candidate_power_rate=gumbel_candidate_power_rate,
+            gumbel_candidate_power_offset=gumbel_candidate_power_offset,
             gumbel_m_candidates=gumbel_m_candidates
         )
     else:

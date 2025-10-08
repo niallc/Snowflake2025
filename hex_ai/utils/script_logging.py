@@ -38,8 +38,9 @@ class ScriptConfig:
     gumbel_c_visit: Optional[float] = None
     gumbel_c_scale: Optional[float] = None
     gumbel_use_gumbel_in_final_eval: Optional[bool] = None
-    gumbel_candidate_log_base: Optional[float] = None
-    gumbel_candidate_log_offset: Optional[float] = None
+    gumbel_candidate_power_scale: Optional[float] = None
+    gumbel_candidate_power_rate: Optional[float] = None
+    gumbel_candidate_power_offset: Optional[float] = None
     gumbel_m_candidates: Optional[int] = None
     search_widths: Optional[List[int]] = None
     output_dir: Optional[str] = None
@@ -244,10 +245,12 @@ def _generate_gumbel_summary(config: ScriptConfig) -> Optional[str]:
                 summary_parts.append(f"c_scale={config.gumbel_c_scale}")
             if config.gumbel_use_gumbel_in_final_eval is not None:
                 summary_parts.append(f"gumbel_in_eval={config.gumbel_use_gumbel_in_final_eval}")
-            if config.gumbel_candidate_log_base:
-                summary_parts.append(f"log_base={config.gumbel_candidate_log_base}")
-            if config.gumbel_candidate_log_offset:
-                summary_parts.append(f"log_offset={config.gumbel_candidate_log_offset}")
+            if config.gumbel_candidate_power_scale:
+                summary_parts.append(f"power_scale={config.gumbel_candidate_power_scale}")
+            if config.gumbel_candidate_power_rate:
+                summary_parts.append(f"power_rate={config.gumbel_candidate_power_rate}")
+            if config.gumbel_candidate_power_offset:
+                summary_parts.append(f"power_offset={config.gumbel_candidate_power_offset}")
             if config.gumbel_m_candidates:
                 summary_parts.append(f"m_candidates={config.gumbel_m_candidates}")
             return f"Gumbel configuration: {', '.join(summary_parts)}"
@@ -389,8 +392,9 @@ def create_script_config_from_args(
         gumbel_c_visit=getattr(args, 'gumbel_c_visit', None),
         gumbel_c_scale=getattr(args, 'gumbel_c_scale', None),
         gumbel_use_gumbel_in_final_eval=getattr(args, 'gumbel_use_gumbel_in_final_eval', None),
-        gumbel_candidate_log_base=getattr(args, 'gumbel_candidate_log_base', None),
-        gumbel_candidate_log_offset=getattr(args, 'gumbel_candidate_log_offset', None),
+        gumbel_candidate_power_scale=getattr(args, 'gumbel_candidate_power_scale', None),
+        gumbel_candidate_power_rate=getattr(args, 'gumbel_candidate_power_rate', None),
+        gumbel_candidate_power_offset=getattr(args, 'gumbel_candidate_power_offset', None),
         gumbel_m_candidates=getattr(args, 'gumbel_m_candidates', None),
         search_widths=getattr(args, 'search_widths', None),
         output_dir=getattr(args, 'output_dir', None),

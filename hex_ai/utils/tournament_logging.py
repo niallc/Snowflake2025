@@ -178,10 +178,12 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
                             strategy_info += f" (gumbel_c_visit={mcts_config['gumbel_c_visit']})"
                         if 'gumbel_c_scale' in mcts_config:
                             strategy_info += f" (gumbel_c_scale={mcts_config['gumbel_c_scale']})"
-                        if 'gumbel_candidate_log_base' in mcts_config:
-                            strategy_info += f" (gumbel_log_base={mcts_config['gumbel_candidate_log_base']})"
-                        if 'gumbel_candidate_log_offset' in mcts_config:
-                            strategy_info += f" (gumbel_log_offset={mcts_config['gumbel_candidate_log_offset']})"
+                        if 'gumbel_candidate_power_scale' in mcts_config:
+                            strategy_info += f" (gumbel_power_scale={mcts_config['gumbel_candidate_power_scale']})"
+                        if 'gumbel_candidate_power_rate' in mcts_config:
+                            strategy_info += f" (gumbel_power_rate={mcts_config['gumbel_candidate_power_rate']})"
+                        if 'gumbel_candidate_power_offset' in mcts_config:
+                            strategy_info += f" (gumbel_power_offset={mcts_config['gumbel_candidate_power_offset']})"
                         if 'gumbel_m_candidates' in mcts_config:
                             strategy_info += f" (gumbel_m_candidates={mcts_config['gumbel_m_candidates']})"
                     else:

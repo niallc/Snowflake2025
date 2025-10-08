@@ -702,8 +702,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     c_pucts = parsed_params['c_pucts']
     enable_gumbel = parsed_params['enable_gumbel']
     gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
-    gumbel_candidate_log_bases = parsed_params['gumbel_candidate_log_bases']
-    gumbel_candidate_log_offsets = parsed_params['gumbel_candidate_log_offsets']
+    gumbel_candidate_power_scales = parsed_params['gumbel_candidate_power_scales']
+    gumbel_candidate_power_rates = parsed_params['gumbel_candidate_power_rates']
+    gumbel_candidate_power_offsets = parsed_params['gumbel_candidate_power_offsets']
     temperatures = parsed_params['temperatures']
     
     try:
@@ -717,8 +718,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             c_pucts=c_pucts,
             enable_gumbel=enable_gumbel,
             gumbel_sim_thresholds=gumbel_sim_thresholds,
-            gumbel_candidate_log_bases=gumbel_candidate_log_bases,
-            gumbel_candidate_log_offsets=gumbel_candidate_log_offsets,
+            gumbel_candidate_power_scales=gumbel_candidate_power_scales,
+            gumbel_candidate_power_rates=gumbel_candidate_power_rates,
+            gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             num_games=args.num_openings,
             board_size=13,
             random_seed=args.seed,
@@ -763,8 +765,9 @@ def create_strategy_configurations(args, strategy_names, model_paths):
                 str(config.config.get('batch_size', '')),
                 str(config.config.get('enable_gumbel_root_selection', '')),
                 str(config.config.get('gumbel_sim_threshold', '')),
-                str(config.config.get('gumbel_candidate_log_base', '')),
-                str(config.config.get('gumbel_candidate_log_offset', '')),
+                str(config.config.get('gumbel_candidate_power_scale', '')),
+                str(config.config.get('gumbel_candidate_power_rate', '')),
+                str(config.config.get('gumbel_candidate_power_offset', '')),
                 str(config.config.get('gumbel_c_scale', ''))
             ]
             signature = ':'.join(signature_parts)

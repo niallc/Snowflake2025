@@ -343,13 +343,17 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     if args.gumbel_sim_threshold:
         gumbel_sim_thresholds = [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
     
-    gumbel_candidate_log_bases = None
-    if args.gumbel_candidate_log_base:
-        gumbel_candidate_log_bases = [float(s.strip()) for s in args.gumbel_candidate_log_base.split(',')]
+    gumbel_candidate_power_scales = None
+    if args.gumbel_candidate_power_scale:
+        gumbel_candidate_power_scales = [float(s.strip()) for s in args.gumbel_candidate_power_scale.split(',')]
     
-    gumbel_candidate_log_offsets = None
-    if args.gumbel_candidate_log_offset:
-        gumbel_candidate_log_offsets = [float(s.strip()) for s in args.gumbel_candidate_log_offset.split(',')]
+    gumbel_candidate_power_rates = None
+    if args.gumbel_candidate_power_rate:
+        gumbel_candidate_power_rates = [float(s.strip()) for s in args.gumbel_candidate_power_rate.split(',')]
+    
+    gumbel_candidate_power_offsets = None
+    if args.gumbel_candidate_power_offset:
+        gumbel_candidate_power_offsets = [float(s.strip()) for s in args.gumbel_candidate_power_offset.split(',')]
     
     gumbel_progressive_widening = None
     if hasattr(args, 'gumbel_progressive_widening') and args.gumbel_progressive_widening:
@@ -377,8 +381,9 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
         'c_pucts': c_pucts,
         'enable_gumbel': enable_gumbel,
         'gumbel_sim_thresholds': gumbel_sim_thresholds,
-        'gumbel_candidate_log_bases': gumbel_candidate_log_bases,
-        'gumbel_candidate_log_offsets': gumbel_candidate_log_offsets,
+        'gumbel_candidate_power_scales': gumbel_candidate_power_scales,
+        'gumbel_candidate_power_rates': gumbel_candidate_power_rates,
+        'gumbel_candidate_power_offsets': gumbel_candidate_power_offsets,
         'gumbel_progressive_widening': gumbel_progressive_widening,
         'gumbel_batch_scaling_factors': gumbel_batch_scaling_factors,
         'gumbel_c_scales': gumbel_c_scales,

@@ -9,7 +9,10 @@ import os
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 
-from hex_ai.config import DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_GUMBEL_C_SCALE, BOARD_SIZE
+from hex_ai.config import (
+    DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_GUMBEL_C_SCALE, BOARD_SIZE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE, DEFAULT_GUMBEL_CANDIDATE_POWER_RATE, DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET
+)
 from hex_ai.inference.tournament_parameters import (
     TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
 )
@@ -79,10 +82,12 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 config_dict["enable_gumbel_root_selection"] = participant_config["enable_gumbel"]
             if "gumbel_sim_threshold" in participant_config:
                 config_dict["gumbel_sim_threshold"] = participant_config["gumbel_sim_threshold"]
-            if "gumbel_candidate_log_base" in participant_config:
-                config_dict["gumbel_candidate_log_base"] = participant_config["gumbel_candidate_log_base"]
-            if "gumbel_candidate_log_offset" in participant_config:
-                config_dict["gumbel_candidate_log_offset"] = participant_config["gumbel_candidate_log_offset"]
+            if "gumbel_candidate_power_scale" in participant_config:
+                config_dict["gumbel_candidate_power_scale"] = participant_config["gumbel_candidate_power_scale"]
+            if "gumbel_candidate_power_rate" in participant_config:
+                config_dict["gumbel_candidate_power_rate"] = participant_config["gumbel_candidate_power_rate"]
+            if "gumbel_candidate_power_offset" in participant_config:
+                config_dict["gumbel_candidate_power_offset"] = participant_config["gumbel_candidate_power_offset"]
             if "gumbel_progressive_widening" in participant_config:
                 config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
             if "gumbel_batch_scaling_factor" in participant_config:
@@ -141,8 +146,9 @@ def create_unified_config_from_args(
     c_pucts: Optional[Union[float, List[float]]] = None,
     enable_gumbel: Optional[Union[bool, List[bool]]] = None,
     gumbel_sim_thresholds: Optional[Union[int, List[int]]] = None,
-    gumbel_candidate_log_bases: Optional[Union[float, List[float]]] = None,
-    gumbel_candidate_log_offsets: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_scales: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_rates: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
     gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
     gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
     gumbel_c_scales: Optional[Union[float, List[float]]] = None,
@@ -167,8 +173,9 @@ def create_unified_config_from_args(
         c_pucts: C_PUCT value(s)
         enable_gumbel: Gumbel enable flag(s)
         gumbel_sim_thresholds: Gumbel simulation threshold(s)
-        gumbel_candidate_log_bases: Gumbel candidate log base(s)
-        gumbel_candidate_log_offsets: Gumbel candidate log offset(s)
+        gumbel_candidate_power_scales: Gumbel candidate power scale(s)
+        gumbel_candidate_power_rates: Gumbel candidate power rate(s)
+        gumbel_candidate_power_offsets: Gumbel candidate power offset(s)
         gumbel_progressive_widening: Gumbel progressive widening flag(s)
         gumbel_batch_scaling_factors: Gumbel batch scaling factor(s)
         gumbel_c_scales: Gumbel c_scale parameter(s)
@@ -233,18 +240,25 @@ def create_unified_config_from_args(
             per_strategy_values=to_list_if_needed(gumbel_sim_thresholds, num_strategies)
         )
     
-    gumbel_candidate_log_bases_config = None
-    if gumbel_candidate_log_bases is not None:
-        gumbel_candidate_log_bases_config = TournamentParameterConfig(
-            default_value=1.5,  # Default log base
-            per_strategy_values=to_list_if_needed(gumbel_candidate_log_bases, num_strategies)
+    gumbel_candidate_power_scales_config = None
+    if gumbel_candidate_power_scales is not None:
+        gumbel_candidate_power_scales_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_scales, num_strategies)
         )
     
-    gumbel_candidate_log_offsets_config = None
-    if gumbel_candidate_log_offsets is not None:
-        gumbel_candidate_log_offsets_config = TournamentParameterConfig(
-            default_value=-1.5,  # Default log offset
-            per_strategy_values=to_list_if_needed(gumbel_candidate_log_offsets, num_strategies)
+    gumbel_candidate_power_rates_config = None
+    if gumbel_candidate_power_rates is not None:
+        gumbel_candidate_power_rates_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_rates, num_strategies)
+        )
+    
+    gumbel_candidate_power_offsets_config = None
+    if gumbel_candidate_power_offsets is not None:
+        gumbel_candidate_power_offsets_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_offsets, num_strategies)
         )
     
     gumbel_progressive_widening_config = None
@@ -277,8 +291,8 @@ def create_unified_config_from_args(
         c_pucts=c_pucts_config,
         enable_gumbel=enable_gumbel_config,
         gumbel_sim_thresholds=gumbel_sim_thresholds_config,
-        gumbel_candidate_log_bases=gumbel_candidate_log_bases_config,
-        gumbel_candidate_log_offsets=gumbel_candidate_log_offsets_config,
+        gumbel_candidate_power_scales=gumbel_candidate_power_scales_config,
+        gumbel_candidate_power_offsets=gumbel_candidate_power_offsets_config,
         gumbel_progressive_widening=gumbel_progressive_widening_config,
         gumbel_batch_scaling_factors=gumbel_batch_scaling_factors_config,
         gumbel_c_scales=gumbel_c_scales_config,
