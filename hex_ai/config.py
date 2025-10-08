@@ -91,7 +91,7 @@ DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move dete
 
 # Gumbel candidate scaling defaults
 DEFAULT_GUMBEL_CANDIDATE_LOG_BASE = 1.15  # Base for logarithmic candidate scaling
-DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET = 1.0  # Offset for logarithmic candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET = -3.0  # Offset for logarithmic candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
 DEFAULT_GUMBEL_CANDIDATE_MAX = 110  # Maximum number of candidates
 

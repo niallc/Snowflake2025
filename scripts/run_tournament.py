@@ -360,6 +360,8 @@ Examples:
                        help='Number of winners from knockout stage to advance (default: 2)')
     parser.add_argument('--round-robin-games', type=int, default=100,
                        help='Number of games per round-robin match (default: 100)')
+    parser.add_argument('--run-desc', type=str,
+                       help='Description of this tournament run (e.g., "Testing c_scale = 1.5") - will be included in output headers')
     
     return parser.parse_args()
 
@@ -629,7 +631,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         top_k=args.top_k,
         round_robin_games=args.round_robin_games,
         epoch_range=epoch_range,
-        command_line=command_line
+        command_line=command_line,
+        run_desc=args.run_desc
     )
     
     print("Running 2-stage tournament...")

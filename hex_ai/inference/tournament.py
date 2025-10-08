@@ -141,7 +141,8 @@ class TournamentPlayConfig:
         strategy: str = "policy",
         strategy_config: Optional[Dict[str, Any]] = None,
         participant_temperatures: Optional[Dict[str, float]] = None,
-        command_line: Optional[str] = None
+        command_line: Optional[str] = None,
+        run_desc: Optional[str] = None
     ):
         self.temperature = temperature
         self.participant_temperatures = participant_temperatures or {}
@@ -154,6 +155,7 @@ class TournamentPlayConfig:
         self.strategy = strategy
         self.strategy_config = strategy_config or {}
         self.command_line = command_line
+        self.run_desc = run_desc
         random.seed(random_seed)
         np.random.seed(random_seed)
     

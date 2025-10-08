@@ -41,7 +41,8 @@ class TwoStageTournament:
                  top_k: int = 2,
                  round_robin_games: int = 100,
                  epoch_range: Optional[Tuple[int, int]] = None,
-                 command_line: Optional[str] = None):
+                 command_line: Optional[str] = None,
+                 run_desc: Optional[str] = None):
         """
         Initialize the two-stage tournament.
         
@@ -54,6 +55,7 @@ class TwoStageTournament:
             round_robin_games: Number of games per round-robin match
             epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints
             command_line: Command line that was used to run the tournament
+            run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
         """
         self.knockout_dir = knockout_dir
         self.knockout_config = knockout_config or self._get_default_knockout_config()
@@ -63,6 +65,7 @@ class TwoStageTournament:
         self.round_robin_games = round_robin_games
         self.epoch_range = epoch_range
         self.command_line = command_line
+        self.run_desc = run_desc
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
@@ -190,7 +193,8 @@ class TwoStageTournament:
             verbose=1,
             seed=None,
             output_dir=self.output_dir,  # Use the same output directory as knockout stage
-            command_line=self.command_line
+            command_line=self.command_line,
+            run_desc=self.run_desc
         )
         
         # Extract ranking from tournament results
@@ -265,7 +269,8 @@ class TwoStageTournament:
             play_config = TournamentPlayConfig(
                 temperature=self.knockout_config.get("temperature", 1.0),
                 random_seed=42,  # Fixed seed for reproducibility
-                command_line=self.command_line
+                command_line=self.command_line,
+                run_desc=self.run_desc
             )
             pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
             pair_strategy_configs = [strategy_a, strategy_b]

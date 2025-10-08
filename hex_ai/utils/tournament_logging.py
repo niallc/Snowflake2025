@@ -64,7 +64,7 @@ def find_available_filename(base_path: str) -> str:
         index += 1
 
 def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, Any], 
-                      random_seed: Optional[int] = None, command_line: str = None):
+                      random_seed: Optional[int] = None, command_line: str = None, run_desc: Optional[str] = None):
     """
     Write a generic header to a .trmph file.
     
@@ -74,6 +74,7 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         metadata: Dictionary of metadata to include in header
         random_seed: Random seed to include (if provided)
         command_line: Command line to include (required)
+        run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
     """
     output_path = Path(trmph_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,6 +97,10 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         if command_line is None:
             raise RuntimeError("Command line must be provided to write_trmph_header - this indicates a bug in the calling code")
         f.write(f"# Command: {command_line}\n")
+        
+        # Write run description if provided
+        if run_desc is not None:
+            f.write(f"# Run description: {run_desc}\n")
         
         f.write(f"# Git commit: {git_info['status']}\n")
         f.write("# Format: trmph_string winner\n")
@@ -206,7 +211,7 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
             metadata[key] = value
     
     # Use generic header writer
-    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed, play_config.command_line)
+    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed, play_config.command_line, play_config.run_desc)
     
     return actual_file_path
 
