@@ -33,7 +33,8 @@ from hex_ai.error_handling import check_data_loading_errors, get_board_state_err
 logger = logging.getLogger(__name__)
 
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
-MAX_VALIDATION_MEMORY_GB = 6.0
+# TODO: Refine ths as I doubt the actual validation gets nearly this but (once we restrict to max_validation_examples)
+MAX_VALIDATION_MEMORY_GB = 9.0
 
 
 def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:

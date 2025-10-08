@@ -264,7 +264,8 @@ class TwoStageTournament:
             # Write TRMPH header
             play_config = TournamentPlayConfig(
                 temperature=self.knockout_config.get("temperature", 1.0),
-                random_seed=42  # Fixed seed for reproducibility
+                random_seed=42,  # Fixed seed for reproducibility
+                command_line=self.command_line
             )
             pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
             pair_strategy_configs = [strategy_a, strategy_b]

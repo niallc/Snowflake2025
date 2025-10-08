@@ -1132,11 +1132,9 @@ def api_policy_move():
             return jsonify({"success": False, "error": "No valid moves available"}), 400
         
         # Apply the move
-        new_state = apply_move_to_state_trmph(state, move[0], move[1])
-        new_trmph = new_state.to_trmph()
-        
-        # Get move in TRMPH format
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
+        new_state = apply_move_to_state_trmph(state, move_trmph)
+        new_trmph = new_state.to_trmph()
         
         # Get policy information for debug output
         policy_logits, value_signed = model.simple_infer(trmph)
@@ -1159,7 +1157,7 @@ def api_policy_move():
             "board": new_state.board.tolist(),
             "player": winner_to_color(new_state.current_player_enum),
             "legal_moves": [fc.rowcol_to_trmph(r, c) for r, c in new_state.get_legal_moves()],
-            "winner": new_state.winner,
+            "winner": winner_to_color(new_state.winner) if new_state.winner is not None else None,
             "move_made": move_trmph,
             "policy_info": {
                 "selected_move": move_trmph,
