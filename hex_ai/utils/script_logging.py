@@ -37,8 +37,6 @@ class ScriptConfig:
     gumbel_sim_threshold: Optional[int] = None
     gumbel_c_visit: Optional[float] = None
     gumbel_c_scale: Optional[float] = None
-    gumbel_sigma_growth: Optional[str] = None
-    gumbel_sqrt_scale: Optional[float] = None
     gumbel_use_gumbel_in_final_eval: Optional[bool] = None
     gumbel_candidate_log_base: Optional[float] = None
     gumbel_candidate_log_offset: Optional[float] = None
@@ -244,10 +242,6 @@ def _generate_gumbel_summary(config: ScriptConfig) -> Optional[str]:
                 summary_parts.append(f"c_visit={config.gumbel_c_visit}")
             if config.gumbel_c_scale:
                 summary_parts.append(f"c_scale={config.gumbel_c_scale}")
-            if config.gumbel_sigma_growth:
-                summary_parts.append(f"sigma_growth={config.gumbel_sigma_growth}")
-            if config.gumbel_sqrt_scale:
-                summary_parts.append(f"sqrt_scale={config.gumbel_sqrt_scale}")
             if config.gumbel_use_gumbel_in_final_eval is not None:
                 summary_parts.append(f"gumbel_in_eval={config.gumbel_use_gumbel_in_final_eval}")
             if config.gumbel_candidate_log_base:
@@ -394,8 +388,6 @@ def create_script_config_from_args(
         gumbel_sim_threshold=getattr(args, 'gumbel_sim_threshold', None),
         gumbel_c_visit=getattr(args, 'gumbel_c_visit', None),
         gumbel_c_scale=getattr(args, 'gumbel_c_scale', None),
-        gumbel_sigma_growth=getattr(args, 'gumbel_sigma_growth', None),
-        gumbel_sqrt_scale=getattr(args, 'gumbel_sqrt_scale', None),
         gumbel_use_gumbel_in_final_eval=getattr(args, 'gumbel_use_gumbel_in_final_eval', None),
         gumbel_candidate_log_base=getattr(args, 'gumbel_candidate_log_base', None),
         gumbel_candidate_log_offset=getattr(args, 'gumbel_candidate_log_offset', None),

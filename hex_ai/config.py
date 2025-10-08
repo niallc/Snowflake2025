@@ -96,8 +96,6 @@ DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
 DEFAULT_GUMBEL_CANDIDATE_MAX = 64  # Maximum number of candidates
 
 # Gumbel ranking stabilization defaults
-DEFAULT_GUMBEL_SIGMA_GROWTH = "constant"  # Options: "constant", "sqrt"
-DEFAULT_GUMBEL_SQRT_SCALE = 0.10  # Used only if sigma_growth == "sqrt"
 DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL = False  # Remove Gumbel noise in final evaluation for deterministic results
 
 # Data augmentation

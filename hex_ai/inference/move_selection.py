@@ -27,8 +27,6 @@ from hex_ai.config import (
     DEFAULT_MCTS_DIRICHLET_EPS,
     DEFAULT_GUMBEL_C_VISIT,
     DEFAULT_GUMBEL_C_SCALE,
-    DEFAULT_GUMBEL_SIGMA_GROWTH,
-    DEFAULT_GUMBEL_SQRT_SCALE,
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
 
@@ -55,8 +53,6 @@ class MoveSelectionConfig:
     gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
     gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
     # Gumbel ranking stabilization parameters
-    gumbel_sigma_growth: str = DEFAULT_GUMBEL_SIGMA_GROWTH  # Options: "constant", "sqrt"
-    gumbel_sqrt_scale: float = DEFAULT_GUMBEL_SQRT_SCALE  # Used only if sigma_growth == "sqrt"
     gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
     # For fixed tree search
     search_widths: Optional[list] = None

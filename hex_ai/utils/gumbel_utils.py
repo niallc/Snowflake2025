@@ -19,8 +19,6 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
     DEFAULT_GUMBEL_CANDIDATE_MIN,
     DEFAULT_GUMBEL_CANDIDATE_MAX,
-    DEFAULT_GUMBEL_SIGMA_GROWTH,
-    DEFAULT_GUMBEL_SQRT_SCALE,
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
 
@@ -66,8 +64,6 @@ def gumbel_alpha_zero_root_batched(
     candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
     candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
     # Gumbel ranking stabilization parameters
-    sigma_growth: str = DEFAULT_GUMBEL_SIGMA_GROWTH,  # Options: "constant", "sqrt"
-    sqrt_scale: float = DEFAULT_GUMBEL_SQRT_SCALE,  # Used only if sigma_growth == "sqrt"
     use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,  # Remove Gumbel noise in final evaluation
     eval_mode: bool = False,  # Whether this is evaluation mode (affects Gumbel noise usage)
 ):
@@ -91,8 +87,6 @@ def gumbel_alpha_zero_root_batched(
         temperature: Noise scale for Gumbel sampling (beta)
         verbose: Verbosity level for debug output
         rng: Random number generator (uses numpy.random if None)
-        sigma_growth: Sigma growth strategy - "constant" or "sqrt"
-        sqrt_scale: Scale factor for sqrt growth
         use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation
         eval_mode: Whether this is evaluation mode
         
@@ -286,14 +280,8 @@ def gumbel_alpha_zero_root_batched(
 
     def rank_key(a):
         """Score function for action a: g[a] + logits[a] + σ(q̂[a] - v_pi)"""
-        # Calculate sigma based on growth strategy
-        if sigma_growth == "sqrt":
-            # Optional mild growth: recompute per round over current candidates
-            current_maxN = max(n_of_child(x) for x in legal_actions) if legal_actions else 0
-            sigma = (c_visit + math.sqrt(current_maxN)) * sqrt_scale
-        else:
-            # Constant sigma (recommended default)
-            sigma = c_scale
+        # Use constant sigma (simplified approach)
+        sigma = c_scale
         
         # Use advantage form: (q_tilde - v_pi) instead of just q_tilde
         q_tilde = completed_q(a)
@@ -407,12 +395,8 @@ def gumbel_alpha_zero_root_batched(
     
     # Final pick - use deterministic ranking without Gumbel noise
     if len(cand) > 1:
-        # Before sorting
-        if sigma_growth == "sqrt":
-            current_maxN = max((n_of_child(x) for x in cand), default=0)
-            final_sigma = (c_visit + math.sqrt(current_maxN)) * sqrt_scale
-        else:
-            final_sigma = c_scale
+        # Use constant sigma for final ranking
+        final_sigma = c_scale
 
         def final_rank_key(a: int) -> float:
             # advantage with cached v_pi and completion for unvisited
