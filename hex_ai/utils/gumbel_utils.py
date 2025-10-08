@@ -15,12 +15,44 @@ from typing import Callable, List, Optional, Tuple, Dict, Any
 
 from hex_ai.config import (
     DEFAULT_GUMBEL_SIM_THRESHOLD,
-    DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
-    DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
     DEFAULT_GUMBEL_CANDIDATE_MIN,
     DEFAULT_GUMBEL_CANDIDATE_MAX,
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
+
+
+def calculate_power_law_candidates(
+    total_sims: int,
+    power_scale: float,
+    power_rate: float,
+    power_offset: float,
+    candidate_min: int,
+    candidate_max: int,
+    num_legal_actions: int
+) -> int:
+    """
+    Calculate the number of Gumbel candidates using power-law scaling.
+    
+    Formula: m = (total_sims * power_scale)^power_rate + power_offset
+    
+    Args:
+        total_sims: Total number of simulations
+        power_scale: Scale factor for power-law scaling
+        power_rate: Rate (exponent) for power-law scaling
+        power_offset: Offset for power-law scaling
+        candidate_min: Minimum number of candidates
+        candidate_max: Maximum number of candidates
+        num_legal_actions: Number of legal actions available
+        
+    Returns:
+        Number of candidates to consider
+    """
+    m_auto = int(min(candidate_max, max(candidate_min, (total_sims * power_scale) ** power_rate + power_offset)))
+    m = min(num_legal_actions, total_sims, m_auto)
+    return m
 
 
 def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
@@ -58,9 +90,10 @@ def gumbel_alpha_zero_root_batched(
     temperature: float = 1.0,  # Noise scale for Gumbel sampling (beta)
     verbose: int = 0,        # Verbosity level for debug output
     rng=np.random,
-    # Configurable candidate scaling parameters (use config defaults)
-    candidate_log_base: float = DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
-    candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    # Power-law candidate scaling parameters
+    candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
     candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
     candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
     # Gumbel ranking stabilization parameters
@@ -222,9 +255,12 @@ def gumbel_alpha_zero_root_batched(
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # Configurable logarithmic candidate scaling: grows slowly with simulation count
-        # Formula: m = min(max, max(min, log_base(total_sims) + offset))
-        m_auto = int(min(candidate_max, max(candidate_min, math.log(total_sims, candidate_log_base) + candidate_log_offset)))
+        # Power-law candidate scaling: grows faster than logarithmic
+        # Formula: m = (total_sims * power_scale)^power_rate + power_offset
+        m_auto = calculate_power_law_candidates(
+            total_sims, candidate_power_scale, candidate_power_rate, candidate_power_offset,
+            candidate_min, candidate_max, len(legal_actions)
+        )
         m = min(len(legal_actions), total_sims, m_auto)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start

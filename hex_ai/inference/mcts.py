@@ -79,8 +79,9 @@ from hex_ai.config import (
     DEFAULT_BATCH_CAP, 
     DEFAULT_C_PUCT, 
     DEFAULT_GUMBEL_SIM_THRESHOLD,
-    DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
-    DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
     DEFAULT_GUMBEL_CANDIDATE_MIN,
     DEFAULT_GUMBEL_CANDIDATE_MAX,
     DEFAULT_GUMBEL_C_VISIT,
@@ -449,9 +450,10 @@ class BaselineMCTSConfig:
     gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
     
-    # Gumbel candidate scaling parameters (for auto candidate selection)
-    gumbel_candidate_log_base: float = DEFAULT_GUMBEL_CANDIDATE_LOG_BASE  # Base for logarithmic candidate scaling
-    gumbel_candidate_log_offset: float = DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET  # Offset for logarithmic candidate scaling
+    # Gumbel candidate scaling parameters (power-law scaling)
+    gumbel_candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE  # Scale factor for power-law candidate scaling
+    gumbel_candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE  # Rate (exponent) for power-law candidate scaling
+    gumbel_candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET  # Offset for power-law candidate scaling
     gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
     gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
     # Gumbel ranking stabilization parameters

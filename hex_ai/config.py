@@ -89,11 +89,12 @@ DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
 DEFAULT_GUMBEL_C_SCALE = 75  # Default Gumbel-AlphaZero c_scale parameter
 DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
 
-# Gumbel candidate scaling defaults
-DEFAULT_GUMBEL_CANDIDATE_LOG_BASE = 1.15  # Base for logarithmic candidate scaling
-DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET = -3.0  # Offset for logarithmic candidate scaling
+# Gumbel candidate scaling defaults (power-law scaling)
+DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 60.0  # Scale factor for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_RATE = 0.39  # Rate (exponent) for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = -4.0  # Offset for power-law candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
-DEFAULT_GUMBEL_CANDIDATE_MAX = 110  # Maximum number of candidates
+DEFAULT_GUMBEL_CANDIDATE_MAX = 80  # Maximum number of candidates
 
 # Gumbel ranking stabilization defaults
 DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL = False  # Remove Gumbel noise in final evaluation for deterministic results

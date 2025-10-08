@@ -7,6 +7,8 @@ import math
 from typing import Dict, List, Tuple, Set
 from collections import defaultdict
 
+from hex_ai.utils.gumbel_utils import calculate_power_law_candidates
+
 def simulate_sequential_halving(
     total_sims: int,
     num_candidates: int,
@@ -112,19 +114,6 @@ def simulate_sequential_halving(
     
     return True, discarded_sims, round_details
 
-def calculate_gumbel_candidates(
-    total_sims: int,
-    candidate_log_base: float,
-    candidate_log_offset: float,
-    candidate_min: int,
-    candidate_max: int,
-    num_legal_actions: int = 164  # Typical Hex board
-) -> int:
-    """Calculate the number of Gumbel candidates using the same formula as the algorithm."""
-    m_auto = int(min(candidate_max, max(candidate_min, math.log(total_sims, candidate_log_base) + candidate_log_offset)))
-    m = min(num_legal_actions, total_sims, m_auto)
-    return m
-
 def validate_gumbel_configurations(
     sim_counts: List[int],
     configs: List[Dict[str, any]],
@@ -144,14 +133,15 @@ def validate_gumbel_configurations(
     results = defaultdict(list)
     
     for config in configs:
-        config_name = config.get('name', f"log_base={config['candidate_log_base']}, offset={config['candidate_log_offset']}")
+        config_name = config.get('name', f"power_scale={config['candidate_power_scale']}, rate={config['candidate_power_rate']}, offset={config['candidate_power_offset']}")
         
         for sims in sim_counts:
             # Calculate number of candidates
-            num_candidates = calculate_gumbel_candidates(
+            num_candidates = calculate_power_law_candidates(
                 sims,
-                config['candidate_log_base'],
-                config['candidate_log_offset'],
+                config['candidate_power_scale'],
+                config['candidate_power_rate'],
+                config['candidate_power_offset'],
                 config['candidate_min'],
                 config['candidate_max'],
                 num_legal_actions
