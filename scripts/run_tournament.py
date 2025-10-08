@@ -328,10 +328,12 @@ Examples:
                        help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
     parser.add_argument('--gumbel-sim-threshold', type=str,
                        help='Comma-separated simulation thresholds for Gumbel AlphaZero root selection (e.g., "200,500,1000")')
-    parser.add_argument('--gumbel-candidate-log-base', type=str,
-                       help='Comma-separated log bases for Gumbel candidate scaling (e.g., "1.5,1.7,2.0")')
-    parser.add_argument('--gumbel-candidate-log-offset', type=str,
-                       help='Comma-separated log offsets for Gumbel candidate scaling (e.g., "-1.5,-2.0,-2.5")')
+    parser.add_argument('--gumbel-candidate-power-scale', type=str,
+                       help='Comma-separated power scales for Gumbel candidate scaling (e.g., "60.0,80.0,100.0")')
+    parser.add_argument('--gumbel-candidate-power-rate', type=str,
+                       help='Comma-separated power rates for Gumbel candidate scaling (e.g., "0.39,0.45,0.50")')
+    parser.add_argument('--gumbel-candidate-power-offset', type=str,
+                       help='Comma-separated power offsets for Gumbel candidate scaling (e.g., "-4.0,-3.0,-2.0")')
     parser.add_argument('--gumbel-progressive-widening', type=str,
                        help='Comma-separated boolean values to enable progressive widening batching for Gumbel strategies (e.g., "true,false,true")')
     parser.add_argument('--gumbel-batch-scaling-factors', type=str,
