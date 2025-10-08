@@ -455,7 +455,8 @@ def run_sf18_tournament(
     verbose: int = DEFAULT_VERBOSE,
     seed: Optional[int] = None,
     output_dir: Optional[str] = None,
-    command_line: str = None
+    command_line: str = None,
+    run_desc: Optional[str] = None
 ) -> SF18TournamentResult:
     """
     Run a tournament between SF25 models and SF18 AI.
@@ -470,6 +471,7 @@ def run_sf18_tournament(
         seed: Random seed for reproducibility
         output_dir: Output directory for tournament files
         command_line: Command line that was used to run the tournament
+        run_desc: Optional description of this tournament run
         
     Returns:
         SF18TournamentResult with tournament results
@@ -500,7 +502,7 @@ def run_sf18_tournament(
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_config, sf18_player)
         
         # Write TRMPH header
-        play_config = create_play_config_for_pair(strategy_config, sf18_player, temperature, seed, command_line)
+        play_config = create_play_config_for_pair(strategy_config, sf18_player, temperature, seed, command_line, run_desc=run_desc)
         pair_model_paths = [strategy_config.model_path, "SF18"]
         pair_strategy_configs = [strategy_config, sf18_player]
         actual_trmph_file = write_tournament_trmph_header(
@@ -632,6 +634,8 @@ Examples:
                        help=f'Random seed for opening selection (different seeds produce different opening sets) (default: auto-generated from time)')
     parser.add_argument('--verbose', type=int, default=DEFAULT_VERBOSE,
                        help=f'Verbosity level (default: {DEFAULT_VERBOSE})')
+    parser.add_argument('--run-desc', type=str,
+                       help='Description of this tournament run (e.g., "Testing c_scale = 1.5") - will be included in output headers')
     
     return parser.parse_args()
 
@@ -893,7 +897,8 @@ def main():
         temperature=args.temperature,
         verbose=args.verbose,
         seed=args.seed,
-        command_line=command_line
+        command_line=command_line,
+        run_desc=args.run_desc
     )
     
     # Print results
