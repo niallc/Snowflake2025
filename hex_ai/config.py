@@ -92,9 +92,9 @@ DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move dete
 # Gumbel candidate scaling defaults (power-law scaling)
 DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 60.0  # Scale factor for power-law candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_POWER_RATE = 0.39  # Rate (exponent) for power-law candidate scaling
-DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = -4.0  # Offset for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = -6.0  # Offset for power-law candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
-DEFAULT_GUMBEL_CANDIDATE_MAX = 80  # Maximum number of candidates
+DEFAULT_GUMBEL_CANDIDATE_MAX = 52  # Maximum number of candidates
 
 # Gumbel ranking stabilization defaults
 DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL = False  # Remove Gumbel noise in final evaluation for deterministic results
