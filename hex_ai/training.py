@@ -1237,11 +1237,16 @@ class Trainer:
         self.model.load_state_dict(checkpoint['model_state_dict'])
         
         if override_checkpoint_hyperparameters:
+            print("Changing learning rate in load_checkpoint...", end="")
             logger.warning("Overriding checkpoint hyperparameters - optimizer state will be reset")
             logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
             logger.info(f"Using hyperparameter value_learning_rate_factor: {self.value_learning_rate_factor}")
             logger.info(f"Using hyperparameter value_weight_decay_factor: {self.value_weight_decay_factor}")
             # Don't load optimizer state - let it use current hyperparameters
+            # Get the actual learning rate from the optimizer to confirm
+            actual_lr = self.optimizer.param_groups[0]['lr']
+            actual_value_lr = self.optimizer.param_groups[-1]['lr']  # Value head is typically the last group
+            print(f"Learning rate now {actual_lr:.6f} (value head: {actual_value_lr:.6f}).")
         else:
             # Load optimizer state (preserves checkpoint hyperparameters)
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
