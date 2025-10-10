@@ -28,7 +28,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.7],
-    "learning_rate": [3e-4],  # Updated default for AdamW
+    "learning_rate": [1.2e-3],  # Updated default for AdamW
     
     # AdamW optimizer parameters
     "betas": [(0.9, 0.999)],  # Coefficients for computing running averages

@@ -137,7 +137,8 @@ class CheckpointDiscovery:
         checkpoints.sort(key=lambda cp: cp.creation_time)
         
         # Validate ordering (fail fast on invalid state)
-        self._validate_checkpoint_ordering(checkpoints)
+        # DISABLED: Allow non-sequential checkpoints for tournament flexibility
+        # self._validate_checkpoint_ordering(checkpoints)
         
         self._discovered_checkpoints = checkpoints
         logger.info(f"Discovered {len(checkpoints)} checkpoints in {self.checkpoint_dir}")
