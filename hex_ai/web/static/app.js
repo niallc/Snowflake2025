@@ -30,16 +30,17 @@
 // - RED_WINNING_PIECE: Colors of red pieces when red wins
 //
 // ===== BASE COLOR PALETTE =====
-// These are the fundamental colors - change hex values here
-const BASE_COLORS = {
+// Light theme colors
+const LIGHT_COLORS = {
   WHITE: '#fff',
   LIGHT_GRAY: '#f8f8fa',
   MEDIUM_GRAY: '#bbb',
   DARK_GRAY: '#222',
   
-  // New minimalist colors
+  // Board colors
   EMPTY_HEX_GRAY: '#f0f0f0',      // ⭐ LIGHT GRAY for empty hexagons
   GRID_WHITE: '#ffffff',           // ⭐ WHITE for grid lines between hexagons
+  BOARD_BACKGROUND: '#f8f8fa',     // ⭐ LIGHT GRAY for board background
   
   // Blue palette
   LIGHT_BLUE: '#e7fcfc',
@@ -56,28 +57,60 @@ const BASE_COLORS = {
   DARKER_RED: '#cc3300',          // ⭐ DARK RED - used for last moves
 };
 
+// Dark theme colors
+const DARK_COLORS = {
+  WHITE: '#2d2d2d',
+  LIGHT_GRAY: '#1a1a1a',
+  MEDIUM_GRAY: '#666',
+  DARK_GRAY: '#e0e0e0',
+  
+  // Board colors
+  EMPTY_HEX_GRAY: '#3a3a3a',      // ⭐ DARK GRAY for empty hexagons
+  GRID_WHITE: '#4a4a4a',          // ⭐ DARK GRAY for grid lines between hexagons
+  BOARD_BACKGROUND: '#1a1a1a',     // ⭐ DARK GRAY for board background
+  
+  // Blue palette (adjusted for dark theme)
+  LIGHT_BLUE: '#1a3a4a',
+  MEDIUM_BLUE: '#2a5a6a',         // ⭐ DARKER CYAN for grid lines
+  DARK_BLUE: '#4a9a9a',           // ⭐ LIGHTER CYAN for blue pieces (more visible on dark)
+  VERY_DARK_BLUE: '#4a9aff',      // ⭐ BRIGHTER BLUE for edges and winning pieces
+  DARKER_BLUE: '#2a7aff',         // ⭐ BRIGHTER BLUE for last moves
+  
+  // Red palette (adjusted for dark theme)
+  LIGHT_RED: '#4a2a1a',
+  MEDIUM_RED: '#6a3a2a',
+  DARK_RED: '#ff9a6a',            // ⭐ BRIGHTER ORANGE for red pieces (more visible on dark)
+  VERY_DARK_RED: '#ff4a00',       // ⭐ BRIGHTER ORANGE-RED for edges and winning pieces
+  DARKER_RED: '#ff2a00',          // ⭐ BRIGHTER RED for last moves
+};
+
+// Dynamic color system
+function getColors() {
+  return state.dark_mode ? DARK_COLORS : LIGHT_COLORS;
+}
+
 const COLORS = {
   // ===== SEMANTIC BOARD REGIONS =====
-  // These reference the base colors above - change which base color they use
-  BOARD_BACKGROUND: BASE_COLORS.LIGHT_GRAY,
-  EMPTY_HEX_COLOR: BASE_COLORS.EMPTY_HEX_GRAY,  // ⭐ LIGHT GRAY for empty hexagons
-  HEX_GRID_COLOR: BASE_COLORS.GRID_WHITE,       // ⭐ WHITE LINES BETWEEN HEXAGONS
+  // These will be dynamically updated based on dark mode
+  get BOARD_BACKGROUND() { return getColors().BOARD_BACKGROUND; },
+  get EMPTY_HEX_COLOR() { return getColors().EMPTY_HEX_GRAY; },
+  get HEX_GRID_COLOR() { return getColors().GRID_WHITE; },
   
   // Edge borders
-  BLUE_EDGE_BORDER: BASE_COLORS.VERY_DARK_BLUE,
-  RED_EDGE_BORDER: BASE_COLORS.VERY_DARK_RED,
+  get BLUE_EDGE_BORDER() { return getColors().VERY_DARK_BLUE; },
+  get RED_EDGE_BORDER() { return getColors().VERY_DARK_RED; },
   
   // Piece colors
-  BLUE_PIECE_COLOR: BASE_COLORS.DARK_BLUE,
-  RED_PIECE_COLOR: BASE_COLORS.DARK_RED,
+  get BLUE_PIECE_COLOR() { return getColors().DARK_BLUE; },
+  get RED_PIECE_COLOR() { return getColors().DARK_RED; },
   
   // Last move colors
-  BLUE_LAST_MOVE: BASE_COLORS.DARKER_BLUE,
-  RED_LAST_MOVE: BASE_COLORS.DARKER_RED,
+  get BLUE_LAST_MOVE() { return getColors().DARKER_BLUE; },
+  get RED_LAST_MOVE() { return getColors().DARKER_RED; },
   
   // Winning piece colors
-  BLUE_WINNING_PIECE: BASE_COLORS.VERY_DARK_BLUE,
-  RED_WINNING_PIECE: BASE_COLORS.VERY_DARK_RED,
+  get BLUE_WINNING_PIECE() { return getColors().VERY_DARK_BLUE; },
+  get RED_WINNING_PIECE() { return getColors().VERY_DARK_RED; },
 };
 
 // --- State ---
@@ -113,7 +146,8 @@ let state = {
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
   redo_history: [], // Track undone moves for redo functionality
-  constants: null // Will be populated from backend
+  constants: null, // Will be populated from backend
+  dark_mode: false // Dark mode state
 };
 
 // --- User Modification Tracking ---
@@ -307,6 +341,66 @@ function initializeSmartSettingsVisualStates() {
       updateSettingVisualState(player, setting, userModifiedSettings[player][setting]);
     });
   });
+}
+
+// --- Dark Mode Functions ---
+function toggleDarkMode() {
+  state.dark_mode = !state.dark_mode;
+  
+  // Update the data-theme attribute on the document
+  if (state.dark_mode) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  
+  // Update the toggle button text and icon
+  const toggleBtn = document.getElementById('dark-mode-toggle');
+  if (toggleBtn) {
+    if (state.dark_mode) {
+      toggleBtn.textContent = '☀️ Light';
+      toggleBtn.title = 'Switch to light mode';
+    } else {
+      toggleBtn.textContent = '🌙 Dark';
+      toggleBtn.title = 'Switch to dark mode';
+    }
+  }
+  
+  // Redraw the board with new colors
+  updateUI();
+  
+  // Save preference to localStorage
+  localStorage.setItem('hex_ai_dark_mode', state.dark_mode.toString());
+}
+
+function initializeDarkMode() {
+  // Check localStorage for saved preference
+  const savedDarkMode = localStorage.getItem('hex_ai_dark_mode');
+  if (savedDarkMode !== null) {
+    state.dark_mode = savedDarkMode === 'true';
+  } else {
+    // Check system preference as fallback
+    state.dark_mode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  
+  // Apply the theme
+  if (state.dark_mode) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  
+  // Update the toggle button
+  const toggleBtn = document.getElementById('dark-mode-toggle');
+  if (toggleBtn) {
+    if (state.dark_mode) {
+      toggleBtn.textContent = '☀️ Light';
+      toggleBtn.title = 'Switch to light mode';
+    } else {
+      toggleBtn.textContent = '🌙 Dark';
+      toggleBtn.title = 'Switch to dark mode';
+    }
+  }
 }
 
 // --- Utility: Convert (row, col) to TRMPH move ---
@@ -539,19 +633,39 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       trmphLabel.setAttribute('font-family', 'monospace');
       trmphLabel.setAttribute('pointer-events', 'none'); // Make text non-interactive
       
-      // Set label color based on piece type
-      let labelColor = '#e0e0e0'; // Default light grey for empty hexes
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) {
-        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
-          labelColor = '#004499'; // Much darker blue for last move
-        } else {
-          labelColor = '#00eeee'; // trmph label color, blue
+      // Set label color based on piece type and theme
+      let labelColor;
+      if (state.dark_mode) {
+        // Dark mode colors
+        labelColor = '#666'; // Default dark grey for empty hexes
+        if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) {
+          if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+            labelColor = '#7ab3ff'; // Bright blue for last move
+          } else {
+            labelColor = '#4a9aff'; // Bright blue for blue pieces
+          }
+        } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
+          if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+            labelColor = '#ff7a4a'; // Bright red for last move
+          } else {
+            labelColor = '#ff4a00'; // Bright red for red pieces
+          }
         }
-      } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
-        if (lastMove && lastMove[0] === row && lastMove[1] === col) {
-          labelColor = '#992200'; // Much darker red for last move
-        } else {
-          labelColor = '#ddcc00'; // trmph label color, red
+      } else {
+        // Light mode colors
+        labelColor = '#e0e0e0'; // Default light grey for empty hexes
+        if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) {
+          if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+            labelColor = '#004499'; // Much darker blue for last move
+          } else {
+            labelColor = '#00eeee'; // trmph label color, blue
+          }
+        } else if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) {
+          if (lastMove && lastMove[0] === row && lastMove[1] === col) {
+            labelColor = '#992200'; // Much darker red for last move
+          } else {
+            labelColor = '#ddcc00'; // trmph label color, red
+          }
         }
       }
       
@@ -904,6 +1018,9 @@ function stopAutoStep() {
 
 // --- Controls ---
 document.addEventListener('DOMContentLoaded', async () => {
+  // Initialize dark mode first
+  initializeDarkMode();
+  
   // Verify detailed exploration elements exist (quiet check)
   const explorationDiv = document.getElementById('detailed-exploration');
   const explorationContent = document.getElementById('exploration-content');
@@ -1106,6 +1223,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.computer_enabled = !state.computer_enabled;
     updateUI();
   });
+
+  // Dark mode toggle
+  document.getElementById('dark-mode-toggle').addEventListener('click', toggleDarkMode);
 
   document.getElementById('undo-btn').addEventListener('click', () => {
     if (state.move_history.length > 0) {
