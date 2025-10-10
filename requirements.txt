@@ -1,7 +1,9 @@
 # Core PyTorch dependencies (required for both training and inference)
-torch>=2.0.0,<2.5.0
-torchaudio>=2.0.0,<2.5.0
-torchvision>=0.15.0,<0.20.0
+# Note: Install PyTorch CPU-only version for shared hosting
+# Use: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch
+torchaudio
+torchvision
 
 # Data processing and scientific computing (required for both training and inference)
 numpy>=1.21.0,<2.0.0
