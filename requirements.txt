@@ -1,10 +1,11 @@
 # Core PyTorch dependencies (required for both training and inference)
-# Note: PyTorch must be installed separately with CPU-only index:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# These lines are commented out to avoid installation conflicts
-# torch
-# torchaudio  
-# torchvision
+# NOTE: PyTorch is included below but you may want to install from official index for better performance:
+# For CPU: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# For CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# For MPS (Apple Silicon): pip install torch torchvision torchaudio (default PyPI is fine)
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
 
 # Data processing and scientific computing (required for both training and inference)
 numpy>=1.21.0,<2.0.0

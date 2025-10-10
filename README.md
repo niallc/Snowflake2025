@@ -18,8 +18,11 @@ cd Snowflake2025
 python -m venv hex_ai_env
 source hex_ai_env/bin/activate  # On Windows: hex_ai_env\Scripts\activate
 
-# Install dependencies
+# Install dependencies (includes PyTorch)
 pip install -r requirements.txt
+
+# Optional: Check what devices are available
+python scripts/check_device.py
 
 # Set up environment
 export PYTHONPATH=.
@@ -166,3 +169,25 @@ export PYTHONPATH=.
 # Validate environment
 python scripts/validate_environment.py
 ```
+
+**PyTorch not found**: If you get "no module named torch":
+```bash
+# Install PyTorch (CPU version)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# For CUDA GPU support:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# For Apple Silicon (MPS) - default installation is optimal:
+# pip install torch torchvision torchaudio
+```
+
+**Device detection**: Check what devices are available:
+```bash
+python scripts/check_device.py
+```
+
+**Performance optimization**: The code automatically detects and uses the best available device:
+- **CUDA**: Best for NVIDIA GPUs
+- **MPS**: Good for Apple Silicon Macs  
+- **CPU**: Fallback for all systems
