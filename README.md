@@ -18,8 +18,23 @@ cd Snowflake2025
 python -m venv hex_ai_env
 source hex_ai_env/bin/activate  # On Windows: hex_ai_env\Scripts\activate
 
-# Install dependencies
+# Install dependencies (includes PyTorch)
 pip install -r requirements.txt
+
+# Check available devices (optional but recommended)
+python scripts/check_device.py
+
+# Optional: Optimize PyTorch installation for your hardware
+# The above installation should work for most cases, but you can optimize:
+
+# For CUDA GPUs (NVIDIA):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# For CPU-only systems:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# For Apple Silicon (MPS) - reinstall from default PyPI for best compatibility:
+# pip install torch torchvision torchaudio
 
 # Set up environment
 export PYTHONPATH=.
@@ -166,3 +181,25 @@ export PYTHONPATH=.
 # Validate environment
 python scripts/validate_environment.py
 ```
+
+**PyTorch not found**: If you get "no module named torch":
+```bash
+# Install PyTorch (CPU version)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# For CUDA GPU support:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# For Apple Silicon (MPS) - default installation is optimal:
+# pip install torch torchvision torchaudio
+```
+
+**Device detection**: Check what devices are available:
+```bash
+python scripts/check_device.py
+```
+
+**Performance optimization**: The code automatically detects and uses the best available device:
+- **CUDA**: Best for NVIDIA GPUs
+- **MPS**: Good for Apple Silicon Macs  
+- **CPU**: Fallback for all systems
