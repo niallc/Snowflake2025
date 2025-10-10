@@ -40,7 +40,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251005_123332/"
 # CURRENT_BEST_MODEL_FILE = "epoch23_mini35.pt.gz" # 22,15 or 22,19 or 21,11
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
-CURRENT_BEST_MODEL_FILE = "epoch31_mini42.pt.gz"
+CURRENT_BEST_MODEL_FILE = "epoch31_mini32.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
 # CURRENT_BEST_MODEL_FILE = "epoch30_mini24.pt.gz"
 
