@@ -21,20 +21,8 @@ source hex_ai_env/bin/activate  # On Windows: hex_ai_env\Scripts\activate
 # Install dependencies (includes PyTorch)
 pip install -r requirements.txt
 
-# Check available devices (optional but recommended)
+# Optional: Check what devices are available
 python scripts/check_device.py
-
-# Optional: Optimize PyTorch installation for your hardware
-# The above installation should work for most cases, but you can optimize:
-
-# For CUDA GPUs (NVIDIA):
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# For CPU-only systems:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# For Apple Silicon (MPS) - reinstall from default PyPI for best compatibility:
-# pip install torch torchvision torchaudio
 
 # Set up environment
 export PYTHONPATH=.
