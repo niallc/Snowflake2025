@@ -9,30 +9,30 @@ from datetime import datetime
 import time # Added for time.time()
 
 
-from hex_ai.utils import format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState, HexGameEngine
+import hex_ai.utils.format_conversion as fc
+from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
-from hex_ai.value_utils import Winner, winner_to_color, get_policy_probs_from_logits, temperature_scaled_softmax, ValuePredictor
-from hex_ai.enums import Player
 from hex_ai.value_utils import (
+    Winner, 
+    winner_to_color, 
+    temperature_scaled_softmax, 
+    ValuePredictor,
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
     signed_to_prob,
 )
+from hex_ai.enums import Player, Piece
 from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.enums import Piece
-from hex_ai.inference.game_engine import apply_move_to_state_trmph
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
-from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -41,7 +41,7 @@ CORS(app)
 # - player: UI-friendly color string ("blue"|"red")
 # - player_enum: canonical enum name ("BLUE"|"RED")
 # - player_index: canonical numeric (0=BLUE, 1=RED)
-# - player_raw: DEPRECATED; remove after frontend migrates
+# - player_raw: remove after frontend migrates
 
 # TODO: PERFORMANCE INVESTIGATION - MCTS vs Fixed Tree Search Performance Gap
 # Fixed tree search: ~6 games/sec with depth 2, ~100 leaf nodes
@@ -286,12 +286,13 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
             "total_legal_moves": len(legal_moves)
         }
     
-    # Level 2: Detailed analysis (removed tree search since we only use MCTS now)
+    # TODO: Understand the value of the below conditionals with pass statements.
+    # Level 2: Detailed analysis
     if verbose >= 2:
         # No tree search analysis needed since we only use MCTS
         pass
     
-    # Level 3: Full analysis (removed policy-value comparison since we only use MCTS now)
+    # Level 3: Full analysis
     if verbose >= 3:
         # No policy-value comparison needed since we only use MCTS
         pass
@@ -304,15 +305,10 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
-# TODO: Remove this function
-def _build_orchestration_from_dict(cfg: dict | None) -> None:
-    """Legacy function - orchestration is now handled internally by BaselineMCTS."""
-    return None
-
 
 def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
                    temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
-                   enable_gumbel=True, gumbel_max_sims=500):
+                   enable_gumbel=False, gumbel_max_sims=4997):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")
@@ -403,38 +399,38 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
         post_mcts_start = time.time()
         
         # Log detailed timing breakdown
-        app.logger.info(f"=== DETAILED TIMING BREAKDOWN ===")
-        app.logger.info(f"MCTS search completed in {mcts_search_time:.3f}s")
-        app.logger.info(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
-        app.logger.info(f"MCTS selected move: {move}")
+        app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
+        app.logger.debug(f"MCTS search completed in {mcts_search_time:.3f}s")
+        app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
+        app.logger.debug(f"MCTS selected move: {move}")
         
-        app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.2f}")
-        app.logger.info(f"Forward pass (total): {stats.get('forward_ms', 0):.1f}ms ({stats.get('forward_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"  - Pure neural network: {stats.get('pure_forward_ms', 0):.1f}ms ({stats.get('pure_forward_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"  - Device sync: {stats.get('sync_ms', 0):.1f}ms ({stats.get('sync_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Selection: {stats.get('select_ms', 0):.1f}ms ({stats.get('select_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"  - Terminal move detection: {stats.get('terminal_detect_ms', 0):.1f}ms ({stats.get('terminal_detect_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"  - PUCT calculation: {stats.get('puct_calc_ms', 0):.1f}ms ({stats.get('puct_calc_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"State creation: {stats.get('state_creation_ms', 0):.1f}ms ({stats.get('state_creation_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Cache lookup: {stats.get('cache_lookup_ms', 0):.1f}ms ({stats.get('cache_lookup_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Encoding: {stats.get('encode_ms', 0):.1f}ms ({stats.get('encode_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Stacking: {stats.get('stack_ms', 0):.1f}ms ({stats.get('stack_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Host-to-device: {stats.get('h2d_ms', 0):.1f}ms ({stats.get('h2d_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Device-to-host: {stats.get('d2h_ms', 0):.1f}ms ({stats.get('d2h_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Expansion: {stats.get('expand_ms', 0):.1f}ms ({stats.get('expand_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Backpropagation: {stats.get('backprop_ms', 0):.1f}ms ({stats.get('backprop_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.info(f"Cache hits: {stats.get('cache_hits', 0)}, misses: {stats.get('cache_misses', 0)}")
-        app.logger.info(f"Batch count: {stats.get('batch_count', 0)}, avg batch size: {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
-        app.logger.info(f"Median forward time: {stats.get('median_forward_ms_ex_warm', 0):.1f}ms")
-        app.logger.info(f"Median select time: {stats.get('median_select_ms', 0):.1f}ms")
-        app.logger.info(f"Median terminal detect time: {stats.get('median_terminal_detect_ms', 0):.1f}ms")
-        app.logger.info(f"Median PUCT calc time: {stats.get('median_puct_calc_ms', 0):.1f}ms")
-        app.logger.info(f"=== END TIMING BREAKDOWN ===")
+        app.logger.debug(f"Simulations per second: {stats.get('simulations_per_second', 0):.2f}")
+        app.logger.debug(f"Forward pass (total): {stats.get('forward_ms', 0):.1f}ms ({stats.get('forward_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"  - Pure neural network: {stats.get('pure_forward_ms', 0):.1f}ms ({stats.get('pure_forward_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"  - Device sync: {stats.get('sync_ms', 0):.1f}ms ({stats.get('sync_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Selection: {stats.get('select_ms', 0):.1f}ms ({stats.get('select_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"  - Terminal move detection: {stats.get('terminal_detect_ms', 0):.1f}ms ({stats.get('terminal_detect_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"  - PUCT calculation: {stats.get('puct_calc_ms', 0):.1f}ms ({stats.get('puct_calc_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"State creation: {stats.get('state_creation_ms', 0):.1f}ms ({stats.get('state_creation_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Cache lookup: {stats.get('cache_lookup_ms', 0):.1f}ms ({stats.get('cache_lookup_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Encoding: {stats.get('encode_ms', 0):.1f}ms ({stats.get('encode_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Stacking: {stats.get('stack_ms', 0):.1f}ms ({stats.get('stack_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Host-to-device: {stats.get('h2d_ms', 0):.1f}ms ({stats.get('h2d_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Device-to-host: {stats.get('d2h_ms', 0):.1f}ms ({stats.get('d2h_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Expansion: {stats.get('expand_ms', 0):.1f}ms ({stats.get('expand_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Backpropagation: {stats.get('backprop_ms', 0):.1f}ms ({stats.get('backprop_ms', 0)/mcts_search_time/10:.1f}%)")
+        app.logger.debug(f"Cache hits: {stats.get('cache_hits', 0)}, misses: {stats.get('cache_misses', 0)}")
+        app.logger.debug(f"Batch count: {stats.get('batch_count', 0)}, avg batch size: {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
+        app.logger.debug(f"Median forward time: {stats.get('median_forward_ms_ex_warm', 0):.1f}ms")
+        app.logger.debug(f"Median select time: {stats.get('median_select_ms', 0):.1f}ms")
+        app.logger.debug(f"Median terminal detect time: {stats.get('median_terminal_detect_ms', 0):.1f}ms")
+        app.logger.debug(f"Median PUCT calc time: {stats.get('median_puct_calc_ms', 0):.1f}ms")
+        app.logger.debug(f"=== END TIMING BREAKDOWN ===")
         
         # Add performance summary
         forward_percentage = (stats.get('forward_ms', 0) / mcts_search_time / 10) if mcts_search_time > 0 else 0
         app.logger.info(f"=== PERFORMANCE SUMMARY ===")
-        app.logger.info(f"Forward pass dominates: {forward_percentage:.1f}% of total time")
+        app.logger.info(f"Forward pass uses: {forward_percentage:.1f}% of total time")
         app.logger.info(f"Cache efficiency: {stats.get('cache_hits', 0)} hits, {stats.get('cache_misses', 0)} misses")
         app.logger.info(f"Batch efficiency: {stats.get('batch_count', 0)} batches, avg size {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
         app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.1f}")
@@ -691,38 +687,38 @@ def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.
         total_wall_time = time.time() - total_start_time
         post_mcts_time = total_wall_time - mcts_search_time
         
-        app.logger.info(f"=== MCTS MOVE COMPLETE ===")
-        app.logger.info(f"=== WALL TIME BREAKDOWN ===")
-        app.logger.info(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
-        app.logger.info(f"MCTS search time: {mcts_search_time:.3f}s")
-        app.logger.info(f"Post-MCTS processing: {post_mcts_time:.3f}s")
-        app.logger.info(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.info(f"=== END WALL TIME BREAKDOWN ===")
-        app.logger.info(f"Final result keys: {list(result.keys())}")
-        app.logger.info(f"Move made: {result['move_made']}")
-        app.logger.info(f"Game over: {result['game_over']}")
-        app.logger.info(f"Winner: {result['winner']}")
+        app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
+        app.logger.debug(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
+        app.logger.debug(f"MCTS search time: {mcts_search_time:.3f}s")
+        app.logger.debug(f"Post-MCTS processing: {post_mcts_time:.3f}s")
+        app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
+        app.logger.debug(f"=== END WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"Final result keys: {list(result.keys())}")
+        app.logger.debug(f"Move made: {result['move_made']}")
+        app.logger.debug(f"Game over: {result['game_over']}")
+        app.logger.debug(f"Winner: {result['winner']}")
         
         # Log detailed exploration info if available
         if 'tree_data' in result and 'detailed_exploration' in result['tree_data']:
             de = result['tree_data']['detailed_exploration']
-            app.logger.info(f"Detailed exploration: enabled={de.get('enabled')}, "
+            app.logger.debug(f"Detailed exploration: enabled={de.get('enabled')}, "
                            f"simulations={de.get('total_simulations')}, "
                            f"trace_length={len(de.get('trace', []))}")
         else:
-            app.logger.info("No detailed exploration data found in tree_data")
+            app.logger.debug("No detailed exploration data found in tree_data")
         
         # Log response size for debugging
         import json
         try:
             response_json = json.dumps(result)
             response_size = len(response_json)
-            app.logger.info(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
+            app.logger.debug(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
         except Exception as e:
             app.logger.warning(f"Could not serialize response for size measurement: {e}")
         
         json_time = time.time() - json_start_time
-        app.logger.info(f"JSON serialization timing took {json_time:.3f}s")
+        app.logger.debug(f"JSON serialization timing took {json_time:.3f}s")
         
         return result
     except Exception as e:
@@ -1110,6 +1106,90 @@ def api_apply_trmph_sequence():
 
 
 
+@app.route("/api/policy_move", methods=["POST"])
+def api_policy_move():
+    """Make a computer move using policy sampling."""
+    data = request.get_json()
+    app.logger.info(f"=== POLICY API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
+    trmph = data.get("trmph")
+    model_id = data.get("model_id", "model1")
+    temperature = data.get("temperature", 0.15)  # Default policy temperature
+    verbose = data.get("verbose", 0)
+    
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
+    
+    try:
+        # Parse TRMPH and get game state
+        state = HexGameState.from_trmph(trmph)
+        
+        # Get model and make policy move
+        model = get_model(model_id)
+        move = select_policy_move(state, model, temperature)
+        
+        if move is None:
+            return jsonify({"success": False, "error": "No valid moves available"}), 400
+        
+        # Apply the move
+        move_trmph = fc.rowcol_to_trmph(move[0], move[1])
+        new_state = apply_move_to_state_trmph(state, move_trmph)
+        new_trmph = new_state.to_trmph()
+        
+        # Get policy information for debug output
+        policy_logits, value_signed = model.simple_infer(trmph)
+        policy_probs = policy_logits_to_probs(policy_logits, temperature)
+        legal_moves = state.get_legal_moves()
+        legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+        
+        # Create policy dictionary for debug
+        policy_dict = {}
+        for i, (row, col) in enumerate(legal_moves):
+            trmph_move = fc.rowcol_to_trmph(row, col)
+            policy_dict[trmph_move] = float(legal_policy[i])
+        
+        # Sort by probability for debug output
+        sorted_policy = sorted(policy_dict.items(), key=lambda x: x[1], reverse=True)
+        
+        result = {
+            "success": True,
+            "new_trmph": new_trmph,
+            "board": new_state.board.tolist(),
+            "player": winner_to_color(new_state.current_player_enum),
+            "legal_moves": [fc.rowcol_to_trmph(r, c) for r, c in new_state.get_legal_moves()],
+            "winner": winner_to_color(new_state.winner) if new_state.winner is not None else None,
+            "move_made": move_trmph,
+            "policy_info": {
+                "selected_move": move_trmph,
+                "selected_probability": policy_dict.get(move_trmph, 0.0),
+                "top_moves": sorted_policy[:5],  # Top 5 moves for debug
+                "temperature": temperature
+            }
+        }
+        
+        if verbose >= 1:
+            result["debug_info"] = {
+                "algorithm_info": {
+                    "algorithm": "policy",
+                    "parameters": {
+                        "temperature": temperature
+                    }
+                },
+                "policy_analysis": {
+                    "top_moves": sorted_policy[:10],
+                    "total_legal_moves": len(legal_moves)
+                }
+            }
+        
+        app.logger.info(f"=== POLICY API RESPONSE ===")
+        app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Policy move error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route("/api/mcts_move", methods=["POST"])
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
@@ -1129,9 +1209,8 @@ def api_mcts_move():
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     
-    # Optional orchestration overrides from request
-    orchestration_cfg = data.get("orchestration", None)
-    orchestration = _build_orchestration_from_dict(orchestration_cfg)
+    # Optional orchestration overrides from request (legacy - not used)
+    orchestration = None
     
     result = make_mcts_move(
         trmph,

@@ -15,10 +15,10 @@ from hex_ai.enums import Channel
 from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.training_utils import get_device  # Use centralized device detection
-from hex_ai.utils import format_conversion as fc
+import hex_ai.utils.format_conversion as fc
 from hex_ai.utils.player_utils import get_player_to_move_from_board
 from hex_ai.value_utils import (
-    get_legal_policy_probs, get_top_k_moves_with_probs, model_output_to_prob, policy_logits_to_probs,
+    get_legal_policy_probs, get_top_k_moves_with_probs, policy_logits_to_probs,
     select_top_k_moves, trmph_winner_to_clear_str, trmph_winner_to_training_value, ValuePerspective
 )
 
@@ -77,10 +77,11 @@ class SimpleModelInference:
         self,
         checkpoint_path: str,
         device: str = None,
-        model_type: str = "resnet18",
+        model_type: str = "katago_inspired",
         cache_size: int = 30000,
         max_batch_size: int = 1000,
-        enable_caching: bool = True
+        enable_caching: bool = True,
+        verbose: int = 2
     ):
         """
         Initialize the SimpleModelInference with a trained model.
@@ -92,6 +93,7 @@ class SimpleModelInference:
             cache_size: Size of the LRU cache for inference results
             max_batch_size: Maximum batch size for inference
             enable_caching: Whether to enable caching
+            verbose: Verbosity level (0=silent, 1=minimal, 2=normal, 3=debug)
         """
         self.checkpoint_path = checkpoint_path
         self.model_type = model_type
@@ -103,7 +105,17 @@ class SimpleModelInference:
         else:
             self.device = device
             
-        print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={self.device}, model_type={model_type}")
+        # Store verbose level for later use
+        self.verbose = verbose
+        
+        # Extract checkpoint name for minimal output
+        checkpoint_name = checkpoint_path.split('/')[-1].replace('.pt.gz', '').replace('.pt', '')
+        
+        # Verbose output for initialization
+        if verbose >= 2:
+            print(f"SimpleModelInference.__init__() called with checkpoint_path={checkpoint_path}, device={self.device}, model_type={model_type}")
+        elif verbose >= 1:
+            print(f"{checkpoint_name} ", end="", flush=True)
         
         # Initialize the model wrapper
         self.model = ModelWrapper(checkpoint_path, self.device, model_type)
@@ -111,7 +123,7 @@ class SimpleModelInference:
         # Initialize caching
         self.enable_caching = enable_caching
         self.cache = LRUCache(cache_size) if enable_caching else None
-        if enable_caching:
+        if enable_caching and verbose >= 2:
             print(f"Cache enabled with size {cache_size}")
         
         # Performance tracking

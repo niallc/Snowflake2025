@@ -1,0 +1,34 @@
+Slightly more formal record of all SF'25 vs SF'18 games. 
+
+Mon Oct 6th
+Setup 
+  git: 23fe5d065
+  model: pipeline_20251003_205950, epoch22_mini19
+  MCTS: Gumbel, 27 sims, temp = 1.01 (other consts as in the code)
+  Compute: SF'25 <20ms / move, SF'18 ~1000ms.
+
+1.
+ a. SF'25 (blue, taking a3)
+ b. Sf'25 (red, against a3)
+
+2.
+ a. SF'18 (red, against c2)
+ b. SF'25 (red, against c2) 
+
+3. 
+ a. SF'25 (blue, taking a8)
+ b. SF'25 (red, against a8)
+
+ Game records
+ 1a: a3i5d10e6f6e8c9c10b10d7c7d5f8e9e5c8f9e10f10g11h9i10h11h10f11f5h5i3i4j3j4k3g4g5h4f3h2g3h3i1g7g6h6f12e12e13d13h1g2g1f2f1e2e1d2d1c2c1a2b12b2c12a1
+ 1b: a3d10f9f8e9e11d11e10i8g10f11f10b11b12a12c9b8a10d9e12a13c10b9b10j9j10k9k10h11i9h9h10l9j8k7k8m7l7m6l6m5l5m4l4m3l2l3i10l10k3k4j4j6i7i6h5i4i5g7f6e7e6d7d6c5c7b7c8g5g6h6m1
+
+ 2a: c2i5l4k4l3d10k6i9e10f8e9d12b12e7d7c11f11d8f7e8c9d9c8e6b11d5e5d6g8f10h9i8g7g5j9j11l11i10h5h8g9g12e13g10e11f9h10j3b7c10b10d4a6b6b4a7c5c6k3g11h11h6j10i11k10k7j7j8h12j4f5f6i7h7g6h4l7l6i4i3m5m6
+ 2b: c2g7e6d10j7j4i5i4k5i3l3l2k3k2j3j2m2m1h5g4f5g5h3h4f7f4d5d6e5f9e10e9g8g9h7e7f6i10j9g6f8j10k9k10h10d4c5c3d3c4b5f11h11e4a4b4a5i8h9b2b3h12g12h8i9j8l7k7l6k6l5i6c10k8l8d9d7j5j6i7c9c8b9b12c11c12a12a13d11d12e12e11b8f10
+
+ 3a. a8d10b9i5c11c10a11b12b11b10a10d4h5c12d11d12g10f11g11f10g9f9g8i4h4g3l2i2i3j3j2f12g12h6f7g6f6g5b6f5c4c2d3f2d2e1d1f8e12c5b5b8c8b7c6g7k4i7j6j8i6h7k7k9l8l9j7i8k8j9e11e13a13d13a12c7e6d6e5d5f3d7d8f4e4e3g2g1h1i1e7
+ 3b. a8c11e10d12c12d11a12b10c10b11a11b9d8f11e12e11j9g9g10g11c7i8a10a9h10f10h8h9j7j8l7k7l6k8l8k6l5k9l9k11m12m10k10j11j10h12i11i12h11g12l11l10
+
+ Notes: 
+ Ay "surprising" is Game 1a. SF'18 appeared to be winning until a very bad blunder of move 40: i1
+ A quick rollout with SF'25 has red winning with g7 instead.

@@ -6,7 +6,7 @@ Search widths [2,2,2] produces only 8 terminal nodes for manual inspection.
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 import numpy as np
 from hex_ai.inference.fixed_tree_search import (
@@ -90,7 +90,7 @@ Replace MODEL_PATH with actual model path.
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.inference.fixed_tree_search import (
     build_search_tree, evaluate_leaf_nodes, minimax_backup,

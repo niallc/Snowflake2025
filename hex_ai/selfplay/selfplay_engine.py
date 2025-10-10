@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN
+from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.enums import Winner
 from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty_hex_state
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
@@ -27,10 +27,11 @@ class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
     def __init__(self, model_path: str, batch_size: int = 32, 
-                 cache_size: int = 10000, temperature: float = 0.5, temperature_end: float = 0.01, 
+                 cache_size: int = DEFAULT_CACHE_SIZE, temperature: float = DEFAULT_TEMPERATURE_START, temperature_end: float = DEFAULT_TEMPERATURE_END, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
-                 mcts_sims: int = 500, c_puct: float = 1.5, enable_gumbel: bool = True):
+                 mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
+                 command_line: str = None):
         
         # Generate a unique run seed based on current time
         self.run_seed = int(time.time() * 1000000) % (2**32)
@@ -67,6 +68,7 @@ class SelfPlayEngine:
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
+        self.command_line = command_line
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -113,7 +115,7 @@ class SelfPlayEngine:
                 "Gumbel root selection": enable_gumbel,
                 "Temperature": temperature,
             }
-            write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed)
+            write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -278,7 +280,7 @@ class SelfPlayEngine:
             game_info = f" (game {game_id})" if game_id is not None else ""
             raise ValueError(f"Invalid TRMPH format{game_info}: must start with {TRMPH_PREFIX!r}")
 
-    def generate_games_with_monitoring(self, num_games: int, board_size: int = 13, 
+    def generate_games_with_monitoring(self, num_games: int, board_size: int = BOARD_SIZE, 
                                      progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate self-play games with monitoring and statistics.
@@ -327,7 +329,7 @@ class SelfPlayEngine:
         
         return games
 
-    def generate_games_streaming(self, num_games: int, board_size: int = 13, 
+    def generate_games_streaming(self, num_games: int, board_size: int = BOARD_SIZE, 
                                progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate games with streaming save to avoid data loss on interruption.
@@ -384,7 +386,7 @@ class SelfPlayEngine:
         return games
 
     def generate_games_with_opening_strategy(self, opening_strategy, num_games: int, 
-                                           board_size: int = 13, progress_interval: int = 10) -> List[Dict[str, Any]]:
+                                           board_size: int = BOARD_SIZE, progress_interval: int = 10) -> List[Dict[str, Any]]:
         """
         Generate self-play games using a specific opening strategy.
         

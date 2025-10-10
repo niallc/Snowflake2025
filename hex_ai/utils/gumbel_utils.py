@@ -13,6 +13,47 @@ import numpy as np
 import time
 from typing import Callable, List, Optional, Tuple, Dict, Any
 
+from hex_ai.config import (
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX,
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
+)
+
+
+def calculate_power_law_candidates(
+    total_sims: int,
+    power_scale: float,
+    power_rate: float,
+    power_offset: float,
+    candidate_min: int,
+    candidate_max: int,
+    num_legal_actions: int
+) -> int:
+    """
+    Calculate the number of Gumbel candidates using power-law scaling.
+    
+    Formula: m = (total_sims * power_scale)^power_rate + power_offset
+    
+    Args:
+        total_sims: Total number of simulations
+        power_scale: Scale factor for power-law scaling
+        power_rate: Rate (exponent) for power-law scaling
+        power_offset: Offset for power-law scaling
+        candidate_min: Minimum number of candidates
+        candidate_max: Maximum number of candidates
+        num_legal_actions: Number of legal actions available
+        
+    Returns:
+        Number of candidates to consider
+    """
+    m_auto = int(min(candidate_max, max(candidate_min, (total_sims * power_scale) ** power_rate + power_offset)))
+    m = min(num_legal_actions, total_sims, m_auto)
+    return m
+
 
 def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
     """
@@ -34,148 +75,11 @@ def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.r
     return -np.log(-np.log(u))
 
 
-def gumbel_alpha_zero_root_select(
-    policy_logits: np.ndarray,
-    total_sims: int,
-    run_one_sim: Callable[[int], None],
-    q_of_child: Callable[[int], float],
-    n_of_child: Callable[[int], int],
-    legal_actions: List[int],
-    m: Optional[int] = None,
-    c_visit: float = 50.0,
-    c_scale: float = 1.0,
-    rng: Optional[np.random.RandomState] = None
-) -> int:
-    """
-    Gumbel-AlphaZero root selection algorithm for small simulation budgets.
-    
-    This function implements the root-only Gumbel-AlphaZero selection procedure.
-    It uses Gumbel-Top-k sampling to select candidate actions and Sequential Halving
-    to allocate simulations efficiently among candidates.
-    
-    Args:
-        policy_logits: Policy logits [K] BEFORE softmax; illegal actions should be -inf
-        total_sims: Total number of simulations to allocate (n)
-        run_one_sim: Function that runs one simulation with forced root action
-        q_of_child: Function that returns current empirical mean value for root child a in [0,1]
-        n_of_child: Function that returns current visit count for root child a
-        legal_actions: List of legal action indices at root
-        m: Number of actions to consider via Top-m (None for auto)
-        c_visit: Gumbel-AlphaZero parameter (default: 50.0)
-        c_scale: Gumbel-AlphaZero parameter (default: 1.0)
-        rng: Random number generator (uses numpy.random if None)
-        
-    Returns:
-        Selected action index
-        
-    Raises:
-        ValueError: If parameters are invalid
-        RuntimeError: If no legal actions available
-    """
-    if rng is None:
-        rng = np.random
-    
-    if not legal_actions:
-        raise RuntimeError("No legal actions available")
-    
-    if total_sims <= 0:
-        raise ValueError(f"total_sims must be positive, got {total_sims}")
-    
-    K = len(policy_logits)
-    
-    # Create mask for illegal actions
-    mask = np.full(K, -np.inf)
-    mask[legal_actions] = 0.0
-    
-    # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    g = sample_gumbel(K, rng=rng)
-    
-    # Apply mask to logits
-    logits = policy_logits + mask
-    
-    # Choose candidate set via Gumbel Top-m on (g + logits)
-    if m is None:
-        # Safe default: don't consider more actions than sims
-        m = min(len(legal_actions), total_sims)
-    
-    top_scores = g + logits
-    
-    # Get indices of top-m actions (unordered)
-    top_idx = np.argpartition(-top_scores, range(m))[:m]
-    
-    # Sequential Halving over the candidate set
-    cand = list(top_idx)
-    R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
-    sims_used = 0
-    
-    def score(a: int) -> float:
-        """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
-        # σ(q) = (c_visit + max_b N(b))^c_scale * q
-        maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
-        sigma = (c_visit + maxN) ** c_scale
-        q_val = q_of_child(a)
-        score_val = g[a] + logits[a] + sigma * q_val
-        return score_val
-    
-    for r in range(R):
-        if not cand:
-            break
-        
-        rounds_left = R - r
-        
-        # Evenly spread remaining simulations across remaining candidates and rounds
-        per_arm = max(1, (total_sims - sims_used) // (len(cand) * rounds_left))
-        
-        # Ensure at least one new visit per arm per round (paper uses this safeguard)
-        for a in list(cand):
-            for _ in range(per_arm):
-                if sims_used >= total_sims:
-                    break
-                run_one_sim(a)
-                sims_used += 1
-        
-        if len(cand) <= 1 or sims_used >= total_sims:
-            break
-        
-        # Rank by g + logits + σ(q̂) and keep top half
-        cand.sort(key=score, reverse=True)
-        keep = max(1, (len(cand) + 1) // 2)
-        cand = cand[:keep]
-    
-    # Final pick: argmax of g + logits + σ(q̂) among remaining
-    if len(cand) > 1:
-        cand.sort(key=score, reverse=True)
-    
-    return cand[0]
-
-
-def normalize_q_values(q_values: np.ndarray, min_val: float = -1.0, max_val: float = 1.0) -> np.ndarray:
-    """
-    Normalize Q-values to [0,1] range for Gumbel-AlphaZero.
-    
-    Args:
-        q_values: Q-values in [min_val, max_val] range
-        min_val: Minimum possible Q-value
-        max_val: Maximum possible Q-value
-        
-    Returns:
-        Normalized Q-values in [0,1] range
-    """
-    if max_val <= min_val:
-        raise ValueError(f"max_val ({max_val}) must be greater than min_val ({min_val})")
-    
-    # Clip to valid range first
-    q_clipped = np.clip(q_values, min_val, max_val)
-    
-    # Normalize to [0,1]
-    return (q_clipped - min_val) / (max_val - min_val)
-
-
 def gumbel_alpha_zero_root_batched(
     *,
     mcts,                    # your BaselineMCTS instance
     root,                    # root node
-    policy_logits,           # np.array [K], BEFORE softmax; illegal set to -inf
+    policy_logits,           # np.array [K], log-probabilities (log of softmax output); illegal set to -inf
     total_sims: int,         # 50..500
     legal_actions: List[int],
     q_of_child: Callable[[int], float],  # returns Q in [0,1]
@@ -183,8 +87,18 @@ def gumbel_alpha_zero_root_batched(
     m: Optional[int] = None,
     c_visit: float = 50.0,
     c_scale: float = 1.0,
-    temperature: float = 1.0,  # Temperature for Gumbel sampling
+    temperature: float = 1.0,  # Noise scale for Gumbel sampling (beta)
+    verbose: int = 0,        # Verbosity level for debug output
     rng=np.random,
+    # Power-law candidate scaling parameters
+    candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN,
+    candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX,
+    # Gumbel ranking stabilization parameters
+    use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,  # Remove Gumbel noise in final evaluation
+    eval_mode: bool = False,  # Whether this is evaluation mode (affects Gumbel noise usage)
 ):
     """
     Batched Gumbel-AlphaZero root selection that reuses existing MCTS batching infrastructure.
@@ -195,16 +109,19 @@ def gumbel_alpha_zero_root_batched(
     Args:
         mcts: BaselineMCTS instance with run_forced_root_actions method
         root: Root MCTS node
-        policy_logits: Policy logits [K] BEFORE softmax; illegal actions should be -inf
+        policy_logits: Log-probabilities [K] (log of softmax output); illegal actions should be -inf
         total_sims: Total number of simulations to allocate
         legal_actions: List of legal action indices at root
         q_of_child: Function that returns current empirical mean value for root child a in [0,1]
         n_of_child: Function that returns current visit count for root child a
         m: Number of actions to consider via Top-m (None for auto)
-        c_visit: Gumbel-AlphaZero parameter (default: 50.0)
-        c_scale: Gumbel-AlphaZero parameter (default: 1.0)
-        temperature: Temperature for Gumbel sampling (default: 1.0)
+        c_visit: Gumbel-AlphaZero parameter
+        c_scale: Gumbel-AlphaZero parameter
+        temperature: Noise scale for Gumbel sampling (beta)
+        verbose: Verbosity level for debug output
         rng: Random number generator (uses numpy.random if None)
+        use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation
+        eval_mode: Whether this is evaluation mode
         
     Returns:
         Tuple of (selected_action_index, performance_metrics_dict)
@@ -213,7 +130,6 @@ def gumbel_alpha_zero_root_batched(
         ValueError: If parameters are invalid
         RuntimeError: If no legal actions available
     """
-    # print(f"GUMBEL FUNCTION CALLED: total_sims={total_sims}, legal_actions={len(legal_actions)}")
     
     # Detailed timing instrumentation
     timing_data = {
@@ -240,18 +156,34 @@ def gumbel_alpha_zero_root_batched(
     if temperature < 0:
         raise ValueError(f"temperature must be non-negative, got {temperature}")
     
-    # Temperature scaling: scale logits by 1/tau to control exploration
-    # This is the standard "temperature before Gumbel" approach
-    t = max(temperature, 1e-6)  # avoid div-by-zero explosion
-    # Do NOT scale the Gumbel noise or the value bonus; only scale logits
-    scaled_policy_logits = policy_logits / t
+    # NOTE: Temperature scaling with Gumbel root selection is currently broken.
+    # The game uses automatic temperature scaling throughout the game (decreasing from 1.0),
+    # but the Gumbel implementation doesn't handle this properly. Using beta (temperature)
+    # as noise scale causes later moves to have lower performance due to reduced randomness.
+    # For now, we disable temperature scaling in Gumbel to maintain consistent performance.
+    # TODO: Implement proper temperature handling for Gumbel root selection.
+    
+    # Interpret temperature as noise scale beta (no scaling of logits or value terms)
+    # beta = float(temperature)
+    # temp_tol = 0.15
+    # if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
+    #     message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
+    #     message += f"For now, temperature must be between {1.0 - temp_tol} and {1.0 + temp_tol}, got {temperature}"
+    #     raise ValueError(message)
+    
+    # DEBUG: Log noise scaling effects
+    # DISABLED: beta-based debug logging due to temperature scaling issues
+    # if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
+    #     print(f"GUMBEL NOISE SCALE DEBUG: beta={beta}")
+    #     print(f"  Original logits range: [{np.min(policy_logits):.3f}, {np.max(policy_logits):.3f}]")
+    #     print(f"  Noise scale: {beta}")
     
     K = policy_logits.shape[0]
     
     # Setup phase timing
     setup_start = time.perf_counter()
     
-    # CRITICAL FIX: Validate that legal_actions are actually legal at current root state
+    # Validate that legal_actions are actually legal at current root state
     # This prevents Gumbel from selecting actions that became illegal due to state changes
     current_legal_indices = set(root.legal_indices)
     validated_legal_actions = [a for a in legal_actions if a in current_legal_indices]
@@ -259,13 +191,16 @@ def gumbel_alpha_zero_root_batched(
     if len(validated_legal_actions) != len(legal_actions):
         # Log the mismatch for debugging
         illegal_actions = [a for a in legal_actions if a not in current_legal_indices]
-        # print(f"WARNING: Gumbel received {len(illegal_actions)} illegal actions: {illegal_actions}")
-        # print(f"Current root legal indices: {sorted(current_legal_indices)}")
-        # print(f"Original legal_actions: {sorted(legal_actions)}")
         
         # If no actions remain valid, this is a critical error
         if not validated_legal_actions:
-            raise RuntimeError(f"All Gumbel legal actions became illegal. Root state may have changed unexpectedly.")
+            raise RuntimeError(
+                f"Gumbel legal actions became illegal. "
+                f"Root state may have changed unexpectedly.\n"
+                f"Illegal actions: {illegal_actions}\n"
+                f"Validated legal actions (after filtering): {validated_legal_actions}\n"
+                f"Current legal indices at root: {sorted(current_legal_indices)}"
+            )
         
         # Update legal_actions to only include valid ones
         legal_actions = validated_legal_actions
@@ -274,14 +209,58 @@ def gumbel_alpha_zero_root_batched(
     mask = np.full(K, -np.inf)
     mask[legal_actions] = 0.0
     
-    # Apply mask to scaled logits
-    logits = scaled_policy_logits + mask
+    # Apply mask to logits (no temperature scaling)
+    logits = policy_logits + mask
+    
+    # Softmax over legal actions
+    pi = np.zeros(K, dtype=np.float64)
+    logits_legal = logits[legal_actions]  # logits already has -inf for illegal
+    # stable softmax for legal slice
+    shift = np.max(logits_legal)
+    exp_legal = np.exp(logits_legal - shift)
+    Z = np.sum(exp_legal)
+    if Z == 0.0:
+        # All -inf or degenerate; assign uniform over legal to avoid NaNs
+        uniform = 1.0 / max(1, len(legal_actions))
+        for a in legal_actions:
+            pi[a] = uniform
+    else:
+        pi_legal = exp_legal / Z
+        for a, p in zip(legal_actions, pi_legal):
+            pi[a] = p
+
+    # Completion helpers
+    def completed_baseline_v_pi():
+        pi_unvisited = 0.0
+        num = 0.0
+        for a in legal_actions:
+            if n_of_child(a) > 0:
+                num += pi[a] * q_of_child(a)
+            else:
+                pi_unvisited += pi[a]
+        denom = 1.0 - pi_unvisited
+        if denom <= 1e-12:
+            # Degenerate (e.g., all unvisited). Fallback: 0.5 in [0,1] or use root value head if available.
+            return 0.5
+        return num / denom
+
+    # Cache v_pi once per root call
+    _v_pi_cache = [None]
+    def completed_q(a: int) -> float:
+        if n_of_child(a) > 0:
+            return q_of_child(a)
+        if _v_pi_cache[0] is None:
+            _v_pi_cache[0] = completed_baseline_v_pi()
+        return _v_pi_cache[0]
     
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
-        # Adaptive candidate count: small when sims are small, grows with sims,
-        # but never exceeds legal moves or sims, and caps at 48.
-        m_auto = int(min(48, max(8, 4 + total_sims // 8)))
+        # Power-law candidate scaling: grows faster than logarithmic
+        # Formula: m = (total_sims * power_scale)^power_rate + power_offset
+        m_auto = calculate_power_law_candidates(
+            total_sims, candidate_power_scale, candidate_power_rate, candidate_power_offset,
+            candidate_min, candidate_max, len(legal_actions)
+        )
         m = min(len(legal_actions), total_sims, m_auto)
     
     timing_data['setup_time'] = time.perf_counter() - setup_start
@@ -290,18 +269,29 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # Use fixed Gumbel(0,1) noise as per the paper - temperature should not scale the Gumbel noise
-    g = sample_gumbel(K, rng=rng)
+    # DISABLED: Scale Gumbel noise by beta (temperature as noise scale)
+    # NOTE: Temperature scaling disabled due to automatic game temperature scaling issues
+    
+    # Sample Gumbel noise only for legal actions (optimization: skip illegal actions)
+    g = np.zeros(K, dtype=np.float64)
+    g_legal = sample_gumbel(len(legal_actions), rng=rng)
+    for i, a in enumerate(legal_actions):
+        g[a] = g_legal[i]
+    
+    # if beta <= 0.0:
+    #     g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
+    # else:
+    #     g *= beta  # DISABLED: causes performance issues with automatic temperature scaling
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
     # Top-m selection timing
     top_m_start = time.perf_counter()
     
-    top_scores = g + logits
-    
-    # Get indices of top-m actions (unordered)
-    top_idx = np.argpartition(-top_scores, range(m))[:m]
+    # Micro-optimization: compute top-m on legal slice only (avoids argpartition over illegal entries)
+    top_scores_legal = g[legal_actions] + logits[legal_actions]
+    idx_local = np.argpartition(top_scores_legal, -m)[-m:]  # unordered
+    top_idx = np.array([legal_actions[i] for i in idx_local], dtype=int)
     
     timing_data['top_m_selection_time'] = time.perf_counter() - top_m_start
     
@@ -310,48 +300,80 @@ def gumbel_alpha_zero_root_batched(
     R = max(1, math.ceil(math.log2(len(cand))))  # number of rounds
     sims_used = 0
     
-    # print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
+    if verbose >= 5:
+        print(f"GUMBEL DEBUG: Starting with {len(cand)} candidates, {R} rounds, {total_sims} total sims")
     
     # Performance tracking
     nn_calls_per_move = 0
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
     
-    def rank_key(a):
-        """Score function for action a: g[a] + logits[a] + σ(q̂[a])"""
-        # σ(q) = (c_visit + max_b N(b))^c_scale * q
-        maxN = max(1, max(n_of_child(b) for b in cand) if cand else 1)
-        sigma = (c_visit + maxN) ** c_scale
-        q_val = q_of_child(a)
-        n_val = n_of_child(a)
-        score_val = g[a] + logits[a] + sigma * q_val
-        
-        # DEBUG: Print Q-values and visit counts
-        # print(f"  Action {a}: g={g[a]:.3f}, logits={logits[a]:.3f}, q={q_val:.3f}, n={n_val}, sigma={sigma:.3f}, score={score_val:.3f}")
-        
-        return score_val
+    # Precompute maxN_all once per root (across ALL legal children)
+    maxN_all = max(1, max(n_of_child(a) for a in legal_actions))
     
-    def schedule_round(arms_list, sims_left, rounds_left, batch_cap):
+    # Compute v_pi once per root and cache it
+    v_pi = completed_baseline_v_pi()
+
+    def rank_key(a):
+        """Score function for action a: g[a] + logits[a] + σ(q̂[a] - v_pi)"""
+        # Use constant sigma (simplified approach)
+        sigma = c_scale
+        
+        # Use advantage form: (q_tilde - v_pi) instead of just q_tilde
+        q_tilde = completed_q(a)
+        advantage = q_tilde - v_pi
+        
+        # Optional: Remove Gumbel noise in final evaluation for deterministic results
+        g_eval = 0.0 if (eval_mode and not use_gumbel_in_final_eval) else g[a]
+        
+        return g_eval + logits[a] + sigma * advantage
+    
+    def per_arm_allocation(total_left, rounds_left, num_arms):
         """
-        IMPROVEMENT: Allocate per round to fill batches, not per-sim.
-        This ensures we get full batches instead of tiny 1-off NN calls.
+        Calculate per-arm allocation for equal budgeting per round.
+        This restores the behavior from 5760a837: each surviving arm gets
+        exactly per_arm targeted root simulations during the current round.
+        
+        Handles cases where we can't allocate even 1 simulation per arm.
         """
-        # At least one full batch, try to split budget evenly across remaining rounds
-        per_round = max(batch_cap, sims_left // rounds_left)
-        per_round = min(per_round, sims_left)
+        if num_arms == 0:
+            return 0
         
-        # Distribute across arms as evenly as possible
-        A = len(arms_list)
-        base = per_round // max(1, A)
-        extra = per_round - base * A
+        # Calculate the theoretical per-arm allocation
+        theoretical_per_arm = total_left // max(1, rounds_left * num_arms)
         
-        counts = {a: base for a in arms_list}
-        for a in rng.permutation(arms_list)[:extra]:
-            counts[a] += 1
+        # But ensure we don't exceed the available simulations
+        max_per_arm = total_left // num_arms
         
-        # Flatten into one list for this round (no shuffling - deterministic order)
-        actions = [a for a in arms_list for _ in range(counts[a])]
+        # If we can't allocate even 1 simulation per arm, return 0
+        # This will cause the algorithm to terminate early
+        if max_per_arm == 0:
+            return 0
+        
+        # Return the minimum of theoretical allocation and budget constraint
+        return max(1, min(theoretical_per_arm, max_per_arm))
+    
+    def schedule_round(arms_list, sims_left, rounds_left):
+        """
+        REVERTED: Use per-arm equal allocation per round (restore behavior from 5760a837).
+        This removes early-round asymmetries that were introduced by the batch-fill strategy.
+        
+        Each surviving arm gets exactly per_arm targeted root simulations during this round.
+        Batching is handled internally by MCTS and does not affect per-arm counts.
+        """
+        # Calculate exactly per_arm sims per arm in this round
+        per_arm = per_arm_allocation(sims_left, rounds_left, len(arms_list))
+        
+        # Create exactly per_arm simulations for each arm
+        actions = [a for a in arms_list for _ in range(per_arm)]
         return actions
+    
+    # Guards for degenerate cases
+    if not cand:
+        raise RuntimeError("No candidates available for Gumbel selection")
+    if R <= 0:
+        # Single candidate case - just return it
+        return cand[0], {"nn_calls_per_move": 0, "total_leaves_evaluated": 0, "distinct_leaves_evaluated": 0, "candidates_m": m, "rounds_R": R, "avg_nn_batch_size": 0, "leaves_distinct_ratio": 0, "timing_breakdown": timing_data}
     
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
@@ -362,29 +384,38 @@ def gumbel_alpha_zero_root_batched(
             break
         rounds_left = R - r
         arms = len(cand)
-        
-        # IMPROVEMENT: Use round-based allocation instead of per-arm
-        actions_this_round = schedule_round(
-            cand, 
-            total_sims - sims_used, 
-            rounds_left, 
-            mcts.cfg.batch_cap
-        )
-        
+
+        # Compute this stage's per-arm allocation (equal budgeting)
+        per_arm = per_arm_allocation(total_sims - sims_used, rounds_left, arms)
+
+        # NEW: if we cannot afford even 1 sim per arm, do not prune on stale evidence
+        if per_arm == 0:
+            break  # exit SH loop; proceed to final ranking over 'cand' as-is
+
+        # Create exactly per_arm simulations for each arm
+        actions_this_round = [a for a in cand for _ in range(per_arm)]
+
+        # (Optional assertion) each arm gets per_arm sims
         if actions_this_round:
-            # Track performance metrics from this round
-            stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
-            # Track batch metrics more accurately
-            nn_calls_per_move += stats.get("batch_count", 0)
-            total_leaves_evaluated += len(actions_this_round)  # Each action = one simulation
-            # Note: unique_evals_total is not available in individual batch stats
-            # We'll track this separately by looking at the final MCTS metrics
-            sims_used += len(actions_this_round)
-        
+            from collections import Counter
+            counts = Counter(actions_this_round)
+            for a in cand:
+                assert counts[a] == per_arm
+
+        # Run the forced actions
+        stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
+        nn_calls_per_move += stats.get("batch_count", 0)
+        total_leaves_evaluated += len(actions_this_round)
+        sims_used += len(actions_this_round)
+
+        # Log per_arm and len(cand) per round at verbose>=4
+        if verbose >= 4:
+            print(f"GUMBEL Round {r+1}: {arms} candidates, {per_arm} sims/arm, {len(actions_this_round)} total sims")
+
         if arms <= 1 or sims_used >= total_sims:
             break
-        
-        # Halve: keep the top half by the current score
+
+        # Halve after NEW evidence
         cand.sort(key=rank_key, reverse=True)
         keep = max(1, (arms + 1) // 2)
         cand = cand[:keep]
@@ -392,12 +423,35 @@ def gumbel_alpha_zero_root_batched(
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start
     
+    # Final assertion: ensure we didn't exceed total_sims
+    assert sims_used <= total_sims, f"Used {sims_used} sims, but only {total_sims} were allocated"
+    
     # Final ranking timing
     ranking_start = time.perf_counter()
     
-    # Final pick
+    # Final pick - use deterministic ranking without Gumbel noise
     if len(cand) > 1:
-        cand.sort(key=rank_key, reverse=True)
+        # Use constant sigma for final ranking
+        final_sigma = c_scale
+
+        def final_rank_key(a: int) -> float:
+            # advantage with cached v_pi and completion for unvisited
+            adv = completed_q(a) - v_pi
+            return logits[a] + final_sigma * adv  # no gumbel in final ranking
+
+        cand.sort(key=final_rank_key, reverse=True)
+    
+    # DEBUG: Compare final selection with top policy move
+    # DISABLED: beta-based debug logging due to temperature scaling issues
+    # if beta <= 0.1 and verbose >= 5:
+    #     selected_action = cand[0]
+    #     top_policy_action = int(np.argmax(logits))
+    #     print(f"GUMBEL FINAL SELECTION DEBUG:")
+    #     print(f"  Selected action: {selected_action} (score: {rank_key(selected_action):.3f})")
+    #     print(f"  Top policy action: {top_policy_action} (score: {rank_key(top_policy_action):.3f})")
+    #     print(f"  Same as top policy: {selected_action == top_policy_action}")
+    #     if selected_action != top_policy_action:
+    #         print(f"  Difference in scores: {rank_key(selected_action) - rank_key(top_policy_action):.3f}")
     
     timing_data['ranking_time'] = time.perf_counter() - ranking_start
     timing_data['total_time'] = time.perf_counter() - total_start
@@ -415,3 +469,100 @@ def gumbel_alpha_zero_root_batched(
     }
     
     return cand[0], performance_metrics
+
+
+# Configuration display utilities
+
+def generate_gumbel_summary_from_configs(strategy_configs: List[Any]) -> str:
+    """
+    Generate a concise summary of Gumbel configuration for strategy configurations.
+    
+    This function works with StrategyConfig objects from the tournament system.
+    
+    Args:
+        strategy_configs: List of strategy configurations with config dictionaries
+        
+    Returns:
+        String summary of Gumbel settings, or empty string if no MCTS strategies
+    """
+    mcts_configs = [c for c in strategy_configs if c.strategy_type == "mcts"]
+    
+    if not mcts_configs:
+        return ""
+    
+    # Get Gumbel settings from the first MCTS config (they should all be the same)
+    gumbel_enabled = any(c.config.get("enable_gumbel_root_selection", False) for c in mcts_configs)
+    gumbel_sim_threshold = mcts_configs[0].config.get("gumbel_sim_threshold", DEFAULT_GUMBEL_SIM_THRESHOLD)
+    
+    # Build summary
+    summary_parts = [
+        f"Gumbel: Flag = {'on' if gumbel_enabled else 'off'}",
+        f"sim threshold = {gumbel_sim_threshold}"
+    ]
+    
+    # Add per-participant status
+    participant_status = []
+    for i, config in enumerate(strategy_configs):
+        if config.strategy_type == "mcts":
+            sims = config.config.get("mcts_sims", 0)
+            gumbel_enabled_for_this = config.config.get("enable_gumbel_root_selection", False)
+            will_use_gumbel = gumbel_enabled_for_this and sims <= gumbel_sim_threshold
+            status = "on" if will_use_gumbel else "off"
+            participant_status.append(f"s{i+1}: {status}")
+        else:
+            participant_status.append(f"s{i+1}: N/A")
+    
+    summary_parts.append(", ".join(participant_status))
+    
+    return ", ".join(summary_parts)
+
+
+def generate_gumbel_summary_from_params(
+    mcts_sims: int,
+    enable_gumbel: bool,
+    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD,
+    strategy_name: str = "selfplay"
+) -> str:
+    """
+    Generate a concise summary of Gumbel configuration from individual parameters.
+    
+    This function works with individual parameters, suitable for selfplay scenarios.
+    
+    Args:
+        mcts_sims: Number of MCTS simulations
+        enable_gumbel: Whether Gumbel root selection is enabled
+        gumbel_sim_threshold: Simulation threshold for Gumbel (default: from config)
+        strategy_name: Name of the strategy (default: "selfplay")
+        
+    Returns:
+        String summary of Gumbel settings
+    """
+    will_use_gumbel = enable_gumbel and mcts_sims <= gumbel_sim_threshold
+    status = "on" if will_use_gumbel else "off"
+    
+    return f"Gumbel: Flag = {'on' if enable_gumbel else 'off'}, sim threshold = {gumbel_sim_threshold}, {strategy_name}: {status}"
+
+
+def generate_gumbel_summary_from_mcts_config(mcts_config: Any) -> str:
+    """
+    Generate a concise summary of Gumbel configuration from an MCTS config object.
+    
+    Args:
+        mcts_config: MCTS configuration object with Gumbel settings
+        
+    Returns:
+        String summary of Gumbel settings
+    """
+    # Extract Gumbel settings from MCTS config
+    enable_gumbel = getattr(mcts_config, 'enable_gumbel_root_selection', False)
+    gumbel_sim_threshold = getattr(mcts_config, 'gumbel_sim_threshold', DEFAULT_GUMBEL_SIM_THRESHOLD)
+    mcts_sims = getattr(mcts_config, 'sims', 0)
+    
+    return generate_gumbel_summary_from_params(
+        mcts_sims=mcts_sims,
+        enable_gumbel=enable_gumbel,
+        gumbel_sim_threshold=gumbel_sim_threshold,
+        strategy_name="selfplay"
+    )
+
+

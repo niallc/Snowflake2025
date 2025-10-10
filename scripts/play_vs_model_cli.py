@@ -16,14 +16,12 @@ from hex_ai.inference.board_display import display_hex_board
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph, apply_move_to_state, select_top_value_head_move
 from hex_ai.file_utils import GracefulShutdown
 import sys
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
     Winner,
     ValuePerspective,
-    model_output_to_prob,
     winner_to_color,
     ValuePredictor,
-    get_policy_probs_from_logits,
     temperature_scaled_softmax,
     # Add new utilities
     policy_logits_to_probs,
@@ -36,8 +34,9 @@ from hex_ai.enums import Player
 from hex_ai.inference.board_display import ansi_colored
 from hex_ai.utils.format_conversion import trmph_move_to_rowcol, rowcol_to_trmph
 from hex_ai.inference.model_config import get_model_path
+from hex_ai.config import BOARD_SIZE, DEFAULT_TEMPERATURE_START
 
-DEFAULT_BOARD_SIZE = 13
+DEFAULT_BOARD_SIZE = BOARD_SIZE
 DEFAULT_TOP_K = 20
 
 DEFAULT_CHKPT_PATH = get_model_path("current_best")
@@ -66,7 +65,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, default=DEFAULT_CHKPT_PATH, help='Path to model checkpoint')
     parser.add_argument('--board-size', type=int, default=DEFAULT_BOARD_SIZE, help='Board size (default: 13)')
     parser.add_argument('--topk', type=int, default=DEFAULT_TOP_K, help='Top-k policy moves to consider (default: 20)')
-    parser.add_argument('--temperature', type=float, default=0.5, help='Randomness for model move selection (default: 0.5)')
+    parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE_START, help=f'Randomness for model move selection (default: {DEFAULT_TEMPERATURE_START})')
     parser.add_argument('--human-first', action='store_true', help='Human plays first (default: model plays first)')
     parser.add_argument('--search-widths', type=str, default=None, help='Comma-separated list of search widths for tree search (e.g., 20,10,10,5). If provided, use minimax tree search for model moves. WARNING: The number of leaf positions grows rapidly as the product of these numbers! (e.g., 20,10,10,5 = 10,000 leaves). Recommended max: 1,000,000.')
     parser.add_argument('--start-trmph', type=str, default=None, help='Optional starting position in trmph format (must start with "#13,", e.g., "#13,a1b2c3")')
@@ -137,7 +136,15 @@ def main():
             else:
                 print("Model is thinking...")
                 if args.search_widths:
-                    move, move_value = minimax_policy_value_search(state, model, search_widths, batch_size=1000, use_alpha_beta=True, temperature=args.temperature)
+                    # Use modern fixed tree search API
+                    search_config = create_fixed_tree_config(
+                        search_widths=search_widths,
+                        temperature=args.temperature,
+                        batch_size=1000
+                    )
+                    result = run_fixed_tree_search(state, model, search_config)
+                    move = result.move
+                    move_value = result.value
                     num_leaves = np.prod(search_widths)
                     print(f"[Tree search] Evaluated up to {num_leaves} leaf positions (widths: {search_widths})")
                 else:

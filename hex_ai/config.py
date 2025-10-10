@@ -63,12 +63,12 @@ TRMPH_PREFIX = "#13,"
 
 # Default hyperparameters
 LEARNING_RATE = 0.001
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 NUM_EPOCHS = 10
 
 # Loss weights for standardized comparison
-POLICY_LOSS_WEIGHT = 0.14
-VALUE_LOSS_WEIGHT = 0.86
+POLICY_LOSS_WEIGHT = 0.8
+VALUE_LOSS_WEIGHT = 0.2
 
 # Model architecture
 RESNET_DEPTH = 18  # ResNet-18 for initial implementation
@@ -78,10 +78,35 @@ CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 # MCTS inference defaults
 DEFAULT_BATCH_CAP = 64  # Default batch size for neural network evaluation
 DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
+DEFAULT_MCTS_SIMS = 50  # Default number of MCTS simulations
+DEFAULT_CACHE_SIZE = 60000  # Default cache size for model inference
+DEFAULT_TEMPERATURE_START = 1.0  # Default starting temperature for move sampling
+DEFAULT_TEMPERATURE_END = 1.0  # Default ending temperature for move sampling
+DEFAULT_MCTS_DIRICHLET_ALPHA = 0.3  # Default Dirichlet noise alpha parameter
+DEFAULT_MCTS_DIRICHLET_EPS = 0.25  # Default Dirichlet noise epsilon parameter
+DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel AlphaZero root selection
+DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
+DEFAULT_GUMBEL_C_SCALE = 100  # Default Gumbel-AlphaZero c_scale parameter
+DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
+
+# Gumbel candidate scaling defaults (power-law scaling)
+DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 75.0  # Scale factor for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_RATE = 0.42  # Rate (exponent) for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = -15.0  # Offset for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
+DEFAULT_GUMBEL_CANDIDATE_MAX = 80  # Maximum number of candidates
+
+# Gumbel ranking stabilization defaults
+DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL = False  # Remove Gumbel noise in final evaluation for deterministic results
 
 # Data augmentation
 ROTATION_AUGMENTATION = True
 REFLECTION_AUGMENTATION = True
+
+# Dataset configuration
+DEFAULT_POOL_SIZE = 1_000_000  # Default number of positions to maintain in memory
+DEFAULT_REFILL_THRESHOLD = 750_000  # Refill pool when it drops below this many positions
+DEFAULT_MAX_MEMORY_GB = 14.0  # Maximum memory usage before graceful shutdown
 
 # Logging
 WANDB_PROJECT_NAME = "hex-ai-2025"

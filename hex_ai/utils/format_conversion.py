@@ -80,20 +80,19 @@ def trmph_to_moves(trmph_text: str, board_size: int = BOARD_SIZE) -> list[tuple[
     
     return rowcol_moves
 
-def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicate_action: str = "exception") -> np.ndarray:
+def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE) -> np.ndarray:
     """
     Parse a trmph string to a board matrix.
     
     Args:
         trmph_text: Complete trmph string
         board_size: Size of the board
-        duplicate_action: How to handle duplicate moves ("exception" or "ignore")
         
     Returns:
         Board matrix with 'e'=empty, 'b'=blue, 'r'=red (character array)
         
     Raises:
-        ValueError: If duplicate_action="exception" and duplicate move found
+        ValueError: If duplicate move found
     """
     # Strip preamble and get moves
     bare_moves = strip_trmph_preamble(trmph_text)
@@ -108,23 +107,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE, duplicat
         
         # Check for duplicate moves
         if board[row, col] != Piece.EMPTY.value:
-            if duplicate_action == "ignore":
-                logger.warning(f"Skipping duplicate move '{move}' at {(row, col)} in {trmph_text}")
-                break  # Do not process any moves after a duplicate.
-            else:
-                # Enhanced debugging output for non-training contexts
-                import traceback
-                frame = traceback.extract_stack()[-2]  # Get calling frame
-                logger.error(f"DUPLICATE MOVE DETECTED:")
-                logger.error(f"  File: {frame.filename}")
-                logger.error(f"  Line: {frame.lineno}")
-                logger.error(f"  Function: {frame.name}")
-                logger.error(f"  Move: '{move}' at position ({row}, {col})")
-                logger.error(f"  Move index: {i}")
-                logger.error(f"  Board value at position: {board[row, col]}")
-                logger.error(f"  Full trmph string: {trmph_text}")
-                logger.error(f"  All moves: {moves}")
-                raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
+            raise ValueError(f"Duplicate move '{move}' at ({row}, {col}) in {trmph_text}")
         
         # Place move (Alternating players. Piece colours are blue='b', red='r' for nxn boards)
         is_blue_turn = (i % 2) == 0
@@ -228,25 +211,36 @@ def board_nxn_to_3nxn(board_nxn: np.ndarray) -> torch.Tensor:
     board_2nxn = board_nxn_to_2nxn(board_nxn)
     return board_2nxn_to_3nxn(board_2nxn)
 
-def parse_trmph_game_record(line: str) -> tuple[str, str]:
+def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
     """
-    Parse a single line from a TRMPH file, returning (trmph_url, winner_indicator).
-    Raises ValueError if the format is invalid or if legacy formats are detected.
+    Convert a (3, N, N) tensor to a (N, N) string array format.
+    Extracts the first two channels (blue and red) and converts to string representation.
+    The third channel (player-to-move) is ignored.
+    
+    Args:
+        board_3nxn: torch.Tensor of shape (3, N, N) or np.ndarray of shape (3, N, N)
+        
+    Returns:
+        np.ndarray of shape (N, N) with 'e'=empty, 'b'=blue, 'r'=red
+        
+    Raises:
+        ValueError: If input shape is not (3, N, N)
     """
-    line = line.strip()
-    if not line:
-        raise ValueError("Empty line")
-    parts = line.split()
-    if len(parts) != 2:
-        raise ValueError(f"Invalid TRMPH game record format: {repr(line)}")
-    trmph_url, winner_indicator = parts
+    if isinstance(board_3nxn, torch.Tensor):
+        board_np = board_3nxn.detach().cpu().numpy()
+    else:
+        board_np = board_3nxn
     
-    # Check for legacy formats and raise exceptions
-    if winner_indicator == "1":
-        raise ValueError(f"Legacy TRMPH_BLUE_WIN value ('1') detected in line: {repr(line)}. Use new format ('b') instead.")
-    elif winner_indicator == "2":
-        raise ValueError(f"Legacy TRMPH_RED_WIN value ('2') detected in line: {repr(line)}. Use new format ('r') instead.")
+    if board_np.shape != (3, BOARD_SIZE, BOARD_SIZE):
+        raise ValueError(f"Expected shape (3, {BOARD_SIZE}, {BOARD_SIZE}), got {board_np.shape}")
     
-    if winner_indicator not in {TRMPH_BLUE_WIN, TRMPH_RED_WIN}:
-        raise ValueError(f"Invalid winner indicator: {winner_indicator} in line: {repr(line)}")
-    return trmph_url, winner_indicator 
+    # Extract blue and red channels
+    blue_channel = board_np[channel_to_int(Channel.BLUE)]
+    red_channel = board_np[channel_to_int(Channel.RED)]
+    
+    # Convert to N×N string format
+    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+    board_nxn[blue_channel == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
+    board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
+    
+    return board_nxn

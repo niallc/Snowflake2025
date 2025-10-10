@@ -23,16 +23,6 @@ def trmph_winner_to_training_value(trmph_winner: str) -> float:
     else:
         raise ValueError(f"Invalid TRMPH winner: {trmph_winner}")
 
-def training_value_to_trmph_winner(training_value: float) -> str:
-    """
-    Map training value (0.0 or 1.0) to TRMPH winner annotation ("1" or "2").
-    """
-    if training_value == TRAINING_BLUE_WIN:
-        return TRMPH_BLUE_WIN
-    elif training_value == TRAINING_RED_WIN:
-        return TRMPH_RED_WIN
-    else:
-        raise ValueError(f"Invalid training value: {training_value}")
 
 def trmph_winner_to_clear_str(trmph_winner: str) -> str:
     """
@@ -104,19 +94,8 @@ def channel_to_int(channel: Channel) -> int:
         raise TypeError(f"channel must be Channel enum, got {type(channel)}")
     return int(channel.value)
 
-def int_to_channel(channel_int: int) -> Channel:
-    """Convert integer to Channel enum."""
-    if not isinstance(channel_int, int):
-        raise TypeError(f"channel_int must be int, got {type(channel_int)}")
-    if channel_int not in (Channel.BLUE.value, Channel.RED.value, Channel.PLAYER_TO_MOVE.value):
-        raise ValueError(f"Invalid channel int: {channel_int}")
-    return Channel(channel_int)
 
 # --- Validation functions to catch legacy formats ---
-def validate_piece_value(piece_value) -> None:
-    """Raise ValueError if piece_value is a legacy numeric value."""
-    if isinstance(piece_value, int):
-        raise ValueError(f"Legacy numeric piece value ({piece_value}) detected. Use character representation ('e', 'b', 'r') instead.")
 
 def validate_trmph_winner(trmph_winner: str) -> None:
     """Raise ValueError if trmph_winner is a legacy value."""
@@ -318,63 +297,6 @@ class ValuePredictor:
         return torch.all((model_output >= -1.0) & (model_output <= 1.0)).item()
 
 
-# Legacy compatibility functions (deprecated but kept for backward compatibility)
-def model_output_to_prob(model_output: float, perspective: ValuePerspective) -> float:
-    """
-    Convert model output (sigmoid(logit)) to probability for the given perspective.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    model_output is the probability that Red wins (after applying sigmoid to the raw logit).
-    """
-    if perspective is None:
-        raise ValueError("perspective cannot be None")
-    elif perspective == ValuePerspective.TRAINING_TARGET:
-        return model_output
-    elif perspective == ValuePerspective.BLUE_WIN_PROB:
-        return 1.0 - model_output
-    elif perspective == ValuePerspective.RED_WIN_PROB:
-        return model_output
-    else:
-        raise ValueError(f"Unknown perspective: {perspective}")
-
-def prob_to_model_output(prob: float, perspective: ValuePerspective) -> float:
-    """
-    Convert a probability for a given perspective to the model output convention.
-    
-    DEPRECATED: This function assumes sigmoid-based model outputs. Use ValuePredictor
-    for the new tanh-based value head.
-    
-    The value head predicts Red's win probability, so the model output convention
-    is the probability that Red wins.
-    """
-    if perspective is None:
-        raise ValueError("perspective cannot be None")
-    elif perspective == ValuePerspective.TRAINING_TARGET:
-        return prob
-    elif perspective == ValuePerspective.BLUE_WIN_PROB:
-        return 1.0 - prob
-    elif perspective == ValuePerspective.RED_WIN_PROB:
-        return prob
-    else:
-        raise ValueError(f"Unknown perspective: {perspective}")
-
-
-
-def get_policy_probs_from_logits(policy_logits) -> np.ndarray:
-    """
-    Given raw policy logits (numpy array or torch tensor), return softmaxed probabilities as a numpy array.
-    """
-    if not isinstance(policy_logits, np.ndarray):
-        policy_logits = policy_logits.detach().cpu().numpy() if hasattr(policy_logits, 'detach') else np.array(policy_logits)
-    policy_probs = torch.softmax(torch.tensor(policy_logits), dim=0).numpy()
-    
-    # Validate the output probabilities
-    validate_probabilities(policy_probs, "Policy logits to probs")
-    
-    return policy_probs
 
 def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.ndarray:
     """
@@ -473,45 +395,6 @@ def policy_logits_to_probs(policy_logits: np.ndarray, temperature: float = 1.0) 
     return temperature_scaled_softmax(policy_logits, temperature)
 
 
-def policy_logits_to_probs_2d(policy_logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
-    """
-    Convert policy logits to 2D probabilities using temperature-scaled softmax.
-    
-    This function is specifically designed for MCTS and other applications that prefer
-    2D coordinate access. It flattens the logits, applies softmax, and reshapes back to 2D.
-
-    Args:
-        policy_logits: Raw policy logits (numpy array, typically 13x13 for Hex)
-        temperature: Temperature parameter (default 1.0)
-
-    Returns:
-        2D temperature-scaled softmax probabilities with same shape as input
-    """
-    if temperature <= 0:
-        # Greedy selection: return one-hot vector for argmax
-        result = np.zeros_like(policy_logits)
-        result[np.argmax(policy_logits)] = 1.0
-        return result
-
-    # Store original shape
-    original_shape = policy_logits.shape
-    
-    # Flatten logits for softmax
-    logits_flat = policy_logits.flatten()
-    
-    # Apply temperature scaling: logits / temperature
-    scaled_logits = logits_flat / temperature
-    
-    # Apply softmax to flattened array
-    probs_flat = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
-    
-    # Reshape back to original shape
-    probs = probs_flat.reshape(original_shape)
-    
-    # Validate that we got reasonable probabilities using our validation function
-    validate_probabilities(probs, f"2D policy logits to probs (T={temperature})")
-    
-    return probs
 
 def get_legal_policy_probs(policy_probs: np.ndarray, legal_moves: List[Tuple[int, int]], board_size: int) -> np.ndarray:
     """
@@ -681,17 +564,6 @@ def signed_to_prob(v_signed: float) -> float:
     """
     return 0.5 * (v_signed + 1.0)
 
-def prob_to_signed(p_prob: float) -> float:
-    """
-    Map probability p ∈ [0,1] to signed value v ∈ [-1,1], with 0 == neutral.
-    
-    Args:
-        p_prob: Probability in [0, 1] range where 0.5 = neutral
-        
-    Returns:
-        Signed value in [-1, 1] range where +1 = certain Red win, -1 = certain Blue win
-    """
-    return 2.0 * p_prob - 1.0
 
 def red_ref_signed_to_ptm_ref_signed(v_red_ref_signed: float, player) -> float:
     """
@@ -861,32 +733,8 @@ def get_top_k_legal_moves(model, state, top_k=20, temperature=1.0, return_probs=
 
 
 # --- Utility functions for enum usage ---
-def get_opponent(player: Player) -> Player:
-    """Get the opponent of the given player."""
-    return Player.RED if player == Player.BLUE else Player.BLUE
-
-def is_blue(player) -> bool:
-    """Check if the given player/winner is blue (strict inputs)."""
-    if isinstance(player, Player):
-        return player == Player.BLUE
-    if isinstance(player, Winner):
-        return player == Winner.BLUE
-    raise TypeError(f"Unknown player type: {type(player)}")
-
-def is_red(player) -> bool:
-    """Check if the given player/winner is red (strict inputs)."""
-    if isinstance(player, Player):
-        return player == Player.RED
-    if isinstance(player, Winner):
-        return player == Winner.RED
-    raise TypeError(f"Unknown player type: {type(player)}")
-
 def player_to_winner(player: Player) -> Winner:
     """Convert Player enum to Winner enum."""
     return Winner.BLUE if player == Player.BLUE else Winner.RED
-
-def winner_to_player(winner: Winner) -> Player:
-    """Convert Winner enum to Player enum."""
-    return Player.BLUE if winner == Winner.BLUE else Player.RED
 
  

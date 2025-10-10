@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
 
 from .data_utils import load_trmph_file, extract_training_examples_with_selector_from_game
-from .utils.format_conversion import parse_trmph_game_record
+from .data_processing import parse_trmph_line_flexible
 from .file_utils import (
     GracefulShutdown, atomic_write_pickle_gz, validate_output_directory,
     sanitize_filename, save_progress_report
@@ -360,7 +360,13 @@ class BatchProcessor:
                 try:
                     # Parse the game record
                     try:
-                        trmph_url, winner = parse_trmph_game_record(game_line)
+                        trmph_url, winner = parse_trmph_line_flexible(game_line)
+                        
+                        # Skip lines without winner indicator
+                        if winner is None:
+                            logger.warning(f"    Game {i+1} has no winner indicator: {repr(game_line)}")
+                            file_stats['skipped_games'] += 1
+                            continue
                     except ValueError as e:
                         logger.warning(f"    Game {i+1} has wrong format: {repr(game_line)}: {e}")
                         file_stats['skipped_games'] += 1

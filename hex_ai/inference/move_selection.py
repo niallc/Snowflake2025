@@ -12,27 +12,50 @@ from dataclasses import dataclass
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
-from hex_ai.inference.fixed_tree_search import minimax_policy_value_search
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.config import (
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_MIN,
+    DEFAULT_GUMBEL_CANDIDATE_MAX,
+    DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_MCTS_DIRICHLET_ALPHA,
+    DEFAULT_MCTS_DIRICHLET_EPS,
+    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_C_SCALE,
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
+)
 
 
 @dataclass
 class MoveSelectionConfig:
     """Configuration for move selection strategies."""
-    temperature: float = 1.0
+    temperature: float  # No default - must be specified
     # For MCTS
-    mcts_sims: int = 200
-    mcts_c_puct: float = 1.5
-    mcts_dirichlet_alpha: float = 0.3
-    mcts_dirichlet_eps: float = 0.25
+    mcts_sims: int = DEFAULT_MCTS_SIMS
+    mcts_c_puct: float = DEFAULT_C_PUCT
+    mcts_dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
+    mcts_dirichlet_eps: float = DEFAULT_MCTS_DIRICHLET_EPS
     batch_size: Optional[int] = None  # Override default batch size for MCTS
     # For Gumbel AlphaZero root selection
-    enable_gumbel_root_selection: bool = False  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = 200  # Use Gumbel selection when sims <= this threshold
-    gumbel_c_visit: float = 50.0  # Gumbel-AlphaZero c_visit parameter
-    gumbel_c_scale: float = 1.0  # Gumbel-AlphaZero c_scale parameter
+    enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
+    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
+    gumbel_c_visit: float = DEFAULT_GUMBEL_C_VISIT  # Gumbel-AlphaZero c_visit parameter
+    gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
     gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
+    # Gumbel candidate scaling parameters (power-law scaling)
+    gumbel_candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE  # Scale factor for power-law candidate scaling
+    gumbel_candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE  # Rate (exponent) for power-law candidate scaling
+    gumbel_candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET  # Offset for power-law candidate scaling
+    gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
+    gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
+    # Gumbel ranking stabilization parameters
+    gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -44,7 +67,7 @@ class MoveSelectionStrategy(ABC):
     
     @abstractmethod
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         """Select a move for the given state and model."""
         pass
     
@@ -63,7 +86,7 @@ class PolicyBasedStrategy(MoveSelectionStrategy):
     """Move selection using direct policy sampling."""
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         return select_policy_move(state, model, config.temperature)
     
     def get_name(self) -> str:
@@ -77,14 +100,18 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
     """Move selection using fixed-width minimax search."""
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
-                   config: MoveSelectionConfig) -> Tuple[int, int]:
+                   config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         if not config.search_widths:
             raise ValueError("FixedTreeSearchStrategy requires search_widths configuration")
         
-        move, _ = minimax_policy_value_search(
-            state, model, config.search_widths, temperature=config.temperature
+        # Create modern config and run search
+        search_config = create_fixed_tree_config(
+            search_widths=config.search_widths,
+            temperature=config.temperature,
+            batch_size=1000  # Default batch size
         )
-        return move
+        result = run_fixed_tree_search(state, model, search_config, verbose)
+        return result.move
     
     def get_name(self) -> str:
         return "fixed_tree"
@@ -104,13 +131,25 @@ class MCTSStrategy(MoveSelectionStrategy):
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
         # Create MCTS configuration optimized for tournament play
+        # Pass all parameters through create_mcts_config for consistency
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
             confidence_termination_threshold=0.95,  # Conservative confidence termination for quality
             c_puct=config.mcts_c_puct,  # Pass the c_puct parameter from strategy config
             dirichlet_alpha=config.mcts_dirichlet_alpha,  # Pass the dirichlet_alpha parameter
             dirichlet_eps=config.mcts_dirichlet_eps,  # Pass the dirichlet_eps parameter
-            enable_depth_discounting=False  # Disable depth discounting for tournament play
+            enable_depth_discounting=False,  # Disable depth discounting for tournament play
+            enable_gumbel_root_selection=config.enable_gumbel_root_selection,  # Pass the gumbel parameter from strategy config
+            # Pass all Gumbel parameters through create_mcts_config for consistency
+            gumbel_sim_threshold=config.gumbel_sim_threshold,
+            gumbel_c_visit=config.gumbel_c_visit,
+            gumbel_c_scale=config.gumbel_c_scale,
+            gumbel_m_candidates=config.gumbel_m_candidates,
+            gumbel_candidate_power_scale=config.gumbel_candidate_power_scale,
+            gumbel_candidate_power_rate=config.gumbel_candidate_power_rate,
+            gumbel_candidate_power_offset=config.gumbel_candidate_power_offset,
+            gumbel_candidate_min=config.gumbel_candidate_min,
+            gumbel_candidate_max=config.gumbel_candidate_max
         )
         
         # Override batch size if specified in config
@@ -126,13 +165,6 @@ class MCTSStrategy(MoveSelectionStrategy):
         # Disable Dirichlet noise for deterministic tournaments
         mcts_config.add_root_noise = False
         
-        # Configure Gumbel AlphaZero parameters if enabled
-        if config.enable_gumbel_root_selection:
-            mcts_config.enable_gumbel_root_selection = True
-            mcts_config.gumbel_sim_threshold = config.gumbel_sim_threshold
-            mcts_config.gumbel_c_visit = config.gumbel_c_visit
-            mcts_config.gumbel_c_scale = config.gumbel_c_scale
-            mcts_config.gumbel_m_candidates = config.gumbel_m_candidates
         
         # Create required components
         engine = HexGameEngine()
@@ -146,7 +178,7 @@ class MCTSStrategy(MoveSelectionStrategy):
         if verbose >= 5:
             print(f"[MCTS DEBUG] add_root_noise={mcts_config.add_root_noise}, dirichlet_alpha={mcts_config.dirichlet_alpha}, dirichlet_eps={mcts_config.dirichlet_eps}")
         
-        result = mcts.run(state, verbose=0)  # Quiet mode for tournaments
+        result = mcts.run(state, verbose=verbose)  # Use passed verbose parameter
         return result.move
     
     def get_name(self) -> str:

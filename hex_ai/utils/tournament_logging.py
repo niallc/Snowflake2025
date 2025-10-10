@@ -1,10 +1,34 @@
 import os
+import sys
 from pathlib import Path
 import csv
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from hex_ai.file_utils import validate_output_directory
 from hex_ai.system_utils import get_git_commit_info
+
+def get_command_line() -> str:
+    """
+    Get the command line that was used to run the current script.
+    
+    Returns:
+        The command line as a string
+        
+    Raises:
+        RuntimeError: If command line information is not available
+    """
+    if len(sys.argv) < 1:
+        raise RuntimeError("Command line information is not available (sys.argv is empty)")
+    
+    # Join all arguments with spaces, but wrap in quotes if they contain spaces
+    cmd_parts = []
+    for arg in sys.argv:
+        if ' ' in arg:
+            cmd_parts.append(f'"{arg}"')
+        else:
+            cmd_parts.append(arg)
+    
+    return ' '.join(cmd_parts)
 
 def find_available_filename(base_path: str) -> str:
     """
@@ -40,7 +64,7 @@ def find_available_filename(base_path: str) -> str:
         index += 1
 
 def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, Any], 
-                      random_seed: Optional[int] = None):
+                      random_seed: Optional[int] = None, command_line: str = None, run_desc: Optional[str] = None):
     """
     Write a generic header to a .trmph file.
     
@@ -49,6 +73,8 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         header_type: Type of header (e.g., "Self-play games", "Tournament games")
         metadata: Dictionary of metadata to include in header
         random_seed: Random seed to include (if provided)
+        command_line: Command line to include (required)
+        run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
     """
     output_path = Path(trmph_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +93,15 @@ def write_trmph_header(trmph_file: str, header_type: str, metadata: Dict[str, An
         if random_seed is not None:
             f.write(f"# Random seed: {random_seed}\n")
         
+        # Write command line - crash if not provided
+        if command_line is None:
+            raise RuntimeError("Command line must be provided to write_trmph_header - this indicates a bug in the calling code")
+        f.write(f"# Command: {command_line}\n")
+        
+        # Write run description if provided
+        if run_desc is not None:
+            f.write(f"# Run description: {run_desc}\n")
+        
         f.write(f"# Git commit: {git_info['status']}\n")
         f.write("# Format: trmph_string winner\n")
 
@@ -83,7 +118,8 @@ def append_trmph_winner_line(trmph_sequence: str, winner: str, output_file: str)
 
 def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list, 
                                  num_games: int, play_config, board_size: int = 13,
-                                 player_labels: list = None, participant_temperatures: dict = None):
+                                 player_labels: list = None, participant_temperatures: dict = None,
+                                 strategy_configs: list = None):
     """
     Write header information to a tournament .trmph file.
     
@@ -91,10 +127,11 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         trmph_file: Path to the .trmph file
         checkpoint_paths: List of checkpoint file paths
         num_games: Number of games per pair
-        play_config: TournamentPlayConfig object
+        play_config: TournamentPlayConfig object (contains command line and other metadata)
         board_size: Board size (default 13)
         player_labels: List of player labels (for duplicate model support)
         participant_temperatures: Dict mapping player labels to their temperatures
+        strategy_configs: List of StrategyConfig objects for detailed strategy information
         
     Returns:
         The actual file path used (may be different from input if collision avoidance was needed)
@@ -112,6 +149,55 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
         "Pie rule": play_config.pie_rule,
     }
     
+    # Add detailed strategy information if available
+    if strategy_configs:
+        strategy_details = []
+        for i, config in enumerate(strategy_configs):
+            model_name = os.path.basename(checkpoint_paths[i]) if i < len(checkpoint_paths) else "unknown"
+            strategy_info = f"{model_name}: {config.strategy_type}"
+            
+            # Add strategy-specific parameters
+            if config.strategy_type.startswith('mcts_'):
+                # Extract simulation count from strategy type (e.g., "mcts_140" -> 140)
+                try:
+                    sims = int(config.strategy_type.split('_')[1])
+                    strategy_info += f" (sims={sims})"
+                except (IndexError, ValueError):
+                    pass
+                
+                # Add MCTS-specific config
+                if hasattr(config, 'config') and config.config:
+                    mcts_config = config.config
+                    if 'c_puct' in mcts_config:
+                        strategy_info += f" (c_puct={mcts_config['c_puct']})"
+                    if 'enable_gumbel' in mcts_config and mcts_config['enable_gumbel']:
+                        strategy_info += " (gumbel=True)"
+                        if 'gumbel_sim_threshold' in mcts_config:
+                            strategy_info += f" (gumbel_threshold={mcts_config['gumbel_sim_threshold']})"
+                        if 'gumbel_c_visit' in mcts_config:
+                            strategy_info += f" (gumbel_c_visit={mcts_config['gumbel_c_visit']})"
+                        if 'gumbel_c_scale' in mcts_config:
+                            strategy_info += f" (gumbel_c_scale={mcts_config['gumbel_c_scale']})"
+                        if 'gumbel_candidate_power_scale' in mcts_config:
+                            strategy_info += f" (gumbel_power_scale={mcts_config['gumbel_candidate_power_scale']})"
+                        if 'gumbel_candidate_power_rate' in mcts_config:
+                            strategy_info += f" (gumbel_power_rate={mcts_config['gumbel_candidate_power_rate']})"
+                        if 'gumbel_candidate_power_offset' in mcts_config:
+                            strategy_info += f" (gumbel_power_offset={mcts_config['gumbel_candidate_power_offset']})"
+                        if 'gumbel_m_candidates' in mcts_config:
+                            strategy_info += f" (gumbel_m_candidates={mcts_config['gumbel_m_candidates']})"
+                    else:
+                        strategy_info += " (gumbel=False)"
+            
+            # Add temperature if different from global
+            if hasattr(config, 'temperature') and config.temperature is not None:
+                strategy_info += f" (temp={config.temperature})"
+            
+            strategy_details.append(strategy_info)
+        
+        if strategy_details:
+            metadata["Strategy details"] = strategy_details
+    
     # Add per-participant temperature information if available
     if participant_temperatures and player_labels:
         temp_info = []
@@ -127,7 +213,7 @@ def write_tournament_trmph_header(trmph_file: str, checkpoint_paths: list,
             metadata[key] = value
     
     # Use generic header writer
-    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed)
+    write_trmph_header(actual_file_path, "Tournament games", metadata, play_config.random_seed, play_config.command_line, play_config.run_desc)
     
     return actual_file_path
 

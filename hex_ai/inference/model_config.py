@@ -14,14 +14,41 @@ from pathlib import Path
 CHECKPOINTS_BASE_DIR = "checkpoints"
 
 # Current best model configuration
-# Temporary honourable mention model: sep6th.../epoch4_mini40.pt.gz, sep6th.../epoch4_mini126.pt.gz
-CURRENT_BEST_MODEL_DIR = "sep6th_extraValueLayer/pipeline_20250906_182558/pipeline_sweep_exp0__99914b_20250906_182558"
-CURRENT_BEST_MODEL_FILE = "epoch4_mini126.pt.gz"
+# Temporary honourable mention models: sep6th.../epoch4_mini135.pt.gz, sep6th.../epoch4_mini40.pt.gz
+
+# # Temporary state for retraining:
+
+
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
+# CURRENT_BEST_MODEL_FILE = "epoch6_mini90.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
+# CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
+# CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
+# CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
+# CURRENT_BEST_MODEL_FILE = "epoch13_mini5.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250924_151002/pipeline_sweep_exp0__99914b_20250924_151002"
+# CURRENT_BEST_MODEL_FILE = "epoch14_mini34.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning//pipeline_20250926_003151/pipeline_sweep_0"
+# CURRENT_BEST_MODEL_FILE = "epoch18_mini30.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250929_142959/pipeline_sweep_0"
+# CURRENT_BEST_MODEL_FILE = "epoch15_mini24.pt.gz" #epoch13_mini19, epoch14_mini9 # epoch14_mini18 # epoch15_mini24
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251003_205950/"
+# CURRENT_BEST_MODEL_FILE = "epoch19_mini6.pt.gz" #(18,23 or 19,7 or 19,5), epoch17_mini7, epoch16_mini7,epoch19_mini19
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251005_123332/"
+# CURRENT_BEST_MODEL_FILE = "epoch23_mini35.pt.gz" # 22,15 or 22,19 or 21,11
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
+CURRENT_BEST_MODEL_FILE = "epoch31_mini42.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
+# CURRENT_BEST_MODEL_FILE = "epoch30_mini24.pt.gz"
+
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "aug28th_extraValueLayer/loss_weight_sweep_exp0__99914b_20250828_183718"
-PREVIOUS_BEST_MODEL_FILE = "epoch2_mini201.pt.gz"
+PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251005_123332"
+PREVIOUS_BEST_MODEL_FILE = "epoch23_mini35.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)

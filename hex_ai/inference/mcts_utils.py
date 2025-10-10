@@ -7,7 +7,10 @@ separate from general value processing utilities.
 
 import math
 import numpy as np
+import torch
 from typing import List, Tuple, Dict, Any, Optional
+
+from hex_ai.utils.format_conversion import rowcol_to_trmph
 
 # =============================
 # MCTS Tree Analysis Utilities
@@ -237,7 +240,7 @@ def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any],
     return tree_data
 
 
-def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10, temperature_scaled_probs: Optional[Dict[str, float]] = None) -> dict:
+def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10, move_probs: Optional[Dict[str, float]] = None) -> dict:
     """
     Format MCTS tree data for API consumption.
     
@@ -334,20 +337,41 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         "principal_variation": principal_variation
     }
     
-    # Add temperature-scaled probabilities if provided
-    if temperature_scaled_probs is not None:
-        result["temperature_scaled_probabilities"] = temperature_scaled_probs
+    # Add move probabilities if provided
+    if move_probs is not None:
+        result["move_probabilities"] = move_probs
     
     return result
 
 
 # =============================
-# Temperature Scaling Utilities
+# Probability Calculation Utilities
 # =============================
 
-def calculate_temperature_scaled_probs(root_node, root_state, cfg) -> Dict[str, float]:
+def _convert_moves_to_trmph_dict(
+    legal_moves: List[Tuple[int, int]], 
+    values: np.ndarray
+) -> Dict[str, float]:
     """
-    Calculate temperature-scaled probabilities for all legal moves.
+    Core utility to convert move data to TRMPH format dictionary.
+    
+    Args:
+        legal_moves: List of (row, col) tuples for legal moves
+        values: Array of values corresponding to each legal move
+        
+    Returns:
+        Dictionary mapping TRMPH move strings to values
+    """
+    result = {}
+    for i, (row, col) in enumerate(legal_moves):
+        move_trmph = rowcol_to_trmph(row, col)
+        result[move_trmph] = float(values[i])
+    
+    return result
+
+def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
+    """
+    Calculate temperature-scaled probabilities from visit counts (for PUCT mode).
     
     This is the same logic used in MCTS move selection, extracted
     into a reusable utility for debugging and analysis purposes.
@@ -360,28 +384,19 @@ def calculate_temperature_scaled_probs(root_node, root_state, cfg) -> Dict[str, 
     Returns:
         Dictionary mapping move TRMPH strings to temperature-scaled probabilities
     """
-    from hex_ai.utils.format_conversion import rowcol_to_trmph
-    
     counts = root_node.N.astype(np.float64)
     total_visits = counts.sum()
     
     if total_visits <= 0:
-        # No visits - return uniform probabilities
-        legal_moves = root_node.legal_moves
-        uniform_prob = 1.0 / len(legal_moves) if legal_moves else 0.0
-        return {rowcol_to_trmph(row, col): uniform_prob for row, col in legal_moves}
+        raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
     
     # Calculate temperature with decay
     move_count = len(root_state.move_history)
     temp = _calculate_root_temperature(move_count, cfg)
     
-    temperature_scaled_probs = {}
-    
     if temp <= cfg.temperature_deterministic_cutoff:
         # Deterministic selection - use raw visit counts
-        for i, (row, col) in enumerate(root_node.legal_moves):
-            move_trmph = rowcol_to_trmph(row, col)
-            temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+        probs = counts / total_visits
     else:
         # Apply temperature scaling using the same logic as move selection
         try:
@@ -396,22 +411,43 @@ def calculate_temperature_scaled_probs(root_node, root_state, cfg) -> Dict[str, 
             # Apply temperature scaling
             pi = np.power(filtered_counts, 1.0 / temp)
             if np.isfinite(pi).all() and np.sum(pi) > 0:
-                pi /= np.sum(pi)
-                for i, (row, col) in enumerate(root_node.legal_moves):
-                    move_trmph = rowcol_to_trmph(row, col)
-                    temperature_scaled_probs[move_trmph] = float(pi[i])
+                probs = pi / np.sum(pi)
             else:
                 # Fall back to raw probabilities
-                for i, (row, col) in enumerate(root_node.legal_moves):
-                    move_trmph = rowcol_to_trmph(row, col)
-                    temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+                probs = counts / total_visits
         except (OverflowError, ValueError):
             # Fall back to raw probabilities
-            for i, (row, col) in enumerate(root_node.legal_moves):
-                move_trmph = rowcol_to_trmph(row, col)
-                temperature_scaled_probs[move_trmph] = counts[i] / total_visits
+            probs = counts / total_visits
     
-    return temperature_scaled_probs
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, probs)
+
+def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[str, float]:
+    """
+    Calculate raw policy probabilities (for Gumbel mode).
+    
+    This returns the policy network probabilities that were used for Gumbel selection,
+    formatted for tree data output.
+    
+    Args:
+        root_node: MCTS root node containing legal moves and indices
+        root_state: Current game state for policy inference
+        cfg: MCTS configuration (not used for policy calculation)
+        mcts_instance: MCTS instance to access policy methods
+        
+    Returns:
+        Dictionary mapping move TRMPH strings to policy probabilities
+    """
+    # Get policy logits and legal mask using the same shared utility as Gumbel
+    policy_logits_full, legal_mask = mcts_instance._get_policy_logits_and_legal_mask(root_state, root_node.legal_indices)
+    
+    # Convert to probabilities using the same method as Gumbel
+    priors_full = mcts_instance._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
+    
+    # Extract probabilities for legal moves only
+    legal_probs = np.array([priors_full[tensor_idx] for tensor_idx in root_node.legal_indices])
+    
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, legal_probs)
+
 
 
 def select_move_index(counts: np.ndarray, temp: float, cfg) -> int:

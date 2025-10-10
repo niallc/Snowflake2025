@@ -13,6 +13,8 @@ scripts/temp
 logs/
 Trash/
 temp/
+write_ups/
+
 
 # Niall's file patterns to ignore
 *.png
@@ -22,55 +24,23 @@ temp/
 # Niall's files to ignore
 gemini
 exclude_files.txt
-scripts/test_value_head_regularization.py
-write_ups/constants_migration_complete.md
-write_ups/trmph_parsing_code_paths_analysis.md
-write_ups/trmph_processor_issues_and_fixes.md
-write_ups/update_training_for_shuffled_TMP.md
-write_ups/shuffled_data_integration_summary.md
-write_ups/completed_work_archive.md
-write_ups/checkpoint_audit_summary.md
-write_ups/hyperparam_sweep_improvements_guide.md
+
+sf18_tournament_results*
+dead_code_analysis_log.json
+
 docs/data_weights_explanation.md
 docs/hyperparam_sweep_improvements_summary.md
-scripts/test_hyperparam_sweep_basic.py
-scripts/test_hyperparam_sweep_improvements.py
-write_ups/tmp_hyperparam_sweep_improvements_guide.md
 docs/hyperparam_sweep_productionization_summary.md
-write_ups/mcts_test_analysis.md
-write_ups/training_instability_analysis_summary.md
-scripts/analyze_shard_spike_correlation.py
-scripts/analyze_training_performance.py
-scripts/investigate_spikes.py
-scripts/fix_winner_labels_safe.py
-scripts/test_pipeline.py
-scripts/example_pipeline_usage.py
-write_ups/pipeline_code_review.md
-scripts/deprecated/example_pipeline_usage.py
-scripts/deprecated/test_pipeline.py
+docs/mcts_early_termination.md
+docs/terminal_move_detection.md
+
 hex_ai/web/README.md
 hex_ai/web/mcts_explorer.html
-scripts/run_mcts_explorer.py
-scripts/test_mcts_tree_reuse.py
-scripts/test_model_config_integration.py
-write_ups/mcts_explorer_summary.md
-write_ups/mcts_tree_reuse_optimization.md
-scripts/deprecated/test_enhanced_inference.py
-write_ups/code_review_concerns.md
-write_ups/tree_search_batching_bug_analysis.md
-write_ups/mcts_timing_analysis.md
-tests/test_winner_to_color_failfast.py
-write_ups/mcts_performance_fix.md
-write_ups/strategy_tournament_implementation_summary.md
-docs/terminal_move_detection.md
-docs/mcts_early_termination.md
-write_ups/performance_tracking_recommendations.md
-write_ups/validation_improvements_summary.md
-write_ups/mcts_cleanup_analysis.md
-write_ups/web_app_model_loading_refactor.md
+
 scripts/evaluate_game_strength.py
 scripts/example_strength_evaluation.py
-write_ups/tournament_duplicate_models_design.md
+
+tests/test_winner_to_color_failfast.py
 
 
 # VSCode

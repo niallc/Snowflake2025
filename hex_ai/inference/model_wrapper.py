@@ -3,7 +3,7 @@ import os
 import torch
 import logging
 import time
-from hex_ai.models import create_model
+from hex_ai.models import create_model, compute_move_stage, is_new_architecture
 from typing import Optional, Tuple, List, Union, Dict, Any
 from hex_ai.training_utils import get_device
 
@@ -19,13 +19,13 @@ class ModelWrapper:
         self,
         checkpoint_path: str,
         device: Optional[str] = None,
-        model_type: str = "resnet18"
+        model_type: str = "katago_inspired"
     ):
         """
         Args:
             checkpoint_path: Path to the model checkpoint (.pt or .pth file, possibly .gz)
             device: 'cpu', 'cuda', 'mps', or None for auto-detect
-            model_type: Model architecture type (default: 'resnet18')
+            model_type: Model architecture type (default: 'katago_inspired')
         """
         self.device = self._detect_device(device)
         self.model = self._load_model(checkpoint_path, model_type)
@@ -88,17 +88,34 @@ class ModelWrapper:
         """
         self.model.eval()
         with torch.no_grad():
-            if board_tensor.dim() == 3:
+            single_input = board_tensor.dim() == 3
+            if single_input:
                 board_tensor = board_tensor.unsqueeze(0)  # Add batch dim
+            
             before_device = getattr(board_tensor, 'device', 'na')
             board_tensor = board_tensor.to(self.device, dtype=torch.float32)
             if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
                 logging.getLogger(__name__).debug(
                     f"predict: input_device_before={before_device}, input_device_after={board_tensor.device}, model_device={next(self.model.parameters()).device}"
                 )
-            policy_logits, value_signed = self.model(board_tensor)
+            
+            # Validate model architecture
+            if not is_new_architecture(self.model):
+                raise ValueError(
+                    f"Model does not support new architecture. Expected model with move_stage support. "
+                    f"Model type: {type(self.model).__name__}. "
+                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                )
+            
+            # Compute move_stage from board state and call model
+            move_stage = compute_move_stage(board_tensor)
+            policy_logits, value_signed = self.model(board_tensor, move_stage)
+            
             # Remove batch dimension for single input
-            return policy_logits[0].cpu(), value_signed[0].cpu()
+            if single_input:
+                return policy_logits[0].cpu(), value_signed[0].cpu()
+            else:
+                return policy_logits.cpu(), value_signed.cpu()
 
     def batch_predict(self, board_tensors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -124,7 +141,18 @@ class ModelWrapper:
                 logger.debug(
                     f"batch_predict: input_device_before={before_device}, input_device_after={board_tensors.device}, model_device={next(self.model.parameters()).device}"
                 )
-            policy_logits, value_signed = self.model(board_tensors)
+            # Validate model architecture
+            if not is_new_architecture(self.model):
+                raise ValueError(
+                    f"Model does not support new architecture. Expected model with move_stage support. "
+                    f"Model type: {type(self.model).__name__}. "
+                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                )
+            
+            # Compute move_stage from board state and call model
+            move_stage = compute_move_stage(board_tensors)
+            policy_logits, value_signed = self.model(board_tensors, move_stage)
+            
             return policy_logits.cpu(), value_signed.cpu()
 
     def infer_timed(self, board_tensors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
@@ -152,7 +180,17 @@ class ModelWrapper:
         # Time the actual neural network forward pass (pure inference)
         pure_forward_start = time.perf_counter()
         with torch.no_grad():
-            policy_logits, value_signed = self.model(board_tensors)
+            # Validate model architecture
+            if not is_new_architecture(self.model):
+                raise ValueError(
+                    f"Model does not support new architecture. Expected model with move_stage support. "
+                    f"Model type: {type(self.model).__name__}. "
+                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                )
+            
+            # Compute move_stage from board state and call model
+            move_stage = compute_move_stage(board_tensors)
+            policy_logits, value_signed = self.model(board_tensors, move_stage)
         pure_forward_ms = (time.perf_counter() - pure_forward_start) * 1000.0
         
         # Time device synchronization

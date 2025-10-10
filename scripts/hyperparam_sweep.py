@@ -22,30 +22,12 @@ from pathlib import Path
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.file_utils import GracefulShutdown
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
-from hex_ai.data_collection import parse_shard_ranges
+from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
+from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 # Create timestamp for the entire run (without minutes/seconds)
 RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H")
-
-###### Logging setup ######
-log_dir = Path('logs')
-log_dir.mkdir(exist_ok=True)
-log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
-
-file_handler = logging.FileHandler(log_file, mode='a')
-formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
-file_handler.setFormatter(formatter)
-
-root_logger = logging.getLogger()
-root_logger.addHandler(file_handler)
-root_logger.setLevel(logging.INFO)  # Or whatever level you want
-
-# Optionally, also add a StreamHandler for terminal output:
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(formatter)
-root_logger.addHandler(stream_handler)
-###### End of logging setup ######
 
 # =============================================================
 #  Sweep Configuration and Parameter Processing
@@ -62,34 +44,12 @@ def calculate_mini_epoch_samples(
     num_mini_epochs = max(min_mini_epochs, min(max_mini_epochs, target_mini_epochs))
     return max_samples // num_mini_epochs
 
-# Define your sweep grid here (edit as needed)
-SWEEP = {
-    "batch_size": [256],
-    "max_grad_norm": [4],
-    "weight_decay": [1e-4],
-    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
-    "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
-    "policy_weight": [0.15],
-    "learning_rate": [0.001],
-    
-    # Likely resolved:
-    "dropout_prob": [0],
-    # Add more as needed
-}
+# Get the default sweep configuration from shared location
+# You can override specific parameters by passing overrides to create_hyperparameter_sweep()
+SWEEP = create_hyperparameter_sweep()  # Use default configuration
 
-# Short labels for parameters
-SHORT_LABELS = {
-    "learning_rate": "lr",
-    "batch_size": "bs",
-    "max_grad_norm": "mgn",
-    "dropout_prob": "do",
-    "weight_decay": "wd",
-    "value_learning_rate_factor": "vlrf",
-    "value_weight_decay_factor": "vwdf",
-    "policy_weight": "pw",
-    "value_weight": "vw",
-    # Add more as needed
-}
+# Use shared short labels
+SHORT_LABELS = HYPERPARAMETER_SHORT_LABELS
 
 # Determine which parameters vary in this sweep
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
@@ -183,49 +143,72 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Single data directory (uses all shards by default)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled
 
   # Multiple data directories (uses all shards from each by default)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled data/processed/jul_29_shuffled
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled data/processed/jul_29_shuffled
 
   # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard_ranges "251-300" "all"
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard-ranges "251-300" "all"
 
   # Use current best model from model_config.py
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --use_current_best_model
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-current-best-model
 
   # Use data shards in sorted order (no shuffling)
-  python scripts/hyperparam_sweep.py --data_dirs data/processed/shuffled --no_shuffle_shards
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --no-shuffle-shards
         """
     )
     
     # Data source arguments
-    parser.add_argument("--data_dirs", type=str, nargs='+', required=True,
+    parser.add_argument("--data-dirs", type=str, nargs='+', required=True,
                        help="One or more directories containing processed data files")
     
     parser.add_argument(
-        '--shard_ranges',
+        '--shard-ranges',
         type=str,
         nargs='+',
-        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard_ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
+        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
+    )
+    
+    # Validation data arguments
+    validation_group = parser.add_argument_group('validation data')
+    
+    validation_group.add_argument(
+        '--validation-dirs',
+        type=str,
+        nargs='*',
+        help='Validation data directories (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
+        '--validation-shard-ranges',
+        type=str,
+        nargs='*',
+        help='Validation shard ranges (defaults to hardcoded values)'
+    )
+    
+    validation_group.add_argument(
+        '--no-validation',
+        action='store_true',
+        help='Disable validation entirely'
     )
     
     # Resume training arguments
     parser.add_argument(
-        '--use_current_best_model',
+        '--use-current-best-model',
         action='store_true',
         help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
     
     parser.add_argument(
-        '--override_checkpoint_hyperparameters',
+        '--override-checkpoint-hyperparameters',
         action='store_true',
         help='When resuming from checkpoint, override checkpoint hyperparameters with sweep hyperparameters. '
              'This resets optimizer state for clean hyperparameter experiments but may affect training stability.'
     )
     
     # Training arguments
-    parser.add_argument("--results_dir", type=str, default="checkpoints/hyperparameter_tuning", 
+    parser.add_argument("--results-dir", type=str, default="checkpoints/hyperparameter_tuning", 
                        help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
     parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, 
@@ -244,10 +227,44 @@ Examples:
     
     args = parser.parse_args()
 
+    # Setup logging only when running as main script
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / (f'hex_ai_training_{RUN_TIMESTAMP}.log')
+
+    file_handler = logging.FileHandler(log_file, mode='a')
+    formatter = logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s')
+    file_handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    root_logger.setLevel(logging.INFO)  # Or whatever level you want
+
+    # Optionally, also add a StreamHandler for terminal output:
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
+
     # Validate shard range arguments
     if args.shard_ranges and len(args.shard_ranges) != len(args.data_dirs):
         print(f"ERROR: Number of shard ranges ({len(args.shard_ranges)}) must match number of data directories ({len(args.data_dirs)})")
         sys.exit(1)
+    
+    # Resolve validation configuration
+    validation_dirs, validation_shard_ranges = resolve_validation_config(
+        validation_dirs=args.validation_dirs,
+        validation_shard_ranges=args.validation_shard_ranges,
+        no_validation=args.no_validation
+    )
+    
+    # Validate validation configuration if not disabled
+    if validation_dirs and validation_shard_ranges:
+        if len(validation_dirs) != len(validation_shard_ranges):
+            print(f"ERROR: Number of validation directories ({len(validation_dirs)}) must match number of validation shard ranges ({len(validation_shard_ranges)})")
+            sys.exit(1)
+    
+    # Log validation summary
+    log_validation_summary(validation_dirs, validation_shard_ranges)
 
     # Handle current best model option
     resume_from = None
@@ -334,6 +351,8 @@ Examples:
         results = run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=args.data_dirs,
+            validation_dirs=validation_dirs,
+            validation_shard_ranges=validation_shard_ranges,
             results_dir=args.results_dir,
             train_ratio=0.8,
             num_epochs=args.epochs,

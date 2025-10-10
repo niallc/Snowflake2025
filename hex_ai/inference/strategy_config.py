@@ -5,9 +5,17 @@ This module consolidates the duplicate strategy parsing code that was previously
 scattered across multiple tournament scripts.
 """
 
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
 import os
+from typing import List, Dict, Any, Optional, Union
+from dataclasses import dataclass
+
+from hex_ai.config import (
+    DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_GUMBEL_C_SCALE, BOARD_SIZE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE, DEFAULT_GUMBEL_CANDIDATE_POWER_RATE, DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET
+)
+from hex_ai.inference.tournament_parameters import (
+    TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
+)
 
 
 @dataclass
@@ -17,253 +25,331 @@ class StrategyConfig:
     name: str
     strategy_type: str
     config: Dict[str, Any]
-    model_path: Optional[str] = None  # Path to the model to use with this strategy
+    model_path: str  # Model checkpoint path for this strategy
+    original_name: str = None  # Original name before parameter modifications
+    temperature: float = None  # Strategy-specific temperature (None for global fallback)
+    
+    def __post_init__(self):
+        if self.original_name is None:
+            self.original_name = self.name
     
     def __str__(self) -> str:
-        if self.model_path:
-            model_name = os.path.basename(self.model_path)
-            return f"{self.name}({self.strategy_type})[{model_name}]"
         return f"{self.name}({self.strategy_type})"
 
 
-def parse_strategy_configs(strategies: List[str], mcts_sims: Optional[List[int]] = None, 
-                          search_widths: Optional[List[str]] = None, batch_sizes: Optional[List[int]] = None,
-                          c_pucts: Optional[List[float]] = None, enable_gumbel: Optional[List[bool]] = None) -> List[StrategyConfig]:
+
+def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamentConfig) -> List[StrategyConfig]:
     """
-    Parse strategy configurations from command line arguments.
+    Create StrategyConfig objects from a UnifiedTournamentConfig.
     
-    This function handles the parsing of strategy names and optional parameter overrides.
-    It's used by multiple tournament scripts to avoid code duplication.
+    This function provides a bridge between the new unified parameter system
+    and the existing StrategyConfig class.
     
     Args:
-        strategies: List of strategy names (e.g., ["policy", "mcts_100", "fixed_tree_13_8"])
-        mcts_sims: Optional list of MCTS simulation counts to override strategy names
-        search_widths: Optional list of search width strings (e.g., ["13,8", "20,10"])
-        batch_sizes: Optional list of batch sizes for MCTS strategies (e.g., [64, 128, 256])
-        c_pucts: Optional list of PUCT exploration constants for MCTS strategies (e.g., [1.2, 1.5, 2.0])
+        unified_config: The unified tournament configuration
     
     Returns:
         List of StrategyConfig objects
     
     Raises:
-        ValueError: If strategy names are invalid or parameter counts don't match
+        ValueError: If configuration is invalid
     """
-    configs = []
-    
-    for strategy_name in strategies:
-        # Parse strategy name to determine type and parameters
-        if strategy_name == "policy":
-            configs.append(StrategyConfig("policy", "policy", {}))
-        
-        elif strategy_name.startswith("mcts_"):
-            # Extract simulation count from name (e.g., "mcts_100" -> 100)
-            try:
-                sims = int(strategy_name.split("_")[1])
-                configs.append(StrategyConfig(
-                    strategy_name, "mcts", 
-                    {"mcts_sims": sims, "mcts_c_puct": 1.5}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid MCTS strategy name: {strategy_name}. Expected format: mcts_<sims>")
-        
-        elif strategy_name.startswith("fixed_tree_"):
-            # Extract widths from name (e.g., "fixed_tree_13_8" -> [13, 8])
-            try:
-                parts = strategy_name.split("_")[2:]
-                widths = [int(w) for w in parts]
-                configs.append(StrategyConfig(
-                    strategy_name, "fixed_tree", 
-                    {"search_widths": widths}
-                ))
-            except (IndexError, ValueError):
-                raise ValueError(f"Invalid fixed_tree strategy name: {strategy_name}. Expected format: fixed_tree_<width1>_<width2>_...")
-        
-        else:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
-    
-    # Override with command line parameters if provided
-    if mcts_sims:
-        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
-        if len(mcts_sims) != len(mcts_configs):
-            raise ValueError(f"Number of MCTS simulation counts ({len(mcts_sims)}) must match number of MCTS strategies ({len(mcts_configs)})")
-        
-        mcts_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["mcts_sims"] = mcts_sims[mcts_idx]
-                mcts_idx += 1
-    
-    if search_widths:
-        tree_configs = [c for c in configs if c.strategy_type == "fixed_tree"]
-        if len(search_widths) != len(tree_configs):
-            raise ValueError(f"Number of search width sets ({len(search_widths)}) must match number of fixed_tree strategies ({len(tree_configs)})")
-        
-        tree_idx = 0
-        for config in configs:
-            if config.strategy_type == "fixed_tree":
-                # Parse widths string (e.g., "13,8" -> [13, 8])
-                widths = [int(w.strip()) for w in search_widths[tree_idx].split(",")]
-                config.config["search_widths"] = widths
-                tree_idx += 1
-    
-    if batch_sizes:
-        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
-        if len(batch_sizes) != len(mcts_configs):
-            raise ValueError(f"Number of batch sizes ({len(batch_sizes)}) must match number of MCTS strategies ({len(mcts_configs)})")
-        
-        batch_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["batch_size"] = batch_sizes[batch_idx]
-                # Update strategy name to include batch size for unique identification
-                config.name = f"{config.name}_b{batch_sizes[batch_idx]}"
-                batch_idx += 1
-    
-    if c_pucts:
-        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
-        if len(c_pucts) != len(mcts_configs):
-            raise ValueError(f"Number of c_puct values ({len(c_pucts)}) must match number of MCTS strategies ({len(mcts_configs)})")
-        
-        c_puct_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["mcts_c_puct"] = c_pucts[c_puct_idx]
-                # Update strategy name to include c_puct for unique identification
-                config.name = f"{config.name}_cp{c_pucts[c_puct_idx]}"
-                c_puct_idx += 1
-    
-    if enable_gumbel:
-        mcts_configs = [c for c in configs if c.strategy_type == "mcts"]
-        if len(enable_gumbel) != len(mcts_configs):
-            raise ValueError(f"Number of enable_gumbel values ({len(enable_gumbel)}) must match number of MCTS strategies ({len(mcts_configs)})")
-        
-        gumbel_idx = 0
-        for config in configs:
-            if config.strategy_type == "mcts":
-                config.config["enable_gumbel_root_selection"] = enable_gumbel[gumbel_idx]
-                # Update strategy name to include gumbel indicator for unique identification
-                if enable_gumbel[gumbel_idx]:
-                    config.name = f"{config.name}_gumbel"
-                gumbel_idx += 1
-    
-    return configs
-
-
-def create_strategy_configs_with_models(
-    model_strategy_combinations: List[str],
-    model_dirs: List[str],
-    mcts_sims: Optional[List[int]] = None,
-    search_widths: Optional[List[str]] = None,
-    batch_sizes: Optional[List[int]] = None,
-    c_pucts: Optional[List[float]] = None,
-    enable_gumbel: Optional[List[bool]] = None
-) -> List[StrategyConfig]:
-    """
-    Create strategy configurations with model paths from model+strategy combinations.
-    
-    Args:
-        model_strategy_combinations: List of "model_name:strategy_name" strings
-        model_dirs: List of model directories to search for models
-        mcts_sims: Optional list of MCTS simulation counts
-        search_widths: Optional list of search width strings
-        batch_sizes: Optional list of batch sizes
-        c_pucts: Optional list of PUCT exploration constants
-        enable_gumbel: Optional list of Gumbel enable flags
-    
-    Returns:
-        List of StrategyConfig objects with model_path set
-    
-    Example:
-        combinations = ["epoch2_mini201.pt.gz:mcts_100", "epoch4_mini126.pt.gz:policy"]
-        model_dirs = ["checkpoints/dir1", "checkpoints/dir2"]
-    """
-    from hex_ai.inference.model_config import get_model_path
+    # Validate the unified config first
+    unified_config.validate()
     
     configs = []
+    num_strategies = len(unified_config.strategies)
     
-    for combination in model_strategy_combinations:
-        if ':' not in combination:
-            raise ValueError(f"Invalid model+strategy combination: {combination}. Expected format: 'model_name:strategy_name'")
+    for i in range(num_strategies):
+        participant_label = f"strategy_{i}"
+        participant_config = unified_config.get_participant_config(participant_label, i)
         
-        model_name, strategy_name = combination.split(':', 1)
+        # Create strategy config
+        strategy_name = unified_config.strategies[i]
+        strategy_type = _determine_strategy_type(strategy_name)
         
-        # Find the model path
-        model_path = None
-        for model_dir in model_dirs:
-            potential_path = os.path.join(model_dir, model_name)
-            if os.path.exists(potential_path):
-                model_path = potential_path
-                break
+        # Build config dictionary
+        config_dict = {}
         
-        if model_path is None:
-            raise ValueError(f"Model not found: {model_name} in directories {model_dirs}")
+        # Add strategy-specific parameters
+        if strategy_type == "mcts":
+            config_dict["mcts_sims"] = participant_config["mcts_sims"]
+            config_dict["mcts_c_puct"] = participant_config.get("c_puct", DEFAULT_C_PUCT)
+            config_dict["batch_size"] = participant_config.get("batch_size", 64)
+            
+            # Add Gumbel parameters if specified
+            if "enable_gumbel" in participant_config:
+                config_dict["enable_gumbel_root_selection"] = participant_config["enable_gumbel"]
+            if "gumbel_sim_threshold" in participant_config:
+                config_dict["gumbel_sim_threshold"] = participant_config["gumbel_sim_threshold"]
+            if "gumbel_candidate_power_scale" in participant_config:
+                config_dict["gumbel_candidate_power_scale"] = participant_config["gumbel_candidate_power_scale"]
+            if "gumbel_candidate_power_rate" in participant_config:
+                config_dict["gumbel_candidate_power_rate"] = participant_config["gumbel_candidate_power_rate"]
+            if "gumbel_candidate_power_offset" in participant_config:
+                config_dict["gumbel_candidate_power_offset"] = participant_config["gumbel_candidate_power_offset"]
+            if "gumbel_progressive_widening" in participant_config:
+                config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
+            if "gumbel_batch_scaling_factor" in participant_config:
+                config_dict["gumbel_batch_scaling_factor"] = participant_config["gumbel_batch_scaling_factor"]
+            if "gumbel_c_scale" in participant_config:
+                config_dict["gumbel_c_scale"] = participant_config["gumbel_c_scale"]
+        elif strategy_type == "policy":
+            # Policy strategies need minimal config - just temperature for consistency
+            # The temperature is also stored as a separate field on StrategyConfig
+            pass  # Temperature is handled separately, policy strategies don't need other params
         
-        # Parse the strategy configuration
-        strategy_configs = parse_strategy_configs([strategy_name], mcts_sims, search_widths, batch_sizes, c_pucts, enable_gumbel)
-        strategy_config = strategy_configs[0]
         
-        # Create a new config with the model path
-        config_with_model = StrategyConfig(
-            name=f"{strategy_config.name}_{os.path.splitext(model_name)[0]}",
-            strategy_type=strategy_config.strategy_type,
-            config=strategy_config.config,
-            model_path=model_path
+        # Create StrategyConfig
+        strategy_config = StrategyConfig(
+            name=strategy_name,
+            strategy_type=strategy_type,
+            config=config_dict,
+            model_path=participant_config["model_path"],
+            original_name=strategy_name,
+            temperature=participant_config["temperature"]
         )
         
-        configs.append(config_with_model)
+        configs.append(strategy_config)
     
     return configs
 
 
-def validate_strategy_configs(configs: List[StrategyConfig]) -> None:
+def _determine_strategy_type(strategy_name: str) -> str:
     """
-    Validate strategy configurations.
+    Determine the strategy type from a strategy name.
     
     Args:
-        configs: List of strategy configurations to validate
-    
-    Raises:
-        ValueError: If configurations are invalid
-    """
-    for config in configs:
-        if config.strategy_type == "mcts":
-            if "mcts_sims" not in config.config:
-                raise ValueError(f"MCTS strategy {config.name} missing mcts_sims parameter")
-            if config.config["mcts_sims"] <= 0:
-                raise ValueError(f"MCTS strategy {config.name} has invalid mcts_sims: {config.config['mcts_sims']}")
-        
-        elif config.strategy_type == "fixed_tree":
-            if "search_widths" not in config.config:
-                raise ValueError(f"Fixed tree strategy {config.name} missing search_widths parameter")
-            if not config.config["search_widths"]:
-                raise ValueError(f"Fixed tree strategy {config.name} has empty search_widths")
-            for width in config.config["search_widths"]:
-                if width <= 0:
-                    raise ValueError(f"Fixed tree strategy {config.name} has invalid search width: {width}")
-
-
-def get_strategy_summary(configs: List[StrategyConfig]) -> str:
-    """
-    Get a human-readable summary of strategy configurations.
-    
-    Args:
-        configs: List of strategy configurations
+        strategy_name: Name of the strategy
     
     Returns:
-        String summary of the configurations
-    """
-    summaries = []
-    for config in configs:
-        if config.strategy_type == "policy":
-            summaries.append("policy")
-        elif config.strategy_type == "mcts":
-            sims = config.config.get("mcts_sims", "unknown")
-            summaries.append(f"mcts_{sims}")
-        elif config.strategy_type == "fixed_tree":
-            widths = config.config.get("search_widths", [])
-            width_str = "_".join(str(w) for w in widths)
-            summaries.append(f"fixed_tree_{width_str}")
-        else:
-            summaries.append(str(config))
+        Strategy type ("policy" or "mcts")
     
-    return ", ".join(summaries)
+    Raises:
+        ValueError: If strategy name is invalid
+    """
+    if strategy_name == "policy":
+        return "policy"
+    elif strategy_name == "mcts":
+        return "mcts"
+    else:
+        raise ValueError(f"Unknown strategy: {strategy_name}")
+
+
+def create_unified_config_from_args(
+    strategies: List[str],
+    models: Optional[List[str]] = None,
+    model_paths: Optional[List[str]] = None,
+    mcts_sims: Optional[Union[int, List[int]]] = None,
+    temperatures: Optional[Union[float, List[float]]] = None,
+    batch_sizes: Optional[Union[int, List[int]]] = None,
+    c_pucts: Optional[Union[float, List[float]]] = None,
+    enable_gumbel: Optional[Union[bool, List[bool]]] = None,
+    gumbel_sim_thresholds: Optional[Union[int, List[int]]] = None,
+    gumbel_candidate_power_scales: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_rates: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
+    gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
+    gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
+    gumbel_c_scales: Optional[Union[float, List[float]]] = None,
+    num_games: int = 10,
+    board_size: int = BOARD_SIZE,
+    random_seed: Optional[int] = None,
+    pie_rule: bool = False
+) -> UnifiedTournamentConfig:
+    """
+    Create a UnifiedTournamentConfig from command line arguments.
+    
+    This function provides a convenient way to create the unified config
+    from the various argument formats used by tournament scripts.
+    
+    Args:
+        strategies: List of strategy names
+        models: Optional list of model registry names
+        model_paths: Optional list of direct model paths
+        mcts_sims: MCTS simulation count(s)
+        temperatures: Temperature value(s)
+        batch_sizes: Batch size value(s)
+        c_pucts: C_PUCT value(s)
+        enable_gumbel: Gumbel enable flag(s)
+        gumbel_sim_thresholds: Gumbel simulation threshold(s)
+        gumbel_candidate_power_scales: Gumbel candidate power scale(s)
+        gumbel_candidate_power_rates: Gumbel candidate power rate(s)
+        gumbel_candidate_power_offsets: Gumbel candidate power offset(s)
+        gumbel_progressive_widening: Gumbel progressive widening flag(s)
+        gumbel_batch_scaling_factors: Gumbel batch scaling factor(s)
+        gumbel_c_scales: Gumbel c_scale parameter(s)
+        num_games: Number of games per pair
+        board_size: Board size
+        random_seed: Random seed
+        pie_rule: Whether to use pie rule
+    
+    Returns:
+        UnifiedTournamentConfig object
+    
+    Raises:
+        ValueError: If arguments are invalid
+    """
+    num_strategies = len(strategies)
+    
+    # Create model configuration
+    if model_paths:
+        model_config = TournamentModelConfig(model_paths=model_paths)
+    elif models:
+        model_config = TournamentModelConfig(model_names=models)
+    else:
+        model_config = TournamentModelConfig()  # Use default model
+    
+    # Create parameter configurations
+    mcts_sims_config = TournamentParameterConfig(
+        default_value=DEFAULT_MCTS_SIMS,  # Default MCTS simulations
+        per_strategy_values=to_list_if_needed(mcts_sims, num_strategies)
+    )
+    
+    temperatures_config = TournamentParameterConfig(
+        default_value=0.0,  # Default temperature
+        per_strategy_values=to_list_if_needed(temperatures, num_strategies)
+    )
+    
+    # Optional parameter configurations
+    batch_sizes_config = None
+    if batch_sizes is not None:
+        batch_sizes_config = TournamentParameterConfig(
+            default_value=64,  # Default batch size
+            per_strategy_values=to_list_if_needed(batch_sizes, num_strategies)
+        )
+    
+    c_pucts_config = None
+    if c_pucts is not None:
+        c_pucts_config = TournamentParameterConfig(
+            default_value=DEFAULT_C_PUCT,  # Default C_PUCT
+            per_strategy_values=to_list_if_needed(c_pucts, num_strategies)
+        )
+    
+    enable_gumbel_config = None
+    if enable_gumbel is not None:
+        enable_gumbel_config = TournamentParameterConfig(
+            default_value=False,  # Default Gumbel disabled
+            per_strategy_values=to_list_if_needed(enable_gumbel, num_strategies)
+        )
+    
+    gumbel_sim_thresholds_config = None
+    if gumbel_sim_thresholds is not None:
+        gumbel_sim_thresholds_config = TournamentParameterConfig(
+            default_value=200,  # Default Gumbel threshold
+            per_strategy_values=to_list_if_needed(gumbel_sim_thresholds, num_strategies)
+        )
+    
+    gumbel_candidate_power_scales_config = None
+    if gumbel_candidate_power_scales is not None:
+        gumbel_candidate_power_scales_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_scales, num_strategies)
+        )
+    
+    gumbel_candidate_power_rates_config = None
+    if gumbel_candidate_power_rates is not None:
+        gumbel_candidate_power_rates_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_rates, num_strategies)
+        )
+    
+    gumbel_candidate_power_offsets_config = None
+    if gumbel_candidate_power_offsets is not None:
+        gumbel_candidate_power_offsets_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+            per_strategy_values=to_list_if_needed(gumbel_candidate_power_offsets, num_strategies)
+        )
+    
+    gumbel_progressive_widening_config = None
+    if gumbel_progressive_widening is not None:
+        gumbel_progressive_widening_config = TournamentParameterConfig(
+            default_value=False,  # Default progressive widening disabled
+            per_strategy_values=to_list_if_needed(gumbel_progressive_widening, num_strategies)
+        )
+    
+    gumbel_batch_scaling_factors_config = None
+    if gumbel_batch_scaling_factors is not None:
+        gumbel_batch_scaling_factors_config = TournamentParameterConfig(
+            default_value=1.0,  # Default scaling factor
+            per_strategy_values=to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
+        )
+    
+    gumbel_c_scales_config = None
+    if gumbel_c_scales is not None:
+        gumbel_c_scales_config = TournamentParameterConfig(
+            default_value=DEFAULT_GUMBEL_C_SCALE,  # Default c_scale from config
+            per_strategy_values=to_list_if_needed(gumbel_c_scales, num_strategies)
+        )
+    
+    return UnifiedTournamentConfig(
+        models=model_config,
+        strategies=strategies,
+        mcts_sims=mcts_sims_config,
+        temperatures=temperatures_config,
+        batch_sizes=batch_sizes_config,
+        c_pucts=c_pucts_config,
+        enable_gumbel=enable_gumbel_config,
+        gumbel_sim_thresholds=gumbel_sim_thresholds_config,
+        gumbel_candidate_power_scales=gumbel_candidate_power_scales_config,
+        gumbel_candidate_power_offsets=gumbel_candidate_power_offsets_config,
+        gumbel_progressive_widening=gumbel_progressive_widening_config,
+        gumbel_batch_scaling_factors=gumbel_batch_scaling_factors_config,
+        gumbel_c_scales=gumbel_c_scales_config,
+        num_games=num_games,
+        board_size=board_size,
+        random_seed=random_seed,
+        pie_rule=pie_rule
+    )
+
+
+def to_list_if_needed(
+    value: Optional[Union[Any, List[Any]]], 
+    num_strategies: int,
+    parameter_name: str = "parameter",
+    original_values: Optional[List[Any]] = None,
+    strategy_names: Optional[List[str]] = None,
+    exit_on_error: bool = True
+) -> Optional[List[Any]]:
+    """
+    Convert a single value to a list if needed, or return None if value is None.
+    
+    Args:
+        value: Single value or list of values
+        num_strategies: Number of strategies (used for validation)
+        parameter_name: Name of the parameter for error messages (e.g., "models", "mcts_sims")
+        original_values: Original values before processing (for error display)
+        strategy_names: List of strategy names (for error display)
+        exit_on_error: Whether to call sys.exit(1) on validation error (default: True)
+    
+    Returns:
+        List of values or None
+    
+    Raises:
+        ValueError: If list length doesn't match number of strategies and exit_on_error=False
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, list):
+        if len(value) == 1:
+            # Single value in list - apply to all strategies
+            return [value[0]] * num_strategies
+        elif len(value) != num_strategies:
+            error_msg = f"List length ({len(value)}) must match number of strategies ({num_strategies})"
+            if original_values is not None:
+                error_msg += f"\n  Provided {parameter_name}: {original_values}"
+            if strategy_names is not None:
+                error_msg += f"\n  Strategies: {strategy_names}"
+            error_msg += f"\n  Tip: You can provide a single {parameter_name} to use for all strategies"
+            
+            if exit_on_error:
+                print(f"ERROR: {error_msg}")
+                import sys
+                sys.exit(1)
+            else:
+                raise ValueError(error_msg)
+        return value
+    else:
+        # Single value - apply to all strategies
+        return [value] * num_strategies

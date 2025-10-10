@@ -47,6 +47,17 @@ class MiniEpochOrchestrator:
         
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
+            
+            # Reset datasets for new epoch (if they have a reset method)
+            if hasattr(self.train_loader.dataset, 'reset'):
+                self.logger.info("Resetting training dataset for new epoch")
+                self.train_loader.dataset.reset()
+            
+            # Also reset validation dataset if it exists
+            if self.val_loader and hasattr(self.val_loader.dataset, 'reset'):
+                self.logger.info("Resetting validation dataset for new epoch")
+                self.val_loader.dataset.reset()
+            
             batch_iter = iter(self.train_loader)
             mini_epoch_idx = 0
             while True:
@@ -65,7 +76,7 @@ class MiniEpochOrchestrator:
                 # Validation (do this before training so we can pass metrics)
                 val_metrics = None
                 if self.val_loader is not None:
-                    val_metrics = self.trainer.validate()
+                    val_metrics = self.trainer.validate(epoch=epoch+1, mini_epoch=mini_epoch_idx+1)
                 
                 # Check for shutdown before starting training
                 if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
@@ -73,7 +84,7 @@ class MiniEpochOrchestrator:
                     raise GracefulShutdownRequested()
                 
                 # Train on this mini-epoch
-                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch, mini_epoch=mini_epoch_idx, val_metrics=val_metrics)
+                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch+1, mini_epoch=mini_epoch_idx+1, val_metrics=val_metrics)
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
@@ -99,7 +110,6 @@ class MiniEpochOrchestrator:
                             f"value={val_metrics.get('value_loss', float('nan')):.4f} "
                         )
                     msg += f"| Batches processed: {batch_count}"
-                    print(msg)
                     self.logger.info(msg)
                 mini_epoch_idx += 1
         

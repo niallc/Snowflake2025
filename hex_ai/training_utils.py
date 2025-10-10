@@ -8,13 +8,116 @@ and other common operations used throughout the project.
 import torch
 import numpy as np
 import time
-import math
-from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 import logging
 
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from hex_ai.value_utils import ValuePredictor
+
+
+# =============================================================
+#  Hyperparameter Configuration
+# =============================================================
+
+# Default hyperparameter sweep configuration
+# This is the central place where all hyperparameters are defined
+DEFAULT_HYPERPARAMETER_SWEEP = {
+    "batch_size": [256],
+    "max_grad_norm": [2.0],  # Updated default for AdamW
+    "weight_decay": [1e-4],
+    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
+    "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
+    "policy_weight": [0.7],
+    "learning_rate": [1.2e-3],  # Updated default for AdamW
+    
+    # AdamW optimizer parameters
+    "betas": [(0.9, 0.999)],  # Coefficients for computing running averages
+    "eps": [1e-8],  # Term added to denominator for numerical stability
+    
+    # New KataGo-inspired architecture parameters
+    "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
+    "trunk_channels": [128],  # Number of channels in trunk
+    "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
+    
+    # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
+    # are currently fixed in the architecture but could be made configurable later
+}
+
+# Short labels for parameters (used in experiment naming)
+HYPERPARAMETER_SHORT_LABELS = {
+    "learning_rate": "lr",
+    "batch_size": "bs",
+    "max_grad_norm": "mgn",
+    "dropout_prob": "do",
+    "weight_decay": "wd",
+    "value_learning_rate_factor": "vlrf",
+    "value_weight_decay_factor": "vwdf",
+    "policy_weight": "pw",
+    "value_weight": "vw",
+    "num_blocks": "nb",
+    "trunk_channels": "tc",
+    "betas": "betas",
+    "eps": "eps",
+}
+
+
+def create_hyperparameter_sweep(overrides: Dict = None) -> Dict:
+    """
+    Create a hyperparameter sweep configuration with optional overrides.
+    
+    Args:
+        overrides: Dictionary of parameter overrides. Keys should match parameter names,
+                  values should be lists (even single values should be in lists).
+                  
+    Returns:
+        Dictionary with hyperparameter sweep configuration
+        
+    Examples:
+        # Use default configuration
+        sweep = create_hyperparameter_sweep()
+        
+        # Override learning rate
+        sweep = create_hyperparameter_sweep({"learning_rate": [1e-4]})
+        
+        # Override multiple parameters
+        sweep = create_hyperparameter_sweep({
+            "learning_rate": [1e-4, 5e-5],
+            "batch_size": [128, 256]
+        })
+    """
+    sweep = DEFAULT_HYPERPARAMETER_SWEEP.copy()
+    
+    if overrides:
+        for param, values in overrides.items():
+            if param not in sweep:
+                raise ValueError(f"Unknown hyperparameter: {param}. "
+                               f"Available parameters: {list(sweep.keys())}")
+            if not isinstance(values, list):
+                raise ValueError(f"Override values must be lists, got {type(values)} for {param}")
+            sweep[param] = values
+    
+    return sweep
+
+
+def get_single_hyperparameter_config(overrides: Dict = None) -> Dict:
+    """
+    Get a single hyperparameter configuration (first value from each sweep parameter).
+    
+    Args:
+        overrides: Dictionary of parameter overrides
+        
+    Returns:
+        Dictionary with single values for each parameter
+        
+    Examples:
+        # Get default single config
+        config = get_single_hyperparameter_config()
+        
+        # Get config with overridden learning rate
+        config = get_single_hyperparameter_config({"learning_rate": [1e-4]})
+    """
+    sweep = create_hyperparameter_sweep(overrides)
+    return {param: values[0] for param, values in sweep.items()}
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
@@ -166,8 +269,8 @@ def create_sample_data(batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor,
     
     # Create random value targets (single value per board)
     values = torch.randn(batch_size, VALUE_OUTPUT_SIZE)
-    # TODO: Check here and elsewhere whether we're correctly using [-1, 1], vs. [0, 1].
-    values = torch.sigmoid(values)  # Convert to [0, 1] range (targets are still in [0,1])
+    # Convert to [-1, 1] range to match the new value head architecture
+    values = torch.tanh(values)  # Convert to [-1, 1] range (matches model output)
     
     return boards, policies, values
 
@@ -187,20 +290,34 @@ class GradientMonitor:
     
     def compute_gradient_norms(self):
         """Compute gradient norms for different parts of the model."""
+        # Get parameter groups using the model's proper methods
+        try:
+            policy_params = set(self.model.get_policy_head_parameters())
+            value_params = set(self.model.get_value_head_parameters())
+            shared_params = set(self.model.get_shared_parameters())
+        except AttributeError as e:
+            raise RuntimeError(f"Model does not support parameter grouping: {e}. "
+                             f"Expected model to have get_policy_head_parameters(), get_value_head_parameters(), "
+                             f"and get_shared_parameters() methods.")
+        
         policy_norms = []
         value_norms = []
         shared_norms = []
         
-        for name, param in self.model.named_parameters():
+        for param in self.model.parameters():
             if param.grad is not None:
                 norm = param.grad.norm().item()
                 
-                if 'policy_head' in name:
+                if param in policy_params:
                     policy_norms.append(norm)
-                elif 'value_head' in name:
+                elif param in value_params:
                     value_norms.append(norm)
-                else:
+                elif param in shared_params:
                     shared_norms.append(norm)
+                else:
+                    # This should never happen if the model's parameter grouping is correct
+                    raise RuntimeError(f"Parameter {param} not found in any expected group. "
+                                     f"This indicates a bug in the model's parameter grouping methods.")
         
         return {
             'policy_head': np.mean(policy_norms) if policy_norms else 0.0,
@@ -270,11 +387,45 @@ class ActivationMonitor:
                             })
             return hook
         
-        # Register hooks for key layers
+        # Register hooks for key layers using proper module identification
+        # We'll hook specific important modules rather than using string matching
+        modules_to_hook = []
+        
+        # Get policy head modules
+        try:
+            policy_params = self.model.get_policy_head_parameters()
+            # Find modules that contain these parameters
+            for name, module in self.model.named_modules():
+                if any(param in module.parameters() for param in policy_params):
+                    modules_to_hook.append((name, module))
+        except AttributeError:
+            # Fallback: hook modules with policy-related names (but this is fragile)
+            print("Warning: Using fallback activation monitoring (string matching)")
+            for name, module in self.model.named_modules():
+                if any(key in name for key in ['policy_conv1', 'policy_bn1', 'policy_conv2', 'policy_head']):
+                    modules_to_hook.append((name, module))
+        
+        # Get value head modules
+        try:
+            value_params = self.model.get_value_head_parameters()
+            for name, module in self.model.named_modules():
+                if any(param in module.parameters() for param in value_params):
+                    modules_to_hook.append((name, module))
+        except AttributeError:
+            # Fallback: hook modules with value-related names
+            for name, module in self.model.named_modules():
+                if 'value_head' in name or 'value_pre' in name:
+                    modules_to_hook.append((name, module))
+        
+        # Hook important shared layers (layer4, global_pool)
         for name, module in self.model.named_modules():
-            if any(key in name for key in ['value_head', 'policy_head', 'layer4', 'global_pool']):
-                hook = module.register_forward_hook(hook_fn(name))
-                self.activation_hooks.append(hook)
+            if name.endswith('layer4') or name.endswith('global_pool'):
+                modules_to_hook.append((name, module))
+        
+        # Register hooks
+        for name, module in modules_to_hook:
+            hook = module.register_forward_hook(hook_fn(name))
+            self.activation_hooks.append(hook)
     
     def log_activations(self, batch_idx):
         """Log activation statistics if it's time to do so."""
@@ -410,9 +561,9 @@ class TrainingUtilities:
     
     @staticmethod
     def move_batch_to_device(boards: torch.Tensor, policies: torch.Tensor, 
-                           values: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                           values: torch.Tensor, move_stage: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Move batch data to the specified device."""
-        return boards.to(device), policies.to(device), values.to(device)
+        return boards.to(device), policies.to(device), values.to(device), move_stage.to(device)
     
     @staticmethod
     def calculate_batch_timing(state: Dict) -> Dict:
@@ -428,17 +579,6 @@ class TrainingUtilities:
             'batch_start_time': batch_start_time
         }
     
-    @staticmethod
-    def calculate_gradient_norm(model: torch.nn.Module) -> float:
-        """Calculate gradient norm for all model parameters."""
-        total_norm = 0.0
-        param_count = 0
-        for p in model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                total_norm += param_norm.item() ** 2
-                param_count += 1
-        return total_norm ** (1. / 2) if param_count > 0 else 0.0
     
     @staticmethod
     def calculate_statistics(values: List[float]) -> Dict[str, float]:
@@ -451,6 +591,16 @@ class TrainingUtilities:
             'max': float(np.max(values)),
             'std': float(np.std(values))
         }
+    
+    @staticmethod
+    def format_epoch_id(epoch: int, mini_epoch: int) -> str:
+        """Format epoch and mini-epoch into a string identifier."""
+        return f"{epoch}_mini{mini_epoch}"
+    
+    @staticmethod
+    def calculate_mini_epoch_time(batch_times: List[float]) -> float:
+        """Calculate total time for a mini-epoch from batch times."""
+        return sum(batch_times)
     
     @staticmethod
     def should_log_progress(batch_idx: int, epoch: int, mini_epoch: int, 
