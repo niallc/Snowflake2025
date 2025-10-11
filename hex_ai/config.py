@@ -78,7 +78,7 @@ CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 # MCTS inference defaults
 DEFAULT_BATCH_CAP = 64  # Default batch size for neural network evaluation
 DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
-DEFAULT_MCTS_SIMS = 50  # Default number of MCTS simulations
+DEFAULT_MCTS_SIMS = 37  # Default number of MCTS simulations
 DEFAULT_CACHE_SIZE = 60000  # Default cache size for model inference
 DEFAULT_TEMPERATURE_START = 1.0  # Default starting temperature for move sampling
 DEFAULT_TEMPERATURE_END = 1.0  # Default ending temperature for move sampling
