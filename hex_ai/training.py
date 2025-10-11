@@ -36,7 +36,7 @@ from .config import (
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
-from hex_ai.data_pipeline import discover_processed_files
+from hex_ai.data_pipeline import discover_training_data_files
 from hex_ai.training_utils import get_device, TrainingUtilities
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
@@ -1239,14 +1239,14 @@ class Trainer:
         if override_checkpoint_hyperparameters:
             print("Changing learning rate in load_checkpoint...", end="")
             logger.warning("Overriding checkpoint hyperparameters - optimizer state will be reset")
-            logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
+            # logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
             logger.info(f"Using hyperparameter value_learning_rate_factor: {self.value_learning_rate_factor}")
             logger.info(f"Using hyperparameter value_weight_decay_factor: {self.value_weight_decay_factor}")
             # Don't load optimizer state - let it use current hyperparameters
             # Get the actual learning rate from the optimizer to confirm
             actual_lr = self.optimizer.param_groups[0]['lr']
             actual_value_lr = self.optimizer.param_groups[-1]['lr']  # Value head is typically the last group
-            print(f"Learning rate now {actual_lr:.6f} (value head: {actual_value_lr:.6f}).")
+            print(f"Value learning rate (read from optimizer) now {actual_lr:.6f} (value head: {actual_value_lr:.6f}).")
         else:
             # Load optimizer state (preserves checkpoint hyperparameters)
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

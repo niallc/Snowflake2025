@@ -694,7 +694,7 @@ class TrainingPipeline:
                 self.step_results['preprocessing'] = cleaned_dir
             else:
                 if selfplay_dir and not self.config.run_preprocessing:
-                    self.logger.warning("WARNING: Game collection completed but preprocessing is disabled. The collected data will not be used for training.")
+                    self.logger.warning("WARNING: Self-play data available but preprocessing is disabled. The self-play data will not be used for training.")
                 self.logger.info("Skipping preprocessing (disabled or no self-play data)")
                 cleaned_dir = None
             
@@ -712,7 +712,7 @@ class TrainingPipeline:
             
             # Step 4: Shuffling (optional)
             # Resolve ordered positions directory (single source of truth)
-            resolved_ordered_positions_dir = self._resolve_ordered_positions_dir(ordered_positions_dir)
+            resolved_ordered_positions_dir = self.config._resolve_ordered_positions_dir(ordered_positions_dir)
             
             if self.config.run_shuffling and resolved_ordered_positions_dir:
                 self.current_step = 4

@@ -317,7 +317,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.estimated_total_games = total_estimated_games
         
         if self.verbose:
-            self.logger.info(f"Estimated total training data: ~{total_estimated_positions:,} positions from ~{total_estimated_games:,} games")
+            self.logger.info(f"Estimated total positions: ~{total_estimated_positions:,} positions from ~{total_estimated_games:,} games")
     
     def get_data_summary(self) -> dict:
         """Get a summary of the estimated training data."""
@@ -370,7 +370,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.logger.info(f"[StreamingMixedShardDataset] Training dataset reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
     
     def _calculate_directory_weights(self):
-        """Calculate proportional weights for each directory based on shard counts."""
+        """Calculate proportional weights for each directory based on shard counts.
+        
+        Note: Weights are based on number of shards (files), not position counts.
+        This prevents over-weighting directories with very large individual shards.
+        """
         shard_counts = [len(queue) for queue in self.shard_queues]
         total_shards = sum(shard_counts)
         
@@ -380,7 +384,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.directory_weights = [count / total_shards for count in shard_counts]
         
         if self.verbose:
-            self.logger.info(f"Directory weights: {[f'{w:.3f}' for w in self.directory_weights]}")
+            self.logger.info(f"Directory weights (based on shard counts): {[f'{w:.3f}' for w in self.directory_weights]}")
     
     def _initialize_validation_dataset(self):
         """
