@@ -64,7 +64,7 @@ MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 200 mini-epochs per epoch
 TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
 
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2  # training now resets the epoch count this this is the further number of epochs to train
+EPOCHS = 10  # This this is (also?) the extra number of epochs to train when resuming
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):

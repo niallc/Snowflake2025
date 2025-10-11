@@ -16,8 +16,8 @@ DEFAULT_SOURCE_DIRS = [
     DEFAULT_DATA_ROOT / "sf25"
 ]
 
-# Processed data directories
-DEFAULT_PROCESSED_DATA_DIRS = [
+# Training data directories (shuffled positions for training)
+DEFAULT_TRAINING_DATA_DIRS = [
     DEFAULT_DATA_ROOT / "processed" / "sf18_shuffled",
     DEFAULT_DATA_ROOT / "processed" / "shuffled_sf25_20250828"
 ]
@@ -76,10 +76,10 @@ def validate_data_directories() -> List[str]:
         if not source_dir.exists():
             missing_dirs.append(str(source_dir))
     
-    # Check processed directories
-    for processed_dir in DEFAULT_PROCESSED_DATA_DIRS:
-        if not processed_dir.exists():
-            missing_dirs.append(str(processed_dir))
+    # Check training data directories
+    for training_dir in DEFAULT_TRAINING_DATA_DIRS:
+        if not training_dir.exists():
+            missing_dirs.append(str(training_dir))
     
     return missing_dirs
 

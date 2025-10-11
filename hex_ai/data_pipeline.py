@@ -236,7 +236,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     max_files = end - start + 1
                 
                 # Discover files in this directory
-                data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
+                dataset_type = "validation" if self.is_validation else "training"
+                process_context = f"{dataset_type} dataset initialization"
+                data_files = discover_training_data_files(data_dir, skip_files=skip_files, max_files=max_files, process_context=process_context)
                 
                 if not data_files:
                     raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
@@ -751,18 +753,24 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         return 10**12
 
 
-def discover_processed_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None) -> List[Path]:
+def discover_training_data_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None, process_context: str = "training data loading") -> List[Path]:
     """
-    Discover all processed data files in the specified directory.
+    Discover training data files in the specified directory.
+    
+    This function finds either:
+    - Shuffled training data files (shuffled_*.pkl.gz) if shuffling_progress.json exists
+    - Ordered position files (*_processed.pkl.gz) otherwise
     
     Args:
-        data_dir: Directory containing processed data files
+        data_dir: Directory containing data files
         skip_files: Number of files to skip from the beginning (sorted by name)
         max_files: Maximum number of files to use after skipping (None = use all remaining)
+        process_context: Context string describing what process is calling this function
         
     Returns:
-        List of paths to processed data files
+        List of paths to data files
     """
+    
     data_path = Path(data_dir)
     if not data_path.exists():
         raise FileNotFoundError(f"Data directory {data_dir} not found")
@@ -771,13 +779,18 @@ def discover_processed_files(data_dir: str = "data/processed", skip_files: int =
     if (data_path / "shuffling_progress.json").exists():
         # Shuffled data: look for shuffled_*.pkl.gz files
         data_files = list(data_path.glob("shuffled_*.pkl.gz"))
-        logger.info(f"Found {len(data_files)} shuffled data files")
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(data_files)} shuffled data files in {data_dir}")
     else:
         # Original processed data: look for *_processed.pkl.gz files
         data_files = list(data_path.glob("*_processed.pkl.gz"))
-        logger.info(f"WARNING: Failed to find shuffled files. Found {len(data_files)} processed data files")
-        logger.info(f"WARNING: Do you want to quit this run and try again? (Ctrl+C to quit)")
-        sleep(5)
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for processed data files in {data_dir}")
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(data_files)} processed data files (not shuffled)")
+        if len(data_files) == 0:
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: No processed data files found in {data_dir}")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: This directory does not contain the expected processed data files")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: Expected files matching pattern: *_processed.pkl.gz")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: Do you want to quit this run and try again? (Ctrl+C to quit)")
+            sleep(5)
     
     if not data_files:
         raise FileNotFoundError(f"No data files found in {data_dir}")

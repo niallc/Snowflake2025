@@ -61,7 +61,8 @@ class PipelineConfig:
     base_data_dir: str = "data"
     raw_trmph_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_SOURCE_DIRS])  # Raw .trmph files to collect
     cleaned_trmph_data_dirs: List[str] = field(default_factory=list)  # Already cleaned .trmph files
-    processed_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS])  # Existing processed data
+    ordered_positions_dirs: List[str] = field(default_factory=list)  # Existing ordered positions (not shuffled)
+    training_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_TRAINING_DATA_DIRS])  # Existing training data (shuffled positions)
     shard_ranges: List[str] = field(default_factory=lambda: ["all"])
     validation_dirs: Optional[List[str]] = None  # Validation data directories (optional, defaults to hardcoded values)
     validation_shard_ranges: Optional[List[str]] = None  # Validation shard ranges (optional, defaults to hardcoded values)
@@ -106,8 +107,8 @@ class PipelineConfig:
         # Generate predictable output directory names based on input
         input_name = Path(self.selfplay_dir).name if self.selfplay_dir else f"run_{self.run_timestamp}"
         self.cleaned_dir = str(Path(self.base_data_dir) / "cleaned" / f"cleaned_{input_name}")
-        self.processed_dir = str(Path(self.base_data_dir) / "processed" / f"processed_{input_name}")
-        self.shuffled_dir = str(Path(self.base_data_dir) / "processed" / f"shuffled_{input_name}")
+        self.ordered_positions_dir = str(Path(self.base_data_dir) / "processed" / f"ordered_positions_{input_name}")  # Individual positions (not shuffled)
+        self.shuffled_dir = str(Path(self.base_data_dir) / "processed" / f"shuffled_{input_name}")  # Final training data (shuffled positions)
         self.temp_dir = str(Path(self.base_data_dir) / "processed" / f"temp_buckets_{input_name}")
     
     def validate(self, check_model: bool = True, check_data: bool = True):
@@ -118,9 +119,9 @@ class PipelineConfig:
         
         # Validate data directories exist
         if check_data:
-            for data_dir in self.processed_data_dirs:
+            for data_dir in self.training_data_dirs:
                 if not os.path.exists(data_dir):
-                    raise FileNotFoundError(f"Processed data directory not found: {data_dir}")
+                    raise FileNotFoundError(f"Training data directory not found: {data_dir}")
         
         # Validate data type consistency
         if self.run_game_collection and not self.raw_trmph_data_dirs:
@@ -129,9 +130,17 @@ class PipelineConfig:
         if self.run_preprocessing and not self.cleaned_trmph_data_dirs and not self.selfplay_dir:
             raise ValueError("Preprocessing enabled but no input data specified. Use --cleaned-trmph-data-dirs or provide selfplay data")
         
-        # Validate shard ranges match processed data directories
-        if self.shard_ranges and len(self.shard_ranges) != len(self.processed_data_dirs):
-            raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of processed data directories ({len(self.processed_data_dirs)})")
+        # Validate ordered positions directories
+        if self.ordered_positions_dirs and len(self.ordered_positions_dirs) > 1:
+            raise NotImplementedError(
+                f"Multiple ordered positions directories not yet supported. "
+                f"Found {len(self.ordered_positions_dirs)} directories: {self.ordered_positions_dirs}. "
+                f"Please specify only one directory or implement multi-directory support."
+            )
+        
+        # Validate shard ranges match training data directories
+        if self.shard_ranges and len(self.shard_ranges) != len(self.training_data_dirs):
+            raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of training data directories ({len(self.training_data_dirs)})")
         
         # Resolve validation configuration
         resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
@@ -144,6 +153,8 @@ class PipelineConfig:
         self.resolved_validation_dirs = resolved_validation_dirs
         self.resolved_validation_ranges = resolved_validation_ranges
         
+        # Note: ordered positions directory will be resolved at runtime
+        
         # Validate that collected data will be used for training
         if self.run_game_collection and not self.run_preprocessing and not self.run_trmph_processing and not self.run_shuffling:
             raise ValueError(
@@ -151,6 +162,17 @@ class PipelineConfig:
                 "The collected data will not be used for training. "
                 "Either enable preprocessing steps or use --cleaned-trmph-data-dirs for already processed data."
             )
+    
+    def _resolve_ordered_positions_dir(self, newly_created_dir: Optional[str] = None) -> Optional[str]:
+        """Resolve the ordered positions directory to use (single source of truth)."""
+        # Priority: newly created > existing specified > None
+        if newly_created_dir:
+            return newly_created_dir
+        elif self.ordered_positions_dirs:
+            assert len(self.ordered_positions_dirs) == 1, "Only one ordered positions directory is supported"
+            return self.ordered_positions_dirs[0]  # Safe because we validated only one exists
+        else:
+            return None
 
 
 class GameCollectionStep:
@@ -382,27 +404,27 @@ class PreprocessingStep:
 
 
 class TRMPHProcessingStep:
-    """Handles TRMPH file processing into training positions."""
+    """Handles TRMPH file processing into ordered training positions."""
     
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
     
     def run(self, input_dir: str) -> str:
-        """Process TRMPH files and return processed directory."""
+        """Process TRMPH files and return ordered positions directory."""
         self.logger.info("=" * 60)
-        self.logger.info("STEP 3: TRMPH PROCESSING")
+        self.logger.info("STEP 3: TRMPH PROCESSING (Creating Ordered Positions)")
         self.logger.info("=" * 60)
         
         self.logger.info(f"Input directory: {input_dir}")
-        self.logger.info(f"Output directory: {self.config.processed_dir}")
+        self.logger.info(f"Output directory: {self.config.ordered_positions_dir}")
         self.logger.info(f"Position selector: {self.config.position_selector}")
         self.logger.info(f"Max workers: {self.config.max_workers_trmph}")
         
         # Check if output already exists
-        if Path(self.config.processed_dir).exists() and list(Path(self.config.processed_dir).glob("*.pkl.gz")):
+        if Path(self.config.ordered_positions_dir).exists() and list(Path(self.config.ordered_positions_dir).glob("*.pkl.gz")):
             raise FileExistsError(
-                f"Output directory already exists and contains data: {self.config.processed_dir}\n"
+                f"Output directory already exists and contains data: {self.config.ordered_positions_dir}\n"
                 f"This suggests the data has already been processed. To avoid wasting compute time,\n"
                 f"either:\n"
                 f"1. Use a different --selfplay-dir\n"
@@ -411,12 +433,12 @@ class TRMPHProcessingStep:
             )
         
         # Create output directory
-        Path(self.config.processed_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.config.ordered_positions_dir).mkdir(parents=True, exist_ok=True)
         
         # Create configuration
         config = create_config_from_args(type('Args', (), {
             'data_dir': input_dir,
-            'output_dir': self.config.processed_dir,
+            'output_dir': self.config.ordered_positions_dir,
             'max_files': None,
             'position_selector': self.config.position_selector,
             'run_tag': f"pipeline_{self.config.run_timestamp}",
@@ -428,27 +450,27 @@ class TRMPHProcessingStep:
         results = process_files(config)
         
         # Verify output was created
-        output_files = list(Path(self.config.processed_dir).glob("*.pkl.gz"))
+        output_files = list(Path(self.config.ordered_positions_dir).glob("*.pkl.gz"))
         if not output_files:
-            raise RuntimeError(f"TRMPH processing failed: No output files created in {self.config.processed_dir}")
+            raise RuntimeError(f"TRMPH processing failed: No output files created in {self.config.ordered_positions_dir}")
         
         self.logger.info(f"TRMPH processing completed: {len(output_files)} output files created")
         self.logger.info(f"Results: {results}")
         
-        return self.config.processed_dir
+        return self.config.ordered_positions_dir
 
 
 class ShufflingStep:
-    """Handles data shuffling."""
+    """Handles shuffling of ordered positions into final training data."""
     
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
     
     def run(self, input_dir: str) -> str:
-        """Shuffle processed data and return shuffled directory."""
+        """Shuffle ordered positions and return shuffled training data directory."""
         self.logger.info("=" * 60)
-        self.logger.info("STEP 4: DATA SHUFFLING")
+        self.logger.info("STEP 4: DATA SHUFFLING (Creating Final Training Data)")
         self.logger.info("=" * 60)
         
 
@@ -513,8 +535,8 @@ class TrainingStep:
         results_dir = str(Path(self.config.results_dir) / f"pipeline_{self.config.run_timestamp}")
         Path(results_dir).mkdir(parents=True, exist_ok=True)
         
-        self.logger.info(f"New data directory: {new_shuffled_dir}")
-        self.logger.info(f"Existing data directories: {self.config.processed_data_dirs}")
+        self.logger.info(f"New training data directory: {new_shuffled_dir}")
+        self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
         self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
         self.logger.info(f"Results directory: {results_dir}")
         self.logger.info(f"Max samples: {self.config.max_samples}")
@@ -563,13 +585,13 @@ class TrainingStep:
         
         # Run training
         if new_shuffled_dir:
-            all_data_dirs = [new_shuffled_dir] + self.config.processed_data_dirs
+            all_data_dirs = [new_shuffled_dir] + self.config.training_data_dirs
             all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
             # For validation, use only the predefined validation directories (don't add new data)
             all_validation_dirs = self.config.resolved_validation_dirs
             all_validation_shard_ranges = self.config.resolved_validation_ranges
         else:
-            all_data_dirs = self.config.processed_data_dirs
+            all_data_dirs = self.config.training_data_dirs
             all_shard_ranges = self.config.shard_ranges
             all_validation_dirs = self.config.resolved_validation_dirs
             all_validation_shard_ranges = self.config.resolved_validation_ranges
@@ -581,14 +603,14 @@ class TrainingStep:
             validation_shard_ranges=all_validation_shard_ranges,
             results_dir=results_dir,
             train_ratio=0.8,
-            num_epochs=4,  # Default from hyperparam_sweep
+            num_epochs=6, 
             early_stopping_patience=None,
             random_seed=42,
             max_examples_unaugmented=self.config.max_samples,
             max_validation_examples=self.config.max_validation_samples,
             experiment_name=None,
             enable_augmentation=True,
-            mini_epoch_samples=250000,  # Default from hyperparam_sweep
+            mini_epoch_samples=250000, 
             resume_from=self.config.model_full_path,
             shard_ranges=all_shard_ranges,
             shutdown_handler=shutdown_handler,
@@ -679,25 +701,31 @@ class TrainingPipeline:
             # Step 3: TRMPH processing (optional)
             if self.config.run_trmph_processing and cleaned_dir:
                 self.current_step = 3
-                self.logger.info(f"\nStarting step {self.current_step}: TRMPH processing")
-                processed_dir = self.trmph_step.run(cleaned_dir)
-                self.step_results['trmph_processing'] = processed_dir
+                self.logger.info(f"\nStarting step {self.current_step}: TRMPH processing (creating ordered positions)")
+                ordered_positions_dir = self.trmph_step.run(cleaned_dir)
+                self.step_results['trmph_processing'] = ordered_positions_dir
             else:
                 if cleaned_dir and not self.config.run_trmph_processing:
-                    self.logger.warning("WARNING: Preprocessing completed but TRMPH processing is disabled. The cleaned data will not be converted to training positions.")
+                    self.logger.warning("WARNING: Preprocessing completed but TRMPH processing is disabled. The cleaned data will not be converted to ordered positions.")
                 self.logger.info("Skipping TRMPH processing (disabled or no cleaned data)")
-                processed_dir = None
+                ordered_positions_dir = None
             
             # Step 4: Shuffling (optional)
-            if self.config.run_shuffling and processed_dir:
+            # Resolve ordered positions directory (single source of truth)
+            resolved_ordered_positions_dir = self._resolve_ordered_positions_dir(ordered_positions_dir)
+            
+            if self.config.run_shuffling and resolved_ordered_positions_dir:
                 self.current_step = 4
-                self.logger.info(f"\nStarting step {self.current_step}: Shuffling")
-                shuffled_dir = self.shuffling_step.run(processed_dir)
+                self.logger.info(f"\nStarting step {self.current_step}: Shuffling (creating final training data)")
+                self.logger.info(f"Using ordered positions: {resolved_ordered_positions_dir}")
+                
+                shuffled_dir = self.shuffling_step.run(resolved_ordered_positions_dir)
                 self.step_results['shuffling'] = shuffled_dir
             else:
-                if processed_dir and not self.config.run_shuffling:
-                    self.logger.warning("WARNING: TRMPH processing completed but shuffling is disabled. The processed data will not be shuffled for training.")
-                self.logger.info("Skipping shuffling (disabled or no processed data)")
+                if resolved_ordered_positions_dir and not self.config.run_shuffling:
+                    self.logger.warning("WARNING: Ordered positions available but shuffling is disabled. The ordered positions will not be shuffled for training.")
+                    # raise ValueError("Ordered positions available but shuffling is disabled. The ordered positions will not be shuffled for training.")
+                self.logger.info("Skipping shuffling (disabled or no ordered positions data)")
                 shuffled_dir = None
             
             # Step 5: Training (optional)
@@ -705,17 +733,17 @@ class TrainingPipeline:
                 self.current_step = 5
                 self.logger.info(f"\nStarting step {self.current_step}: Training")
                 
-                # Use newly shuffled data if available, otherwise use existing data sources
+                # Use newly shuffled data if available, otherwise use existing training data sources
                 if shuffled_dir:
                     training_data_dir = shuffled_dir
-                    self.logger.info(f"Using newly shuffled data: {training_data_dir}")
-                elif self.config.processed_data_dirs:
-                    # When no new shuffled data, just use existing processed data (no duplication)
+                    self.logger.info(f"Using newly shuffled training data: {training_data_dir}")
+                elif self.config.training_data_dirs:
+                    # When no new shuffled data, just use existing training data (no duplication)
                     training_data_dir = None
-                    self.logger.info(f"Using existing processed data: {self.config.processed_data_dirs}")
+                    self.logger.info(f"Using existing training data: {self.config.training_data_dirs}")
                 else:
                     self.logger.error("No training data available")
-                    raise ValueError("No training data available - need either shuffled data or data sources")
+                    raise ValueError("No training data available - need either shuffled data or training data sources")
                 
                 results_dir = self.training_step.run(training_data_dir)
                 self.step_results['training'] = results_dir
@@ -753,7 +781,7 @@ class TrainingPipeline:
         temp_dirs = [
             self.config.selfplay_dir,
             self.config.cleaned_dir,
-            self.config.processed_dir,
+            self.config.ordered_positions_dir,  # Clean up ordered positions (intermediate)
             self.config.temp_dir
         ]
         
@@ -849,11 +877,13 @@ Examples:
                        help="Raw .trmph files to collect and clean (for game collection step). Defaults to tournament_play and sf25 directories.")
     parser.add_argument("--cleaned-trmph-data-dirs", type=str, nargs='+', default=[],
                        help="Already cleaned .trmph files to process (for preprocessing step)")
-    parser.add_argument("--processed-data-dirs", type=str, nargs='+', 
-                       default=[str(d) for d in hex_ai.data_config.DEFAULT_PROCESSED_DATA_DIRS],
-                       help="Existing processed data directories for training")
+    parser.add_argument("--ordered-positions-dirs", type=str, nargs='+', default=[],
+                       help="Existing ordered positions directories (not shuffled) for shuffling step")
+    parser.add_argument("--training-data-dirs", type=str, nargs='+', 
+                       default=[str(d) for d in hex_ai.data_config.DEFAULT_TRAINING_DATA_DIRS],
+                       help="Existing training data directories (shuffled positions) for training")
     parser.add_argument("--shard-ranges", type=str, nargs='+',
-                       help='Shard ranges for processed data directories. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
+                       help='Shard ranges for training data directories. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
     # Validation data arguments
     validation_group = parser.add_argument_group('validation data')
     
@@ -983,7 +1013,8 @@ def main():
             base_data_dir=args.base_data_dir,
             raw_trmph_data_dirs=args.raw_trmph_data_dirs,
             cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
-            processed_data_dirs=args.processed_data_dirs,
+            ordered_positions_dirs=args.ordered_positions_dirs,
+            training_data_dirs=args.training_data_dirs,
             shard_ranges=getattr(args, 'shard_ranges', None),
             validation_dirs=args.validation_dirs,
             validation_shard_ranges=args.validation_shard_ranges,
