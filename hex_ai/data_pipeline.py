@@ -26,14 +26,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from time import sleep
 import psutil
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB, VALIDATION_DATA_COMPRESSION_RATIO, MAX_TEMP_MEMORY_GB
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
 from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
 
 logger = logging.getLogger(__name__)
 
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
-# TODO: Refine ths as I doubt the actual validation gets nearly this but (once we restrict to max_validation_examples)
+# TODO: Refine ths as I doubt the actual validation gets nearly this big
 MAX_VALIDATION_MEMORY_GB = 9.0
 
 
@@ -382,10 +382,26 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     
     def _initialize_validation_dataset(self):
         """
-        Initialize validation dataset with memory guards and shuffling.
-        Loads all validation data into memory, applies memory guards, and shuffles deterministically.
+        Initialize validation dataset with improved memory estimation and guards.
+        Estimates memory usage from disk sizes before loading, then loads and shuffles data.
         """
-        # Load all validation data into memory for shuffling
+        # Step 1: Estimate total disk size and memory usage before loading
+        total_disk_size = 0
+        for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
+            if not shard_queue:
+                continue
+            for shard_path in shard_queue:
+                if shard_path.exists():
+                    total_disk_size += shard_path.stat().st_size
+        
+        # Estimate memory usage from disk size using compression ratio
+        estimated_temp_memory_gb = (total_disk_size * VALIDATION_DATA_COMPRESSION_RATIO) / (1024**3)
+        
+        # Check if temporary loading would exceed memory limit
+        if estimated_temp_memory_gb > MAX_TEMP_MEMORY_GB:
+            raise RuntimeError(f"Validation data would use {estimated_temp_memory_gb:.1f}GB during loading, exceeds {MAX_TEMP_MEMORY_GB}GB limit")
+        
+        # Step 2: Load all validation data into memory for shuffling
         all_validation_positions = []
         
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
@@ -404,25 +420,38 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.logger.error(f"Failed to load validation shard {shard_path}: {e}")
                     raise RuntimeError(f"Failed to load validation shard {shard_path}: {e}")
         
-        # Memory guards - crash if validation data is too large
-        # Based on actual testing: ~4.5 KB per position in memory
-        estimated_memory_gb = len(all_validation_positions) * 0.0045 / 1024  # 4.5 KB per position
-        estimated_positions = len(all_validation_positions)
+        # Step 3: Calculate usage fraction before shuffling/limiting
+        total_loaded_positions = len(all_validation_positions)
         
-        if estimated_memory_gb > MAX_VALIDATION_MEMORY_GB:
-            raise RuntimeError(f"Validation data would use {estimated_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
+        # Calculate usage fraction: how much of the loaded data we'll actually use
+        if self.max_examples_unaugmented is not None and total_loaded_positions > self.max_examples_unaugmented:
+            # We loaded more than we need, so we'll use a fraction
+            usage_fraction = self.max_examples_unaugmented / total_loaded_positions
+        else:
+            # We'll use all loaded data
+            usage_fraction = 1.0
         
-        if estimated_positions > 5_000_000:
-            raise RuntimeError(f"Validation data would have {estimated_positions:,} positions, exceeds 5M limit")
+        # Estimate final memory usage based on usage fraction
+        estimated_final_memory_gb = estimated_temp_memory_gb * usage_fraction
         
-        # Shuffle validation data deterministically
+        # Step 4: Check final memory usage against validation limit
+        if estimated_final_memory_gb > MAX_VALIDATION_MEMORY_GB:
+            raise RuntimeError(f"Validation data would use {estimated_final_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
+        
+        # Step 5: Shuffle validation data deterministically
         if self.random_seed is not None:
             random.seed(self.random_seed)
         random.shuffle(all_validation_positions)
         
-        # Limit to max_validation_examples if specified
+        # Step 6: Limit to max_validation_examples if specified
         if self.max_examples_unaugmented is not None and len(all_validation_positions) > self.max_examples_unaugmented:
             all_validation_positions = all_validation_positions[:self.max_examples_unaugmented]
+        
+        # Step 7: Get final position count and check limits
+        actual_positions = len(all_validation_positions)
+        
+        if actual_positions > 5_000_000:
+            raise RuntimeError(f"Validation data would have {actual_positions:,} positions, exceeds 5M limit")
         
         # Store shuffled validation data
         self.validation_positions = all_validation_positions
@@ -434,7 +463,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         if self.verbose:
             self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
-                           f"estimated {estimated_memory_gb:.2f}GB memory usage")
+                           f"estimated {estimated_final_memory_gb:.2f}GB memory usage")
     
     def _monitor_memory(self) -> bool:
         """

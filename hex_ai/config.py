@@ -108,6 +108,11 @@ DEFAULT_POOL_SIZE = 1_000_000  # Default number of positions to maintain in memo
 DEFAULT_REFILL_THRESHOLD = 750_000  # Refill pool when it drops below this many positions
 DEFAULT_MAX_MEMORY_GB = 14.0  # Maximum memory usage before graceful shutdown
 
+# Validation data memory estimation
+# Based on analysis of sample files: ~2.33x compression ratio (memory/disk)
+VALIDATION_DATA_COMPRESSION_RATIO = 2.33  # Memory size / disk size ratio
+MAX_TEMP_MEMORY_GB = 25.0  # Maximum temporary memory for loading validation data
+
 # Logging
 WANDB_PROJECT_NAME = "hex-ai-2025"
 LOG_INTERVAL = 100  # Log every N batches
