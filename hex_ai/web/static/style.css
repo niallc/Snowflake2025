@@ -582,18 +582,22 @@ button:hover {
 .trmph-input-row label {
   display: block;
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
   margin-bottom: 4px; /* Reduced from 6px */
+  transition: color 0.3s ease;
 }
 
 .trmph-input-row textarea {
   width: 100%;
   padding: 8px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   font-family: monospace;
   font-size: 0.9em;
   resize: vertical;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .trmph-input-row textarea:focus {
@@ -671,15 +675,17 @@ button:hover {
 #detailed-exploration {
   margin-top: 20px;
   padding: 16px;
-  background: #f9f9f9;
-  border: 1px solid #e0e0e0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 #detailed-exploration h4 {
   margin: 0 0 12px 0;
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 1.0em;
+  transition: color 0.3s ease;
 }
 
 #exploration-content {
@@ -687,12 +693,14 @@ button:hover {
   font-size: 0.85em;
   line-height: 1.4;
   white-space: pre-wrap;
-  background: #fff;
+  background: var(--debug-bg);
   padding: 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   max-height: 2400px;
   overflow-y: auto;
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .exploration-step {
@@ -737,4 +745,17 @@ button:hover {
 .user-modified:focus {
   border-color: #ff6b35 !important;
   box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3) !important;
+}
+
+/* Dark mode user-modified styling */
+[data-theme="dark"] .user-modified {
+  border: 2px solid #ff6b35 !important;
+  background-color: #4a2a1a !important; /* Dark orange background */
+  box-shadow: 0 0 0 1px rgba(255, 107, 53, 0.3) !important;
+  color: var(--text-primary) !important; /* Ensure text is visible */
+}
+
+[data-theme="dark"] .user-modified:focus {
+  border-color: #ff6b35 !important;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.4) !important;
 }
