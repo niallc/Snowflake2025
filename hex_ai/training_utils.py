@@ -25,7 +25,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "batch_size": [256],
     "max_grad_norm": [2.0],  # Updated default for AdamW
     "weight_decay": [1e-4],
-    "value_learning_rate_factor": [2],  # Value head learns slower if this is < 1
+    "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.7],
     "learning_rate": [8e-4],  # Updated default for AdamW
