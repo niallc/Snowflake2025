@@ -28,6 +28,10 @@ python scripts/check_device.py
 export PYTHONPATH=.
 ```
 
+> **Windows users**: For a detailed walkthrough that covers installing prerequisites (Git, Python, Build Tools), creating a
+> PowerShell virtual environment, installing the correct PyTorch wheel, and checking out the `oct10` branch, see
+> [`docs/windows_setup.md`](docs/windows_setup.md).
+
 ### 3. Create Required Directories
 ```bash
 # Create all required directories (first-time setup only)
