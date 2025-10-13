@@ -8,7 +8,7 @@ for use in knockout tournaments.
 import re
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -232,6 +232,58 @@ class CheckpointDiscovery:
         for cp in checkpoints:
             if start_epoch <= cp.epoch < end_epoch:
                 result.append(cp)
+        
+        return result
+    
+    def get_checkpoints_by_mini_epoch_range(self, start_mini_epoch: int, end_mini_epoch: int) -> List[CheckpointInfo]:
+        """
+        Get checkpoints within a range of mini epoch numbers.
+        
+        Args:
+            start_mini_epoch: Start mini epoch number (inclusive)
+            end_mini_epoch: End mini epoch number (exclusive)
+            
+        Returns:
+            List of CheckpointInfo objects in the specified mini epoch range
+        """
+        checkpoints = self.discover_checkpoints()
+        
+        result = []
+        for cp in checkpoints:
+            if start_mini_epoch <= cp.mini < end_mini_epoch:
+                result.append(cp)
+        
+        return result
+    
+    def get_checkpoints_by_combined_range(self, epoch_range: Optional[Tuple[int, int]] = None, 
+                                        mini_epoch_range: Optional[Tuple[int, int]] = None) -> List[CheckpointInfo]:
+        """
+        Get checkpoints filtered by both epoch and mini epoch ranges.
+        
+        Args:
+            epoch_range: Optional tuple of (start_epoch, end_epoch) to filter by epoch
+            mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter by mini epoch
+            
+        Returns:
+            List of CheckpointInfo objects matching both criteria
+        """
+        checkpoints = self.discover_checkpoints()
+        
+        result = []
+        for cp in checkpoints:
+            # Check epoch range if specified
+            if epoch_range:
+                start_epoch, end_epoch = epoch_range
+                if not (start_epoch <= cp.epoch < end_epoch):
+                    continue
+            
+            # Check mini epoch range if specified
+            if mini_epoch_range:
+                start_mini_epoch, end_mini_epoch = mini_epoch_range
+                if not (start_mini_epoch <= cp.mini < end_mini_epoch):
+                    continue
+            
+            result.append(cp)
         
         return result
     

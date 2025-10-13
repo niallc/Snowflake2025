@@ -41,6 +41,7 @@ class TwoStageTournament:
                  top_k: int = 2,
                  round_robin_games: int = 100,
                  epoch_range: Optional[Tuple[int, int]] = None,
+                 mini_epoch_range: Optional[Tuple[int, int]] = None,
                  command_line: Optional[str] = None,
                  run_desc: Optional[str] = None):
         """
@@ -54,6 +55,7 @@ class TwoStageTournament:
             top_k: Number of winners from knockout stage to advance
             round_robin_games: Number of games per round-robin match
             epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints
+            mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter knockout checkpoints
             command_line: Command line that was used to run the tournament
             run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
         """
@@ -64,6 +66,7 @@ class TwoStageTournament:
         self.top_k = top_k
         self.round_robin_games = round_robin_games
         self.epoch_range = epoch_range
+        self.mini_epoch_range = mini_epoch_range
         self.command_line = command_line
         self.run_desc = run_desc
         
@@ -130,11 +133,24 @@ class TwoStageTournament:
         # Discover checkpoints
         discovery = CheckpointDiscovery(self.knockout_dir)
         
-        # Filter by epoch range if specified
-        if self.epoch_range:
-            start_epoch, end_epoch = self.epoch_range
-            checkpoints = discovery.get_checkpoints_by_epoch_range(start_epoch, end_epoch)
-            logger.info(f"Filtered to {len(checkpoints)} checkpoints for epochs {start_epoch}-{end_epoch-1}")
+        # Filter by epoch and/or mini epoch ranges if specified
+        if self.epoch_range or self.mini_epoch_range:
+            checkpoints = discovery.get_checkpoints_by_combined_range(
+                epoch_range=self.epoch_range,
+                mini_epoch_range=self.mini_epoch_range
+            )
+            
+            # Create descriptive filter message
+            filter_parts = []
+            if self.epoch_range:
+                start_epoch, end_epoch = self.epoch_range
+                filter_parts.append(f"epochs {start_epoch}-{end_epoch-1}")
+            if self.mini_epoch_range:
+                start_mini, end_mini = self.mini_epoch_range
+                filter_parts.append(f"mini epochs {start_mini}-{end_mini-1}")
+            
+            filter_desc = " and ".join(filter_parts)
+            logger.info(f"Filtered to {len(checkpoints)} checkpoints for {filter_desc}")
         else:
             checkpoints = discovery.discover_checkpoints()
             logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
