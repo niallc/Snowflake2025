@@ -306,9 +306,9 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 
-def make_mcts_move(trmph, model_id, num_simulations=200, exploration_constant=2.8, 
-                   temperature=1.0, temperature_end=0.1, verbose=0, orchestration_overrides=None,
-                   enable_gumbel=False, gumbel_max_sims=4997):
+def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
+                   temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims,
+                   orchestration_overrides=None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")

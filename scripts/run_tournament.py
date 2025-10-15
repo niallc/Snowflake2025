@@ -375,13 +375,13 @@ def parse_epoch_range(epoch_range_str: str) -> Tuple[int, int]:
     Parse epoch range string into start and end epoch numbers.
     
     Args:
-        epoch_range_str: String like "16" for single epoch or "16,19" for range 16-18
+        epoch_range_str: String like "16" for single epoch or "16,19" for range 16-19 (inclusive)
         
     Returns:
         Tuple of (start_epoch, end_epoch) where end_epoch is exclusive
         Examples:
             "16" -> (16, 17)  # Just epoch 16
-            "16,19" -> (16, 19)  # Epochs 16, 17, 18
+            "16,19" -> (16, 20)  # Epochs 16, 17, 18, 19
         
     Raises:
         ValueError: If format is invalid
@@ -391,15 +391,15 @@ def parse_epoch_range(epoch_range_str: str) -> Tuple[int, int]:
     
     parts = epoch_range_str.split(',')
     if len(parts) == 1:
-        # Single epoch: "14" -> start=14, end=15
+        # Single epoch: "16" -> start=16, end=17
         start_epoch = int(parts[0].strip())
         end_epoch = start_epoch + 1
     elif len(parts) == 2:
-        # Range: "14,15" -> start=14, end=16
+        # Range: "16,19" -> start=16, end=20 (includes 16,17,18,19)
         start_epoch = int(parts[0].strip())
         end_epoch = int(parts[1].strip()) + 1
     else:
-        raise ValueError(f"Invalid epoch range format: '{epoch_range_str}'. Expected format: 'N' for single epoch (e.g., '16') or 'N,M' for range N to M-1 (e.g., '16,19' for epochs 16,17,18)")
+        raise ValueError(f"Invalid epoch range format: '{epoch_range_str}'. Expected format: 'N' for single epoch (e.g., '16') or 'N,M' for range N to M inclusive (e.g., '16,19' for epochs 16,17,18,19)")
     
     if start_epoch < 1:
         raise ValueError(f"Start epoch must be >= 1, got {start_epoch}")
@@ -414,13 +414,13 @@ def parse_mini_epoch_range(mini_epoch_range_str: str) -> Tuple[int, int]:
     Parse mini epoch range string into start and end mini epoch numbers.
     
     Args:
-        mini_epoch_range_str: String like "14" for single mini epoch or "14,20" for range 14-19
+        mini_epoch_range_str: String like "14" for single mini epoch or "14,20" for range 14-20 (inclusive)
         
     Returns:
         Tuple of (start_mini_epoch, end_mini_epoch) where end_mini_epoch is exclusive
         Examples:
             "14" -> (14, 15)  # Just mini epoch 14
-            "14,20" -> (14, 20)  # Mini epochs 14, 15, 16, 17, 18, 19
+            "14,20" -> (14, 21)  # Mini epochs 14, 15, 16, 17, 18, 19, 20
         
     Raises:
         ValueError: If format is invalid
@@ -434,11 +434,11 @@ def parse_mini_epoch_range(mini_epoch_range_str: str) -> Tuple[int, int]:
         start_mini_epoch = int(parts[0].strip())
         end_mini_epoch = start_mini_epoch + 1
     elif len(parts) == 2:
-        # Range: "14,20" -> start=14, end=20
+        # Range: "14,20" -> start=14, end=21 (includes 14,15,16,17,18,19,20)
         start_mini_epoch = int(parts[0].strip())
-        end_mini_epoch = int(parts[1].strip())
+        end_mini_epoch = int(parts[1].strip()) + 1
     else:
-        raise ValueError(f"Invalid mini epoch range format: '{mini_epoch_range_str}'. Expected format: 'N' for single mini epoch (e.g., '14') or 'N,M' for range N to M-1 (e.g., '14,20' for mini epochs 14-19)")
+        raise ValueError(f"Invalid mini epoch range format: '{mini_epoch_range_str}'. Expected format: 'N' for single mini epoch (e.g., '14') or 'N,M' for range N to M inclusive (e.g., '14,20' for mini epochs 14-20)")
     
     if start_mini_epoch < 1:
         raise ValueError(f"Start mini epoch must be >= 1, got {start_mini_epoch}")

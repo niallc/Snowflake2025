@@ -147,7 +147,14 @@ class SF18TournamentResult:
             self.results[(model, sf18_difficulty)] = {
                 'sf25_wins': 0,
                 'sf18_wins': 0,
-                'total_games': 0
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,  # Openings where SF25 won both games
+                'openings_sf18_won_both': 0,  # Openings where SF18 won both games
+                'openings_split': 0  # Openings where each won one game
             }
     
     def record_game(self, sf25_model: str, winner: str, game_data: Dict[str, Any]):
@@ -158,21 +165,69 @@ class SF18TournamentResult:
             self.results[key] = {
                 'sf25_wins': 0,
                 'sf18_wins': 0,
-                'total_games': 0
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,
+                'openings_sf18_won_both': 0,
+                'openings_split': 0
             }
         
         self.results[key]['total_games'] += 1
         
+        # Track overall wins
         if winner == 'sf25':
             self.results[key]['sf25_wins'] += 1
         elif winner == 'sf18':
             self.results[key]['sf18_wins'] += 1
+        
+        # Track color-specific wins
+        winner_color = game_data.get('winner', 'unknown')
+        if winner == 'sf25':
+            if winner_color == 'blue':
+                self.results[key]['sf25_wins_as_blue'] += 1
+            elif winner_color == 'red':
+                self.results[key]['sf25_wins_as_red'] += 1
+        elif winner == 'sf18':
+            if winner_color == 'blue':
+                self.results[key]['sf18_wins_as_blue'] += 1
+            elif winner_color == 'red':
+                self.results[key]['sf18_wins_as_red'] += 1
         
         self.game_results.append({
             'sf25_model': sf25_model,
             'winner': winner,
             'game_data': game_data
         })
+    
+    def record_opening_results(self, sf25_model: str, opening_idx: int, 
+                              sf25_won_first: bool, sf25_won_second: bool):
+        """Record the results for both games of an opening."""
+        key = (sf25_model, self.sf18_difficulty)
+        
+        if key not in self.results:
+            self.results[key] = {
+                'sf25_wins': 0,
+                'sf18_wins': 0,
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,
+                'openings_sf18_won_both': 0,
+                'openings_split': 0
+            }
+        
+        # Track opening-level results
+        if sf25_won_first and sf25_won_second:
+            self.results[key]['openings_sf25_won_both'] += 1
+        elif not sf25_won_first and not sf25_won_second:
+            self.results[key]['openings_sf18_won_both'] += 1
+        else:
+            self.results[key]['openings_split'] += 1
     
     def get_summary(self) -> Dict[str, Any]:
         """Get tournament summary."""
@@ -212,6 +267,25 @@ class SF18TournamentResult:
                 print(f"  Total Games: {stats['total_games']}")
                 print(f"  SF25 Win Rate: {win_rate:.3f}")
                 print()
+                
+                # Color-specific breakdown
+                print(f"  Color-specific wins:")
+                print(f"    SF25 as Blue: {stats['sf25_wins_as_blue']}")
+                print(f"    SF25 as Red: {stats['sf25_wins_as_red']}")
+                print(f"    SF18 as Blue: {stats['sf18_wins_as_blue']}")
+                print(f"    SF18 as Red: {stats['sf18_wins_as_red']}")
+                print()
+                
+                # Opening-level results
+                total_openings = (stats['openings_sf25_won_both'] + 
+                                stats['openings_sf18_won_both'] + 
+                                stats['openings_split'])
+                if total_openings > 0:
+                    print(f"  Opening-level results (out of {total_openings} openings):")
+                    print(f"    Openings SF25 won both ways: {stats['openings_sf25_won_both']}")
+                    print(f"    Openings SF18 won both ways: {stats['openings_sf18_won_both']}")
+                    print(f"    Openings split (1-1): {stats['openings_split']}")
+                    print()
         
         print("="*60)
 
@@ -536,6 +610,10 @@ def run_sf18_tournament(
             
             result.record_game(strategy_config.name, winner_1, result_1)
             result.record_game(strategy_config.name, winner_2, result_2)
+            
+            # Record opening-level results
+            result.record_opening_results(strategy_config.name, opening_idx, 
+                                        winner_1 == "sf25", winner_2 == "sf25")
             
             # Log TRMPH results
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner'][0], actual_trmph_file)
