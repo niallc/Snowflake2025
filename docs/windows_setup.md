@@ -16,6 +16,38 @@ This guide walks through setting up the Snowflake2025 project on a Windows 10/11
 
 > **Tip**: If you only need CPU execution you can skip CUDA. PyTorch wheels for CPU are provided below.
 
+### Verify prerequisite installations
+
+Open a new PowerShell window after each installer finishes so the updated `PATH` values take effect. Then run the following checks:
+
+```powershell
+git --version
+python --version
+```
+
+To confirm the C++ Build Tools workload is present, use the Visual Studio `vswhere` utility (installed alongside the build tools) and ensure it reports an instance with the `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` component:
+
+```powershell
+& "$Env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe" `
+  -products * `
+  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+  -property installationPath
+
+Get-Command cl.exe
+```
+
+If `cl.exe` is not found, reopen PowerShell with administrator privileges and verify the workload was selected in the Visual Studio Installer.
+
+For CUDA installations, ensure the toolkit is on your `PATH` and that your GPU drivers are active:
+
+```powershell
+Get-Command nvcc
+nvcc --version
+nvidia-smi
+```
+
+If `nvcc` is missing, rerun the CUDA installer and choose the option to update environment variables.
+
 ## 2. Clone the Repository
 
 Open **Windows Terminal** or **PowerShell**, then run:
@@ -38,10 +70,10 @@ If you prefer to start on `main` first, run `git checkout main`, then switch to 
 
 ```powershell
 # Create the virtual environment in the project folder
-python -m venv .venv
+python -m venv hex_ai_env
 
 # Activate the virtual environment for the current shell session
-.\.venv\Scripts\Activate.ps1
+.\hex_ai_env\Scripts\Activate.ps1
 ```
 
 If you see an execution policy error, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once in PowerShell and retry the activation command.
@@ -65,6 +97,8 @@ After PyTorch is installed, install the rest of the dependencies from the repo:
 pip install -r requirements.txt
 ```
 
+> **Important**: Make sure your virtual environment is activated (`.\hex_ai_env\Scripts\Activate.ps1`) before running `pip install`. The virtual environment needs to be active to install packages into it.
+
 > **Note**: `requirements.txt` lists PyTorch packages, but installing from the official index first ensures you get the correct Windows wheels.
 
 ## 5. Configure Environment Variables
@@ -72,10 +106,16 @@ pip install -r requirements.txt
 Most project commands expect `PYTHONPATH` to include the repository root. You can set it for the current session with:
 
 ```powershell
-setx PYTHONPATH "$PWD"
+$env:PYTHONPATH = "."
 ```
 
-Close and reopen your terminal (or run `RefreshEnv`) so the new `PYTHONPATH` value is available. When using a new terminal session, remember to reactivate the virtual environment with `.\.venv\Scripts\Activate.ps1`.
+Or to set it permanently for future sessions:
+
+```powershell
+setx PYTHONPATH "."
+```
+
+Close and reopen your terminal (or run `RefreshEnv`) so the new `PYTHONPATH` value is available. When using a new terminal session, remember to reactivate the virtual environment with `.\hex_ai_env\Scripts\Activate.ps1`.
 
 ## 6. Verify the Installation
 
@@ -104,7 +144,7 @@ This command is safe to run multiple times.
 
 ## 8. Next Steps
 
-- **Run the web app**: `PYTHONPATH=. python -m hex_ai.web.app --port 5001`
+- **Run the web app**: `$env:PYTHONPATH="."; python -m hex_ai.web.app --port 5001`
 - **Start training**: Follow the command examples in `README.md` under "Training"
 - **Update to latest branch**: Pull new changes with `git pull` and switch branches with `git checkout <branch>`
 

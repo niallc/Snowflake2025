@@ -244,7 +244,8 @@ class SF18TournamentResult:
                     'sf25_wins': stats['sf25_wins'],
                     'sf18_wins': stats['sf18_wins'],
                     'total_games': stats['total_games'],
-                    'sf25_win_rate': win_rate
+                    'sf25_win_rate': win_rate,
+                    'sf25_win_percentage': win_rate * 100
                 }
         
         return summary
@@ -265,7 +266,7 @@ class SF18TournamentResult:
                 print(f"  SF25 Wins: {stats['sf25_wins']}")
                 print(f"  SF18 Wins: {stats['sf18_wins']}")
                 print(f"  Total Games: {stats['total_games']}")
-                print(f"  SF25 Win Rate: {win_rate:.3f}")
+                print(f"  SF25 Win Rate: {win_rate*100:.1f}%")
                 print()
                 
                 # Color-specific breakdown
