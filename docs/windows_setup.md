@@ -148,6 +148,26 @@ This command is safe to run multiple times.
 - **Start training**: Follow the command examples in `README.md` under "Training"
 - **Update to latest branch**: Pull new changes with `git pull` and switch branches with `git checkout <branch>`
 
+## 9. Generating Training Data from a Fresh Terminal
+
+When you open a new PowerShell window, you'll need to reactivate the virtual environment and set PYTHONPATH:
+
+```powershell
+# Navigate to the project directory
+cd C:\path\to\Snowflake2025
+
+# Activate the virtual environment
+.\hex_ai_env\Scripts\Activate.ps1
+
+# Set PYTHONPATH for the current session
+$env:PYTHONPATH = "."
+
+# Now you can run commands like:
+python scripts\run_large_selfplay.py --num_games 100000 --verbose 1 --streaming_save --output_dir data\sf25\oct15 --progress_interval 50 --mcts_sims 37 --temperature 1.0
+```
+
+**Note**: The backslashes (`\`) in the command above are for Windows file paths. PowerShell also accepts forward slashes (`/`) for most commands.
+
 ## Troubleshooting
 
 - **"cl.exe not found" errors** during `pip install`: Ensure the C++ Build Tools are installed and that you opened a new terminal after installation.
