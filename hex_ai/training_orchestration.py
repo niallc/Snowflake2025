@@ -26,7 +26,7 @@ from .models import TwoHeadedResNet
 from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
-from hex_ai.data_pipeline import discover_training_data_files
+from hex_ai.data_pipeline import discover_training_data_files_all
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 

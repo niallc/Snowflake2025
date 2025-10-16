@@ -6,19 +6,8 @@ hex_ai_env\Scripts\Activate.ps1
 # Set PYTHONPATH for the project
 $env:PYTHONPATH = "."
 
-# Debug: Check if the data directory exists and what files are in it
-Write-Host "=== Debugging data directory ==="
-Write-Host "Checking data/processed/sf18_shuffled..."
-if (Test-Path "data/processed/sf18_shuffled") {
-    Write-Host "Directory exists. Contents:"
-    Get-ChildItem "data/processed/sf18_shuffled" | Select-Object Name | Format-Table -AutoSize
-    Write-Host "Looking for *_processed.pkl.gz files:"
-    Get-ChildItem "data/processed/sf18_shuffled" -Filter "*_processed.pkl.gz" | Select-Object Name
-} else {
-    Write-Host "ERROR: Directory data/processed/sf18_shuffled does not exist!"
-}
-Write-Host "=== End debug ==="
-Write-Host ""
+# Note: The training pipeline now uses improved shard discovery logic
+# that finds files by shard number rather than using skip/take logic
 
 # Run the training pipeline with all data directories and shard ranges
 python scripts/training_pipeline.py `

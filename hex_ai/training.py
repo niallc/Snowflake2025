@@ -36,7 +36,7 @@ from .config import (
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
-from hex_ai.data_pipeline import discover_training_data_files
+from hex_ai.data_pipeline import discover_training_data_files_all
 from hex_ai.training_utils import get_device, TrainingUtilities
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size

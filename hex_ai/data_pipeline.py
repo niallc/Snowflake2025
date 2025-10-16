@@ -238,7 +238,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 # Discover files in this directory
                 dataset_type = "validation" if self.is_validation else "training"
                 process_context = f"{dataset_type} dataset initialization"
-                data_files = discover_training_data_files(data_dir, skip_files=skip_files, max_files=max_files, process_context=process_context)
+                
+                if end is None:  # 'all' case - get all files
+                    data_files = discover_training_data_files_all(data_dir, process_context=process_context)
+                else:
+                    # Use shard-based approach
+                    shard_numbers = list(range(start, end + 1))
+                    data_files = discover_training_data_files_by_shards(data_dir, shard_numbers, process_context=process_context)
                 
                 if not data_files:
                     raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
@@ -757,9 +763,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         return 10**12
 
 
-def discover_training_data_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None, process_context: str = "training data loading") -> List[Path]:
+def discover_training_data_files_all(data_dir: str = "data/processed", process_context: str = "training data loading") -> List[Path]:
     """
-    Discover training data files in the specified directory.
+    Discover all training data files in the specified directory.
     
     This function finds either:
     - Shuffled training data files (shuffled_*.pkl.gz) if shuffling_progress.json exists
@@ -767,12 +773,10 @@ def discover_training_data_files(data_dir: str = "data/processed", skip_files: i
     
     Args:
         data_dir: Directory containing data files
-        skip_files: Number of files to skip from the beginning (sorted by name)
-        max_files: Maximum number of files to use after skipping (None = use all remaining)
         process_context: Context string describing what process is calling this function
         
     Returns:
-        List of paths to data files
+        List of paths to all data files
     """
     
     data_path = Path(data_dir)
@@ -801,21 +805,84 @@ def discover_training_data_files(data_dir: str = "data/processed", skip_files: i
     
     # Sort files by name for consistent ordering
     data_files.sort()
-    
-    # Skip the first N files if requested
-    if skip_files > 0:
-        if skip_files >= len(data_files):
-            raise ValueError(f"Cannot skip {skip_files} files when only {len(data_files)} files exist in {data_dir}")
-        data_files = data_files[skip_files:]
-        logger.info(f"Skipped first {skip_files} files from {data_dir}, using {len(data_files)} remaining files")
-    
-    # Limit to max_files if requested
-    if max_files is not None and max_files > 0:
-        if max_files < len(data_files):
-            data_files = data_files[:max_files]
-            logger.info(f"Limited to first {max_files} files from {data_dir}, using {len(data_files)} files total")
-    
     return data_files
+
+
+def discover_training_data_files_by_shards(data_dir: str, shard_numbers: List[int], process_context: str = "training data loading") -> List[Path]:
+    """
+    Discover training data files by specific shard numbers.
+    
+    This function finds files by shard number rather than using skip/take logic.
+    It validates that files follow the expected naming pattern and crashes if expected shards are missing.
+    
+    Args:
+        data_dir: Directory containing data files
+        shard_numbers: List of shard numbers to find (e.g., [213, 214, 215])
+        process_context: Context string describing what process is calling this function
+        
+    Returns:
+        List of paths to data files for the requested shards
+        
+    Raises:
+        FileNotFoundError: If data directory doesn't exist or no files found
+        ValueError: If expected shard files are missing or don't follow expected pattern
+    """
+    import re
+    
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data directory {data_dir} not found")
+    
+    # Determine file pattern based on directory type
+    if (data_path / "shuffling_progress.json").exists():
+        # Shuffled data: look for shuffled_*.pkl.gz files
+        pattern = "shuffled_*.pkl.gz"
+        expected_format = r"shuffled_(\d+)\.pkl\.gz"
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for shuffled data files in {data_dir}")
+    else:
+        # Original processed data: look for *_processed.pkl.gz files  
+        pattern = "*_processed.pkl.gz"
+        expected_format = r"(\d+)_processed\.pkl\.gz"
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for processed data files in {data_dir}")
+    
+    # Get all files matching the pattern
+    all_files = list(data_path.glob(pattern))
+    if not all_files:
+        raise FileNotFoundError(f"No data files found in {data_dir} matching pattern {pattern}")
+    
+    # Validate file naming pattern and extract shard numbers
+    shard_to_file = {}
+    for file_path in all_files:
+        match = re.match(expected_format, file_path.name)
+        if not match:
+            raise ValueError(f"File {file_path.name} does not follow expected naming pattern {expected_format}")
+        
+        shard_num = int(match.group(1))
+        shard_to_file[shard_num] = file_path
+    
+    # Find requested shard files
+    found_files = []
+    missing_shards = []
+    
+    for shard_num in shard_numbers:
+        if shard_num in shard_to_file:
+            found_files.append(shard_to_file[shard_num])
+        else:
+            missing_shards.append(shard_num)
+    
+    # Crash if any expected shards are missing
+    if missing_shards:
+        available_shards = sorted(shard_to_file.keys())
+        raise ValueError(
+            f"Missing expected shards {missing_shards} in {data_dir}. "
+            f"Available shards: {available_shards[:10]}{'...' if len(available_shards) > 10 else ''}"
+        )
+    
+    # Sort by shard number for consistent ordering
+    found_files.sort(key=lambda p: int(re.match(expected_format, p.name).group(1)))
+    
+    logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(found_files)} files for shards {shard_numbers} in {data_dir}")
+    return found_files
 
 
 # ============================================================================

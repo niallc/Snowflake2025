@@ -13,7 +13,7 @@ import re
 
 from .data_utils import find_trmph_files, extract_games_from_file, remove_duplicates
 from .data_config import log_processed_files
-from hex_ai.data_pipeline import discover_training_data_files
+from hex_ai.data_pipeline import discover_training_data_files_all, discover_training_data_files_by_shards
 
 logger = logging.getLogger(__name__)
 
@@ -752,16 +752,15 @@ def validate_shard_ranges(data_dirs: List[str],
             # Parse shard range for this directory
             start, end = parse_shard_range(shard_range, data_dir)
             
-            if end is None:  # 'all' case
-                skip_files = 0
-                max_files = None
-            else:
-                skip_files = start
-                max_files = end - start + 1
-            
-            # Discover files in this directory
+            # Discover files in this directory using shard-based approach
             process_context = f"{context_name} data validation"
-            data_files = discover_training_data_files(data_dir, skip_files=skip_files, max_files=max_files, process_context=process_context)
+            
+            if end is None:  # 'all' case - get all files
+                data_files = discover_training_data_files_all(data_dir, process_context=process_context)
+            else:
+                # Use shard-based approach
+                shard_numbers = list(range(start, end + 1))
+                data_files = discover_training_data_files_by_shards(data_dir, shard_numbers, process_context=process_context)
             
             if not data_files:
                 raise RuntimeError(f"No {context_name} data files found in {data_dir} with range {shard_range}")
