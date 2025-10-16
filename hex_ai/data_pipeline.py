@@ -195,12 +195,19 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self._shards_exhausted_logged = False  # Track if we've already logged that shards are exhausted
         
         # Initialize shard discovery and weighting
+        if self.verbose:
+            dataset_type = "validation" if self.is_validation else "training"
+            self.logger.info(f"Initializing {dataset_type} dataset...")
         self._discover_shards()
         self._calculate_directory_weights()
         
         # Validation-specific initialization
         if self.is_validation:
+            if self.verbose:
+                self.logger.info("Loading validation data...")
             self._initialize_validation_dataset()
+            if self.verbose:
+                self.logger.info("Validation data loaded. Done.")
         
         if self.verbose:
             dataset_type = "validation" if self.is_validation else "training"
@@ -397,6 +404,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         Initialize validation dataset with improved memory estimation and guards.
         Estimates memory usage from disk sizes before loading, then loads and shuffles data.
         """
+        if self.verbose:
+            self.logger.info("Estimating memory usage...")
         # Step 1: Estimate total disk size and memory usage before loading
         total_disk_size = 0
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
@@ -414,6 +423,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             raise RuntimeError(f"Validation data would use {estimated_temp_memory_gb:.1f}GB during loading, exceeds {MAX_TEMP_MEMORY_GB}GB limit")
         
         # Step 2: Load all validation data into memory for shuffling
+        if self.verbose:
+            self.logger.info("Loading validation shards...")
         all_validation_positions = []
         
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
@@ -451,6 +462,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             raise RuntimeError(f"Validation data would use {estimated_final_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
         
         # Step 5: Shuffle validation data deterministically
+        if self.verbose:
+            self.logger.info("Shuffling validation data...")
         if self.random_seed is not None:
             random.seed(self.random_seed)
         random.shuffle(all_validation_positions)

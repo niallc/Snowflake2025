@@ -53,6 +53,7 @@ def create_datasets(data_dirs: List[str],
     from hex_ai.data_pipeline import StreamingMixedShardDataset
     
     try:
+        logger.info("Creating training dataset...")
         train_dataset = StreamingMixedShardDataset(
             data_dirs=data_dirs,
             shard_ranges=shard_ranges,
@@ -64,19 +65,25 @@ def create_datasets(data_dirs: List[str],
             verbose=verbose,
             random_seed=random_seed
         )
+        logger.info("Training dataset created. Done.")
         
-        val_dataset = StreamingMixedShardDataset(
-            data_dirs=validation_dirs,
-            shard_ranges=validation_shard_ranges,
-            pool_size=pool_size,
-            refill_threshold=refill_threshold,
-            max_memory_gb=max_memory_gb,
-            enable_augmentation=False,  # Validation dataset is not augmented
-            max_examples_unaugmented=max_validation_examples,
-            verbose=verbose,
-            random_seed=random_seed,
-            is_validation=True  # Enable validation-specific behavior
-        ) if max_validation_examples and validation_dirs else None
+        if max_validation_examples and validation_dirs:
+            logger.info("Creating validation dataset...")
+            val_dataset = StreamingMixedShardDataset(
+                data_dirs=validation_dirs,
+                shard_ranges=validation_shard_ranges,
+                pool_size=pool_size,
+                refill_threshold=refill_threshold,
+                max_memory_gb=max_memory_gb,
+                enable_augmentation=False,  # Validation dataset is not augmented
+                max_examples_unaugmented=max_validation_examples,
+                verbose=verbose,
+                random_seed=random_seed,
+                is_validation=True  # Enable validation-specific behavior
+            )
+            logger.info("Validation dataset created. Done.")
+        else:
+            val_dataset = None
         
         # Log data summary after shard discovery
         train_summary = train_dataset.get_data_summary()
@@ -471,6 +478,7 @@ def run_hyperparameter_tuning_current_data(
     
     # Create datasets using the new mixed shard approach
     logger.info(f"Using StreamingMixedShardDataset with pool_size={pool_size:,}, refill_threshold={refill_threshold:,}")
+    logger.info("Creating training and validation datasets...")
     train_loader, val_loader = create_datasets(
         data_dirs=data_dirs,
         shard_ranges=shard_ranges,
@@ -486,6 +494,7 @@ def run_hyperparameter_tuning_current_data(
         random_seed=random_seed,
         verbose=verbose
     )
+    logger.info("Datasets created. Done.")
     
     # Log dataset information
     logger.info(f"\nStreaming mixed dataset: up to {max_examples_unaugmented} training examples, up to {max_validation_examples} validation examples.")
