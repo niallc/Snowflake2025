@@ -68,8 +68,7 @@ def find_trmph_files(source_dirs: List[Path]) -> List[Tuple[Path, Path]]:
     
     for source_dir in source_dirs:
         if not source_dir.exists():
-            logger.warning(f"Source directory {source_dir} does not exist, skipping")
-            continue
+            raise FileNotFoundError(f"Source directory {source_dir} does not exist - this is likely a configuration error")
             
         # Find all .trmph files recursively
         trmph_files = list(source_dir.rglob("*.trmph"))

@@ -268,8 +268,7 @@ def find_trmph_files_with_date_filter(
     
     for source_dir in source_dirs:
         if not source_dir.exists():
-            logger.warning(f"Source directory does not exist: {source_dir}")
-            continue
+            raise FileNotFoundError(f"Source directory {source_dir} does not exist - this is likely a configuration error")
             
         # Handle tournament directories
         if include_tournaments:
@@ -616,35 +615,26 @@ def collect_and_organize_data(
     }
 
 
-def combine_and_clean_files(input_dir: Path, output_dir: Path, chunk_size: int = 20000):
-    """Combine all TRMPH files, remove duplicates, and split into chunks."""
+def combine_and_clean_files(input_dirs: List[Path], output_dir: Path, chunk_size: int = 20000):
+    """Combine all TRMPH files from multiple input directories, remove duplicates, and split into chunks."""
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Find all TRMPH files
-    trmph_files = list(input_dir.glob("*.trmph"))
-    if not trmph_files:
-        logger.error(f"No .trmph files found in {input_dir}")
-        # Still create a summary file even if no files were found
-        summary_path = output_dir / "processing_summary.txt"
-        with open(summary_path, 'w') as f:
-            f.write(f"Self-play data preprocessing summary\n")
-            f.write(f"=====================================\n")
-            f.write(f"Input directory: {input_dir}\n")
-            f.write(f"Output directory: {output_dir}\n")
-            f.write(f"Total input files: 0\n")
-            f.write(f"Total games extracted: 0\n")
-            f.write(f"Unique games after deduplication: 0\n")
-            f.write(f"Duplicates removed: 0\n")
-            f.write(f"Output chunks: 0\n")
-            f.write(f"Games per chunk: ~{chunk_size}\n")
-            f.write(f"\nNo .trmph files found in input directory.\n")
-        logger.info(f"Processing complete! Summary written to {summary_path}")
-        return
+    # Find all TRMPH files from all input directories
+    all_trmph_files = []
+    for input_dir in input_dirs:
+        if not input_dir.exists():
+            raise FileNotFoundError(f"Input directory {input_dir} does not exist - this is likely a configuration error")
+        trmph_files = list(input_dir.glob("*.trmph"))
+        all_trmph_files.extend(trmph_files)
+        logger.info(f"Found {len(trmph_files)} .trmph files in {input_dir}")
+    
+    if not all_trmph_files:
+        raise RuntimeError(f"No .trmph files found in any input directory: {[str(d) for d in input_dirs]}. This suggests a configuration error or empty directories.")
     
     # Extract all games from all files
     all_games = []
-    for file_path in trmph_files:
+    for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
         all_games.extend(games)
@@ -677,17 +667,17 @@ def combine_and_clean_files(input_dir: Path, output_dir: Path, chunk_size: int =
     with open(summary_path, 'w') as f:
         f.write(f"Self-play data preprocessing summary\n")
         f.write(f"=====================================\n")
-        f.write(f"Input directory: {input_dir}\n")
+        f.write(f"Input directories: {[str(d) for d in input_dirs]}\n")
         f.write(f"Output directory: {output_dir}\n")
-        f.write(f"Total input files: {len(trmph_files)}\n")
+        f.write(f"Total input files: {len(all_trmph_files)}\n")
         f.write(f"Total games extracted: {len(all_games)}\n")
         f.write(f"Unique games after deduplication: {len(unique_games)}\n")
         f.write(f"Duplicates removed: {len(all_games) - len(unique_games)}\n")
         f.write(f"Output chunks: {len(chunks)}\n")
         f.write(f"Games per chunk: ~{chunk_size}\n")
         f.write(f"\nInput files:\n")
-        for file_path in trmph_files:
-            f.write(f"  {file_path.name}\n")
+        for file_path in all_trmph_files:
+            f.write(f"  {file_path}\n")
         f.write(f"\nOutput files:\n")
         for i in range(len(chunks)):
             f.write(f"  cleaned_chunk_{i:03d}.trmph\n")

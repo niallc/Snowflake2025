@@ -380,22 +380,17 @@ class PreprocessingStep:
         # Create output directory
         Path(self.config.cleaned_dir).mkdir(parents=True, exist_ok=True)
         
-        # Process each input source using the existing function
-        processed_any = False
-        for source_dir in input_sources:
-            if source_dir.exists():
-                self.logger.info(f"Processing {source_dir}")
-                # Use the existing combine_and_clean_files function
-                combine_and_clean_files(source_dir, Path(self.config.cleaned_dir), self.config.chunk_size)
-                processed_any = True
-            else:
-                self.logger.warning(f"Input source does not exist: {source_dir}")
+        # Check that all input sources exist - fail fast if any are missing
+        missing_sources = [source_dir for source_dir in input_sources if not source_dir.exists()]
+        if missing_sources:
+            raise FileNotFoundError(f"Input sources do not exist: {missing_sources}. This is likely a configuration error.")
+        
+        # Process all sources together
+        self.logger.info(f"Processing {len(input_sources)} input sources together")
+        combine_and_clean_files(input_sources, Path(self.config.cleaned_dir), self.config.chunk_size)
         
         # Verify output was created
         output_files = list(Path(self.config.cleaned_dir).glob("*.trmph"))
-        if not processed_any:
-            raise ValueError("No input sources were processed - all sources were missing or empty")
-        
         if not output_files:
             raise RuntimeError(f"Preprocessing failed: No output files created in {self.config.cleaned_dir}")
         
