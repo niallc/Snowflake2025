@@ -408,12 +408,28 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.logger.info("Estimating memory usage...")
         # Step 1: Estimate total disk size and memory usage before loading
         total_disk_size = 0
+        
+        # Count total shards to examine
+        total_shards_to_check = 0
+        for shard_queue in self.shard_queues:
+            total_shards_to_check += len([p for p in shard_queue if p.exists()])
+        
+        if self.verbose and total_shards_to_check > 0:
+            self.logger.info(f"Checking {total_shards_to_check} shards for memory estimation...")
+        
+        shards_checked = 0
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
             if not shard_queue:
                 continue
             for shard_path in shard_queue:
                 if shard_path.exists():
                     total_disk_size += shard_path.stat().st_size
+                    shards_checked += 1
+                    if self.verbose and total_shards_to_check > 10:  # Only show dots for many files
+                        print(".", end="", flush=True)
+        
+        if self.verbose and total_shards_to_check > 10:
+            print()  # Newline after dots
         
         # Estimate memory usage from disk size using compression ratio
         estimated_temp_memory_gb = (total_disk_size * VALIDATION_DATA_COMPRESSION_RATIO) / (1024**3)
@@ -427,6 +443,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.logger.info("Loading validation shards...")
         all_validation_positions = []
         
+        # Count total shards to load
+        total_shards_to_load = 0
+        for shard_queue in self.shard_queues:
+            total_shards_to_load += len(shard_queue)
+        
+        if self.verbose and total_shards_to_load > 0:
+            self.logger.info(f"Loading {total_shards_to_load} validation shards...")
+        
+        shards_loaded = 0
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
             if not shard_queue:
                 continue
@@ -438,10 +463,17 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     
                     if isinstance(data, dict) and 'examples' in data:
                         all_validation_positions.extend(data['examples'])
+                    
+                    shards_loaded += 1
+                    if self.verbose and total_shards_to_load > 5:  # Only show dots for multiple files
+                        print(".", end="", flush=True)
                         
                 except Exception as e:
                     self.logger.error(f"Failed to load validation shard {shard_path}: {e}")
                     raise RuntimeError(f"Failed to load validation shard {shard_path}: {e}")
+        
+        if self.verbose and total_shards_to_load > 5:
+            print()  # Newline after dots
         
         # Step 3: Calculate usage fraction before shuffling/limiting
         total_loaded_positions = len(all_validation_positions)
