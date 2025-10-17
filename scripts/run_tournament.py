@@ -104,6 +104,14 @@ from hex_ai.inference.two_stage_tournament import TwoStageTournament
 from hex_ai.inference.knockout_tournament import TournamentParticipant
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/tournament.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Constants
