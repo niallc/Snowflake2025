@@ -701,7 +701,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         epoch_range=epoch_range,
         mini_epoch_range=mini_epoch_range,
         command_line=command_line,
-        run_desc=args.run_desc
+        run_desc=args.run_desc,
+        trmph_source=args.trmph_source
     )
     
     print("Running 2-stage tournament...")

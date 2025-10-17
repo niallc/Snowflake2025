@@ -43,7 +43,8 @@ class TwoStageTournament:
                  epoch_range: Optional[Tuple[int, int]] = None,
                  mini_epoch_range: Optional[Tuple[int, int]] = None,
                  command_line: Optional[str] = None,
-                 run_desc: Optional[str] = None):
+                 run_desc: Optional[str] = None,
+                 trmph_source: str = "data/sf25/sep28"):
         """
         Initialize the two-stage tournament.
         
@@ -58,6 +59,7 @@ class TwoStageTournament:
             mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter knockout checkpoints
             command_line: Command line that was used to run the tournament
             run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
+            trmph_source: Directory containing TRMPH files for opening generation
         """
         self.knockout_dir = knockout_dir
         self.knockout_config = knockout_config or self._get_default_knockout_config()
@@ -69,6 +71,7 @@ class TwoStageTournament:
         self.mini_epoch_range = mini_epoch_range
         self.command_line = command_line
         self.run_desc = run_desc
+        self.trmph_source = trmph_source
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
@@ -403,10 +406,10 @@ class TwoStageTournament:
             ValueError: If insufficient openings can be generated
         """
         # Use same TRMPH files as existing tournament system
-        trmph_files = find_trmph_files("data/sf25/sep28")
+        trmph_files = find_trmph_files(self.trmph_source)
         
         if not trmph_files:
-            raise ValueError(f"No TRMPH files found in data/sf25/sep28 for {stage_name} stage")
+            raise ValueError(f"No TRMPH files found in {self.trmph_source} for {stage_name} stage")
         
         # Generate 1.1x required openings (fail fast if insufficient)
         target_count = int(num_games * 1.1)
