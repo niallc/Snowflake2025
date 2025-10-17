@@ -73,3 +73,27 @@ python scripts/training_pipeline.py `
 # - Make sure to run this from the project root directory
 # - The virtual environment activation may require setting execution policy if not already done:
 #   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# PowerShell Tournament Command for Windows
+
+# Activate the virtual environment
+hex_ai_env\Scripts\Activate.ps1
+
+# Set PYTHONPATH for the project
+$env:PYTHONPATH = "."
+
+# Run the tournament
+python scripts/run_tournament.py `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251013_181038/ `
+  --knockout-config='{"mcts_sims": 39, "enable_gumbel_root_selection": true, "temperature": 1.0}' `
+  --top-k=1 `
+  --epoch-range=45 `
+  --mini-epoch-range="20,23" `
+  --games-per-match=50 `
+  --round-robin-games=100 `
+  --model-dirs=checkpoints/hyperparameter_tuning/pipeline_20251013_181038/ `
+  --model-files=epoch43_mini34.pt.gz `
+  --strategies=mcts,mcts `
+  --mcts-sims=39 `
+  --enable-gumbel=true `
+  --temperature=1.0
