@@ -151,9 +151,17 @@ class TwoStageTournament:
             
             filter_desc = " and ".join(filter_parts)
             logger.info(f"Filtered to {len(checkpoints)} checkpoints for {filter_desc}")
+            
+            # Validate that we have enough checkpoints for a tournament
+            if len(checkpoints) <= 1:
+                self._raise_insufficient_checkpoints_error(discovery, self.epoch_range, self.mini_epoch_range)
         else:
             checkpoints = discovery.discover_checkpoints()
             logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
+            
+            # Validate that we have enough checkpoints for a tournament
+            if len(checkpoints) <= 1:
+                self._raise_insufficient_checkpoints_error(discovery, None, None)
         
         # Create participants from checkpoints
         participants = []
@@ -509,3 +517,71 @@ class TwoStageTournament:
             
             print(f"\nTotal games played: {total_games}")
             print("="*80)
+    
+    def _raise_insufficient_checkpoints_error(self, discovery: CheckpointDiscovery, 
+                                            epoch_range: Optional[Tuple[int, int]], 
+                                            mini_epoch_range: Optional[Tuple[int, int]]) -> None:
+        """
+        Raise a helpful error when insufficient checkpoints are found.
+        
+        Args:
+            discovery: The checkpoint discovery object
+            epoch_range: The epoch range filter that was applied (if any)
+            mini_epoch_range: The mini epoch range filter that was applied (if any)
+        """
+        # Get directory contents for helpful error message
+        checkpoint_dir = discovery.checkpoint_dir
+        try:
+            all_files = list(checkpoint_dir.iterdir())
+            checkpoint_files = [f for f in all_files if f.is_file() and f.name.endswith('.pt.gz')]
+            other_files = [f for f in all_files if f.is_file() and not f.name.endswith('.pt.gz')]
+        except Exception as e:
+            all_files = []
+            checkpoint_files = []
+            other_files = []
+        
+        # Build error message
+        error_parts = [
+            f"Tournament requires at least 2 checkpoints, but found {len(checkpoint_files)} matching files.",
+            f"",
+            f"Directory: {checkpoint_dir}",
+        ]
+        
+        # Add filter information
+        if epoch_range:
+            start_epoch, end_epoch = epoch_range
+            error_parts.append(f"Epoch range filter: {start_epoch}-{end_epoch-1}")
+        if mini_epoch_range:
+            start_mini, end_mini = mini_epoch_range
+            error_parts.append(f"Mini epoch range filter: {start_mini}-{end_mini-1}")
+        
+        # Add directory contents
+        error_parts.extend([
+            f"",
+            f"Directory contents:"
+        ])
+        
+        if checkpoint_files:
+            error_parts.append(f"  Checkpoint files ({len(checkpoint_files)}):")
+            for f in sorted(checkpoint_files):
+                error_parts.append(f"    {f.name}")
+        else:
+            error_parts.append(f"  No checkpoint files found (looking for files ending in .pt.gz)")
+        
+        if other_files:
+            error_parts.append(f"  Other files ({len(other_files)}):")
+            for f in sorted(other_files):
+                error_parts.append(f"    {f.name}")
+        
+        # Add helpful suggestions
+        error_parts.extend([
+            f"",
+            f"Suggestions:",
+            f"  1. Check that the directory contains checkpoint files with pattern 'epochN_miniJ.pt.gz'",
+            f"  2. Verify the epoch and mini-epoch ranges include existing checkpoints",
+            f"  3. Remove filters to use all available checkpoints",
+            f"  4. Check that the directory path is correct"
+        ])
+        
+        error_message = "\n".join(error_parts)
+        raise ValueError(error_message)
