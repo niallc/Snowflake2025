@@ -84,7 +84,7 @@ $env:PYTHONPATH = "."
 
 # Run the tournament
 python scripts/run_tournament.py `
-  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251013_181038/ `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251016_184020/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=1 `
   --epoch-range=45 `
