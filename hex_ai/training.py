@@ -1211,6 +1211,9 @@ class Trainer:
         else:
             # Save as uncompressed file
             torch.save(checkpoint, path)
+        
+        # Explicitly release memory to prevent accumulation
+        del checkpoint
     
     def load_checkpoint(self, path: Path, override_checkpoint_hyperparameters: bool = False):
         """
@@ -1254,27 +1257,13 @@ class Trainer:
         
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
+        
+        # Explicitly release memory to prevent accumulation
+        del checkpoint
+        import gc
+        gc.collect()  # Force garbage collection
 
 
-    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        # Find all checkpoint files except best_model.pt
-        all_ckpts = [f for f in os.listdir(save_path) if re.match(r"epoch\d+_mini\d+\.pt", f)]
-        # Extract epoch numbers
-        epoch_nums = []
-        for fname in all_ckpts:
-            m = re.match(r"epoch(\d+)_mini(\d+)\.pt", fname)
-            if m:
-                epoch_nums.append((int(m.group(1)), fname))
-        if not epoch_nums:
-            return
-        max_epoch = max(e for e, _ in epoch_nums)
-        keep_epochs = TrainingUtilities.get_checkpoints_to_keep(max_epoch, max_checkpoints)
-        for e, fname in epoch_nums:
-            if e not in keep_epochs:
-                try:
-                    os.remove(os.path.join(save_path, fname))
-                except Exception:
-                    pass
 
 
 

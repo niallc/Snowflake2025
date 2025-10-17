@@ -648,16 +648,3 @@ class TrainingUtilities:
             return torch.cuda.memory_allocated() / (1024 * 1024)
         return None
     
-    @staticmethod
-    def get_checkpoints_to_keep(max_epoch: int, max_checkpoints: int) -> set:
-        """Determine which checkpoints to keep based on epoch number."""
-        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
-        keep = set()
-        if max_epoch < 4:
-            keep.update(range(1, max_epoch + 1))
-        else:
-            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
-            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
-                if k <= max_epoch:
-                    keep.add(k)
-        return keep
