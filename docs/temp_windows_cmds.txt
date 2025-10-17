@@ -85,7 +85,7 @@ $env:PYTHONPATH = "."
 # Run the tournament
 python scripts/run_tournament.py `
   --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251013_181038/ `
-  --knockout-config="{`"mcts_sims`": 39, `"enable_gumbel_root_selection`": true, `"temperature`": 1.0}" `
+  --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=1 `
   --epoch-range=45 `
   --mini-epoch-range="20,23" `
@@ -93,7 +93,8 @@ python scripts/run_tournament.py `
   --round-robin-games=100 `
   --model-dirs=checkpoints/hyperparameter_tuning/pipeline_20251013_181038/ `
   --model-files=epoch43_mini34.pt.gz `
-  --strategies=mcts,mcts `
+  --strategies=mcts `
   --mcts-sims=39 `
   --enable-gumbel=true `
+  --trmph-source=data/sf25/oct14/ `
   --temperature=1.0

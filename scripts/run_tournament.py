@@ -634,6 +634,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     # Parse knockout configuration
     knockout_config = {}
     if args.knockout_config:
+        print(f"DEBUG: Received knockout-config string: '{args.knockout_config}'")
+        print(f"DEBUG: String length: {len(args.knockout_config)}")
+        print(f"DEBUG: First 10 chars: '{args.knockout_config[:10]}'")
+        print(f"DEBUG: Last 10 chars: '{args.knockout_config[-10:]}'")
         try:
             knockout_config = json.loads(args.knockout_config)
         except json.JSONDecodeError as e:
