@@ -505,6 +505,7 @@ def run_hyperparameter_tuning_current_data(
     device = select_device()
     logger.info(f"Using device {device}...")
     logger.info(f"Starting {len(experiments)} experiments...")
+    logger.info("Initializing training...")
 
     all_results = []
     total_start_time = time.time()

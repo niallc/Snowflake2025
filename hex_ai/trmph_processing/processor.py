@@ -234,15 +234,24 @@ class TRMPHProcessor:
             for r in results if r['success']
         )
         
+        total_duplicate_move_games = sum(
+            r.get('stats', {}).get('duplicate_move_games', 0) 
+            for r in results if r['success']
+        )
+        
         logger.info("")
         logger.info("PROCESSING SUMMARY:")
         logger.info(f"  Total files: {total_files}")
         logger.info(f"  Successful: {successful_files}")
         logger.info(f"  Failed: {failed_files}")
         logger.info(f"  Total examples generated: {total_examples}")
+        logger.info(f"  Games skipped due to duplicate moves: {total_duplicate_move_games}")
         
         if failed_files > 0:
             logger.warning(f"  {failed_files} files failed to process")
+        
+        if total_duplicate_move_games > 0:
+            logger.warning(f"  {total_duplicate_move_games} games skipped due to duplicate moves")
     
     def _save_results(self, results: List[Dict]):
         """Save processing results to JSON file."""

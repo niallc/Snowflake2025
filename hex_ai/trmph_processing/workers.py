@@ -93,6 +93,7 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         'all_games': 0,           # Total games attempted (including invalid ones)
         'valid_games': 0,         # Successfully processed games
         'skipped_games': 0,       # Games that couldn't be processed (format errors, etc.)
+        'duplicate_move_games': 0, # Games skipped due to duplicate moves
         'examples_generated': 0,  # Total training examples created
         'file_error': None        # File-level error (if any)
     }
@@ -112,11 +113,12 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                 
                 # Skip lines without winner indicator
                 if winner is None:
+                    file_stats['skipped_games'] += 1
                     continue
                 
                 # Extract training examples from this game
                 game_id = (file_idx, i+1)  # file_idx and line_idx (1-based)
-                examples = extract_training_examples_with_selector_from_game(
+                examples, skip_reason = extract_training_examples_with_selector_from_game(
                     trmph_url, winner, game_id, position_selector=position_selector
                 )
                 
@@ -129,6 +131,8 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                     all_examples.extend(examples)
                     file_stats['valid_games'] += 1
                     file_stats['examples_generated'] += len(examples)
+                elif skip_reason == "duplicate_moves":
+                    file_stats['duplicate_move_games'] += 1
                 else:
                     file_stats['skipped_games'] += 1
                     

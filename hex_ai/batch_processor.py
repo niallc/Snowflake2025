@@ -376,12 +376,15 @@ class BatchProcessor:
                     try:
                         # Create game_id with file_idx and line_idx (i+1 for 1-based line numbers)
                         game_id = (file_idx, i+1)
-                        examples = extract_training_examples_with_selector_from_game(trmph_url, winner, game_id, position_selector=position_selector)
+                        examples, skip_reason = extract_training_examples_with_selector_from_game(trmph_url, winner, game_id, position_selector=position_selector)
                         if examples:
                             # Use dictionary format directly - no conversion needed
                             all_examples.extend(examples)
                             file_stats['valid_games'] += 1
                             file_stats['examples_generated'] += len(examples)
+                        elif skip_reason == "duplicate_moves":
+                            logger.warning(f"    Game {i+1} in {file_path.name} skipped due to duplicate moves")
+                            file_stats['skipped_games'] += 1  # Note: batch_processor doesn't have separate duplicate_move_games counter
                         else:
                             logger.warning(f"    Game {i+1} in {file_path.name} produced no examples")
                             file_stats['skipped_games'] += 1

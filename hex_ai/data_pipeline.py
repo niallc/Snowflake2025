@@ -626,6 +626,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         if positions_needed <= 0:
             return
         
+        # Show progress for initial pool filling (when pool is empty)
+        if len(self.position_pool) == 0 and self.verbose:
+            self.logger.info(f"Loading initial training pool ({self.pool_size:,} positions)...")
+        
         # Load shards proportionally until we have enough positions
         positions_added = 0
         shards_loaded_this_refill = 0
@@ -664,6 +668,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.total_shards_loaded += 1
                 shards_loaded_this_refill += 1
                 
+                # Show progress dots for initial pool loading
+                if len(self.position_pool) == 0 and self.verbose and shards_loaded_this_refill % 5 == 0:
+                    print(".", end="", flush=True)
+                
                 if self.verbose >= 3:
                     self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
                                    f"(added {min(positions_added, positions_needed)} to pool)")
@@ -678,6 +686,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if self.verbose >= 3:
                 self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
                                f"(total pool size: {len(self.position_pool):,})")
+        
+        # Show completion message for initial pool loading
+        if len(self.position_pool) == positions_added and self.verbose and shards_loaded_this_refill > 0:
+            print()  # Newline after dots
+            self.logger.info(f"Training pool loaded. Done. ({positions_added:,} positions from {shards_loaded_this_refill} shards)")
         
         if self.verbose >= 3:
             self.logger.info(f"Pool refill complete: added {positions_added:,} positions from {shards_loaded_this_refill} shards")

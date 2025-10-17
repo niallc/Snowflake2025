@@ -4,7 +4,7 @@ from hex_ai.config import (
     BOARD_SIZE, PIECE_ONEHOT, EMPTY_ONEHOT,
 )
 from hex_ai.enums import Winner, Player, Piece, Channel, ValuePerspective, channel_to_int, player_to_int
-from hex_ai.utils.math_utils import validate_probabilities
+from hex_ai.utils.math_utils import softmax_np
 import numpy as np
 import torch
 from typing import List, Tuple
@@ -331,11 +331,16 @@ def temperature_scaled_softmax(logits: np.ndarray, temperature: float) -> np.nda
 
     # Apply temperature scaling: logits / temperature
     scaled_logits = logits / temperature
-    # Apply softmax
-    probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
+
+    # TODO: Check whether torch softmax or our own numerically stable softmax is better.
+    # Apply softmax (using torch directly)
+    # probs = torch.softmax(torch.tensor(scaled_logits), dim=0).numpy()
     
-    # Validate that we got reasonable probabilities using our validation function
-    validate_probabilities(probs, f"Temperature-scaled softmax (T={temperature})")
+    # # Validate that we got reasonable probabilities using our validation function
+    # validate_probabilities(probs, f"Temperature-scaled softmax (T={temperature})")
+
+    # Apply numerically stable softmax
+    probs = softmax_np(scaled_logits)
     
     return probs
 
