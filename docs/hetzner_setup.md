@@ -1,116 +1,83 @@
-# Hetzner Server Setup — PUBLIC SUMMARY
+# Hetzner Server Setup — Public Summary
 
-This document summarizes the server setup for a small hobby site hosted on a Hetzner cloud instance with a domain managed by a third-party DNS provider. It records configuration structure and “where things live” without exposing personal details.
-
----
-
-## 1. Overview of the stack
-
-- **OS:** Ubuntu LTS (current stable release)
-- **Domain:** <DOMAIN_NAME> (managed by registrar/DNS provider)
-- **Public IP:** <SERVER_IPv4>  (intentionally generalized)
-- **Server stack:**
-  - **nginx** — reverse proxy and public-facing HTTP/HTTPS server.
-  - **Gunicorn** — serves the Python application on localhost.
-  - **Let's Encrypt (Certbot)** — provides and renews free TLS certificates for HTTPS.
-- **Application:** Python web app running on `127.0.0.1:8000`
-
-**Request flow (high-level):**
-1. Browser → `https://<DOMAIN_NAME>`
-2. nginx (ports 80/443) → redirects HTTP→HTTPS; terminates TLS.
-3. nginx reverse-proxies to Gunicorn at `127.0.0.1:8000`.
-4. Gunicorn serves the Python app.
+This document summarizes the setup of a small hobby site hosted on a Hetzner cloud instance with a domain managed by a third-party DNS provider.  
+For further details or questions, contact **Niall Cardin** at **niallc@gmail.com**.
 
 ---
 
-## 2. Domain and DNS
+## Overview
 
-`<DOMAIN_NAME>` resolves to `<SERVER_IPv4>`. This is required so Let’s Encrypt can verify domain ownership for certificate issuance.
-
-Example checks (from server):
-```bash
-hostname -I
-getent hosts <DOMAIN_NAME>
-```
+- **Domain:** `sf25.niallcardin.com`  
+- **Server:** Hetzner cloud instance running Ubuntu 24.04 LTS  
+- **Web server:** nginx (reverse proxy)  
+- **Primary purpose:** Serving a small web project as a public hobby site
 
 ---
 
-## 3. nginx configuration (illustrative)
+## Key Setup Details
 
-Site configuration is managed under `/etc/nginx/`. The structure is standard for Ubuntu:
+### HTTPS with Let's Encrypt
+The site uses HTTPS via a free Let's Encrypt TLS certificate, issued and managed by `certbot`.  
+- Certificates are stored under `/etc/letsencrypt/live/sf25.niallcardin.com/`.
+- Renewal is automatic (`certbot renew` is scheduled via systemd).
 
-- `/etc/nginx/nginx.conf` — main config
-- `/etc/nginx/sites-available/<DOMAIN_NAME>` — site config
-- `/etc/nginx/sites-enabled/` — symlinks to enabled sites
-
-Illustrative server blocks (replace placeholders with your values):
-
-```nginx
-server {
-    listen 80;
-    server_name <DOMAIN_NAME>;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name <DOMAIN_NAME>;
-
-    ssl_certificate /etc/letsencrypt/live/<DOMAIN_NAME>/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/<DOMAIN_NAME>/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+Visiting `http://sf25.niallcardin.com` automatically redirects to HTTPS.
 
 ---
 
-## 4. HTTPS with Let's Encrypt (Certbot)
+### Firewall (UFW)
 
-Installed via apt with the nginx plugin, then certificate obtained with:
-```bash
-sudo certbot --nginx -d <DOMAIN_NAME>
-```
+A minimal firewall is enabled via **UFW** (Uncomplicated Firewall), configured to:
+- **Allow:**  
+  - Port 22 (SSH)  
+  - Port 80 (HTTP)  
+  - Port 443 (HTTPS)  
+- **Deny:** All other inbound traffic by default
 
-Certificates live under:
-- `/etc/letsencrypt/live/<DOMAIN_NAME>/fullchain.pem`
-- `/etc/letsencrypt/live/<DOMAIN_NAME>/privkey.pem`
-
-Renewal is automated by Certbot (systemd/cron). Test with:
-```bash
-sudo certbot renew --dry-run
-```
+This reduces the attack surface while preserving normal web and SSH access.
 
 ---
 
-## 5. Useful commands
+### Automatic Security Updates
 
-```bash
-# nginx
-sudo nginx -t && sudo systemctl reload nginx
-sudo systemctl status nginx
-
-# cert status
-sudo certbot certificates
-
-# ports
-sudo ss -tuln
-```
+`unattended-upgrades` is installed and enabled to automatically install daily security patches.  
+Configuration file: `/etc/apt/apt.conf.d/20auto-upgrades`
 
 ---
 
-## 6. Baseline hardening checklist (non-exhaustive)
+### Basic System Monitoring
 
-- **Firewall:** Only allow ports 22 (SSH), 80 (HTTP), 443 (HTTPS).
-- **Automatic security updates:** Enable unattended upgrades.
-- **Security headers:** Add HSTS, X-Content-Type-Options, etc.
-- **Backups:** Code + key configs.
-- **Monitoring/logging:** Basic system and nginx log checks.
+The lightweight tool **Monit** is configured to monitor CPU and memory usage and send email alerts if they remain high for extended periods.  
+This provides early warnings of potential performance or security issues.
 
 ---
 
-*This public summary intentionally omits personal email addresses, exact package versions, and exact IP. Replace placeholders as needed for private/internal documentation.*
+### HTTP Security Headers
+
+Several security-related headers are added via nginx:
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains`  
+- `X-Content-Type-Options: nosniff`  
+- `X-Frame-Options: DENY`  
+- `Referrer-Policy: no-referrer-when-downgrade`  
+- `Permissions-Policy: geolocation=(), microphone=(), camera=()`
+
+These headers strengthen browser-side security and reduce common web vulnerabilities.
+
+Additionally, `server_tokens off;` is set to prevent nginx from exposing its version number.
+
+---
+
+## Future Improvements (Optional)
+
+- **Content-Security-Policy (CSP):** Further limits browser behavior and reduces XSS risk.  
+- **Backups:** Automate snapshots or periodic data backups.  
+- **Monitoring Dashboard:** Add metrics dashboards (e.g. Grafana + Prometheus) for deeper visibility.  
+- **HSTS Preload:** Enforce HTTPS even before first visit (requires commitment to HTTPS for all subdomains).
+
+---
+
+## Contact
+
+For questions about this setup or the project:  
+📧 **niallc@gmail.com**
