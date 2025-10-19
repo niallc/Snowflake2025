@@ -13,6 +13,7 @@ class HexGame {
         this.blueComputer = true;
         this.redComputer = false;
         this.isLoading = false;
+        this.isInitialLoad = true; // Track if this is the initial page load
         
         this.initializeElements();
         this.setupEventListeners();
@@ -94,7 +95,9 @@ class HexGame {
             this.winnerValues = data.WINNER_VALUES;
             
             this.initializeBoard();
-            this.resetGame();
+            // Initial load - allow computer auto-move
+            await this.loadGameState(true);
+            this.isInitialLoad = false; // Mark initial load as complete
         } catch (error) {
             console.error('Failed to load game constants:', error);
             this.handleNetworkError(error, 'load game');
@@ -131,8 +134,9 @@ class HexGame {
             this.currentTRMPH = "";
             this.gameHistory = [];
             this.moveCount = 0;
+            this.isInitialLoad = false; // Mark that this is no longer initial load
             this.updateTrmphDisplay();
-            await this.loadGameState();
+            await this.loadGameState(false); // Don't auto-move after reset
         } catch (error) {
             console.error('Failed to reset game:', error);
             this.showError('Failed to reset game.');
@@ -273,7 +277,8 @@ class HexGame {
             // Handle game over and auto-move logic
             if (data.winner) {
                 this.showGameOver(data.winner);
-            } else if (autoMove && this.shouldMakeComputerMove(data.player)) {
+            } else if (autoMove && this.shouldMakeComputerMove(data.player) && this.isInitialLoad) {
+                // Only auto-move on initial page load, not after reset
                 this.scheduleAutoMove();
             }
             
@@ -489,13 +494,8 @@ class HexGame {
         const col = parseInt(e.target.getAttribute('data-col'));
         console.log(`Clicked on row=${row}, col=${col}`);
         
-        // Check if it's a human player's turn
-        const currentPlayer = this.getCurrentPlayer();
-        console.log(`Current player: ${currentPlayer}, should make computer move: ${this.shouldMakeComputerMove(currentPlayer)}`);
-        if (this.shouldMakeComputerMove(currentPlayer)) {
-            console.log('Computer should move, ignoring human click');
-            return;
-        }
+        // Allow user clicks regardless of computer settings
+        // Users can always make moves when they click
         
         this.setLoading(true);
         try {

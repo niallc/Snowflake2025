@@ -181,42 +181,68 @@ def get_difficulty_parameters(elo_rating):
     elif elo_rating > 2350:
         elo_rating = 2350
     
-    if elo_rating <= 300:
-        # ELO 1-300: Policy play with exponential temperature decay
-        # temp = 10000 * (0.0003)^(elo/300)
-        temp = 10000 * (0.0003 ** (elo_rating / 300))
-        return {
-            "algorithm": "policy",
-            "temperature": temp,
-            "num_simulations": 0,
-            "exploration_constant": 0,
-            "enable_gumbel": False
-        }
-    elif elo_rating <= 2100:
-        # ELO 301-2100: Policy play with refined temperature
-        # temp = 3.0 * (0.0333)^((elo-300)/1800)
-        temp = 3.0 * (0.0333 ** ((elo_rating - 300) / 1800))
-        return {
-            "algorithm": "policy",
-            "temperature": temp,
-            "num_simulations": 0,
-            "exploration_constant": 0,
-            "enable_gumbel": False
-        }
-    else:
-        # ELO 2101-2350: Gumbel MCTS with increasing simulations
-        # sims = 8 + (elo - 2100) * (39 - 8) / 250
-        sims = 8 + (elo_rating - 2100) * (39 - 8) / 250
-        sims = int(round(sims))
-        return {
-            "algorithm": "mcts",
-            "temperature": 1.0,
-            "temperature_end": 0.1,
-            "num_simulations": sims,
-            "exploration_constant": 2.8,
-            "enable_gumbel": True,
-            "gumbel_max_sims": 500
-        }
+    # Define difficulty breakpoints for linear interpolation
+    # Format: (elo, temperature, num_simulations, algorithm)
+    difficulty_points = [
+        (1, 2.5, 0, "policy"),      # Mindless
+        (300, 1.3, 0, "policy"),    # Beginner  
+        (500, 0.9, 0, "policy"),    # Novice
+        (1000, 0.6, 0, "policy"),   # Medium
+        (1500, 0.40, 0, "policy"),   # Hard
+        (1800, 0.20, 0, "policy"),  # Very Hard
+        (2100, 0.05, 0, "policy"),   # Expert
+        (2150, 0.1, 8, "mcts"),     # Extra Hard - Gumbel MCTS
+        (2250, 0.1, 20, "mcts"),     # Ultra Hard - Gumbel MCTS
+        (2350, 0.1, 39, "mcts"),    # Ultra Difficult - Gumbel MCTS
+    ]
+    
+    # Find the appropriate segment for linear interpolation
+    for i in range(len(difficulty_points) - 1):
+        elo_low, temp_low, sims_low, algo_low = difficulty_points[i]
+        elo_high, temp_high, sims_high, algo_high = difficulty_points[i + 1]
+        
+        if elo_low <= elo_rating <= elo_high:
+            # Linear interpolation
+            if elo_high == elo_low:
+                # Avoid division by zero
+                ratio = 0
+            else:
+                ratio = (elo_rating - elo_low) / (elo_high - elo_low)
+            
+            # Interpolate temperature and simulations
+            temperature = temp_low + ratio * (temp_high - temp_low)
+            num_simulations = int(round(sims_low + ratio * (sims_high - sims_low)))
+            
+            # Determine algorithm (use higher algorithm if we're in MCTS range)
+            algorithm = algo_high if algo_high == "mcts" else algo_low
+            
+            if algorithm == "policy":
+                return {
+                    "algorithm": "policy",
+                    "temperature": temperature,
+                    "num_simulations": 0,
+                    "exploration_constant": 0,
+                    "enable_gumbel": False
+                }
+            else:  # mcts
+                return {
+                    "algorithm": "mcts",
+                    "temperature": 1.0,
+                    "temperature_end": 0.1,
+                    "num_simulations": num_simulations,
+                    "exploration_constant": 2.8,
+                    "enable_gumbel": True,
+                    "gumbel_max_sims": 500
+                }
+    
+    # Fallback (should not reach here with proper bounds checking)
+    return {
+        "algorithm": "policy",
+        "temperature": 0.5,
+        "num_simulations": 0,
+        "exploration_constant": 0,
+        "enable_gumbel": False
+    }
 
 
 # =============================================================================
