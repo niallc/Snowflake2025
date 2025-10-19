@@ -61,6 +61,7 @@ def validate_trmph_input(trmph_string):
     
     Only allows single letters a-m followed by numbers 1-13.
     Pattern: ([a-m]([0-9]|1[0-3]))+
+    Also allows empty strings for initial game state.
     
     Args:
         trmph_string (str): The TRMPH string to validate
@@ -68,24 +69,32 @@ def validate_trmph_input(trmph_string):
     Returns:
         tuple: (is_valid, error_message) where is_valid is bool and error_message is str or None
     """
-    if not trmph_string or not isinstance(trmph_string, str):
-        return False, "TRMPH input must be a non-empty string"
+    if not isinstance(trmph_string, str):
+        return False, "TRMPH input must be a string"
     
     # Remove any whitespace
     trmph_string = trmph_string.strip()
     
+    # Allow empty strings for initial game state
     if not trmph_string:
-        return False, "TRMPH input cannot be empty"
+        return True, None
     
-    # Validate format: ([a-m]([0-9]|1[0-3]))+
-    trmph_pattern = re.compile(r'^([a-m]([0-9]|1[0-3]))+$')
+    # Validate format: #13,([a-m]([0-9]|1[0-3]))+ or ([a-m]([0-9]|1[0-3]))+
+    trmph_pattern_with_prefix = re.compile(r'^#13,([a-m]([0-9]|1[0-3]))+$')
+    trmph_pattern_without_prefix = re.compile(r'^([a-m]([0-9]|1[0-3]))+$')
     
-    if not trmph_pattern.match(trmph_string):
-        return False, "Invalid TRMPH format. Only letters a-m followed by numbers 1-13 are allowed (e.g., a1b2c3)"
+    if not (trmph_pattern_with_prefix.match(trmph_string) or trmph_pattern_without_prefix.match(trmph_string)):
+        return False, "Invalid TRMPH format. Only letters a-m followed by numbers 1-13 are allowed (e.g., a1b2c3 or #13,a1b2c3)"
     
     # Use existing utility function to properly count moves
     try:
-        moves = fc.split_trmph_moves(trmph_string)
+        # Strip the #13, prefix if present before parsing moves
+        if trmph_string.startswith('#13,'):
+            bare_moves = trmph_string[4:]  # Remove '#13,' prefix
+        else:
+            bare_moves = trmph_string
+        
+        moves = fc.split_trmph_moves(bare_moves)
         max_moves = BOARD_SIZE * BOARD_SIZE  # 13^2 = 169
         if len(moves) > max_moves:
             return False, f"Too many moves (maximum {max_moves} moves for a complete game)"
@@ -209,20 +218,6 @@ def get_difficulty_parameters(elo_rating):
             "gumbel_max_sims": 500
         }
 
-def get_difficulty_levels():
-    """Return predefined difficulty levels for dropdown selection."""
-    return [
-        {"name": "Mindless", "elo": 1, "description": "Extremely random play"},
-        {"name": "Beginner", "elo": 300, "description": "Very random, makes many mistakes"},
-        {"name": "Novice", "elo": 500, "description": "Somewhat random, basic play"},
-        {"name": "Medium", "elo": 1000, "description": "Reasonable play with some mistakes"},
-        {"name": "Hard", "elo": 1500, "description": "Good play, occasional mistakes"},
-        {"name": "Very Hard", "elo": 1800, "description": "Strong play, few mistakes"},
-        {"name": "Expert", "elo": 2100, "description": "Very strong play"},
-        {"name": "Extra Hard", "elo": 2150, "description": "Expert level with tree search"},
-        {"name": "Ultra Hard", "elo": 2250, "description": "Master level play"},
-        {"name": "Ultra Difficult", "elo": 2350, "description": "Maximum difficulty"}
-    ]
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -315,6 +310,143 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
+def build_move_response(state, move_made=None, success=True, error=None):
+    """
+    Build a standardized move response with game state information.
+    
+    Args:
+        state (HexGameState): The current game state
+        move_made (str, optional): TRMPH representation of the move made
+        success (bool): Whether the operation was successful
+        error (str, optional): Error message if operation failed
+        
+    Returns:
+        dict: Standardized move response
+    """
+    response = {
+        "success": success,
+        "new_trmph": state.to_trmph(),
+        "board": state.board.tolist(),
+        "player": winner_to_color(state.current_player_enum),
+        "legal_moves": moves_to_trmph(state.get_legal_moves()),
+        "winner": winner_to_color(state.winner) if state.winner is not None else None,
+        "move_made": move_made,
+        "game_over": state.game_over
+    }
+    
+    if error:
+        response["error"] = error
+        
+    return response
+
+def _check_game_over_early_return(state, trmph):
+    """Check if game is over and return early response if so."""
+    if state.game_over:
+        app.logger.info("Game is over, returning current state")
+        result = build_move_response(state, move_made=None)
+        app.logger.info(f"Returning early result: {result}")
+        return result
+    return None
+
+def _load_model_safely(model_id):
+    """Load model with error handling."""
+    try:
+        model = get_model(model_id)
+        app.logger.info(f"Model loaded successfully: {type(model).__name__}")
+        return model, None
+    except Exception as e:
+        app.logger.error(f"Failed to get model {model_id}: {e}")
+        return None, f"Model loading failed: {e}"
+
+def _create_mcts_configuration(num_simulations, exploration_constant, temperature, temperature_end, enable_gumbel, gumbel_max_sims):
+    """Create MCTS configuration with temperature adjustments."""
+    if temperature_end > temperature:
+        app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
+        temperature_end = temperature / 10
+    
+    if temperature < 0.02:
+        app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
+    
+    mcts_config = create_mcts_config(
+        config_type="tournament",
+        sims=num_simulations,
+        c_puct=exploration_constant,
+        temperature_start=temperature,
+        temperature_end=temperature_end,
+        enable_gumbel_root_selection=enable_gumbel,
+        gumbel_sim_threshold=gumbel_max_sims
+    )
+    app.logger.info(f"MCTS config created: {mcts_config}")
+    return mcts_config
+
+def _execute_mcts_search(state, model_id, mcts_config):
+    """Execute MCTS search and return the selected move."""
+    # Create game engine
+    engine = HexGameEngine()
+    app.logger.info("Game engine created")
+    
+    # Get cached model wrapper for MCTS
+    app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
+    model_wrapper_start = time.time()
+    model_wrapper = get_cached_model_wrapper(model_id)
+    model_wrapper_time = time.time() - model_wrapper_start
+    app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
+    
+    # Run MCTS search
+    app.logger.info("Starting MCTS search...")
+    mcts_start_time = time.time()
+    app.logger.info("About to call run_mcts_move...")
+    try:
+        move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
+        app.logger.info("run_mcts_move completed successfully")
+    except Exception as e:
+        app.logger.error(f"run_mcts_move failed with exception: {e}")
+        import traceback
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
+    mcts_search_time = time.time() - mcts_start_time
+    
+    return move
+
+def _apply_move_and_build_response(state, move):
+    """Apply the selected move and build the response."""
+    selected_move_trmph = fc.rowcol_to_trmph(*move)
+    app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
+    
+    # Apply the move
+    app.logger.info(f"Applying move: {selected_move_trmph}")
+    state = apply_move_to_state_trmph(state, selected_move_trmph)
+    app.logger.info(f"Move applied. New state game_over: {state.game_over}")
+    
+    return build_move_response(state, move_made=selected_move_trmph)
+
+def _prepare_mcts_parameters(num_simulations, exploration_constant, temperature, temperature_end, enable_gumbel, gumbel_max_sims):
+    """Prepare and validate MCTS parameters."""
+    return {
+        "num_simulations": num_simulations,
+        "exploration_constant": exploration_constant,
+        "temperature": temperature,
+        "temperature_end": temperature_end,
+        "enable_gumbel": enable_gumbel,
+        "gumbel_max_sims": gumbel_max_sims
+    }
+
+def _execute_mcts_move_workflow(state, model_id, mcts_params):
+    """Execute the core MCTS move workflow."""
+    # Load model
+    model, model_error = _load_model_safely(model_id)
+    if model_error:
+        return {"success": False, "error": model_error}
+    
+    # Create MCTS configuration
+    mcts_config = _create_mcts_configuration(**mcts_params)
+    
+    # Execute MCTS search
+    move = _execute_mcts_search(state, model_id, mcts_config)
+    
+    # Apply move and build response
+    return _apply_move_and_build_response(state, move)
+
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
     """Make one computer move using MCTS and return the new state with diagnostics."""
@@ -323,110 +455,28 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
         app.logger.info(f"Input TRMPH: '{trmph}'")
         
-        # Note: TRMPH validation is handled by the calling API endpoint
-        
-        # Create game state from TRMPH
+        # Create game state from TRMPH (validation already done by calling API endpoint)
         state = create_game_state_from_trmph(trmph, "for MCTS move")
         app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
         
-        # If game is over, return current state
-        if state.game_over:
-            app.logger.info("Game is over, returning current state")
-            result = {
-                "success": True,
-                "new_trmph": trmph,
-                "board": state.board.tolist(),
-                "player": winner_to_color(state.current_player),
-                "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": winner_to_color(state.winner) if state.winner is not None else None,
-                "move_made": None,
-                "game_over": True
-            }
-            app.logger.info(f"Returning early result: {result}")
-            return result
+        # Check if game is over (early return)
+        early_result = _check_game_over_early_return(state, trmph)
+        if early_result:
+            return early_result
         
-        # Get model
-        try:
-            model = get_model(model_id)
-            app.logger.info(f"Model loaded successfully: {type(model).__name__}")
-        except Exception as e:
-            app.logger.error(f"Failed to get model {model_id}: {e}")
-            return {
-                "success": False,
-                "error": f"Model loading failed: {e}"
-            }
-        
-        # Create MCTS configuration
-        if temperature_end > temperature:
-            app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
-            temperature_end = temperature / 10
-        
-        if temperature < 0.02:
-            app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
-        
-        mcts_config = create_mcts_config(
-            config_type="tournament",
-            sims=num_simulations,
-            c_puct=exploration_constant,
-            temperature_start=temperature,
-            temperature_end=temperature_end,
-            enable_gumbel_root_selection=enable_gumbel,
-            gumbel_sim_threshold=gumbel_max_sims
+        # Prepare MCTS parameters
+        mcts_params = _prepare_mcts_parameters(
+            num_simulations, exploration_constant, temperature, temperature_end, 
+            enable_gumbel, gumbel_max_sims
         )
-        app.logger.info(f"MCTS config created: {mcts_config}")
         
-        # Create game engine
-        engine = HexGameEngine()
-        app.logger.info("Game engine created")
+        # Execute MCTS workflow
+        result = _execute_mcts_move_workflow(state, model_id, mcts_params)
         
-        # Get cached model wrapper for MCTS
-        app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
-        model_wrapper_start = time.time()
-        model_wrapper = get_cached_model_wrapper(model_id)
-        model_wrapper_time = time.time() - model_wrapper_start
-        app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
-        
-        # Run MCTS search
-        app.logger.info("Starting MCTS search...")
-        total_start_time = time.time()
-        
-        mcts_start_time = time.time()
-        app.logger.info("About to call run_mcts_move...")
-        try:
-            move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
-            app.logger.info("run_mcts_move completed successfully")
-        except Exception as e:
-            app.logger.error(f"run_mcts_move failed with exception: {e}")
-            import traceback
-            app.logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
-        mcts_search_time = time.time() - mcts_start_time
-        
-        selected_move_trmph = fc.rowcol_to_trmph(*move)
-        app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
-        
-        # Apply the move
-        app.logger.info(f"Applying move: {selected_move_trmph}")
-        state = apply_move_to_state_trmph(state, selected_move_trmph)
-        app.logger.info(f"Move applied. New state game_over: {state.game_over}")
-        
-        result = {
-            "success": True,
-            "new_trmph": state.to_trmph(),
-            "board": state.board.tolist(),
-            "player": winner_to_color(state.current_player),
-            "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": winner_to_color(state.winner) if state.winner is not None else None,
-            "move_made": selected_move_trmph,
-            "game_over": state.game_over
-        }
-        
-        total_wall_time = time.time() - total_start_time
         app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
-        app.logger.debug(f"Total wall time: {total_wall_time:.3f}s")
-        app.logger.debug(f"Move made: {result['move_made']}")
-        app.logger.debug(f"Game over: {result['game_over']}")
-        app.logger.debug(f"Winner: {result['winner']}")
+        app.logger.debug(f"Move made: {result.get('move_made', 'N/A')}")
+        app.logger.debug(f"Game over: {result.get('game_over', 'N/A')}")
+        app.logger.debug(f"Winner: {result.get('winner', 'N/A')}")
         
         return result
     except Exception as e:
@@ -463,10 +513,6 @@ def api_constants():
         }
     })
 
-@app.route("/api/difficulty_levels", methods=["GET"])
-def api_difficulty_levels():
-    """Get available difficulty levels."""
-    return jsonify({"difficulty_levels": get_difficulty_levels()})
 
 @app.route("/api/state", methods=["POST"])
 def api_state():
@@ -488,12 +534,8 @@ def api_state():
     
     app.logger.info(f"api_state called with trmph='{trmph}', elo_rating={elo_rating}")
     
-    try:
-        # Create game state from TRMPH
-        state = create_game_state_from_trmph(trmph)
-    except Exception as e:
-        app.logger.error(f"Failed to create game state from TRMPH '{trmph}': {e}")
-        return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
+    # Create game state from TRMPH (validation already done by validate_api_input)
+    state = create_game_state_from_trmph(trmph)
 
     # For empty TRMPH, we need to use the state's TRMPH representation
     if not trmph or trmph.strip() == "":
@@ -528,12 +570,8 @@ def api_apply_move():
     
     app.logger.info(f"api_apply_move called with trmph='{trmph}', move='{move}', elo_rating={elo_rating}")
     
-    try:
-        # Create game state from TRMPH
-        state = create_game_state_from_trmph(trmph, "for move")
-    except Exception as e:
-        app.logger.error(f"Failed to create game state from TRMPH '{trmph}': {e}")
-        return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
+    # Create game state from TRMPH (validation already done by validate_api_input)
+    state = create_game_state_from_trmph(trmph, "for move")
     
     try:
         state = apply_move_to_state_trmph(state, move)
@@ -573,7 +611,7 @@ def api_policy_move():
     app.logger.info(f"Parsed parameters: trmph='{trmph}', elo_rating={elo_rating}")
     
     try:
-        # Create game state from TRMPH
+        # Create game state from TRMPH (validation already done by validate_api_input)
         state = create_game_state_from_trmph(trmph, "for policy move")
         
         # Get difficulty parameters
@@ -590,18 +628,8 @@ def api_policy_move():
         # Apply the move
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
         new_state = apply_move_to_state_trmph(state, move_trmph)
-        new_trmph = new_state.to_trmph()
         
-        result = {
-            "success": True,
-            "new_trmph": new_trmph,
-            "board": new_state.board.tolist(),
-            "player": winner_to_color(new_state.current_player_enum),
-            "legal_moves": [fc.rowcol_to_trmph(r, c) for r, c in new_state.get_legal_moves()],
-            "winner": winner_to_color(new_state.winner) if new_state.winner is not None else None,
-            "move_made": move_trmph,
-            "game_over": new_state.game_over
-        }
+        result = build_move_response(new_state, move_made=move_trmph)
         
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph}")
@@ -689,7 +717,7 @@ def api_apply_trmph_sequence():
     app.logger.info(f"api_apply_trmph_sequence called with trmph='{trmph}', sequence='{trmph_sequence}', elo_rating={elo_rating}")
     
     try:
-        # Create game state from TRMPH
+        # Create game state from TRMPH (validation already done by validate_api_input)
         state = create_game_state_from_trmph(trmph, "for TRMPH sequence")
         
         # Apply the TRMPH sequence
