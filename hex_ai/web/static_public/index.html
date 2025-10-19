@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snowflake 25</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Game Board Section -->
+    <div id="board-section">
+      <h1>Snowflake 25</h1>
+      <div id="status-line"></div>
+      <div id="board-container"></div>
+      
+      <!-- Game Controls -->
+      <div id="controls">
+        <button id="undo-btn">Undo</button>
+        <button id="redo-btn">Redo</button>
+        <button id="computer-move-btn" class="btn-primary">Computer Move</button>
+        <button id="reset-btn">New Game</button>
+        <button id="rules-btn" class="rules-button" onclick="window.location.href='/rules.html'">Rules</button>
+      </div>
+    </div>
+    
+    <!-- Settings Section -->
+    <div id="settings-section">
+      <!-- Difficulty Selection -->
+      <div id="difficulty-controls" class="control-panel">
+        <h3>Difficulty</h3>
+        <div class="difficulty-row">
+          <label for="difficulty-preset">Preset:</label>
+          <select id="difficulty-preset">
+            <option value="500">Novice (ELO 500)</option>
+            <option value="1000" selected>Medium (ELO 1000)</option>
+            <option value="1500">Hard (ELO 1500)</option>
+            <option value="1800">Very Hard (ELO 1800)</option>
+            <option value="2100">Expert (ELO 2100)</option>
+            <option value="2150">Extra Hard (ELO 2150)</option>
+            <option value="2250">Ultra Hard (ELO 2250)</option>
+            <option value="2350">Ultra Difficult (ELO 2350)</option>
+          </select>
+        </div>
+        <div class="difficulty-row">
+          <label for="elo-slider">Custom ELO:</label>
+          <input id="elo-slider" type="range" min="1" max="2350" value="1000" step="1">
+          <span id="elo-display">1000</span>
+        </div>
+      </div>
+      
+      <!-- Player Settings -->
+      <div id="player-controls" class="control-panel">
+        <h3>Players</h3>
+        <div class="player-row">
+          <label for="blue-computer">Blue (Computer):</label>
+          <input id="blue-computer" type="checkbox" checked>
+        </div>
+        <div class="player-row">
+          <label for="red-computer">Red (Computer):</label>
+          <input id="red-computer" type="checkbox">
+        </div>
+      </div>
+      
+      
+      <!-- Game Sequence -->
+      <div id="trmph-controls" class="control-panel">
+        <h3>Game Sequence</h3>
+        <div class="trmph-row">
+          <label for="trmph-display">Current Game:</label>
+          <input id="trmph-display" type="text" readonly placeholder="Game sequence will appear here...">
+          <button id="copy-trmph">Copy</button>
+        </div>
+        <div class="trmph-row">
+          <label for="trmph-input">Apply Sequence:</label>
+          <input id="trmph-input" type="text" placeholder="Enter TRMPH moves (e.g., a1b2c3)...">
+          <button id="apply-trmph">Apply</button>
+        </div>
+        <div id="trmph-error" class="error-message" style="display: none;"></div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="/static/app.js"></script>
+</body>
+</html>

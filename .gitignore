@@ -16,6 +16,7 @@ temp/
 write_ups/
 
 
+
 # Niall's file patterns to ignore
 *.png
 *.csv
@@ -263,6 +264,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+.cursor/
 
 # Marimo
 marimo/_static/

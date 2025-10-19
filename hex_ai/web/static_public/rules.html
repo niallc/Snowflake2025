@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rules - Snowflake 25</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .rules-container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    
+    .rules-header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .rules-header h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+    
+    .back-button {
+      display: inline-block;
+      background: #007bff;
+      color: white;
+      padding: 10px 20px;
+      text-decoration: none;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      transition: background-color 0.3s;
+    }
+    
+    .back-button:hover {
+      background: #0056b3;
+    }
+    
+    .rules-section {
+      background: #f8f9fa;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #007bff;
+    }
+    
+    .rules-section h2 {
+      color: #333;
+      margin-top: 0;
+      margin-bottom: 15px;
+    }
+    
+    .rules-section h3 {
+      color: #555;
+      margin-top: 20px;
+      margin-bottom: 10px;
+    }
+    
+    .rules-section p {
+      line-height: 1.6;
+      color: #666;
+      margin-bottom: 10px;
+    }
+    
+    .rules-section ul {
+      padding-left: 20px;
+    }
+    
+    .rules-section li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+    
+    .highlight {
+      background: #fff3cd;
+      padding: 15px;
+      border-radius: 5px;
+      border-left: 4px solid #ffc107;
+      margin: 15px 0;
+    }
+    
+    .game-board-demo {
+      text-align: center;
+      margin: 20px 0;
+      padding: 20px;
+      background: #e9ecef;
+      border-radius: 8px;
+    }
+    
+    .controls-demo {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: 15px 0;
+    }
+    
+    .control-button {
+      background: #6c757d;
+      color: white;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    
+    .control-button.primary {
+      background: #007bff;
+    }
+  </style>
+</head>
+<body>
+  <div class="rules-container">
+    <div class="rules-header">
+      <a href="/" class="back-button">← Back to Game</a>
+      <h1>Snowflake 25 - How to Play</h1>
+      <p>Learn the rules of Hex and how to use this AI-powered game interface</p>
+    </div>
+
+    <div class="rules-section">
+      <h2>🎯 Object of the Game</h2>
+      <p>Hex is a strategic board game where two players compete to connect opposite sides of a hexagonal board.</p>
+      <ul>
+        <li><strong>Blue player</strong> (you): Connect the top and bottom edges</li>
+        <li><strong>Red player</strong> (AI): Connect the left and right edges</li>
+        <li>First player to create an unbroken chain wins!</li>
+      </ul>
+    </div>
+
+    <div class="rules-section">
+      <h2>📋 Basic Rules</h2>
+      <h3>1. Taking Turns</h3>
+      <p>Players alternate placing pieces on the hexagonal board. Blue always goes first.</p>
+      
+      <h3>2. Placing Pieces</h3>
+      <p>Click on any empty hexagon to place your piece. Once placed, pieces cannot be moved or removed.</p>
+      
+      <h3>3. Winning</h3>
+      <p>You win by creating a continuous path of your pieces from one edge to the opposite edge:</p>
+      <ul>
+        <li><strong>Blue wins:</strong> Connect top edge to bottom edge</li>
+        <li><strong>Red wins:</strong> Connect left edge to right edge</li>
+      </ul>
+      
+      <div class="highlight">
+        <strong>💡 Pro Tip:</strong> In Hex, there are no ties! One player will always win due to the nature of the board geometry.
+      </div>
+    </div>
+
+    <div class="rules-section">
+      <h2>🎮 How to Use This Interface</h2>
+      
+      <h3>Making Moves</h3>
+      <p>Simply click on any empty hexagon to place your piece. The game will automatically switch to the AI's turn.</p>
+      
+      <h3>Game Controls</h3>
+      <div class="controls-demo">
+        <button class="control-button">Undo</button>
+        <button class="control-button">Redo</button>
+        <button class="control-button primary">Computer Move</button>
+        <button class="control-button">New Game</button>
+        <button class="control-button">Save Game</button>
+      </div>
+      
+      <ul>
+        <li><strong>Undo:</strong> Take back your last move</li>
+        <li><strong>Redo:</strong> Restore a move you undid</li>
+        <li><strong>Computer Move:</strong> Force the AI to make a move (useful when AI is disabled)</li>
+        <li><strong>New Game:</strong> Start a fresh game</li>
+        <li><strong>Save Game:</strong> Save the current game sequence</li>
+      </ul>
+      
+      <h3>Difficulty Settings</h3>
+      <p>Adjust the AI difficulty using the settings panel:</p>
+      <ul>
+        <li><strong>Novice (ELO 500):</strong> Very random play, makes many mistakes</li>
+        <li><strong>Medium (ELO 1000):</strong> Reasonable play with some mistakes</li>
+        <li><strong>Hard (ELO 1500):</strong> Good play, probably tough to beat</li>
+        <li><strong>Expert (ELO 2100):</strong> Strong play</li>
+        <li><strong>Ultra Difficult (ELO 2350):</strong> Maximum difficulty with advanced AI</li>
+      </ul>
+      
+      <h3>Player Settings</h3>
+      <p>Choose who controls each color:</p>
+      <ul>
+        <li><strong>Blue (Computer):</strong> AI plays as blue</li>
+        <li><strong>Red (Computer):</strong> AI plays as red</li>
+        <li>You can have both, one, or neither controlled by the AI</li>
+      </ul>
+    </div>
+
+    <div class="rules-section">
+      <h2>🔧 Other Features</h2>
+      
+      <h3>Game Sequence (TRMPH)</h3>
+      <p>The game uses a special notation called TRMPH to record moves:</p>
+      <ul>
+        <li>Each move is recorded as a letter-number combination (e.g., "a1", "b2")</li>
+        <li>You can copy the current game sequence</li>
+        <li>You can apply a sequence of moves to jump to a specific position</li>
+      </ul>
+      
+    </div>
+
+
+    <div style="text-align: center; margin-top: 30px;">
+      <a href="/" class="back-button">← Back to Game</a>
+    </div>
+  </div>
+</body>
+</html>
