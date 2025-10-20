@@ -112,12 +112,8 @@ class HexGame {
         svg.setAttribute('height', '100%');
         svg.style.cursor = 'pointer';
         
-        // Add touch event listeners for mobile
+        // Add click event listener (let browser handle native touch gestures)
         svg.addEventListener('click', (e) => this.handleBoardClick(e));
-        svg.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            this.handleBoardClick(e);
-        });
         
         // Add a general click handler to debug
         svg.addEventListener('click', (e) => {
@@ -365,11 +361,6 @@ class HexGame {
                     const self = this;
                     hex.addEventListener('click', function(e) {
                         console.log('Hex click event triggered', e.target);
-                        self.onCellClick(e);
-                    });
-                    hex.addEventListener('touchstart', function(e) {
-                        e.preventDefault();
-                        console.log('Hex touchstart event triggered', e.target);
                         self.onCellClick(e);
                     });
                 }

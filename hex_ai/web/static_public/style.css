@@ -119,6 +119,12 @@ h1 {
   transition: transform 0.2s ease;
 }
 
+/* Allow native touch gestures (pinch-zoom, pan) */
+#board-container, #board-container svg {
+  touch-action: auto;
+  -ms-touch-action: auto;
+}
+
 /* Hexagonal board specific styles */
 #board-container svg polygon {
   transition: fill 0.2s ease, stroke 0.2s ease;
