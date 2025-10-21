@@ -109,6 +109,34 @@
     .control-button.primary {
       background: #007bff;
     }
+    
+    .board-sequence {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 15px;
+      margin: 10px 0;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      word-break: break-all;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    
+    .board-sequence:hover {
+      background: #e9ecef;
+    }
+    
+    .board-sequence.copied {
+      background: #d4edda;
+      border-color: #c3e6cb;
+    }
+    
+    .copy-instructions {
+      font-size: 12px;
+      color: #6c757d;
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
@@ -204,10 +232,168 @@
       
     </div>
 
+    <div class="rules-section">
+      <h2>🎲 Playing on Smaller Boards</h2>
+      <p>While the default game uses a 13×13 board, you can also play on smaller boards for quicker games or different strategic challenges.</p>
+      
+      <h3>How to Use Smaller Boards</h3>
+      <p>To start a game on a smaller board, copy and paste one of the sequences below into the "Apply TRMPH Sequence" field in the game interface:</p>
+      
+      <div class="highlight">
+        <strong>💡 How it works:</strong> These sequences create a "virtual" smaller board by filling in the outer edges of the 13×13 board, leaving only the desired smaller area playable.
+      </div>
+      
+      <h3>Available Board Sizes</h3>
+      
+      <h4>12×12 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>11×11 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>10×10 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>9×9 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>8×8 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>7×7 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>6×6 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>5×5 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>4×4 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>3×3 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h4>2×2 Board</h4>
+      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
+        a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2
+        <div class="copy-instructions">Click to copy this sequence</div>
+      </div>
+      
+      <h3>Instructions</h3>
+      <ol>
+        <li>Copy one of the sequences above by clicking on it</li>
+        <li>Go back to the main game interface</li>
+        <li>Click on "Apply TRMPH Sequence" button</li>
+        <li>Paste the sequence into the text field</li>
+        <li>Click "Apply" to start the smaller board game</li>
+      </ol>
+      
+      <div class="highlight">
+        <strong>🎯 Pro Tip:</strong> Smaller boards are great for learning the game, quick matches, or when you want to focus on specific tactical patterns. The 6×6 and 7×7 boards are particularly good for beginners!
+      </div>
+    </div>
 
     <div style="text-align: center; margin-top: 30px;">
       <a href="/" class="back-button">← Back to Game</a>
     </div>
   </div>
+  
+  <script>
+    function copyToClipboard(element) {
+      // Get the text content (excluding the copy instructions div)
+      const textToCopy = element.querySelector('div.copy-instructions') ? 
+        element.textContent.replace(element.querySelector('div.copy-instructions').textContent, '').trim() :
+        element.textContent.trim();
+      
+      console.log('Attempting to copy:', textToCopy); // Debug log
+      
+      // Try modern clipboard API first
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(textToCopy).then(function() {
+          console.log('Successfully copied to clipboard');
+          showCopyFeedback(element);
+        }).catch(function(err) {
+          console.error('Clipboard API failed:', err);
+          fallbackCopy(textToCopy, element);
+        });
+      } else {
+        // Fallback for older browsers
+        fallbackCopy(textToCopy, element);
+      }
+    }
+    
+    function fallbackCopy(text, element) {
+      // Create a temporary textarea element
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          console.log('Fallback copy successful');
+          showCopyFeedback(element);
+        } else {
+          console.error('Fallback copy failed');
+          alert('Copy failed. Please manually select and copy the text.');
+        }
+      } catch (err) {
+        console.error('Fallback copy error:', err);
+        alert('Copy failed. Please manually select and copy the text.');
+      }
+      
+      document.body.removeChild(textArea);
+    }
+    
+    function showCopyFeedback(element) {
+      // Visual feedback
+      element.classList.add('copied');
+      const originalText = element.innerHTML;
+      element.innerHTML = '✓ Copied!';
+      
+      // Reset after 2 seconds
+      setTimeout(function() {
+        element.classList.remove('copied');
+        element.innerHTML = originalText;
+      }, 2000);
+    }
+  </script>
 </body>
 </html>
