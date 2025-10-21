@@ -49,16 +49,16 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_FILE = "epoch43_mini34.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251016_184020/"
 # CURRENT_BEST_MODEL_FILE = "epoch48_mini11.pt.gz"
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
-CURRENT_BEST_MODEL_FILE = "epoch49_mini57.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353/"
-# CURRENT_BEST_MODEL_FILE = "epoch51_mini59.pt.gz"
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
+# CURRENT_BEST_MODEL_FILE = "epoch49_mini57.pt.gz"
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353/"
+CURRENT_BEST_MODEL_FILE = "epoch50_mini52.pt.gz"
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819"
-PREVIOUS_BEST_MODEL_FILE = "epoch49_mini50.pt.gz"
+PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353"
+PREVIOUS_BEST_MODEL_FILE = "epoch50_mini52.pt.gz"
 PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Legacy models (for historical comparison)
