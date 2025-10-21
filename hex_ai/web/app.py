@@ -158,6 +158,7 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
                     is_valid, error_msg = validate_trmph_input(data[field])
                     if not is_valid:
                         return False, f"Invalid {field}: {error_msg}", None
+                    validated_data[field] = data[field]
                 elif field == 'elo_rating':
                     # ELO rating needs special validation
                     try:
