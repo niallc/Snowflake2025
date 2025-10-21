@@ -354,11 +354,11 @@ REFILL_RATE = 1.0       # Tokens per second (60/minute)
 # MCTS: every 2 seconds (5 tokens cost, 1 token/sec refill = 2 sec wait)
 # Policy: every 1 second (2 tokens cost, 1 token/sec refill = 1 sec wait)
 ENDPOINT_COSTS = {
-    'api_state': 0.5,              # Read-only, cheap (40 burst calls)
-    'api_apply_move': 1.0,        # Simple move application (20 burst calls)
-    'api_policy_move': 2.0,       # Model inference (10 burst calls, 1/sec sustained)
-    'api_apply_trmph_sequence': 2.0,  # Batch operation (10 burst calls)
-    'api_mcts_move': 5.0,         # Expensive MCTS (4 burst calls, 2/sec sustained)
+    'api_state': 0.5,                # Read-only, cheap (40 burst calls)
+    'api_apply_move': 0.5,           # Simple move application (20 burst calls)
+    'api_policy_move': 1.0,          # Model inference (10 burst calls, 1/sec sustained)
+    'api_apply_trmph_sequence': 5.0, # Batch operation (10 burst calls)
+    'api_mcts_move': 3.0,            # Expensive MCTS (4 burst calls, 2/sec sustained)
 }
 
 def rate_limit(cost: float = 1.0):
