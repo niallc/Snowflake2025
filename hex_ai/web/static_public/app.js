@@ -727,8 +727,8 @@ class HexGame {
             return { valid: false, error: `Invalid TRMPH format: ${error.message}` };
         }
         
-        // Validate TRMPH format: ([a-m]([0-9]|1[0-3]))+
-        const trmphRegex = /^([a-m]([0-9]|1[0-3]))+$/;
+        // Validate TRMPH format: ([a-m]([1-9]|1[0-3]))+
+        const trmphRegex = /^([a-m]([1-9]|1[0-3]))+$/;
         if (!trmphRegex.test(trimmed)) {
             return { 
                 valid: false, 

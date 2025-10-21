@@ -32,6 +32,28 @@ from hex_ai.inference.model_cache import get_model_cache
 app = Flask(__name__, static_folder="static_public")
 CORS(app)
 
+# =============================================================================
+# FLASK APP CONFIGURATION
+# =============================================================================
+
+# Set maximum content length to prevent large payloads (2 KB limit)
+# Rationale: Maximum legitimate payload = 1,088 bytes (169 moves × 3 chars + JSON overhead)
+# 2KB provides tight security with minimal buffer for any edge cases
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024  # 2 KB
+
+# JSON error handler for malformed JSON
+@app.errorhandler(413)
+def too_large(e):
+    """Handle request too large errors."""
+    app.logger.warning(f"Request too large: {e}")
+    return jsonify({"error": "Request too large. Maximum size is 2 KB."}), 413
+
+@app.errorhandler(400)
+def bad_request(e):
+    """Handle bad request errors (including malformed JSON)."""
+    app.logger.warning(f"Bad request: {e}")
+    return jsonify({"error": "Invalid request format. Please check your input."}), 400
+
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
 
@@ -79,9 +101,9 @@ def validate_trmph_input(trmph_string):
     if not trmph_string:
         return True, None
     
-    # Validate format: #13,([a-m]([0-9]|1[0-3]))+ or ([a-m]([0-9]|1[0-3]))+
-    trmph_pattern_with_prefix = re.compile(r'^#13,([a-m]([0-9]|1[0-3]))+$')
-    trmph_pattern_without_prefix = re.compile(r'^([a-m]([0-9]|1[0-3]))+$')
+    # Validate format: #13,([a-m]([1-9]|1[0-3]))+ or ([a-m]([1-9]|1[0-3]))+
+    trmph_pattern_with_prefix = re.compile(r'^#13,([a-m]([1-9]|1[0-3]))+$')
+    trmph_pattern_without_prefix = re.compile(r'^([a-m]([1-9]|1[0-3]))+$')
     
     if not (trmph_pattern_with_prefix.match(trmph_string) or trmph_pattern_without_prefix.match(trmph_string)):
         return False, "Invalid TRMPH format. Only letters a-m followed by numbers 1-13 are allowed (e.g., a1b2c3 or #13,a1b2c3)"
@@ -136,9 +158,137 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
                     is_valid, error_msg = validate_trmph_input(data[field])
                     if not is_valid:
                         return False, f"Invalid {field}: {error_msg}", None
-                validated_data[field] = data[field]
+                elif field == 'elo_rating':
+                    # ELO rating needs special validation
+                    try:
+                        validated_data[field] = validate_elo_rating(data[field])
+                    except ValueError as e:
+                        return False, f"Invalid {field}: {e}", None
+                else:
+                    validated_data[field] = data[field]
     
     return True, None, validated_data
+
+def validate_elo_rating(value):
+    """
+    Validate and convert ELO rating to integer.
+    
+    Args:
+        value: ELO rating value (int, float, str, or None)
+        
+    Returns:
+        int: Validated ELO rating in range [1, 2350]
+        
+    Raises:
+        ValueError: If value is None, cannot be converted, or is out of range
+    """
+    if value is None:
+        raise ValueError("ELO rating is required and cannot be null")
+    
+    try:
+        # Convert to float first to handle string inputs like "1000.0"
+        elo_float = float(value)
+        elo_int = int(round(elo_float))
+    except (ValueError, TypeError):
+        raise ValueError("ELO rating must be a number")
+    
+    if not (1 <= elo_int <= 2350):
+        raise ValueError("ELO rating must be between 1 and 2350")
+    
+    return elo_int
+
+def sanitize_exception_message(exception):
+    """
+    Sanitize exception messages to remove sensitive implementation details.
+    
+    Args:
+        exception: Exception object
+        
+    Returns:
+        str: Sanitized error message safe for user display
+    """
+    # Get the base error message
+    error_msg = str(exception)
+    
+    # Remove file paths and line numbers
+    import re
+    # Remove patterns like "/path/to/file.py:123:"
+    error_msg = re.sub(r'/[^\s]*\.py:\d+:', '', error_msg)
+    # Remove patterns like "line 123"
+    error_msg = re.sub(r'line \d+', 'line', error_msg)
+    # Remove patterns like "at 0x12345678"
+    error_msg = re.sub(r'at 0x[0-9a-fA-F]+', 'at memory location', error_msg)
+    
+    # Remove common Python internal details
+    error_msg = error_msg.replace('Traceback (most recent call last):', '')
+    error_msg = error_msg.replace('File "<', 'File "')
+    
+    # Clean up whitespace
+    error_msg = ' '.join(error_msg.split())
+    
+    # If we've stripped too much, provide a generic message
+    if not error_msg or len(error_msg) < 3:
+        return "Invalid input format"
+    
+    return error_msg
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
+
+import time
+from functools import wraps
+from collections import defaultdict
+
+# In-memory rate limiting storage
+# Format: {ip_address: {endpoint: last_request_time}}
+_rate_limit_storage = defaultdict(dict)
+
+def rate_limit(seconds=1):
+    """
+    Rate limiting decorator that limits requests per IP address per endpoint.
+    
+    Args:
+        seconds (int): Minimum seconds between requests from same IP to same endpoint
+        
+    Returns:
+        decorator: Flask route decorator
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Get client IP address
+            client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
+            if client_ip:
+                client_ip = client_ip.split(',')[0].strip()  # Handle multiple proxies
+            
+            # Get endpoint name
+            endpoint = f.__name__
+            
+            # Check rate limit
+            current_time = time.time()
+            last_request_time = _rate_limit_storage[client_ip].get(endpoint, 0)
+            
+            if current_time - last_request_time < seconds:
+                app.logger.warning(f"Rate limit exceeded for IP {client_ip} on endpoint {endpoint}")
+                return jsonify({"error": "Rate limit exceeded. Please wait before making another request."}), 429
+            
+            # Update last request time
+            _rate_limit_storage[client_ip][endpoint] = current_time
+            
+            # Clean up old entries (older than 1 hour) to prevent memory leaks
+            if len(_rate_limit_storage) > 1000:  # Only clean up if we have many entries
+                cutoff_time = current_time - 3600  # 1 hour ago
+                for ip in list(_rate_limit_storage.keys()):
+                    for ep in list(_rate_limit_storage[ip].keys()):
+                        if _rate_limit_storage[ip][ep] < cutoff_time:
+                            del _rate_limit_storage[ip][ep]
+                    if not _rate_limit_storage[ip]:  # Remove empty IP entries
+                        del _rate_limit_storage[ip]
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 # =============================================================================
 # MODEL MANAGEMENT
@@ -184,16 +334,16 @@ def get_difficulty_parameters(elo_rating):
     # Define difficulty breakpoints for linear interpolation
     # Format: (elo, temperature, num_simulations, algorithm)
     difficulty_points = [
-        (1, 2.5, 0, "policy"),      # Mindless
-        (300, 1.3, 0, "policy"),    # Beginner  
-        (500, 0.9, 0, "policy"),    # Novice
-        (1000, 0.6, 0, "policy"),   # Medium
-        (1500, 0.40, 0, "policy"),   # Hard
-        (1800, 0.20, 0, "policy"),  # Very Hard
+        (1, 2.5, 0, "policy"),       # Mindless
+        (300, 1.7, 0, "policy"),     # Beginner  
+        (500, 1.2, 0, "policy"),     # Novice
+        (1000, 0.8, 0, "policy"),    # Medium
+        (1500, 0.50, 0, "policy"),   # Hard
+        (1800, 0.20, 0, "policy"),   # Very Hard
         (2100, 0.05, 0, "policy"),   # Expert
-        (2150, 0.1, 8, "mcts"),     # Extra Hard - Gumbel MCTS
+        (2150, 0.1, 8, "mcts"),      # Extra Hard - Gumbel MCTS
         (2250, 0.1, 20, "mcts"),     # Ultra Hard - Gumbel MCTS
-        (2350, 0.1, 39, "mcts"),    # Ultra Difficult - Gumbel MCTS
+        (2350, 0.1, 39, "mcts"),     # Ultra Difficult - Gumbel MCTS
     ]
     
     # Find the appropriate segment for linear interpolation
@@ -512,7 +662,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "success": False,
-            "error": f"MCTS move generation failed: {e}"
+            "error": "MCTS move generation failed. Please try again."
         }
 
 # =============================================================================
@@ -541,6 +691,7 @@ def api_constants():
 
 
 @app.route("/api/state", methods=["POST"])
+@rate_limit(seconds=1)
 def api_state():
     data = request.get_json()
     
@@ -575,6 +726,7 @@ def api_state():
     return jsonify(response)
 
 @app.route("/api/apply_move", methods=["POST"])
+@rate_limit(seconds=1)
 def api_apply_move():
     """Apply only a human move without making a computer move."""
     data = request.get_json()
@@ -602,7 +754,14 @@ def api_apply_move():
     try:
         state = apply_move_to_state_trmph(state, move)
     except Exception as e:
-        return jsonify({"error": f"Invalid move: {e}"}), 400
+        # Silently ignore invalid moves (e.g., clicking on already filled hex)
+        app.logger.debug(f"Invalid move ignored: {e}")
+        # Return current state without error - user will learn not to click filled hexes
+        response = build_game_response(state, elo_rating, trmph, {
+            "new_trmph": trmph,
+            "model_move": None  # No computer move made
+        })
+        return jsonify(response)
 
     new_trmph = state.to_trmph()
     
@@ -614,6 +773,7 @@ def api_apply_move():
     return jsonify(response)
 
 @app.route("/api/policy_move", methods=["POST"])
+@rate_limit(seconds=1)
 def api_policy_move():
     """Make a computer move using policy sampling."""
     data = request.get_json()
@@ -664,9 +824,10 @@ def api_policy_move():
         
     except Exception as e:
         app.logger.error(f"Policy move error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
 
 @app.route("/api/mcts_move", methods=["POST"])
+@rate_limit(seconds=1)
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
@@ -721,6 +882,7 @@ def api_mcts_move():
     return jsonify(result)
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
+@rate_limit(seconds=1)
 def api_apply_trmph_sequence():
     """Apply a sequence of TRMPH moves to the current game state."""
     data = request.get_json()
@@ -749,24 +911,23 @@ def api_apply_trmph_sequence():
         # Apply the TRMPH sequence
         moves_applied = 0
         if trmph_sequence and trmph_sequence.strip():
-            # Parse individual moves from the sequence
-            moves = []
-            for i in range(0, len(trmph_sequence), 2):
-                if i + 1 < len(trmph_sequence):
-                    move = trmph_sequence[i:i+2]
-                    moves.append(move)
-            
-            app.logger.info(f"Applying {len(moves)} moves from sequence: {moves}")
-            
-            # Apply each move
-            for move in moves:
-                if not state.game_over:
-                    state = apply_move_to_state_trmph(state, move)
-                    moves_applied += 1
-                    app.logger.info(f"Applied move {move}, game_over: {state.game_over}")
-                else:
-                    app.logger.info(f"Game is over, skipping remaining moves")
-                    break
+            # Use the proper TRMPH parsing utility instead of naive string slicing
+            try:
+                moves = fc.split_trmph_moves(trmph_sequence.strip())
+                app.logger.info(f"Applying {len(moves)} moves from sequence: {moves}")
+                
+                # Apply each move
+                for move in moves:
+                    if not state.game_over:
+                        state = apply_move_to_state_trmph(state, move)
+                        moves_applied += 1
+                        app.logger.info(f"Applied move {move}, game_over: {state.game_over}")
+                    else:
+                        app.logger.info(f"Game is over, skipping remaining moves")
+                        break
+            except ValueError as e:
+                app.logger.error(f"Invalid TRMPH sequence format: {e}")
+                return jsonify({"error": "Invalid TRMPH sequence format. Please check the format and try again."}), 400
         
         new_trmph = state.to_trmph()
         
@@ -779,7 +940,7 @@ def api_apply_trmph_sequence():
         
     except Exception as e:
         app.logger.error(f"TRMPH sequence application error: {e}")
-        return jsonify({"error": f"Failed to apply TRMPH sequence: {e}"}), 500
+        return jsonify({"error": "Failed to apply TRMPH sequence. Please check the sequence and try again."}), 500
 
 
 @app.route("/favicon.ico")
