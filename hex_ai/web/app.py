@@ -234,23 +234,81 @@ def sanitize_exception_message(exception):
     return error_msg
 
 # =============================================================================
-# RATE LIMITING
+# TOKEN BUCKET RATE LIMITING
 # =============================================================================
 
 import time
 from functools import wraps
 from collections import defaultdict
 
-# In-memory rate limiting storage
-# Format: {ip_address: {endpoint: last_request_time}}
-_rate_limit_storage = defaultdict(dict)
-
-def rate_limit(seconds=1):
+class TokenBucket:
     """
-    Rate limiting decorator that limits requests per IP address per endpoint.
+    Token bucket rate limiter for fair resource allocation.
+    
+    Each IP address gets a bucket with a maximum capacity of tokens.
+    Tokens refill at a steady rate. Requests consume tokens based on
+    their computational cost. This allows bursts while preventing
+    sustained abuse.
+    
+    Algorithm:
+    - Bucket capacity: 20 tokens (allows bursts)
+    - Refill rate: 1 token/second (60/minute sustained)
+    - Request cost: varies by endpoint (0.5 to 5.0 tokens)
+    """
+    
+    def __init__(self, capacity: float, refill_rate: float):
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.tokens = capacity
+        self.last_update = time.time()
+    
+    def _refill(self):
+        """Refill tokens based on time elapsed since last update."""
+        now = time.time()
+        elapsed = now - self.last_update
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_update = now
+    
+    def consume(self, tokens: float) -> bool:
+        """
+        Attempt to consume tokens. Returns True if successful, False otherwise.
+        """
+        self._refill()
+        if self.tokens >= tokens:
+            self.tokens -= tokens
+            return True
+        return False
+    
+    def get_remaining(self) -> float:
+        """Get remaining tokens (after refilling)."""
+        self._refill()
+        return self.tokens
+
+# In-memory token bucket storage
+# Format: {ip_address: {endpoint: TokenBucket}}
+_token_buckets = defaultdict(dict)
+
+# Token bucket configuration
+BUCKET_CAPACITY = 20.0  # Maximum tokens in bucket
+REFILL_RATE = 1.0       # Tokens per second (60/minute)
+
+# Token costs by endpoint (adjusted for user requirements)
+# MCTS: every 2 seconds (5 tokens cost, 1 token/sec refill = 2 sec wait)
+# Policy: every 1 second (2 tokens cost, 1 token/sec refill = 1 sec wait)
+ENDPOINT_COSTS = {
+    'api_state': 0.5,              # Read-only, cheap (40 burst calls)
+    'api_apply_move': 1.0,        # Simple move application (20 burst calls)
+    'api_policy_move': 2.0,       # Model inference (10 burst calls, 1/sec sustained)
+    'api_apply_trmph_sequence': 2.0,  # Batch operation (10 burst calls)
+    'api_mcts_move': 5.0,         # Expensive MCTS (4 burst calls, 2/sec sustained)
+}
+
+def rate_limit(cost: float = 1.0):
+    """
+    Token bucket rate limiting decorator with weighted costs.
     
     Args:
-        seconds (int): Minimum seconds between requests from same IP to same endpoint
+        cost (float): Number of tokens this request costs (default 1.0)
         
     Returns:
         decorator: Flask route decorator
@@ -266,26 +324,37 @@ def rate_limit(seconds=1):
             # Get endpoint name
             endpoint = f.__name__
             
-            # Check rate limit
-            current_time = time.time()
-            last_request_time = _rate_limit_storage[client_ip].get(endpoint, 0)
+            # Get or create token bucket for this IP/endpoint
+            if endpoint not in _token_buckets[client_ip]:
+                _token_buckets[client_ip][endpoint] = TokenBucket(
+                    capacity=BUCKET_CAPACITY,
+                    refill_rate=REFILL_RATE
+                )
             
-            if current_time - last_request_time < seconds:
-                app.logger.warning(f"Rate limit exceeded for IP {client_ip} on endpoint {endpoint}")
-                return jsonify({"error": "Rate limit exceeded. Please wait before making another request."}), 429
+            bucket = _token_buckets[client_ip][endpoint]
             
-            # Update last request time
-            _rate_limit_storage[client_ip][endpoint] = current_time
+            # Try to consume tokens
+            if not bucket.consume(cost):
+                remaining = bucket.get_remaining()
+                wait_time = (cost - remaining) / REFILL_RATE
+                app.logger.warning(
+                    f"Rate limit exceeded for IP {client_ip} on endpoint {endpoint}. "
+                    f"Cost: {cost}, Remaining: {remaining:.2f}, Wait: {wait_time:.1f}s"
+                )
+                return jsonify({
+                    "error": f"Rate limit exceeded. Please wait {wait_time:.1f} seconds.",
+                    "retry_after": wait_time
+                }), 429
             
-            # Clean up old entries (older than 1 hour) to prevent memory leaks
-            if len(_rate_limit_storage) > 1000:  # Only clean up if we have many entries
-                cutoff_time = current_time - 3600  # 1 hour ago
-                for ip in list(_rate_limit_storage.keys()):
-                    for ep in list(_rate_limit_storage[ip].keys()):
-                        if _rate_limit_storage[ip][ep] < cutoff_time:
-                            del _rate_limit_storage[ip][ep]
-                    if not _rate_limit_storage[ip]:  # Remove empty IP entries
-                        del _rate_limit_storage[ip]
+            # Clean up old buckets (older than 1 hour) to prevent memory leaks
+            if len(_token_buckets) > 1000:
+                cutoff_time = time.time() - 3600
+                for ip in list(_token_buckets.keys()):
+                    for ep in list(_token_buckets[ip].keys()):
+                        if _token_buckets[ip][ep].last_update < cutoff_time:
+                            del _token_buckets[ip][ep]
+                    if not _token_buckets[ip]:
+                        del _token_buckets[ip]
             
             return f(*args, **kwargs)
         return decorated_function
@@ -692,7 +761,7 @@ def api_constants():
 
 
 @app.route("/api/state", methods=["POST"])
-@rate_limit(seconds=1)
+@rate_limit(cost=0.5)
 def api_state():
     data = request.get_json()
     
@@ -727,7 +796,7 @@ def api_state():
     return jsonify(response)
 
 @app.route("/api/apply_move", methods=["POST"])
-@rate_limit(seconds=1)
+@rate_limit(cost=1.0)
 def api_apply_move():
     """Apply only a human move without making a computer move."""
     data = request.get_json()
@@ -774,7 +843,7 @@ def api_apply_move():
     return jsonify(response)
 
 @app.route("/api/policy_move", methods=["POST"])
-@rate_limit(seconds=1)
+@rate_limit(cost=2.0)
 def api_policy_move():
     """Make a computer move using policy sampling."""
     data = request.get_json()
@@ -828,7 +897,7 @@ def api_policy_move():
         return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
 
 @app.route("/api/mcts_move", methods=["POST"])
-@rate_limit(seconds=1)
+@rate_limit(cost=5.0)
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
@@ -883,7 +952,7 @@ def api_mcts_move():
     return jsonify(result)
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
-@rate_limit(seconds=1)
+@rate_limit(cost=2.0)
 def api_apply_trmph_sequence():
     """Apply a sequence of TRMPH moves to the current game state."""
     data = request.get_json()
