@@ -56,6 +56,11 @@ CURRENT_BEST_MODEL_FILE = "epoch50_mini52.pt.gz"
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
+# Fallback model configuration (used when current best model is unavailable)
+FALLBACK_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
+FALLBACK_MODEL_FILE = "epoch49_mini57.pt.gz"
+FALLBACK_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, FALLBACK_MODEL_DIR, FALLBACK_MODEL_FILE)
+
 # Previous best model (kept for comparison/testing)
 PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353"
 PREVIOUS_BEST_MODEL_FILE = "epoch50_mini52.pt.gz"
@@ -71,6 +76,7 @@ MODEL_REGISTRY = {
     "model2": PREVIOUS_BEST_MODEL_PATH,
     "current_best": CURRENT_BEST_MODEL_PATH,
     "previous_best": PREVIOUS_BEST_MODEL_PATH,
+    "fallback": FALLBACK_MODEL_PATH,
 }
 
 def get_model_path(model_name: str = "current_best") -> str:
@@ -210,6 +216,75 @@ def get_normalized_path(model_path: str) -> str:
         Normalized absolute path
     """
     return os.path.abspath(os.path.normpath(model_path))
+
+def get_model_path_with_fallback(model_name: str = "current_best") -> str:
+    """
+    Get the full path to a model checkpoint with fallback support.
+    
+    If the requested model doesn't exist, falls back to the fallback model.
+    This is useful for web applications that need to stay online even when
+    the current best model is temporarily unavailable.
+    
+    Args:
+        model_name: Name of the model to get path for. Options:
+            - "current_best": Latest best model (with fallback)
+            - "model1": Alias for current_best (with fallback)
+            - "fallback": Direct access to fallback model
+            - Other models: No fallback, returns as-is
+    
+    Returns:
+        Full path to the model checkpoint file (or fallback if needed)
+    """
+    # Get the primary model path
+    primary_path = get_model_path(model_name)
+    
+    # For current_best and model1, check if file exists and fallback if needed
+    if model_name in ["current_best", "model1"]:
+        if not validate_model_path(primary_path):
+            # Primary model doesn't exist, use fallback
+            fallback_path = get_model_path("fallback")
+            if validate_model_path(fallback_path):
+                return fallback_path
+            else:
+                # Even fallback doesn't exist, return primary path (will cause error)
+                return primary_path
+    
+    return primary_path
+
+def get_available_model_with_fallback(model_name: str = "current_best") -> str:
+    """
+    Get an available model path, trying primary first, then fallback.
+    
+    This function is designed for web applications that need to gracefully
+    handle model unavailability by falling back to a known working model.
+    
+    Args:
+        model_name: Name of the model to get path for
+    
+    Returns:
+        Full path to an available model checkpoint file
+    
+    Raises:
+        FileNotFoundError: If neither primary nor fallback model exists
+    """
+    # Try primary model first
+    try:
+        primary_path = get_model_path(model_name)
+        if validate_model_path(primary_path):
+            return primary_path
+    except (ValueError, KeyError):
+        pass  # Model name not found, try fallback
+    
+    # Try fallback model
+    try:
+        fallback_path = get_model_path("fallback")
+        if validate_model_path(fallback_path):
+            return fallback_path
+    except (ValueError, KeyError):
+        pass  # Fallback model not found
+    
+    # Neither model exists
+    raise FileNotFoundError(f"Neither primary model '{model_name}' nor fallback model is available")
 
 # Convenience variables for backward compatibility
 DEFAULT_MODEL_PATH = CURRENT_BEST_MODEL_PATH

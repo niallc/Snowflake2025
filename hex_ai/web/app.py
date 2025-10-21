@@ -27,7 +27,7 @@ from hex_ai.value_utils import (
 from hex_ai.enums import Player, Piece
 from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
+from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
 from hex_ai.inference.model_cache import get_model_cache
 
 app = Flask(__name__, static_folder="static_public")
@@ -63,7 +63,8 @@ def preload_default_model():
     """Preload the default model to avoid loading delays on first move."""
     try:
         app.logger.info("Preloading default model...")
-        model_path = get_model_path("model1")
+        # Use fallback system to get an available model
+        model_path = get_model_path_with_fallback("model1")
         app.logger.info(f"Preloading model1 from {model_path}")
         MODEL_CACHE.get_simple_model(model_path)
         MODEL_CACHE.get_wrapper_model(model_path)
@@ -434,12 +435,12 @@ def rate_limit(cost: float = 1.0):
 # =============================================================================
 
 def get_model(model_id="model1"):
-    """Get or create a model instance for the given model_id using centralized cache."""
+    """Get or create a model instance for the given model_id using centralized cache with fallback support."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
     
-    # Use centralized model configuration
+    # Use centralized model configuration with fallback support
     if is_valid_model_id(model_id):
-        model_path = get_model_path(model_id)
+        model_path = get_model_path_with_fallback(model_id)
         app.logger.debug(f"Found model {model_id} -> {model_path}")
         return MODEL_CACHE.get_simple_model(model_path)
     
@@ -447,17 +448,16 @@ def get_model(model_id="model1"):
     raise ValueError(f"Unknown model_id: {model_id}")
 
 def get_cached_model_wrapper(model_id: str):
-    """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
+    """Get or create a cached ModelWrapper instance for the given model_id using centralized cache with fallback support."""
     app.logger.debug(f"get_cached_model_wrapper called with model_id: {model_id}")
     
-    # Get the model path for this model_id
+    # Get the model path for this model_id with fallback support
     if is_valid_model_id(model_id):
-        model_path = get_model_path(model_id)
+        model_path = get_model_path_with_fallback(model_id)
+        app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
+        return MODEL_CACHE.get_wrapper_model(model_path)
     else:
         raise ValueError(f"Unknown model_id: {model_id}")
-    
-    app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
-    return MODEL_CACHE.get_wrapper_model(model_path)
 
 # =============================================================================
 # DIFFICULTY LEVEL MAPPING
@@ -476,9 +476,9 @@ def get_difficulty_parameters(elo_rating):
         (1, 2.5, 0, "policy"),       # Mindless
         (300, 1.5, 0, "policy"),     # Beginner  
         (500, 1.1, 0, "policy"),     # Novice
-        (1000, 0.75, 0, "policy"),   # Medium
-        (1500, 0.50, 0, "policy"),   # Hard
-        (1800, 0.25, 0, "policy"),   # Very Hard
+        (1000, 0.85, 0, "policy"),   # Medium
+        (1500, 0.55, 0, "policy"),   # Hard
+        (1800, 0.30, 0, "policy"),   # Very Hard
         (2100, 0.08, 0, "policy"),   # Expert
         (2150, 0.1, 8, "mcts"),      # Extra Hard - Gumbel MCTS
         (2250, 0.1, 20, "mcts"),     # Ultra Hard - Gumbel MCTS
