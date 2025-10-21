@@ -80,7 +80,6 @@ def main():
         num_games=args.num_games,
         strategy_config={"mcts_sims": args.mcts_sims, "c_puct": args.c_puct},
         temperatures=args.temperature,
-        random_seed=0,  # Selfplay doesn't use a fixed seed
         pie_rule=False,  # Not applicable to selfplay
         opening_strategy=args.opening_strategy,
         batch_size=args.batch_size,

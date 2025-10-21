@@ -808,7 +808,6 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             num_games=args.num_openings,
             board_size=13,
-            random_seed=args.seed,
             pie_rule=False
         )
         

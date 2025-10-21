@@ -558,7 +558,6 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_c_scales=gumbel_c_scales,
             num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
             board_size=13,
-            random_seed=args.seed,
             pie_rule=False  # Deterministic tournaments don't use pie rule
         )
         
@@ -899,7 +898,6 @@ def main():
             num_games=games_to_play,  # Use the determined number of games
             strategy_config={},  # Strategy configs are handled individually
             temperatures=args.temperatures if args.temperatures else args.temperature,
-            random_seed=args.seed,
             pie_rule=False,  # Deterministic tournaments don't use pie rule
             opening_length=args.opening_length,
             batch_sizes=args.batch_sizes,

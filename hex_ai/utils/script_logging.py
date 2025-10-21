@@ -24,7 +24,6 @@ class ScriptConfig:
     num_games: int
     strategy_config: Dict[str, Any]
     temperatures: Union[float, List[float], Dict[str, float]]
-    random_seed: int
     pie_rule: bool = False
     opening_length: Optional[int] = None
     opening_strategy: Optional[str] = None
@@ -99,9 +98,6 @@ class ConfigurationPrinter:
         # Print pie rule information (tournaments only)
         if config.script_type != "selfplay":
             print(f"  Pie rule: {config.pie_rule}")
-        
-        # Print random seed
-        print(f"  Random seed: {config.random_seed}")
         
         # Print Gumbel configuration summary
         if include_gumbel:
@@ -379,7 +375,6 @@ def create_script_config_from_args(
         num_games=getattr(args, 'num_games', getattr(args, 'num_openings', 100)),
         strategy_config=strategy_config,
         temperatures=temperatures,
-        random_seed=getattr(args, 'seed', 0),
         pie_rule=getattr(args, 'pie_rule', not getattr(args, 'no_pie_rule', False)),
         opening_length=getattr(args, 'opening_length', None),
         opening_strategy=getattr(args, 'opening_strategy', None),
