@@ -1420,7 +1420,7 @@ class Trainer:
         boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
         
         # Forward pass with mixed precision
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         with self.mixed_precision.autocast_context():
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
