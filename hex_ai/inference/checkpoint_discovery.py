@@ -119,13 +119,14 @@ class CheckpointDiscovery:
             sorted_epochs = sorted(max_mini_per_epoch.keys())
             completed_epochs = sorted_epochs[:-1]  # All except the most recent
             
-            if len(completed_epochs) > 1:
-                completed_mini_counts = [max_mini_per_epoch[epoch] for epoch in completed_epochs]
-                if len(set(completed_mini_counts)) > 1:
-                    raise ValueError(
-                        f"Completed epochs have different numbers of mini epochs: {dict(zip(completed_epochs, completed_mini_counts))}. "
-                        f"This indicates inconsistent training configuration and is not supported."
-                    )
+            # DISABLED: Allow non-sequential checkpoints for tournament flexibility
+            # if len(completed_epochs) > 1:
+            #     completed_mini_counts = [max_mini_per_epoch[epoch] for epoch in completed_epochs]
+            #     if len(set(completed_mini_counts)) > 1:
+            #         raise ValueError(
+            #             f"Completed epochs have different numbers of mini epochs: {dict(zip(completed_epochs, completed_mini_counts))}. "
+            #             f"This indicates inconsistent training configuration and is not supported."
+            #         )
         
         total_mini_epochs = max(max_mini_per_epoch.values())
         
