@@ -84,11 +84,11 @@ $env:PYTHONPATH = "."
 
 # Run the tournament
 python scripts/run_tournament.py `
-  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251020_171253/ `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251021_104711/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="50,52" `
-  --mini-epoch-range="52,60" `
+  --epoch-range="52,55" `
+  --mini-epoch-range="42,80" `
   --games-per-match=50 `
   --round-robin-games=100 `
   --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251018_152819/,checkpoints/hyperparameter_tuning/pipeline_20251013_181038/" `
