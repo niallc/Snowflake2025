@@ -9,6 +9,7 @@ import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph, make_empty_hex_state
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 import re
+import string
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -105,18 +106,27 @@ def validate_trmph_input(trmph_string):
     if not trmph_string:
         return True, None
     
-    # Validate format: #13,([a-m]([1-9]|1[0-3]))+ or ([a-m]([1-9]|1[0-3]))+
-    trmph_pattern_with_prefix = re.compile(r'^#13,([a-m]([1-9]|1[0-3]))+$')
-    trmph_pattern_without_prefix = re.compile(r'^([a-m]([1-9]|1[0-3]))+$')
+    # Build pattern based on board size
+    max_col = string.ascii_lowercase[BOARD_SIZE - 1]  # 'm' for 13x13
+    if BOARD_SIZE <= 9:
+        # For boards 9x9 or smaller, only single digits
+        number_pattern = f'[1-{BOARD_SIZE}]'
+    else:
+        # For boards 10x10 or larger, handle 10-13 range
+        number_pattern = f'(1[0-{BOARD_SIZE%10}]|[1-9])'
+    
+    trmph_pattern_with_prefix = re.compile(f'^#{BOARD_SIZE},([a-{max_col}]{number_pattern})+$')
+    trmph_pattern_without_prefix = re.compile(f'^([a-{max_col}]{number_pattern})+$')
     
     if not (trmph_pattern_with_prefix.match(trmph_string) or trmph_pattern_without_prefix.match(trmph_string)):
-        return False, "Invalid TRMPH format. Only letters a-m followed by numbers 1-13 are allowed (e.g., a1b2c3 or #13,a1b2c3)"
+        return False, f"Invalid TRMPH format. Only letters a-{max_col} followed by numbers 1-{BOARD_SIZE} are allowed (e.g., a1b2c3 or #{BOARD_SIZE},a1b2c3)"
     
     # Use existing utility function to properly count moves
     try:
-        # Strip the #13, prefix if present before parsing moves
-        if trmph_string.startswith('#13,'):
-            bare_moves = trmph_string[4:]  # Remove '#13,' prefix
+        # Strip the #{BOARD_SIZE}, prefix if present before parsing moves
+        prefix = f'#{BOARD_SIZE},'
+        if trmph_string.startswith(prefix):
+            bare_moves = trmph_string[len(prefix):]  # Remove prefix
         else:
             bare_moves = trmph_string
         
@@ -143,6 +153,12 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
     """
     if not isinstance(data, dict):
         return False, "Request data must be a JSON object", None
+    
+    # Reject unexpected fields (defense-in-depth)
+    all_allowed = set(required_fields or []) | set(optional_fields or [])
+    unexpected = set(data.keys()) - all_allowed
+    if unexpected:
+        return False, f"Unexpected fields: {list(unexpected)}", None
     
     validated_data = {}
     
