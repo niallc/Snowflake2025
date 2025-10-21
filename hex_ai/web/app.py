@@ -336,12 +336,12 @@ def get_difficulty_parameters(elo_rating):
     # Format: (elo, temperature, num_simulations, algorithm)
     difficulty_points = [
         (1, 2.5, 0, "policy"),       # Mindless
-        (300, 1.7, 0, "policy"),     # Beginner  
-        (500, 1.2, 0, "policy"),     # Novice
-        (1000, 0.8, 0, "policy"),    # Medium
+        (300, 1.5, 0, "policy"),     # Beginner  
+        (500, 1.1, 0, "policy"),     # Novice
+        (1000, 0.75, 0, "policy"),   # Medium
         (1500, 0.50, 0, "policy"),   # Hard
-        (1800, 0.20, 0, "policy"),   # Very Hard
-        (2100, 0.05, 0, "policy"),   # Expert
+        (1800, 0.25, 0, "policy"),   # Very Hard
+        (2100, 0.08, 0, "policy"),   # Expert
         (2150, 0.1, 8, "mcts"),      # Extra Hard - Gumbel MCTS
         (2250, 0.1, 20, "mcts"),     # Ultra Hard - Gumbel MCTS
         (2350, 0.1, 39, "mcts"),     # Ultra Difficult - Gumbel MCTS
