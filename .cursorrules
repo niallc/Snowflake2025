@@ -39,6 +39,12 @@ python scripts/validate_environment.py
  - If running code to check that it works, but mindful of how computationally intensive it is! Creating more than 3 games takes time, generating move with more than e.g. 100 MCTS simulations per move takes time.
   - Don't aim to maintain backward compatibility or build compatibility layers for out of date interfaces. Instead build single clean code paths. If in doubt, STOP and explain the issue, then we can decide how to resolve call-sites with different patterns, or similar issues.
 
+## Git and Version Control Rules
+1. **NEVER run git write operations: commit, git push, git rebase, or any git commands that modify repository history**.
+2. When debugging issues, use `git show`, `git diff`, and `git log` to INVESTIGATE only
+3. If the user mentions checking previous commits, that means READING them for comparison, not CHECKING THEM OUT or REVERTING
+4. Read-only git commands (show, diff, log, status) are fine.
+
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions
 2. Run `python scripts/validate_environment.py` to check setup
