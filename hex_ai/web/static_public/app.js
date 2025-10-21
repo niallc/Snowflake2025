@@ -147,18 +147,18 @@ class HexGame {
         
         this.setLoading(true);
         try {
-            // Save current state to redo history before undoing
-            const currentState = {
-                trmph: this.currentTRMPH,
-                moveCount: this.moveCount
-            };
-            this.redoHistory.push(currentState);
+            // Save current TRMPH string (not object) to redo history
+            this.redoHistory.push(this.currentTRMPH);
             
             // Restore previous state
             this.gameHistory.pop();
             this.currentTRMPH = this.gameHistory.length > 0 ? 
                 this.gameHistory[this.gameHistory.length - 1] : "";
-            this.moveCount = Math.max(0, this.moveCount - 1);
+            
+            // Recalculate moveCount from TRMPH string
+            this.moveCount = this.currentTRMPH ? 
+                this.parseTrmphMoves(this.currentTRMPH).length : 0;
+            
             await this.loadGameStateWithoutAutoMove();
         } catch (error) {
             console.error('Failed to undo move:', error);
@@ -248,6 +248,12 @@ class HexGame {
             console.log(`API response status: ${response.status}`);
             
             if (!response.ok) {
+                if (response.status === 429) {
+                    const errorData = await response.json();
+                    const waitTime = errorData.retry_after || 1;
+                    this.showError(`Too many requests. Please wait ${waitTime.toFixed(1)} seconds.`);
+                    return;
+                }
                 const errorText = await response.text();
                 console.error(`API error: ${response.status} - ${errorText}`);
                 this.showError(`Server error: ${response.status}`);
@@ -650,17 +656,17 @@ class HexGame {
         
         this.setLoading(true);
         try {
-            // Save current state to undo history before redoing
-            const currentState = {
-                trmph: this.currentTRMPH,
-                moveCount: this.moveCount
-            };
-            this.gameHistory.push(currentState);
+            // Save current TRMPH string (not object) to game history
+            this.gameHistory.push(this.currentTRMPH);
             
-            // Restore next state from redo history
-            const nextState = this.redoHistory.pop();
-            this.currentTRMPH = nextState.trmph;
-            this.moveCount = nextState.moveCount;
+            // Restore next state from redo history (already a string)
+            const nextTrmph = this.redoHistory.pop();
+            this.currentTRMPH = nextTrmph;
+            
+            // Recalculate moveCount from TRMPH string
+            this.moveCount = this.currentTRMPH ? 
+                this.parseTrmphMoves(this.currentTRMPH).length : 0;
+            
             await this.loadGameStateWithoutAutoMove();
         } catch (error) {
             console.error('Failed to redo move:', error);
@@ -685,20 +691,28 @@ class HexGame {
     // =============================================================================
     
     parseTrmphMoves(trmphString) {
-        // Parse TRMPH string into individual moves (similar to split_trmph_moves in Python)
-        const moves = [];
-        let i = 0;
+        // Parse TRMPH string into individual moves (matches Python split_trmph_moves + strip_trmph_preamble)
         const letters = 'abcdefghijklm';
         
-        while (i < trmphString.length) {
-            if (!letters.includes(trmphString[i])) {
-                throw new Error(`Expected letter at position ${i} in ${trmphString}`);
+        // Strip preamble first (like Python strip_trmph_preamble)
+        let bareMoves = trmphString;
+        const preambleMatch = trmphString.match(/^#(\d+),/);
+        if (preambleMatch) {
+            bareMoves = trmphString.substring(preambleMatch[0].length);
+        }
+        
+        // Split into moves (like Python split_trmph_moves)
+        const moves = [];
+        let i = 0;
+        while (i < bareMoves.length) {
+            if (!letters.includes(bareMoves[i])) {
+                throw new Error(`Expected letter at position ${i} in ${bareMoves}`);
             }
             let j = i + 1;
-            while (j < trmphString.length && /\d/.test(trmphString[j])) {
+            while (j < bareMoves.length && /\d/.test(bareMoves[j])) {
                 j++;
             }
-            moves.push(trmphString.substring(i, j));
+            moves.push(bareMoves.substring(i, j));
             i = j;
         }
         return moves;

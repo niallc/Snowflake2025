@@ -91,6 +91,10 @@ def validate_trmph_input(trmph_string):
     Returns:
         tuple: (is_valid, error_message) where is_valid is bool and error_message is str or None
     """
+    # Handle None values (from frontend null/undefined) by treating as empty string
+    if trmph_string is None:
+        trmph_string = ""
+    
     if not isinstance(trmph_string, str):
         return False, "TRMPH input must be a string"
     
@@ -288,8 +292,45 @@ class TokenBucket:
 # Format: {ip_address: {endpoint: TokenBucket}}
 _token_buckets = defaultdict(dict)
 
+# Global request tracking for abuse prevention (max 1000 requests per 3 minutes)
+_request_history = defaultdict(list)
+REQUEST_WINDOW = 180  # 3 minutes in seconds
+MAX_REQUESTS_PER_WINDOW = 1000
+
+def check_global_rate_limit(client_ip):
+    """
+    Check if client has exceeded global rate limit (1000 requests per 3 minutes).
+    Returns (allowed: bool, wait_time: float)
+    """
+    now = time.time()
+    cutoff = now - REQUEST_WINDOW
+    
+    # Clean up old requests
+    _request_history[client_ip] = [
+        req_time for req_time in _request_history[client_ip] 
+        if req_time > cutoff
+    ]
+    
+    # Check if over limit
+    if len(_request_history[client_ip]) >= MAX_REQUESTS_PER_WINDOW:
+        oldest_request = min(_request_history[client_ip])
+        wait_time = REQUEST_WINDOW - (now - oldest_request)
+        return False, wait_time
+    
+    # Record this request
+    _request_history[client_ip].append(now)
+    
+    # Cleanup memory if too many IPs (keep last 10000 IPs)
+    if len(_request_history) > 10000:
+        # Remove IPs with no recent requests
+        for ip in list(_request_history.keys()):
+            if not _request_history[ip]:
+                del _request_history[ip]
+    
+    return True, 0
+
 # Token bucket configuration
-BUCKET_CAPACITY = 20.0  # Maximum tokens in bucket
+BUCKET_CAPACITY = 60.0  # Maximum tokens in bucket (allows ~120 rapid undo/redo)
 REFILL_RATE = 1.0       # Tokens per second (60/minute)
 
 # Token costs by endpoint (adjusted for user requirements)
@@ -320,6 +361,18 @@ def rate_limit(cost: float = 1.0):
             client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
             if client_ip:
                 client_ip = client_ip.split(',')[0].strip()  # Handle multiple proxies
+            
+            # Check global rate limit first
+            allowed, wait_time = check_global_rate_limit(client_ip)
+            if not allowed:
+                app.logger.warning(
+                    f"Global rate limit exceeded for IP {client_ip}. "
+                    f"Over 1000 requests in 3 minutes. Wait: {wait_time:.1f}s"
+                )
+                return jsonify({
+                    "error": f"Too many requests. Please wait {wait_time:.1f} seconds.",
+                    "retry_after": wait_time
+                }), 429
             
             # Get endpoint name
             endpoint = f.__name__
