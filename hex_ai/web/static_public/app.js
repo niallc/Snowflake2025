@@ -10,10 +10,14 @@ class HexGame {
         this.redoHistory = []; // Track undone moves for redo functionality
         this.moveCount = 0;
         this.currentElo = 1000;
-        this.blueComputer = true;
-        this.redComputer = false;
+        this.blueComputer = false;
+        this.redComputer = true;
         this.isLoading = false;
         this.isInitialLoad = true; // Track if this is the initial page load
+        
+        // Track previous board state for efficient updates
+        this.previousBoard = null;
+        this.hexElements = new Map(); // Cache hex elements by position
         
         this.initializeElements();
         this.setupEventListeners();
@@ -131,6 +135,8 @@ class HexGame {
             this.gameHistory = [];
             this.moveCount = 0;
             this.isInitialLoad = false; // Mark that this is no longer initial load
+            this.previousBoard = null; // Clear board cache
+            this.hexElements.clear(); // Clear hex cache
             this.updateTrmphDisplay();
             await this.loadGameState(false); // Don't auto-move after reset
         } catch (error) {
@@ -158,6 +164,10 @@ class HexGame {
             // Recalculate moveCount from TRMPH string
             this.moveCount = this.currentTRMPH ? 
                 this.parseTrmphMoves(this.currentTRMPH).length : 0;
+            
+            // Clear cache for undo to ensure clean state
+            this.previousBoard = null;
+            this.hexElements.clear();
             
             await this.loadGameStateWithoutAutoMove();
         } catch (error) {
@@ -307,11 +317,123 @@ class HexGame {
         
         console.log('Rendering board with legal moves:', this.legalMoves);
         
+        // If this is the first render or we don't have cached elements, do full render
+        if (this.previousBoard === null || this.hexElements.size === 0) {
+            this.clearBoard();
+            this.drawHexBoard(board);
+            this.previousBoard = board.map(row => [...row]); // Deep copy
+            return;
+        }
+        
+        // Otherwise, do efficient incremental update
+        // Use requestAnimationFrame to ensure smooth rendering
+        requestAnimationFrame(() => {
+            this.updateBoardIncremental(board);
+        });
+    }
+    
+    clearBoard() {
         // Clear existing board
         this.svg.innerHTML = '';
+        this.hexElements.clear();
+    }
+    
+    updateBoardIncremental(newBoard) {
+        // Only update hexes that have changed
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                const oldValue = this.previousBoard[row][col];
+                const newValue = newBoard[row][col];
+                
+                if (oldValue !== newValue) {
+                    this.updateHex(row, col, newValue);
+                }
+            }
+        }
         
-        // Use the proper hexagonal board rendering from the dev version
-        this.drawHexBoard(board);
+        // Update legal moves highlighting
+        this.updateLegalMovesHighlighting();
+        
+        // Update previous board state
+        this.previousBoard = newBoard.map(row => [...row]); // Deep copy
+    }
+    
+    updateHex(row, col, newValue) {
+        const key = `${row},${col}`;
+        let hexElement = this.hexElements.get(key);
+        
+        if (!hexElement) {
+            // Create new hex if it doesn't exist (shouldn't happen in normal flow)
+            const { x, y } = this.hexCenter(row, col, 18);
+            hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue), false);
+            hexElement.setAttribute('data-row', row);
+            hexElement.setAttribute('data-col', col);
+            this.svg.appendChild(hexElement);
+            this.hexElements.set(key, hexElement);
+        } else {
+            // Update existing hex with immediate color change (no transition during moves)
+            const newColor = this.getHexColor(newValue);
+            hexElement.style.transition = 'none'; // Disable transition for instant update
+            hexElement.setAttribute('fill', newColor);
+            // Re-enable transitions after a brief delay for hover effects
+            setTimeout(() => {
+                if (hexElement) {
+                    hexElement.style.transition = '';
+                }
+            }, 50);
+        }
+    }
+    
+    getHexColor(cellValue) {
+        if (cellValue === this.pieceValues.BLUE) return '#0099ff';
+        if (cellValue === this.pieceValues.RED) return '#ff4444';
+        return '#f0f0f0'; // Empty hex color
+    }
+    
+    updateLegalMovesHighlighting() {
+        // Only update clickability for empty hexes to avoid unnecessary DOM operations
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                const key = `${row},${col}`;
+                const hexElement = this.hexElements.get(key);
+                if (hexElement) {
+                    const isLegal = this.isLegalMove(row, col);
+                    const isEmpty = this.previousBoard[row][col] === this.pieceValues.EMPTY;
+                    
+                    if (isLegal && isEmpty && !this.isLoading) {
+                        // Only update if not already clickable
+                        if (!hexElement.classList.contains('clickable')) {
+                            hexElement.style.cursor = 'pointer';
+                            hexElement.classList.add('clickable');
+                            // Ensure event listener is attached
+                            this.attachHexClickListener(hexElement, row, col);
+                        }
+                    } else {
+                        // Only update if currently clickable
+                        if (hexElement.classList.contains('clickable')) {
+                            hexElement.style.cursor = 'default';
+                            hexElement.classList.remove('clickable');
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    attachHexClickListener(hexElement, row, col) {
+        // Check if listener is already attached to avoid unnecessary DOM manipulation
+        if (hexElement.hasAttribute('data-listener-attached')) {
+            return;
+        }
+        
+        // Add new listener
+        hexElement.addEventListener('click', (e) => {
+            console.log('Hex click event triggered', e.target);
+            this.onCellClick(e);
+        });
+        
+        // Mark as having listener attached
+        hexElement.setAttribute('data-listener-attached', 'true');
     }
     
     drawHexBoard(board) {
@@ -344,16 +466,14 @@ class HexGame {
         // Draw edge indicators (blue: top/bottom, red: left/right)
         this.drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE);
         
-        // Draw hexagons
+        // Draw hexagons and cache them
         for (let row = 0; row < BOARD_SIZE; row++) {
             for (let col = 0; col < BOARD_SIZE; col++) {
                 const { x, y } = this.hexCenter(row, col, HEX_RADIUS);
                 const cell = board[row]?.[col] || this.pieceValues.EMPTY;
                 
                 // Determine fill color
-                let fill = '#f0f0f0'; // Empty hex color
-                if (cell === this.pieceValues.BLUE) fill = '#0099ff';
-                if (cell === this.pieceValues.RED) fill = '#ff4444';
+                const fill = this.getHexColor(cell);
                 
                 const isLegal = this.isLegalMove(row, col);
                 console.log(`Hex at row=${row}, col=${col}: isLegal=${isLegal}, isLoading=${this.isLoading}`);
@@ -369,9 +489,14 @@ class HexGame {
                         console.log('Hex click event triggered', e.target);
                         self.onCellClick(e);
                     });
+                    hex.setAttribute('data-listener-attached', 'true');
                 }
                 
                 this.svg.appendChild(hex);
+                
+                // Cache the hex element
+                const key = `${row},${col}`;
+                this.hexElements.set(key, hex);
             }
         }
     }
@@ -603,11 +728,8 @@ class HexGame {
         this.undoBtn.disabled = loading;
         this.redoBtn.disabled = loading;
         
-        if (loading) {
-            document.body.classList.add('loading');
-        } else {
-            document.body.classList.remove('loading');
-        }
+        // Don't apply loading class to body to avoid flickering
+        // The loading state is handled by button states only
     }
     
     updateButtonStates() {
@@ -666,6 +788,10 @@ class HexGame {
             // Recalculate moveCount from TRMPH string
             this.moveCount = this.currentTRMPH ? 
                 this.parseTrmphMoves(this.currentTRMPH).length : 0;
+            
+            // Clear cache for redo to ensure clean state
+            this.previousBoard = null;
+            this.hexElements.clear();
             
             await this.loadGameStateWithoutAutoMove();
         } catch (error) {

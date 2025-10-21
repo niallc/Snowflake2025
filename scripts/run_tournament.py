@@ -114,6 +114,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Configure logging verbosity based on command line argument
+def configure_logging_verbosity(verbose_level: int):
+    """Configure logging verbosity based on the --verbose argument."""
+    if verbose_level <= 0:
+        # Very quiet - only show essential tournament progress
+        logging.getLogger('hex_ai.inference.model_wrapper').setLevel(logging.ERROR)
+        logging.getLogger('hex_ai.inference.checkpoint_discovery').setLevel(logging.ERROR)
+        logging.getLogger('hex_ai.inference.game_execution').setLevel(logging.ERROR)
+        logging.getLogger('hex_ai.inference.knockout_tournament').setLevel(logging.ERROR)
+    elif verbose_level == 1:
+        # Default - show tournament progress but reduce repetitive logs
+        logging.getLogger('hex_ai.inference.model_wrapper').setLevel(logging.WARNING)
+        logging.getLogger('hex_ai.inference.checkpoint_discovery').setLevel(logging.WARNING)
+        logging.getLogger('hex_ai.inference.game_execution').setLevel(logging.WARNING)
+        logging.getLogger('hex_ai.inference.knockout_tournament').setLevel(logging.WARNING)
+    elif verbose_level >= 2:
+        # Verbose - show all logs
+        # Keep default INFO level for all loggers
+        pass
+
 # Constants
 DEFAULT_OPENING_LENGTH = 5
 DEFAULT_NUM_OPENINGS = 100
@@ -641,10 +661,6 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     # Parse knockout configuration
     knockout_config = {}
     if args.knockout_config:
-        print(f"DEBUG: Received knockout-config string: '{args.knockout_config}'")
-        print(f"DEBUG: String length: {len(args.knockout_config)}")
-        print(f"DEBUG: First 10 chars: '{args.knockout_config[:10]}'")
-        print(f"DEBUG: Last 10 chars: '{args.knockout_config[-10:]}'")
         try:
             knockout_config = json.loads(args.knockout_config)
         except json.JSONDecodeError as e:
@@ -761,6 +777,9 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
 
 def main():
     args = parse_args()
+    
+    # Configure logging verbosity based on --verbose argument
+    configure_logging_verbosity(args.verbose)
     
     # Get command line early - crash if not available
     try:
