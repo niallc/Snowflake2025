@@ -119,10 +119,6 @@ class HexGame {
         // Add click event listener (let browser handle native touch gestures)
         svg.addEventListener('click', (e) => this.handleBoardClick(e));
         
-        // Add a general click handler to debug
-        svg.addEventListener('click', (e) => {
-            console.log('SVG click event:', e.target);
-        });
         
         this.boardContainer.appendChild(svg);
         this.svg = svg;
@@ -193,13 +189,7 @@ class HexGame {
                 })
             });
             
-            console.log('Computer move response status:', response.status);
-            console.log('Computer move response ok:', response.ok);
-            
             const data = await response.json();
-            console.log('Computer move API response:', data);
-            console.log('Computer move data.success:', data.success);
-            console.log('Computer move data.error:', data.error);
             
             if (data.success) {
                 this.currentTRMPH = data.new_trmph;
@@ -216,10 +206,7 @@ class HexGame {
                 if (data.winner) {
                     this.showGameOver(data.winner);
                 } else if (this.shouldMakeComputerMove(data.player)) {
-                    console.log(`Auto-triggering computer move for player: ${data.player}`);
                     this.scheduleAutoMove();
-                } else {
-                    console.log(`No auto-move needed. Player: ${data.player}, shouldMakeComputerMove: ${this.shouldMakeComputerMove(data.player)}`);
                 }
             } else {
                 console.log('Computer move failed, data.success:', data.success, 'data.error:', data.error);
@@ -255,8 +242,6 @@ class HexGame {
                 })
             });
             
-            console.log(`API response status: ${response.status}`);
-            
             if (!response.ok) {
                 if (response.status === 429) {
                     const errorData = await response.json();
@@ -281,7 +266,6 @@ class HexGame {
             
             // Store legal moves for move validation
             this.legalMoves = data.legal_moves || [];
-            console.log('Legal moves received:', this.legalMoves);
             
             await this.renderBoard(data.board);
             this.updateTrmphDisplay();
@@ -314,8 +298,6 @@ class HexGame {
     
     async renderBoard(board) {
         if (!this.svg) return;
-        
-        console.log('Rendering board with legal moves:', this.legalMoves);
         
         // If this is the first render or we don't have cached elements, do full render
         if (this.previousBoard === null || this.hexElements.size === 0) {
@@ -428,7 +410,6 @@ class HexGame {
         
         // Add new listener
         hexElement.addEventListener('click', (e) => {
-            console.log('Hex click event triggered', e.target);
             this.onCellClick(e);
         });
         
@@ -476,7 +457,6 @@ class HexGame {
                 const fill = this.getHexColor(cell);
                 
                 const isLegal = this.isLegalMove(row, col);
-                console.log(`Hex at row=${row}, col=${col}: isLegal=${isLegal}, isLoading=${this.isLoading}`);
                 const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal);
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
@@ -486,7 +466,6 @@ class HexGame {
                     // Use proper event handling like the dev version
                     const self = this;
                     hex.addEventListener('click', function(e) {
-                        console.log('Hex click event triggered', e.target);
                         self.onCellClick(e);
                     });
                     hex.setAttribute('data-listener-attached', 'true');
@@ -567,7 +546,6 @@ class HexGame {
         hex.setAttribute('stroke-width', '1');
         if (highlight) {
             hex.style.cursor = 'pointer';
-            console.log('Made hex clickable at', cx, cy);
         }
         return hex;
     }
@@ -606,7 +584,6 @@ class HexGame {
     // =============================================================================
     
     async onCellClick(e) {
-        console.log('onCellClick called', e.target);
         if (this.isLoading) {
             console.log('Loading, ignoring click');
             return;
@@ -614,7 +591,6 @@ class HexGame {
         
         const row = parseInt(e.target.getAttribute('data-row'));
         const col = parseInt(e.target.getAttribute('data-col'));
-        console.log(`Clicked on row=${row}, col=${col}`);
         
         // Allow user clicks regardless of computer settings
         // Users can always make moves when they click
@@ -671,20 +647,16 @@ class HexGame {
         }
         const move = this.rowColToTRMPH(row, col);
         const isLegal = this.legalMoves.includes(move);
-        console.log(`Checking move ${move} (row=${row}, col=${col}): legal=${isLegal}, available moves:`, this.legalMoves);
         return isLegal;
     }
     
     
     handleBoardClick(e) {
         // Handle board-level clicks if needed
-        console.log('Board click event:', e.target);
-        
         // If we clicked on a hex, handle it
         if (e.target.tagName === 'polygon') {
             const row = parseInt(e.target.getAttribute('data-row'));
             const col = parseInt(e.target.getAttribute('data-col'));
-            console.log(`Board click on hex row=${row}, col=${col}`);
             
             if (!isNaN(row) && !isNaN(col)) {
                 // Create a synthetic event for the hex click

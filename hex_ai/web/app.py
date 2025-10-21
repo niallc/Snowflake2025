@@ -659,7 +659,6 @@ def _check_game_over_early_return(state, trmph):
     if state.game_over:
         app.logger.info("Game is over, returning current state")
         result = build_move_response(state, move_made=None)
-        app.logger.info(f"Returning early result: {result}")
         return result
     return None
 
@@ -702,15 +701,10 @@ def _execute_mcts_search(state, model_id, mcts_config):
     
     # Get cached model wrapper for MCTS
     app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
-    model_wrapper_start = time.time()
     model_wrapper = get_cached_model_wrapper(model_id)
-    model_wrapper_time = time.time() - model_wrapper_start
-    app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
     
     # Run MCTS search
     app.logger.info("Starting MCTS search...")
-    mcts_start_time = time.time()
-    app.logger.info("About to call run_mcts_move...")
     try:
         move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
         app.logger.info("run_mcts_move completed successfully")
@@ -719,7 +713,6 @@ def _execute_mcts_search(state, model_id, mcts_config):
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         raise
-    mcts_search_time = time.time() - mcts_start_time
     
     return move
 
