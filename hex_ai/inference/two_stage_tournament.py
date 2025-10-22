@@ -276,7 +276,7 @@ class TwoStageTournament:
             """
             Execute a match between two participants using existing game execution infrastructure.
             """
-            logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
+            # logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
             
             # Convert TournamentParticipant to StrategyConfig
             strategy_a = p1.to_strategy_config()
@@ -372,7 +372,7 @@ class TwoStageTournament:
             p1_pct = (p1_wins / total_games) * 100
             p2_pct = (p2_wins / total_games) * 100
             print(f" {p1.name}:{p1_wins}/{total_games} ({p1_pct:.1f}%) {p2.name}:{p2_wins}/{total_games} ({p2_pct:.1f}%) -> {winner_name} wins")
-            logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
+            # logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
             
             # Clean up temporary models to free memory
             # The temporary models will be garbage collected when this function returns

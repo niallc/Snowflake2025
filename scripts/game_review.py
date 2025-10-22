@@ -14,13 +14,10 @@ Usage:
 import argparse
 import json
 import sys
-import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 from dataclasses import dataclass, asdict
-from datetime import datetime
-import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,6 +32,19 @@ from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
 from hex_ai.data_processing import parse_trmph_to_gamerecord
 from hex_ai.value_utils import red_ref_signed_to_ptm_ref_signed
 from hex_ai.config import BOARD_SIZE, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_BATCH_CAP
+
+# Constants for analysis thresholds
+MISTAKE_THRESHOLDS = {
+    'minor': 0.05,
+    'moderate': 0.15,
+    'major': 0.30
+}
+
+WINNING_THRESHOLD = 0.05
+GAME_PHASE_THRESHOLDS = {
+    'opening_end': 12,
+    'endgame_start_offset': 20
+}
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -99,7 +109,7 @@ class GameReview:
 class GameReviewer:
     """Main class for analyzing games and producing review reports."""
     
-    def __init__(self, model_path: str, mcts_sims: int = 100, c_puct: float = 1.0):
+    def __init__(self, model_path: str, mcts_sims: int = 39, c_puct: float = 1.0):
         """
         Initialize the game reviewer.
         
@@ -113,7 +123,7 @@ class GameReviewer:
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
         
-        # Create MCTS configuration
+        # Create MCTS configuration with Gumbel enabled
         self.mcts_config = BaselineMCTSConfig(
             sims=mcts_sims,
             c_puct=c_puct,
@@ -121,7 +131,7 @@ class GameReviewer:
             add_root_noise=False,
             temperature_start=0.01,  # Very low but positive temperature
             temperature_end=0.01,
-            enable_gumbel_root_selection=False,
+            enable_gumbel_root_selection=True,
             confidence_termination_threshold=0.95,
             enable_depth_discounting=False
         )
@@ -204,10 +214,10 @@ class GameReviewer:
             # Get direct value network assessment of the played move (from player's perspective)
             value_network_assessment_played = self._get_move_value_direct(state, move_played)
             
-            # Run MCTS to get best move recommendation
+            # Run Gumbel MCTS to get best move recommendation
             mcts_result = self._run_mcts_analysis(state)
             
-            # Get direct value network assessment of the MCTS-recommended move (from player's perspective)
+            # Get direct value network assessment of the best move (from player's perspective)
             value_network_assessment_best = self._get_move_value_direct(state, mcts_result['best_move'])
             
             # Determine game phase
@@ -280,29 +290,30 @@ class GameReviewer:
         return value_ptm
     
     def _run_mcts_analysis(self, state) -> Dict[str, Any]:
-        """Run MCTS analysis on a position."""
+        """Run Gumbel MCTS analysis to find the best move."""
         try:
-            # Instead of using MCTS (which has the policy normalization bug),
-            # let's use direct neural network evaluation for all legal moves
-            legal_moves = state.get_legal_moves()
+            mcts = BaselineMCTS(self.engine, self.model_wrapper, self.mcts_config)
+            result = mcts.run(state, verbose=0)
             
-            # Get values for all legal moves using direct neural network evaluation
+            # Get the best move from MCTS
+            best_move = result.move
+            
+            # Get MCTS value estimate from tree data
+            mcts_value_estimate = result.tree_data.get('v_ptm_ref_signed_best_child', None)
+            
+            # Build move_values dict for all legal moves (for finding alternatives)
+            # We can get this from the root node
             move_values = {}
-            for row, col in legal_moves:
-                new_state = state.make_move(row, col)
-                _, value_signed = self.model_wrapper.predict(new_state.get_board_tensor())
-                actor = state.current_player_enum
-                value_ptm = red_ref_signed_to_ptm_ref_signed(value_signed.item(), actor)
-                move_values[(row, col)] = value_ptm
-            
-            # Find best move
-            best_move = max(move_values.keys(), key=lambda k: move_values[k])
-            best_value = move_values[best_move]
+            root = result.root_node
+            for i, move in enumerate(root.legal_moves):
+                # Use Q-values (action values) for each move
+                move_values[move] = float(root.Q[i]) if root.N[i] > 0 else float('-inf')
             
             return {
                 'best_move': best_move,
-                'best_value': best_value,
-                'move_values': move_values
+                'best_value': move_values[best_move],
+                'move_values': move_values,
+                'mcts_value_estimate': mcts_value_estimate  # Optional MCTS value
             }
         except Exception as e:
             logger.error(f"Error in MCTS analysis: {e}")
@@ -312,9 +323,9 @@ class GameReviewer:
     
     def _determine_game_phase(self, ply: int, total_moves: int) -> str:
         """Determine the game phase based on move number."""
-        if ply < 12:
+        if ply < GAME_PHASE_THRESHOLDS['opening_end']:
             return "opening"
-        elif ply < max(0, total_moves - 20):
+        elif ply < max(0, total_moves - GAME_PHASE_THRESHOLDS['endgame_start_offset']):
             return "middle"
         else:
             return "endgame"
@@ -323,37 +334,32 @@ class GameReviewer:
         """Analyze if a move is a mistake using direct value network comparison."""
         value_diff = value_best - value_played
         
-        # Thresholds for mistake detection
-        minor_thresh = 0.05
-        moderate_thresh = 0.15
-        major_thresh = 0.30
-        
-        if value_diff < minor_thresh:
+        if value_diff < MISTAKE_THRESHOLDS['minor']:
             return False, "none", "Move is within acceptable range"
-        elif value_diff < moderate_thresh:
+        elif value_diff < MISTAKE_THRESHOLDS['moderate']:
             return True, "minor", f"Small mistake: {value_diff:.3f} value loss"
-        elif value_diff < major_thresh:
+        elif value_diff < MISTAKE_THRESHOLDS['major']:
             return True, "moderate", f"Moderate mistake: {value_diff:.3f} value loss"
         else:
             return True, "major", f"Major mistake: {value_diff:.3f} value loss"
     
-    def _analyze_losing_move_direct(self, played_move_value: float, mcts_result: Dict) -> Tuple[bool, bool, bool, List[Tuple[int, int]]]:
+    def _analyze_losing_move_direct(self, played_move_value: float, move_evaluation: Dict) -> Tuple[bool, bool, bool, List[Tuple[int, int]]]:
         """Analyze if a move is a losing move using direct value network assessment."""
         # A move is "losing" if the value network thinks it's negative
         # and there are alternative moves that are positive
-        was_winning_before = played_move_value > 0.05  # This is a bit of a simplification
-        is_winning_after = played_move_value > 0.05
+        was_winning_before = played_move_value > WINNING_THRESHOLD
+        is_winning_after = played_move_value > WINNING_THRESHOLD
         
         # Find alternative winning moves
         alternative_winning_moves = []
-        for move, value in mcts_result['move_values'].items():
-            if value > 0.05:  # Alternative move that would maintain winning position
+        for move, value in move_evaluation['move_values'].items():
+            if value > WINNING_THRESHOLD:  # Alternative move that would maintain winning position
                 alternative_winning_moves.append(move)
         
         # A move is a "losing move" if:
         # 1. The move itself is assessed as negative by the value network
         # 2. There are alternative moves that are positive
-        is_losing_move = (played_move_value < -0.05 and len(alternative_winning_moves) > 0)
+        is_losing_move = (played_move_value < -WINNING_THRESHOLD and len(alternative_winning_moves) > 0)
         
         return is_losing_move, was_winning_before, is_winning_after, alternative_winning_moves
     
@@ -504,6 +510,45 @@ def format_review_as_json(review: GameReview) -> Dict[str, Any]:
     }
 
 
+def create_index_html(reviews: List[GameReview]) -> str:
+    """Create an HTML index page for multiple game reviews."""
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Hex Game Reviews</title></head>
+    <body>
+        <h1>Hex Game Reviews</h1>
+        <ul>
+            {''.join([f'<li><a href="game_{i+1}_review.html">Game {i+1}</a></li>' for i in range(len(reviews))])}
+        </ul>
+    </body>
+    </html>
+    """
+
+
+def save_review_files(reviews: List[GameReview], output_dir: Path) -> None:
+    """Save review files (JSON and HTML) to the specified directory."""
+    for i, review in enumerate(reviews):
+        # Save JSON
+        json_file = output_dir / f"game_{i+1}_review.json"
+        with open(json_file, 'w') as f:
+            json.dump(format_review_as_json(review), f, indent=2)
+        
+        # Save HTML
+        html_file = output_dir / f"game_{i+1}_review.html"
+        with open(html_file, 'w') as f:
+            f.write(format_review_as_html(review))
+        
+        logger.info(f"Saved review for game {i+1} to {json_file} and {html_file}")
+    
+    # Create index page for multiple games
+    if len(reviews) > 1:
+        index_file = output_dir / "index.html"
+        with open(index_file, 'w') as f:
+            f.write(create_index_html(reviews))
+        logger.info(f"Created index page at {index_file}")
+
+
 def main():
     """Main CLI function."""
     parser = argparse.ArgumentParser(
@@ -537,8 +582,8 @@ Examples:
     parser.add_argument("--output-dir", type=str, help="Output directory for multiple games")
     
     # Analysis parameters
-    parser.add_argument("--mcts-sims", type=int, default=100,
-                       help="MCTS simulations for analysis (default: 100)")
+    parser.add_argument("--mcts-sims", type=int, default=39,
+                       help="MCTS simulations for analysis (default: 39)")
     parser.add_argument("--c-puct", type=float, default=1.0,
                        help="MCTS C_PUCT parameter (default: 1.0)")
     
@@ -640,22 +685,10 @@ Examples:
         
         # Output results
         if args.output_dir:
-            # Create output directory
+            # Save to specified directory
             output_dir = Path(args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            
-            for i, review in enumerate(reviews):
-                # Save JSON
-                json_file = output_dir / f"game_{i+1}_review.json"
-                with open(json_file, 'w') as f:
-                    json.dump(format_review_as_json(review), f, indent=2)
-                
-                # Save HTML
-                html_file = output_dir / f"game_{i+1}_review.html"
-                with open(html_file, 'w') as f:
-                    f.write(format_review_as_html(review))
-                
-                logger.info(f"Saved review for game {i+1} to {json_file} and {html_file}")
+            save_review_files(reviews, output_dir)
         
         elif args.output:
             # Single JSON output
@@ -667,37 +700,22 @@ Examples:
                     json.dump([format_review_as_json(review) for review in reviews], f, indent=2)
             logger.info(f"Results written to {args.output}")
         
-        if args.html_output:
+        elif args.html_output:
             # Single HTML output
             if len(reviews) == 1:
                 with open(args.html_output, 'w') as f:
                     f.write(format_review_as_html(reviews[0]))
             else:
                 # Multiple games - create index page
-                html_content = f"""
-                <!DOCTYPE html>
-                <html>
-                <head><title>Hex Game Reviews</title></head>
-                <body>
-                    <h1>Hex Game Reviews</h1>
-                    <ul>
-                        {''.join([f'<li><a href="game_{i+1}_review.html">Game {i+1}</a></li>' for i in range(len(reviews))])}
-                    </ul>
-                </body>
-                </html>
-                """
                 with open(args.html_output, 'w') as f:
-                    f.write(html_content)
+                    f.write(create_index_html(reviews))
             logger.info(f"HTML results written to {args.html_output}")
         
-        # Print summary to console (only if no file output requested)
-        if not args.output and not args.html_output and not args.output_dir:
-            if len(reviews) == 1:
-                # For single games, show the summary (already printed above)
-                pass
-            else:
-                # For multiple games, show summary for each
-                print(json.dumps([format_review_as_json(review) for review in reviews], indent=2))
+        else:
+            # Default behavior: save to analysis/game_reviews directory
+            default_output_dir = Path("analysis/game_reviews")
+            default_output_dir.mkdir(parents=True, exist_ok=True)
+            save_review_files(reviews, default_output_dir)
         
         logger.info(f"Successfully reviewed {len(reviews)} games")
         return 0
