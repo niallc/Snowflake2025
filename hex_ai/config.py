@@ -34,7 +34,7 @@ VALUE_OUTPUT_SIZE = 1
 # Fixed Tree Search configuration
 FIXED_TREE_MAX_PRODUCT = 100000  # Maximum product of search widths
 FIXED_TREE_DEFAULT_WIDTH = POLICY_OUTPUT_SIZE  # Default to full board sweep (169)
-FIXED_TREE_DEFAULT_TEMPERATURE = 1.0
+FIXED_TREE_DEFAULT_TEMPERATURE = 0.2
 
 # One-hot encoded board constants (for 2N×N and 3N×N formats)
 PIECE_ONEHOT = 1      # Value for occupied positions in one-hot encoding
