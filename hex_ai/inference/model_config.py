@@ -51,8 +51,10 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_FILE = "epoch48_mini11.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
 # CURRENT_BEST_MODEL_FILE = "epoch49_mini57.pt.gz"
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353/"
-CURRENT_BEST_MODEL_FILE = "epoch51_mini30.pt.gz" # epoch50_mini52
+# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353/"
+# CURRENT_BEST_MODEL_FILE = "epoch51_mini30.pt.gz" # epoch50_mini52
+CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251021_104711/"
+CURRENT_BEST_MODEL_FILE = "epoch55_mini13.pt.gz" 
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 

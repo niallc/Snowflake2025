@@ -14,6 +14,7 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config, FixedTreeSearchConfig
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import (
     Winner, 
@@ -28,7 +29,7 @@ from hex_ai.value_utils import (
 )
 from hex_ai.enums import Player, Piece
 from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
-from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, FIXED_TREE_MAX_PRODUCT, FIXED_TREE_DEFAULT_WIDTH, FIXED_TREE_DEFAULT_TEMPERATURE
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
@@ -732,6 +733,251 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         }
 
 
+def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
+    """Make one computer move using Fixed Tree Search and return the new state with diagnostics."""
+    try:
+        app.logger.info(f"=== FIXED TREE MOVE START ===")
+        app.logger.info(f"Input: model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
+        app.logger.info(f"Input TRMPH: {trmph}")
+        
+        state = HexGameState.from_trmph(trmph)
+        app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
+        
+        # If game is over, return current state
+        if state.game_over:
+            app.logger.info("Game is over, returning current state")
+            result = {
+                "success": True,
+                "new_trmph": trmph,
+                "board": state.board.tolist(),
+                "player": winner_to_color(state.current_player),
+                "legal_moves": moves_to_trmph(state.get_legal_moves()),
+                "winner": winner_to_color(state.winner) if state.winner is not None else None,
+                "move_made": None,
+                "game_over": True,
+                "fixed_tree_debug_info": {}
+            }
+            app.logger.info(f"Returning early result: {result}")
+            return result
+        
+        # Get model
+        try:
+            model = get_model(model_id)
+            app.logger.info(f"Model loaded successfully: {type(model).__name__}")
+        except Exception as e:
+            app.logger.error(f"Failed to get model {model_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Model loading failed: {e}"
+            }
+        
+        # Create Fixed Tree Search configuration
+        search_config = create_fixed_tree_config(
+            search_widths=search_widths,
+            temperature=temperature,
+            batch_size=1000,  # Default batch size
+            enable_early_termination=True,
+            early_termination_threshold=0.95
+        )
+        app.logger.info(f"Fixed tree config created: {search_config}")
+        
+        # Run Fixed Tree Search with comprehensive timing
+        app.logger.info("Starting Fixed Tree Search...")
+        total_start_time = time.time()
+        
+        # Time the actual search
+        search_start_time = time.time()
+        app.logger.info("About to call run_fixed_tree_search...")
+        try:
+            result = run_fixed_tree_search(state, model, search_config, verbose)
+            app.logger.info("run_fixed_tree_search completed successfully")
+        except Exception as e:
+            app.logger.error(f"run_fixed_tree_search failed with exception: {e}")
+            import traceback
+            app.logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
+        search_time = time.time() - search_start_time
+        
+        # Time the rest of the processing
+        post_search_start = time.time()
+        
+        # Log detailed timing breakdown
+        app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
+        app.logger.debug(f"Fixed tree search completed in {search_time:.3f}s")
+        app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
+        app.logger.debug(f"Fixed tree selected move: {result.move}")
+        
+        # Log performance metrics
+        stats = result.stats
+        app.logger.debug(f"Total positions: {stats.get('total_positions', 0)}")
+        app.logger.debug(f"Policy evaluations: {stats.get('policy_evaluations', 0)}")
+        app.logger.debug(f"Value evaluations: {stats.get('value_evaluations', 0)}")
+        app.logger.debug(f"Tree depth: {stats.get('tree_depth', 0)}")
+        app.logger.debug(f"Tree width: {stats.get('tree_width', 0)}")
+        app.logger.debug(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
+        
+        # Add performance summary
+        app.logger.info(f"=== PERFORMANCE SUMMARY ===")
+        app.logger.info(f"Total positions evaluated: {stats.get('total_positions', 0)}")
+        app.logger.info(f"Search time: {search_time:.3f}s")
+        app.logger.info(f"Tree depth: {stats.get('tree_depth', 0)}, max width: {stats.get('tree_width', 0)}")
+        app.logger.info(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
+        app.logger.info(f"=== END PERFORMANCE SUMMARY ===")
+        
+        selected_move_trmph = fc.rowcol_to_trmph(*result.move)
+        app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
+        
+        # Get direct policy comparison
+        app.logger.info("Getting direct policy comparison...")
+        policy_start = time.time()
+        policy_logits, value_output = model.simple_infer(trmph)
+        policy_time = time.time() - policy_start
+        app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
+        
+        policy_probs = policy_logits_to_probs(policy_logits, temperature)
+        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
+        
+        # Get legal moves count for summary
+        legal_moves = state.get_legal_moves()
+        original_legal_moves_count = len(legal_moves)
+        app.logger.info(f"Legal moves count: {original_legal_moves_count}")
+        
+        # Get direct policy probabilities for comparison with Fixed Tree
+        legal_move_probs = {}
+        for move in legal_moves:
+            move_trmph = fc.rowcol_to_trmph(*move)
+            tensor_idx = fc.rowcol_to_tensor(*move)
+            if 0 <= tensor_idx < len(policy_probs):
+                legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
+        
+        # Log top 10 legal move probabilities
+        sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
+        top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
+        app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
+        
+        # Apply the move
+        app.logger.info(f"Applying move: {selected_move_trmph}")
+        state = apply_move_to_state_trmph(state, selected_move_trmph)
+        app.logger.info(f"Move applied. New state game_over: {state.game_over}")
+        
+        # Generate Fixed Tree diagnostic info
+        algorithm = "Fixed Tree Search"
+        
+        # Get win probabilities using centralized utility
+        root_win_prob = result.win_probability
+        
+        # Get tree data for analysis
+        tree_data = result.tree_data
+        
+        fixed_tree_debug_info = {
+            "algorithm_info": {
+                "algorithm": algorithm,
+                "early_termination": result.early_termination_info is not None,
+                "early_termination_reason": result.early_termination_info.reason if result.early_termination_info else "none",
+                "early_termination_details": {
+                    "reason": result.early_termination_info.reason if result.early_termination_info else "none",
+                    "win_probability": result.early_termination_info.win_probability if result.early_termination_info else None,
+                    "move": result.early_termination_info.move if result.early_termination_info else None
+                },
+                "parameters": {
+                    "search_widths": search_widths,
+                    "temperature": temperature
+                }
+            },
+            "search_stats": {
+                "search_time": search_time,
+                "search_widths": search_widths,
+                "temperature": temperature,
+                "fixed_tree_stats": stats,
+                "algorithm_used": algorithm
+            },
+            "tree_statistics": {
+                "total_positions": stats.get('total_positions', 0),
+                "tree_depth": stats.get('tree_depth', 0),
+                "tree_width": stats.get('tree_width', 0),
+                "policy_evaluations": stats.get('policy_evaluations', 0),
+                "value_evaluations": stats.get('value_evaluations', 0),
+                "early_terminations": stats.get('early_terminations', 0)
+            },
+            "move_selection": {
+                "selected_move": selected_move_trmph,
+                "selected_move_coords": result.move
+            },
+            "move_probabilities": {
+                "direct_policy": legal_move_probs
+            },
+            "comparison": {
+                "fixed_tree_vs_direct": {}
+            },
+            "win_rate_analysis": {
+                "root_value": result.value,
+                "win_probability": root_win_prob
+            },
+            "summary": {
+                "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
+                "total_legal_moves": original_legal_moves_count,
+                "moves_explored": f"{stats.get('total_positions', 0)}/{original_legal_moves_count}",
+                "search_efficiency": stats.get('total_positions', 0) / max(1, original_legal_moves_count),
+                "algorithm_summary": algorithm
+            },
+            "profiling_summary": {
+                "total_compute_ms": int(search_time * 1000.0),
+                "search_time_ms": int(search_time * 1000.0),
+                "memory_usage_mb": stats.get('memory_usage_mb', 0.0),
+                "tree_building_time_ms": int(stats.get('tree_building_time', 0.0) * 1000.0),
+                "leaf_evaluation_time_ms": int(stats.get('leaf_evaluation_time', 0.0) * 1000.0),
+                "backup_time_ms": int(stats.get('backup_time', 0.0) * 1000.0),
+                "policy_nn_time_ms": int(stats.get('policy_nn_time', 0.0) * 1000.0),
+                "value_nn_time_ms": int(stats.get('value_nn_time', 0.0) * 1000.0)
+            }
+        }
+        
+        # Add comparison data
+        for move_trmph in legal_move_probs:
+            direct_prob = legal_move_probs.get(move_trmph, 0)
+            fixed_tree_debug_info["comparison"]["fixed_tree_vs_direct"][move_trmph] = {
+                "direct_probability": direct_prob,
+                "fixed_tree_selected": move_trmph == selected_move_trmph
+            }
+        
+        result_data = {
+            "success": True,
+            "new_trmph": state.to_trmph(),
+            "board": state.board.tolist(),
+            "player": winner_to_color(state.current_player),
+            "legal_moves": moves_to_trmph(state.get_legal_moves()),
+            "winner": winner_to_color(state.winner) if state.winner is not None else None,
+            "move_made": selected_move_trmph,
+            "game_over": state.game_over,
+            "fixed_tree_debug_info": fixed_tree_debug_info,
+            "tree_data": tree_data
+        }
+        
+        # Calculate total wall time before JSON serialization
+        total_wall_time = time.time() - total_start_time
+        post_search_time = total_wall_time - search_time
+        
+        app.logger.debug(f"=== FIXED TREE MOVE COMPLETE ===")
+        app.logger.debug(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"Fixed tree search time: {search_time:.3f}s")
+        app.logger.debug(f"Post-search processing: {post_search_time:.3f}s")
+        app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
+        app.logger.debug(f"=== END WALL TIME BREAKDOWN ===")
+        app.logger.debug(f"Final result keys: {list(result_data.keys())}")
+        app.logger.debug(f"Move made: {result_data['move_made']}")
+        app.logger.debug(f"Game over: {result_data['game_over']}")
+        app.logger.debug(f"Winner: {result_data['winner']}")
+        
+        return result_data
+    except Exception as e:
+        app.logger.error(f"=== FIXED TREE MOVE ERROR ===")
+        app.logger.error(f"Error in make_fixed_tree_move: {e}")
+        import traceback
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": f"Fixed tree move generation failed: {e}"
+        }
 
 
 @app.route("/api/constants", methods=["GET"])
@@ -754,6 +1000,11 @@ def api_constants():
         "WINNER_VALUES": {
             "BLUE": TRMPH_BLUE_WIN,
             "RED": TRMPH_RED_WIN
+        },
+        "FIXED_TREE": {
+            "MAX_PRODUCT": FIXED_TREE_MAX_PRODUCT,
+            "DEFAULT_WIDTH": FIXED_TREE_DEFAULT_WIDTH,
+            "DEFAULT_TEMPERATURE": FIXED_TREE_DEFAULT_TEMPERATURE
         }
     })
 
@@ -1235,6 +1486,69 @@ def api_mcts_move():
         # Log a few key numeric values that might be causing the toFixed error
         if 'mcts_debug_info' in result:
             debug_info = result['mcts_debug_info']
+            if 'profiling_summary' in debug_info:
+                profiling = debug_info['profiling_summary']
+                app.logger.info(f"Profiling values: {profiling}")
+    else:
+        app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
+    
+    return jsonify(result)
+
+@app.route("/api/fixed_tree_move", methods=["POST"])
+def api_fixed_tree_move():
+    """Make a computer move using Fixed Tree Search with diagnostic output."""
+    data = request.get_json()
+    app.logger.info(f"=== FIXED TREE API CALL ===")
+    app.logger.info(f"Request data: {data}")
+    
+    trmph = data.get("trmph")
+    model_id = data.get("model_id", "model1")
+    search_widths = data.get("search_widths")  # Required parameter
+    temperature = data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
+    verbose = data.get("verbose", 0)
+    
+    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
+    
+    # Validate search_widths: product must be ≤ FIXED_TREE_MAX_PRODUCT
+    if not search_widths:
+        return jsonify({
+            "success": False,
+            "error": "search_widths parameter is required"
+        }), 400
+        
+    try:
+        product = np.prod(search_widths)
+        if product > FIXED_TREE_MAX_PRODUCT:
+            app.logger.error(f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}")
+            return jsonify({
+                "success": False, 
+                "error": f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}"
+            }), 400
+    except Exception as e:
+        app.logger.error(f"Error validating search_widths: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Invalid search_widths: {e}"
+        }), 400
+    
+    result = make_fixed_tree_move(
+        trmph,
+        model_id,
+        search_widths,
+        temperature,
+        verbose
+    )
+    
+    app.logger.info(f"=== FIXED TREE API RESPONSE ===")
+    app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
+    if result.get('success'):
+        app.logger.info(f"Result keys: {list(result.keys())}")
+        app.logger.info(f"Move made: {result.get('move_made', 'MISSING')}")
+        app.logger.info(f"Game over: {result.get('game_over', 'MISSING')}")
+        app.logger.info(f"Winner: {result.get('winner', 'MISSING')}")
+        # Log a few key numeric values that might be causing issues
+        if 'fixed_tree_debug_info' in result:
+            debug_info = result['fixed_tree_debug_info']
             if 'profiling_summary' in debug_info:
                 profiling = debug_info['profiling_summary']
                 app.logger.info(f"Profiling values: {profiling}")

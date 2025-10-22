@@ -136,7 +136,15 @@ let state = {
   red_enable_gumbel: true,
   blue_gumbel_max_sims: 49999,
   red_gumbel_max_sims: 49999,
-  // Policy play settings
+  // Move selection method
+  blue_move_method: 'mcts',
+  red_move_method: 'mcts',
+  // Fixed tree search settings (will be set from backend constants)
+  blue_search_widths: [],
+  red_search_widths: [],
+  blue_search_widths_str: '',
+  red_search_widths_str: '',
+  // Policy play settings (legacy - kept for compatibility)
   blue_use_policy: false,
   red_use_policy: false,
   auto_step_active: false,
@@ -263,6 +271,33 @@ function updateSettingVisualState(player, setting, isModified) {
   }
 }
 
+// Fixed Tree Search constants (loaded from backend)
+let FIXED_TREE_MAX_PRODUCT;
+let FIXED_TREE_DEFAULT_WIDTH;
+let FIXED_TREE_DEFAULT_TEMPERATURE;
+
+// Validate search widths input
+function validateSearchWidths(widthsStr) {
+  try {
+    const widths = widthsStr.split(',').map(s => parseInt(s.trim()));
+    
+    // Check all are valid integers 1-169
+    if (widths.some(w => isNaN(w) || w < 1 || w > FIXED_TREE_DEFAULT_WIDTH)) {
+      return { valid: false, error: `All widths must be integers between 1 and ${FIXED_TREE_DEFAULT_WIDTH}` };
+    }
+    
+    // Check product constraint
+    const product = widths.reduce((a, b) => a * b, 1);
+    if (product > FIXED_TREE_MAX_PRODUCT) {
+      return { valid: false, error: `Product ${product} exceeds limit of ${FIXED_TREE_MAX_PRODUCT}` };
+    }
+    
+    return { valid: true, widths };
+  } catch (e) {
+    return { valid: false, error: "Invalid format. Use comma-separated integers like '169' or '20,10,5'" };
+  }
+}
+
 // Smart update when Gumbel is toggled
 function onGumbelToggle(player, enabled) {
   const mode = enabled ? 'gumbel' : 'mcts';
@@ -319,6 +354,29 @@ function onPolicyToggle(player, enabled) {
   // Always update the Policy setting itself
   state[`${player}_use_policy`] = enabled;
   updateUIElement(`${player}-use-policy`, enabled);
+}
+
+// Smart update when move method is changed
+function onMoveMethodChange(player, method) {
+  // Show/hide sections based on method
+  const mctsSection = document.querySelector(`.${player}-mcts-section`);
+  const policySection = document.querySelector(`.${player}-policy-section`);
+  const fixedTreeSection = document.querySelector(`.${player}-fixed-tree-section`);
+  
+  if (mctsSection) mctsSection.style.display = method === 'mcts' ? 'block' : 'none';
+  if (policySection) policySection.style.display = method === 'policy' ? 'block' : 'none';
+  if (fixedTreeSection) fixedTreeSection.style.display = method === 'fixed_tree' ? 'block' : 'none';
+  
+  // Update legacy policy checkbox for compatibility
+  if (method === 'policy') {
+    state[`${player}_use_policy`] = true;
+    updateUIElement(`${player}-use-policy`, true);
+  } else {
+    state[`${player}_use_policy`] = false;
+    updateUIElement(`${player}-use-policy`, false);
+  }
+  
+  console.log(`Move method changed for ${player}: ${method}`);
 }
 
 // Helper to update UI element value
@@ -481,12 +539,13 @@ async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.
   return await resp.json();
 }
 
-async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
-                               num_simulations = 200, exploration_constant = 1.4,
-                               enable_gumbel = false, gumbel_max_sims = 4996, use_policy = false) {
-  console.log(`makeComputerMove called with model_id: ${model_id}, use_policy: ${use_policy}`);
+async function makeComputerMove(trmph, model_id, temperature, verbose,
+                               num_simulations, exploration_constant,
+                               enable_gumbel, gumbel_max_sims, 
+                               move_method, search_widths) {
+  console.log(`makeComputerMove called with model_id: ${model_id}, move_method: ${move_method}`);
   
-  if (use_policy) {
+  if (move_method === 'policy') {
     // Use policy endpoint for fast policy sampling
     const resp = await fetch('/api/policy_move', {
       method: 'POST',
@@ -500,8 +559,23 @@ async function makeComputerMove(trmph, model_id, temperature = 1.0, verbose = 0,
     });
     if (!resp.ok) throw new Error('API error');
     return await resp.json();
+  } else if (move_method === 'fixed_tree') {
+    // Use fixed tree search endpoint
+    const resp = await fetch('/api/fixed_tree_move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        trmph, 
+        model_id, 
+        search_widths,
+        temperature, 
+        verbose
+      }),
+    });
+    if (!resp.ok) throw new Error('API error');
+    return await resp.json();
   } else {
-    // Use MCTS endpoint
+    // Use MCTS endpoint (default)
     const resp = await fetch('/api/mcts_move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -887,6 +961,9 @@ async function onCellClick(e) {
       }
       
       // Make computer move with verbose output
+      const computerMoveMethod = computerPlayer === 'blue' ? state.blue_move_method : state.red_move_method;
+      const computerSearchWidths = computerPlayer === 'blue' ? state.blue_search_widths : state.red_search_widths;
+      
       const computerResult = await makeComputerMove(
         state.trmph, 
         computerModelId, 
@@ -896,7 +973,8 @@ async function onCellClick(e) {
         computerExplorationConstant,
         computerEnableGumbel,
         computerGumbelMaxSims,
-        computerPlayer === 'blue' ? state.blue_use_policy : state.red_use_policy
+        computerMoveMethod,
+        computerSearchWidths
       );
       
       if (computerResult.success) {
@@ -913,6 +991,8 @@ async function onCellClick(e) {
         displayDebugInfo(computerResult.debug_info);
       } else if (computerResult.mcts_debug_info) {
         displayMCTSDebugInfo(computerResult.mcts_debug_info);
+      } else if (computerResult.fixed_tree_debug_info) {
+        displayFixedTreeDebugInfo(computerResult.fixed_tree_debug_info);
       }
       
       // Display policy information if available
@@ -943,6 +1023,10 @@ async function stepComputerMove() {
   const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims, use_policy } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
+  // Get move method and search widths for current player
+  const moveMethod = currentPlayer === 'blue' ? state.blue_move_method : state.red_move_method;
+  const searchWidths = currentPlayer === 'blue' ? state.blue_search_widths : state.red_search_widths;
+  
   // Save state for undo functionality before computer move
   saveStateForUndo();
   
@@ -956,7 +1040,8 @@ async function stepComputerMove() {
       exploration_constant,
       enable_gumbel,
       gumbel_max_sims,
-      use_policy
+      moveMethod,
+      searchWidths
     );
     
     if (result.success) {
@@ -973,6 +1058,8 @@ async function stepComputerMove() {
         displayDebugInfo(result.debug_info);
       } else if (result.mcts_debug_info) {
         displayMCTSDebugInfo(result.mcts_debug_info);
+      } else if (result.fixed_tree_debug_info) {
+        displayFixedTreeDebugInfo(result.fixed_tree_debug_info);
       }
       
       // Display policy information if available
@@ -1037,6 +1124,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       PLAYER_VALUES: constantsResult.PLAYER_VALUES,
       WINNER_VALUES: constantsResult.WINNER_VALUES
     };
+    
+    // Load fixed tree constants from backend
+    if (constantsResult.FIXED_TREE) {
+      FIXED_TREE_MAX_PRODUCT = constantsResult.FIXED_TREE.MAX_PRODUCT;
+      FIXED_TREE_DEFAULT_WIDTH = constantsResult.FIXED_TREE.DEFAULT_WIDTH;
+      FIXED_TREE_DEFAULT_TEMPERATURE = constantsResult.FIXED_TREE.DEFAULT_TEMPERATURE;
+      console.log('Loaded fixed tree constants:', constantsResult.FIXED_TREE);
+      
+      // Update state with backend constants
+      state.blue_search_widths = [FIXED_TREE_DEFAULT_WIDTH];
+      state.red_search_widths = [FIXED_TREE_DEFAULT_WIDTH];
+      state.blue_search_widths_str = FIXED_TREE_DEFAULT_WIDTH.toString();
+      state.red_search_widths_str = FIXED_TREE_DEFAULT_WIDTH.toString();
+      
+      // Update UI with backend constants
+      document.getElementById('blue-search-widths').value = FIXED_TREE_DEFAULT_WIDTH.toString();
+      document.getElementById('red-search-widths').value = FIXED_TREE_DEFAULT_WIDTH.toString();
+    }
+    
     state.constants = constantsResult;
     console.log('Loadedx game constants:', GAME_CONSTANTS);
   } catch (err) {
@@ -1162,7 +1268,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.red_gumbel_max_sims = parseInt(e.target.value);
   });
 
-  // Policy play controls
+  // Move method selection controls
+  document.getElementById('blue-move-method').addEventListener('change', (e) => {
+    state.blue_move_method = e.target.value;
+    onMoveMethodChange('blue', e.target.value);
+  });
+  document.getElementById('red-move-method').addEventListener('change', (e) => {
+    state.red_move_method = e.target.value;
+    onMoveMethodChange('red', e.target.value);
+  });
+
+  // Fixed tree search controls
+  document.getElementById('blue-search-widths').addEventListener('input', (e) => {
+    state.blue_search_widths_str = e.target.value;
+    const validation = validateSearchWidths(e.target.value);
+    if (validation.valid) {
+      state.blue_search_widths = validation.widths;
+      e.target.style.borderColor = '';
+      e.target.title = '';
+    } else {
+      e.target.style.borderColor = 'red';
+      e.target.title = validation.error;
+    }
+  });
+  document.getElementById('red-search-widths').addEventListener('input', (e) => {
+    state.red_search_widths_str = e.target.value;
+    const validation = validateSearchWidths(e.target.value);
+    if (validation.valid) {
+      state.red_search_widths = validation.widths;
+      e.target.style.borderColor = '';
+      e.target.title = '';
+    } else {
+      e.target.style.borderColor = 'red';
+      e.target.title = validation.error;
+    }
+  });
+
+  // Policy play controls (legacy - kept for compatibility)
   document.getElementById('blue-use-policy').addEventListener('change', (e) => {
     markSettingAsModified('blue', 'use_policy');
     onPolicyToggle('blue', e.target.checked);
@@ -1472,6 +1614,94 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
       });
       output += '\n';
     }
+  }
+  
+  debugContent.textContent = output;
+}
+
+function displayFixedTreeDebugInfo(fixedTreeDebugInfo) {
+  if (!fixedTreeDebugInfo || state.verbose_level === 0) return;
+  
+  const debugContent = document.getElementById('debug-content');
+  if (!debugContent) return;
+  
+  let output = '';
+  
+  // Display algorithm information first
+  output += displayAlgorithmInfo(fixedTreeDebugInfo);
+  
+  // Fixed Tree Search Statistics
+  if (fixedTreeDebugInfo.search_stats) {
+    output += '=== FIXED TREE SEARCH STATISTICS ===\n';
+    output += `Search Widths: [${fixedTreeDebugInfo.search_stats.search_widths.join(', ')}] | `;
+    output += `Time: ${fixedTreeDebugInfo.search_stats.search_time.toFixed(3)}s | `;
+    output += `Temperature: ${fixedTreeDebugInfo.search_stats.temperature}\n\n`;
+  }
+  
+  // Move Selection
+  if (fixedTreeDebugInfo.move_selection) {
+    output += '=== MOVE SELECTION ===\n';
+    output += `Selected: ${fixedTreeDebugInfo.move_selection.selected_move} (${fixedTreeDebugInfo.move_selection.selected_move_coords[0]}, ${fixedTreeDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
+  }
+  
+  // Tree Statistics
+  if (fixedTreeDebugInfo.tree_statistics) {
+    output += '=== TREE STATISTICS ===\n';
+    output += `Total Positions: ${fixedTreeDebugInfo.tree_statistics.total_positions} | `;
+    output += `Tree Depth: ${fixedTreeDebugInfo.tree_statistics.tree_depth} | `;
+    output += `Tree Width: ${fixedTreeDebugInfo.tree_statistics.tree_width} | `;
+    output += `Policy Evaluations: ${fixedTreeDebugInfo.tree_statistics.policy_evaluations} | `;
+    output += `Value Evaluations: ${fixedTreeDebugInfo.tree_statistics.value_evaluations}\n\n`;
+  }
+  
+  // Move Probabilities
+  if (fixedTreeDebugInfo.move_probabilities) {
+    output += '=== MOVE PROBABILITIES ===\n';
+    
+    // Direct policy probabilities (top moves only)
+    if (fixedTreeDebugInfo.move_probabilities.direct_policy) {
+      output += 'Direct Policy Probabilities:\n';
+      const sortedPolicy = Object.entries(fixedTreeDebugInfo.move_probabilities.direct_policy)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 10);
+      sortedPolicy.forEach(([move, prob]) => {
+        const probPercent = (prob * 100).toFixed(2);
+        output += `  ${move}: ${probPercent}%\n`;
+      });
+      output += '\n';
+    }
+  }
+  
+  // Win Rate Analysis
+  if (fixedTreeDebugInfo.win_rate_analysis) {
+    output += '=== WIN RATE ANALYSIS ===\n';
+    output += `Root Value: ${fixedTreeDebugInfo.win_rate_analysis.root_value.toFixed(4)} | `;
+    output += `Win Probability: ${(fixedTreeDebugInfo.win_rate_analysis.win_probability * 100).toFixed(2)}%\n\n`;
+  }
+  
+  // Summary
+  if (fixedTreeDebugInfo.summary) {
+    output += '=== SUMMARY ===\n';
+    output += `Algorithm: ${fixedTreeDebugInfo.summary.algorithm_summary}\n`;
+    output += `Total Legal Moves: ${fixedTreeDebugInfo.summary.total_legal_moves}\n`;
+    output += `Moves Explored: ${fixedTreeDebugInfo.summary.moves_explored}\n`;
+    output += `Search Efficiency: ${(fixedTreeDebugInfo.summary.search_efficiency * 100).toFixed(1)}%\n`;
+    if (fixedTreeDebugInfo.summary.top_direct_move) {
+      output += `Top Direct Move: ${fixedTreeDebugInfo.summary.top_direct_move}\n`;
+    }
+    output += '\n';
+  }
+  
+  // Profiling Summary
+  if (fixedTreeDebugInfo.profiling_summary) {
+    output += '=== PERFORMANCE ===\n';
+    output += `Total Compute: ${fixedTreeDebugInfo.profiling_summary.total_compute_ms}ms | `;
+    output += `Memory Usage: ${fixedTreeDebugInfo.profiling_summary.memory_usage_mb.toFixed(1)}MB\n`;
+    output += `Tree Building: ${fixedTreeDebugInfo.profiling_summary.tree_building_time_ms}ms | `;
+    output += `Leaf Evaluation: ${fixedTreeDebugInfo.profiling_summary.leaf_evaluation_time_ms}ms | `;
+    output += `Backup: ${fixedTreeDebugInfo.profiling_summary.backup_time_ms}ms\n`;
+    output += `Policy NN: ${fixedTreeDebugInfo.profiling_summary.policy_nn_time_ms}ms | `;
+    output += `Value NN: ${fixedTreeDebugInfo.profiling_summary.value_nn_time_ms}ms\n\n`;
   }
   
   debugContent.textContent = output;
