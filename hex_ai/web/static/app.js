@@ -144,9 +144,6 @@ let state = {
   red_search_widths: [],
   blue_search_widths_str: '',
   red_search_widths_str: '',
-  // Policy play settings (legacy - kept for compatibility)
-  blue_use_policy: false,
-  red_use_policy: false,
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
@@ -165,14 +162,12 @@ const userModifiedSettings = {
   blue: {
     temperature: false,
     num_simulations: false,
-    gumbel_enabled: false,
-    use_policy: false
+    gumbel_enabled: false
   },
   red: {
     temperature: false,
     num_simulations: false,
-    gumbel_enabled: false,
-    use_policy: false
+    gumbel_enabled: false
   }
 };
 
@@ -193,7 +188,7 @@ const SMART_DEFAULTS = {
 
 // --- Game Constants (will be populated from backend) ---
 let GAME_CONSTANTS = {
-  BOARD_SIZE: 13, // Default fallback
+  BOARD_SIZE: 13,
   PIECE_VALUES: {
     EMPTY: 'e',
     BLUE: 'b', 
@@ -212,8 +207,7 @@ function getCurrentPlayerSettings() {
       num_simulations: state.blue_num_simulations,
       exploration_constant: state.blue_exploration_constant,
       enable_gumbel: state.blue_enable_gumbel,
-      gumbel_max_sims: state.blue_gumbel_max_sims,
-      use_policy: state.blue_use_policy
+      gumbel_max_sims: state.blue_gumbel_max_sims
     };
   } else {
     return {
@@ -222,8 +216,7 @@ function getCurrentPlayerSettings() {
       num_simulations: state.red_num_simulations,
       exploration_constant: state.red_exploration_constant,
       enable_gumbel: state.red_enable_gumbel,
-      gumbel_max_sims: state.red_gumbel_max_sims,
-      use_policy: state.red_use_policy
+      gumbel_max_sims: state.red_gumbel_max_sims
     };
   }
 }
@@ -351,9 +344,6 @@ function onPolicyToggle(player, enabled) {
     console.log(`Smart update for ${player}: returning to ${mode} mode - temp: ${state[`${player}_temperature`]}`);
   }
   
-  // Always update the Policy setting itself
-  state[`${player}_use_policy`] = enabled;
-  updateUIElement(`${player}-use-policy`, enabled);
 }
 
 // Smart update when move method is changed
@@ -367,14 +357,6 @@ function onMoveMethodChange(player, method) {
   if (policySection) policySection.style.display = method === 'policy' ? 'block' : 'none';
   if (fixedTreeSection) fixedTreeSection.style.display = method === 'fixed_tree' ? 'block' : 'none';
   
-  // Update legacy policy checkbox for compatibility
-  if (method === 'policy') {
-    state[`${player}_use_policy`] = true;
-    updateUIElement(`${player}-use-policy`, true);
-  } else {
-    state[`${player}_use_policy`] = false;
-    updateUIElement(`${player}-use-policy`, false);
-  }
   
   console.log(`Move method changed for ${player}: ${method}`);
 }
@@ -437,7 +419,6 @@ function initializeDarkMode() {
   if (savedDarkMode !== null) {
     state.dark_mode = savedDarkMode === 'true';
   } else {
-    // Check system preference as fallback
     state.dark_mode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   }
   
@@ -885,12 +866,6 @@ function updateUI() {
   if (redEnableGumbel) redEnableGumbel.checked = state.red_enable_gumbel;
   if (redGumbelMaxSims) redGumbelMaxSims.value = state.red_gumbel_max_sims;
   
-  // Update Policy play controls
-  const blueUsePolicy = document.getElementById('blue-use-policy');
-  const redUsePolicy = document.getElementById('red-use-policy');
-  
-  if (blueUsePolicy) blueUsePolicy.checked = state.blue_use_policy;
-  if (redUsePolicy) redUsePolicy.checked = state.red_use_policy;
   
   // Show/hide debug output based on verbose level
   const debugOutput = document.getElementById('debug-output');
@@ -1020,7 +995,7 @@ async function onCellClick(e) {
 async function stepComputerMove() {
   if (state.winner) return;
   
-  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims, use_policy } = getCurrentPlayerSettings();
+  const { model_id, temperature, num_simulations, exploration_constant, enable_gumbel, gumbel_max_sims } = getCurrentPlayerSettings();
   const currentPlayer = state.player; // Store current player before the move
   
   // Get move method and search widths for current player
@@ -1139,8 +1114,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.red_search_widths_str = FIXED_TREE_DEFAULT_WIDTH.toString();
       
       // Update UI with backend constants
-      document.getElementById('blue-search-widths').value = FIXED_TREE_DEFAULT_WIDTH.toString();
-      document.getElementById('red-search-widths').value = FIXED_TREE_DEFAULT_WIDTH.toString();
+      const blueSearchWidths = document.getElementById('blue-search-widths');
+      const redSearchWidths = document.getElementById('red-search-widths');
+      if (blueSearchWidths) blueSearchWidths.value = FIXED_TREE_DEFAULT_WIDTH.toString();
+      if (redSearchWidths) redSearchWidths.value = FIXED_TREE_DEFAULT_WIDTH.toString();
     }
     
     state.constants = constantsResult;
@@ -1214,10 +1191,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Model selection handlers
-  document.getElementById('blue-model').addEventListener('change', (e) => {
+  const blueModel = document.getElementById('blue-model');
+  const redModel = document.getElementById('red-model');
+  if (blueModel) blueModel.addEventListener('change', (e) => {
     state.blue_model_id = e.target.value;
   });
-  document.getElementById('red-model').addEventListener('change', (e) => {
+  if (redModel) redModel.addEventListener('change', (e) => {
     state.red_model_id = e.target.value;
   });
 
@@ -1269,17 +1248,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Move method selection controls
-  document.getElementById('blue-move-method').addEventListener('change', (e) => {
+  const blueMoveMethod = document.getElementById('blue-move-method');
+  const redMoveMethod = document.getElementById('red-move-method');
+  if (blueMoveMethod) blueMoveMethod.addEventListener('change', (e) => {
     state.blue_move_method = e.target.value;
     onMoveMethodChange('blue', e.target.value);
   });
-  document.getElementById('red-move-method').addEventListener('change', (e) => {
+  if (redMoveMethod) redMoveMethod.addEventListener('change', (e) => {
     state.red_move_method = e.target.value;
     onMoveMethodChange('red', e.target.value);
   });
 
   // Fixed tree search controls
-  document.getElementById('blue-search-widths').addEventListener('input', (e) => {
+  const blueSearchWidths = document.getElementById('blue-search-widths');
+  const redSearchWidths = document.getElementById('red-search-widths');
+  if (blueSearchWidths) blueSearchWidths.addEventListener('input', (e) => {
     state.blue_search_widths_str = e.target.value;
     const validation = validateSearchWidths(e.target.value);
     if (validation.valid) {
@@ -1291,7 +1274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       e.target.title = validation.error;
     }
   });
-  document.getElementById('red-search-widths').addEventListener('input', (e) => {
+  if (redSearchWidths) redSearchWidths.addEventListener('input', (e) => {
     state.red_search_widths_str = e.target.value;
     const validation = validateSearchWidths(e.target.value);
     if (validation.valid) {
@@ -1304,15 +1287,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Policy play controls (legacy - kept for compatibility)
-  document.getElementById('blue-use-policy').addEventListener('change', (e) => {
-    markSettingAsModified('blue', 'use_policy');
-    onPolicyToggle('blue', e.target.checked);
-  });
-  document.getElementById('red-use-policy').addEventListener('change', (e) => {
-    markSettingAsModified('red', 'use_policy');
-    onPolicyToggle('red', e.target.checked);
-  });
 
   // Step button handler
   document.getElementById('step-btn').addEventListener('click', async () => {
