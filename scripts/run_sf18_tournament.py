@@ -20,7 +20,7 @@ Examples:
 
 2. Use specific SF18 difficulty and server URL:
    PYTHONPATH=. python scripts/run_sf18_tournament.py \
-     --models=current_best,model1 \
+     --models=current_best,best \
      --strategies=mcts,mcts \
      --mcts-sims=100,100 \
      --sf18-difficulty=8 \
@@ -645,7 +645,7 @@ Examples:
   %(prog)s --model-files=epoch11_mini15.pt.gz,epoch16_mini23.pt.gz --model-dirs=checkpoints/dir1,checkpoints/dir2 --strategies=mcts,mcts --mcts-sims=30,30 --num-openings=100
   
   # Use specific SF18 difficulty and server URL
-  %(prog)s --models=current_best,model1 --strategies=mcts,mcts --mcts-sims=100,100 --sf18-difficulty=8 --sf18-server-url=http://localhost:8088 --num-openings=50
+  %(prog)s --models=current_best,best --strategies=mcts,mcts --mcts-sims=100,100 --sf18-difficulty=8 --sf18-server-url=http://localhost:8088 --num-openings=50
   
   # Use custom opening file
   %(prog)s --models=current_best --strategies=mcts --mcts-sims=30 --opening-file=data/deterministic_openings.txt --sf18-difficulty=9
@@ -654,7 +654,7 @@ Examples:
     
     # SF25 model arguments (reused from run_tournament.py)
     parser.add_argument('--models', type=str,
-                       help='Comma-separated list of model registry names (e.g., "current_best,model1,model2")')
+                       help='Comma-separated list of model registry names (e.g., "current_best,best,model2")')
     parser.add_argument('--model-files', type=str,
                        help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz")')
     parser.add_argument('--model-dirs', type=str,

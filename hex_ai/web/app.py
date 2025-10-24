@@ -58,17 +58,26 @@ def bad_request(e):
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
 
-# Preload default model on startup
+# Preload default models on startup
 def preload_default_model():
-    """Preload the default model to avoid loading delays on first move."""
+    """Preload both simple and best models to avoid loading delays when switching difficulty."""
     try:
-        app.logger.info("Preloading default model...")
-        # Use fallback system to get an available model
-        model_path = get_model_path_with_fallback("model1")
-        app.logger.info(f"Preloading model1 from {model_path}")
-        MODEL_CACHE.get_simple_model(model_path)
-        MODEL_CACHE.get_wrapper_model(model_path)
-        app.logger.info("Successfully preloaded model1")
+        app.logger.info("Preloading models...")
+        
+        # Load best model
+        best_model_path = get_model_path_with_fallback("best")
+        app.logger.info(f"Preloading best model from {best_model_path}")
+        MODEL_CACHE.get_simple_model(best_model_path)
+        MODEL_CACHE.get_wrapper_model(best_model_path)
+        app.logger.info("Successfully preloaded best model")
+        
+        # Load simple model
+        from hex_ai.inference.model_config import SIMPLE_MODEL_PATH
+        app.logger.info(f"Preloading simple model from {SIMPLE_MODEL_PATH}")
+        MODEL_CACHE.get_simple_model(SIMPLE_MODEL_PATH)
+        MODEL_CACHE.get_wrapper_model(SIMPLE_MODEL_PATH)
+        app.logger.info("Successfully preloaded simple model")
+        
     except Exception as e:
         app.logger.error(f"Error during model preloading: {e}")
 
@@ -434,7 +443,7 @@ def rate_limit(cost: float = 1.0):
 # MODEL MANAGEMENT
 # =============================================================================
 
-def get_model(model_id="model1"):
+def get_model(model_id="best"):
     """Get or create a model instance for the given model_id using centralized cache with fallback support."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
     
@@ -471,24 +480,26 @@ def get_difficulty_parameters(elo_rating):
         elo_rating = 2350
     
     # Define difficulty breakpoints for linear interpolation
-    # Format: (elo, temperature, num_simulations, algorithm)
+    # Format: (elo, temperature, num_simulations, algorithm, model)
     difficulty_points = [
-        (1, 2.5, 0, "policy"),       # Mindless
-        (300, 1.5, 0, "policy"),     # Beginner  
-        (500, 1.1, 0, "policy"),     # Novice
-        (1000, 0.85, 0, "policy"),   # Medium
-        (1500, 0.55, 0, "policy"),   # Hard
-        (1800, 0.30, 0, "policy"),   # Very Hard
-        (2100, 0.08, 0, "policy"),   # Expert
-        (2150, 0.1, 8, "mcts"),      # Extra Hard - Gumbel MCTS
-        (2250, 0.1, 20, "mcts"),     # Ultra Hard - Gumbel MCTS
-        (2350, 0.1, 39, "mcts"),     # Ultra Difficult - Gumbel MCTS
+        (1,    2.2,  0 , "policy", "simple"),   # Mindless
+        (300,  1.5,  0 , "policy", "simple"),   # Beginner  
+        (500,  1.1,  0 , "policy", "simple"),   # Novice
+        (800,  0.8,  0 , "policy", "simple"),   # Novice
+        (1199, 0.6,  0 , "policy", "simple"),   # Medium
+        (1200, 0.70, 0 , "policy", "best"),     # NEW - transition point
+        (1500, 0.55, 0 , "policy", "best"),     # Hard
+        (1800, 0.30, 0 , "policy", "best"),     # Very Hard
+        (2100, 0.08, 0 , "policy", "best"),     # Expert
+        (2150, 0.1,  8 , "mcts",   "best"),     # Extra Hard - Gumbel MCTS
+        (2250, 0.1,  20, "mcts",   "best"),     # Ultra Hard - Gumbel MCTS
+        (2350, 0.1,  39, "mcts",   "best"),     # Ultra Difficult - Gumbel MCTS
     ]
     
     # Find the appropriate segment for linear interpolation
     for i in range(len(difficulty_points) - 1):
-        elo_low, temp_low, sims_low, algo_low = difficulty_points[i]
-        elo_high, temp_high, sims_high, algo_high = difficulty_points[i + 1]
+        elo_low, temp_low, sims_low, algo_low, model_low = difficulty_points[i]
+        elo_high, temp_high, sims_high, algo_high, model_high = difficulty_points[i + 1]
         
         if elo_low <= elo_rating <= elo_high:
             # Linear interpolation
@@ -505,13 +516,17 @@ def get_difficulty_parameters(elo_rating):
             # Determine algorithm (use higher algorithm if we're in MCTS range)
             algorithm = algo_high if algo_high == "mcts" else algo_low
             
+            # Model selection: use discrete cutoff (use lower model until threshold reached)
+            model = model_low if elo_rating < elo_high else model_high
+            
             if algorithm == "policy":
                 return {
                     "algorithm": "policy",
                     "temperature": temperature,
                     "num_simulations": 0,
                     "exploration_constant": 0,
-                    "enable_gumbel": False
+                    "enable_gumbel": False,
+                    "model": model
                 }
             else:  # mcts
                 return {
@@ -521,7 +536,8 @@ def get_difficulty_parameters(elo_rating):
                     "num_simulations": num_simulations,
                     "exploration_constant": 2.8,
                     "enable_gumbel": True,
-                    "gumbel_max_sims": 500
+                    "gumbel_max_sims": 500,
+                    "model": model
                 }
     
     # Fallback (should not reach here with proper bounds checking)
@@ -530,7 +546,8 @@ def get_difficulty_parameters(elo_rating):
         "temperature": 0.5,
         "num_simulations": 0,
         "exploration_constant": 0,
-        "enable_gumbel": False
+        "enable_gumbel": False,
+        "model": "best"
     }
 
 
@@ -584,16 +601,17 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
     player_color = winner_to_color(player_enum)
     winner_color = winner_to_color(winner) if winner is not None else None
     
+    # Get difficulty parameters and apply temperature scaling
+    difficulty_params = get_difficulty_parameters(elo_rating)
+    temperature = difficulty_params["temperature"]
+    model_id = difficulty_params["model"]
+    
     # Model inference
-    model = get_model("model1")
+    model = get_model(model_id)
     if trmph_for_inference is None:
         trmph_for_inference = state.to_trmph()
     
     policy_logits, value_signed = model.simple_infer(trmph_for_inference)
-    
-    # Get difficulty parameters and apply temperature scaling
-    difficulty_params = get_difficulty_parameters(elo_rating)
-    temperature = difficulty_params["temperature"]
     
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
@@ -935,9 +953,10 @@ def api_policy_move():
         # Get difficulty parameters
         difficulty_params = get_difficulty_parameters(elo_rating)
         temperature = difficulty_params["temperature"]
+        model_id = difficulty_params["model"]
         
         # Get model and make policy move
-        model = get_model("model1")
+        model = get_model(model_id)
         move = select_policy_move(state, model, temperature)
         
         if move is None:
@@ -992,7 +1011,7 @@ def api_mcts_move():
     # Use MCTS for higher difficulties
     result = make_mcts_move(
         trmph,
-        "model1",
+        difficulty_params["model"],
         difficulty_params["num_simulations"],
         difficulty_params["exploration_constant"],
         difficulty_params["temperature"],

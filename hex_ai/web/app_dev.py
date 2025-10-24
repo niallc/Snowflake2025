@@ -94,7 +94,7 @@ def preload_default_models():
     """Preload the default models to avoid loading delays on first move."""
     try:
         app.logger.info("Preloading default models...")
-        default_models = ["model1", "model2"]  # Current and previous best models
+        default_models = ["best", "model2"]  # Current and previous best models
         
         for model_id in default_models:
             try:
@@ -115,7 +115,7 @@ def preload_default_models():
 preload_default_models()
 
 # --- Model Management ---
-def get_model(model_id="model1"):
+def get_model(model_id="best"):
     """Get or create a model instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
     
@@ -166,9 +166,9 @@ def get_available_models():
     # Get all models from central registry
     all_models = get_all_model_info()
     
-    # Filter to only show the main model IDs (model1, model2) to avoid duplicates
+    # Filter to only show the main model IDs (best, model2) to avoid duplicates
     # since current_best/previous_best point to the same files
-    main_models = [model for model in all_models if model['id'] in ['model1', 'model2']]
+    main_models = [model for model in all_models if model['id'] in ['best', 'model2']]
     
     # Add 'name' field that the frontend expects
     for model in main_models:
@@ -1172,7 +1172,7 @@ def api_refresh_models():
 def api_state():
     data = request.get_json()
     trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")  # Default to model1
+    model_id = data.get("model_id", "best")  # Default to best
     temperature = data.get("temperature", 1.0)  # Default temperature
     verbose = data.get("verbose", 0)  # Get verbose level
     

@@ -24,7 +24,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
 # CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
-# CURRENT_BEST_MODEL_FILE = "epoch9_mini12.pt.gz"
+# CURRENT_BEST_MODEL_FILE = "epoch8_mini1.pt.gz" #epoch9_mini12.pt.gz
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
 # CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
@@ -56,42 +56,44 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251021_104711/"
 # CURRENT_BEST_MODEL_FILE = "epoch55_mini13.pt.gz" 
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549/"
-CURRENT_BEST_MODEL_FILE = "epoch59_mini29.pt.gz" 
-
+CURRENT_BEST_MODEL_FILE = "epoch59_mini15.pt.gz" 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
+
+# Previous best model (kept for comparison/testing)
+PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549"
+PREVIOUS_BEST_MODEL_FILE = "epoch59_mini15.pt.gz"
+PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
 
 # Fallback model configuration (used when current best model is unavailable)
 FALLBACK_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
 FALLBACK_MODEL_FILE = "epoch49_mini57.pt.gz"
 FALLBACK_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, FALLBACK_MODEL_DIR, FALLBACK_MODEL_FILE)
 
-# Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549"
-PREVIOUS_BEST_MODEL_FILE = "epoch59_mini29.pt.gz"
-PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
-
+# Simple model configuration (used to generate lower ELO play, rather than best-possible play)
+SIMPLE_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
+SIMPLE_MODEL_FILE = "epoch8_mini1.pt.gz"
+SIMPLE_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, SIMPLE_MODEL_DIR, SIMPLE_MODEL_FILE)
 # Legacy models (for historical comparison)
 LEGACY_MODELS = {}
 
 # Central registry of all model IDs and their paths
 # This ensures all parts of the code use the same model IDs and paths
 MODEL_REGISTRY = {
-    "model1": CURRENT_BEST_MODEL_PATH,
+    "best": CURRENT_BEST_MODEL_PATH,
     "model2": PREVIOUS_BEST_MODEL_PATH,
-    "current_best": CURRENT_BEST_MODEL_PATH,
     "previous_best": PREVIOUS_BEST_MODEL_PATH,
     "fallback": FALLBACK_MODEL_PATH,
+    "simple": SIMPLE_MODEL_PATH,
 }
 
-def get_model_path(model_name: str = "current_best") -> str:
+def get_model_path(model_name: str = "best") -> str:
     """
     Get the full path to a model checkpoint.
     
     Args:
         model_name: Name of the model to get path for. Options:
-            - "current_best": Latest best model
+            - "best": Latest best model (preferred)
             - "previous_best": Previous best model
-            - "model1": Alias for current_best
             - "model2": Alias for previous_best
             - Any key from LEGACY_MODELS
     
@@ -106,7 +108,7 @@ def get_model_path(model_name: str = "current_best") -> str:
     else:
         raise ValueError(f"Unknown model name: {model_name}. Available: {list(MODEL_REGISTRY.keys())}, {list(LEGACY_MODELS.keys())}")
 
-def get_model_dir(model_name: str = "current_best") -> str:
+def get_model_dir(model_name: str = "best") -> str:
     """
     Get the directory containing a model checkpoint.
     
@@ -145,10 +147,10 @@ def get_default_model_paths() -> dict:
     Get default model paths for web app and other components.
     
     Returns:
-        Dictionary with model1 and model2 paths
+        Dictionary with best and model2 paths
     """
     return {
-        "model1": get_model_path("model1"),
+        "best": get_model_path("best"),
         "model2": get_model_path("model2")
     }
 
@@ -157,7 +159,7 @@ def get_model_info(model_id: str) -> Dict[str, Any]:
     Get comprehensive information about a model.
     
     Args:
-        model_id: Model identifier (e.g., "model1", "current_best")
+        model_id: Model identifier (e.g., "best", "simple", "previous_best")
     
     Returns:
         Dictionary with model information including path, filename, etc.
@@ -221,7 +223,7 @@ def get_normalized_path(model_path: str) -> str:
     """
     return os.path.abspath(os.path.normpath(model_path))
 
-def get_model_path_with_fallback(model_name: str = "current_best") -> str:
+def get_model_path_with_fallback(model_name: str = "best") -> str:
     """
     Get the full path to a model checkpoint with fallback support.
     
@@ -231,8 +233,7 @@ def get_model_path_with_fallback(model_name: str = "current_best") -> str:
     
     Args:
         model_name: Name of the model to get path for. Options:
-            - "current_best": Latest best model (with fallback)
-            - "model1": Alias for current_best (with fallback)
+            - "best": Latest best model (with fallback, preferred)
             - "fallback": Direct access to fallback model
             - Other models: No fallback, returns as-is
     
@@ -242,8 +243,8 @@ def get_model_path_with_fallback(model_name: str = "current_best") -> str:
     # Get the primary model path
     primary_path = get_model_path(model_name)
     
-    # For current_best and model1, check if file exists and fallback if needed
-    if model_name in ["current_best", "model1"]:
+    # For best, check if file exists and fallback if needed
+    if model_name in ["best"]:
         if not validate_model_path(primary_path):
             # Primary model doesn't exist, use fallback
             fallback_path = get_model_path("fallback")
@@ -255,7 +256,7 @@ def get_model_path_with_fallback(model_name: str = "current_best") -> str:
     
     return primary_path
 
-def get_available_model_with_fallback(model_name: str = "current_best") -> str:
+def get_available_model_with_fallback(model_name: str = "best") -> str:
     """
     Get an available model path, trying primary first, then fallback.
     

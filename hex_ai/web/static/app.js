@@ -122,8 +122,8 @@ let state = {
   winner: null,
   last_move: null,
   last_move_player: null, // Track which player made the last move
-  blue_model_id: 'model1',
-  red_model_id: 'model1',  // Use current best model for both players by default
+  blue_model_id: 'best',
+  red_model_id: 'best',  // Use current best model for both players by default
   blue_temperature: 1.0,
   red_temperature: 1.0,
   // MCTS settings
@@ -500,7 +500,7 @@ async function fetchModels() {
   return await resp.json();
 }
 
-async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
+async function fetchState(trmph, model_id = 'best', temperature = 1.0) {
   const resp = await fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -510,7 +510,7 @@ async function fetchState(trmph, model_id = 'model1', temperature = 1.0) {
   return await resp.json();
 }
 
-async function applyHumanMove(trmph, move, model_id = 'model1', temperature = 1.0) {
+async function applyHumanMove(trmph, move, model_id = 'best', temperature = 1.0) {
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
