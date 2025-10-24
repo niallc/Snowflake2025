@@ -375,8 +375,8 @@ input[type="checkbox"] {
   }
 }
 
-/* Mobile Landscape - More inclusive media query */
-@media (orientation: landscape) and (max-width: 1024px) {
+/* Mobile Landscape - Use viewport dimensions for more reliable targeting */
+@media (max-width: 1024px) and (min-aspect-ratio: 4/3) {
   /* Mobile/Tablet Landscape - Critical for board visibility with better zoom control */
   #app-container {
     padding: 5px;
@@ -385,14 +385,14 @@ input[type="checkbox"] {
   
   #board-container {
     /* In landscape, prioritize width constraint over height */
-    max-height: 70vh; /* More flexible height constraint */
-    max-width: 70%; /* Leave some padding on sides - this takes priority */
+    max-height: none !important; /* Remove height constraint to prevent clipping */
+    max-width: 70% !important; /* Leave some padding on sides - this takes priority */
     margin: 0 auto; /* Center the board */
-    /* Smaller minimum size to allow more zoom out */
+    /* Ensure container can grow to fit SVG */
     min-height: 200px;
     min-width: 200px;
     /* Ensure width constraint is respected */
-    width: 70%;
+    width: 70% !important;
   }
   
   .control-panel {
