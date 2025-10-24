@@ -31,6 +31,7 @@ class HexGame {
     initializeElements() {
         this.statusLine = document.getElementById('status-line');
         this.boardContainer = document.getElementById('board-container');
+        this.instructionText = document.getElementById('instruction-text');
         this.resetBtn = document.getElementById('reset-btn');
         this.undoBtn = document.getElementById('undo-btn');
         this.redoBtn = document.getElementById('redo-btn');
@@ -135,6 +136,9 @@ class HexGame {
             this.hexElements.clear(); // Clear hex cache
             this.updateTrmphDisplay();
             await this.loadGameState(false); // Don't auto-move after reset
+            
+            // Show instruction text for the new empty board
+            this.showInstructionText();
         } catch (error) {
             console.error('Failed to reset game:', error);
             this.showError('Failed to reset game.');
@@ -166,6 +170,11 @@ class HexGame {
             this.hexElements.clear();
             
             await this.loadGameStateWithoutAutoMove();
+            
+            // Show instruction text if we're back to an empty board
+            if (this.isBoardEmpty(this.previousBoard)) {
+                this.showInstructionText();
+            }
         } catch (error) {
             console.error('Failed to undo move:', error);
             this.showError('Failed to undo move.');
@@ -177,6 +186,9 @@ class HexGame {
     
     async makeComputerMove() {
         if (this.isLoading) return;
+        
+        // Hide instruction text since computer is making a move
+        this.hideInstructionText();
         
         this.setLoading(true);
         try {
@@ -357,6 +369,7 @@ class HexGame {
             const newColor = this.getHexColor(newValue);
             hexElement.style.transition = 'none'; // Disable transition for instant update
             hexElement.setAttribute('fill', newColor);
+            
             // Re-enable transitions after a brief delay for hover effects
             setTimeout(() => {
                 if (hexElement) {
@@ -370,6 +383,53 @@ class HexGame {
         if (cellValue === this.pieceValues.BLUE) return '#0099ff';
         if (cellValue === this.pieceValues.RED) return '#ff4444';
         return '#f0f0f0'; // Empty hex color
+    }
+    
+    shouldShadeHex(row, col) {
+        // Shade all hexes except the edge hexes
+        // Edge hexes are: top row (row=0), bottom row (row=12), 
+        // left column (col=0), right column (col=12),
+        // second column (col=1), second-to-last column (col=11)
+        return row > 0 && row < 12 && col > 1 && col < 11;
+    }
+    
+    isBoardEmpty(board) {
+        // Check if board is completely empty (first move)
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                if (board[row][col] !== this.pieceValues.EMPTY) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    
+    clearAllPurpleShading() {
+        // Remove purple shading from all hexes
+        for (let row = 0; row < this.boardSize; row++) {
+            for (let col = 0; col < this.boardSize; col++) {
+                const key = `${row},${col}`;
+                const hexElement = this.hexElements.get(key);
+                if (hexElement) {
+                    hexElement.classList.remove('purple-shaded');
+                }
+            }
+        }
+    }
+    
+    hideInstructionText() {
+        // Hide the instruction text about purple hexes
+        if (this.instructionText) {
+            this.instructionText.style.display = 'none';
+        }
+    }
+    
+    showInstructionText() {
+        // Show the instruction text about purple hexes
+        if (this.instructionText) {
+            this.instructionText.style.display = 'block';
+        }
     }
     
     updateLegalMovesHighlighting() {
@@ -447,6 +507,9 @@ class HexGame {
         // Draw edge indicators (blue: top/bottom, red: left/right)
         this.drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE);
         
+        // Check if board is empty (first move)
+        const isEmpty = this.isBoardEmpty(board);
+        
         // Draw hexagons and cache them
         for (let row = 0; row < BOARD_SIZE; row++) {
             for (let col = 0; col < BOARD_SIZE; col++) {
@@ -457,7 +520,8 @@ class HexGame {
                 const fill = this.getHexColor(cell);
                 
                 const isLegal = this.isLegalMove(row, col);
-                const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal);
+                const shouldShade = isEmpty && this.shouldShadeHex(row, col);
+                const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal, shouldShade);
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
                 
@@ -530,7 +594,7 @@ class HexGame {
         return { x, y };
     }
     
-    makeHex(cx, cy, r, fill, highlight) {
+    makeHex(cx, cy, r, fill, highlight, shouldShade = false) {
         const points = [];
         for (let i = 0; i < 6; i++) {
             const angle = Math.PI / 3 * i + Math.PI / 6;
@@ -544,6 +608,12 @@ class HexGame {
         hex.setAttribute('fill', fill);
         hex.setAttribute('stroke', '#ddd');
         hex.setAttribute('stroke-width', '1');
+        
+        // Apply purple shading if needed
+        if (shouldShade) {
+            hex.classList.add('purple-shaded');
+        }
+        
         if (highlight) {
             hex.style.cursor = 'pointer';
         }
@@ -591,6 +661,13 @@ class HexGame {
         
         const row = parseInt(e.target.getAttribute('data-row'));
         const col = parseInt(e.target.getAttribute('data-col'));
+        
+        // Clear purple shading immediately when a move is about to be made
+        // This ensures the move color shows properly
+        this.clearAllPurpleShading();
+        
+        // Hide instruction text since purple hexes are no longer relevant
+        this.hideInstructionText();
         
         // Allow user clicks regardless of computer settings
         // Users can always make moves when they click
@@ -766,6 +843,11 @@ class HexGame {
             this.hexElements.clear();
             
             await this.loadGameStateWithoutAutoMove();
+            
+            // Show instruction text if we're back to an empty board
+            if (this.isBoardEmpty(this.previousBoard)) {
+                this.showInstructionText();
+            }
         } catch (error) {
             console.error('Failed to redo move:', error);
             this.showError('Failed to redo move.');

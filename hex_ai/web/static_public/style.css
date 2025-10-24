@@ -77,6 +77,14 @@ h1 {
   transition: color 0.3s ease;
 }
 
+#instruction-text {
+  text-align: center;
+  font-size: 0.9em;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 #status-line {
   text-align: center;
   font-size: 1.1em;
@@ -143,6 +151,18 @@ h1 {
   fill-opacity: 0.8;
   stroke-width: 3;
   stroke: #333;
+}
+
+/* Purple shading for central hexes on empty board */
+#board-container svg polygon.purple-shaded {
+  fill: #e6e6ff !important; /* Subtle purple tint */
+  stroke: #d0d0ff;
+}
+
+#board-container svg polygon.purple-shaded:hover {
+  fill: #d6d6ff !important; /* Slightly darker purple on hover */
+  stroke-width: 2;
+  stroke: #b0b0ff;
 }
 
 /* Controls - Touch Friendly */
