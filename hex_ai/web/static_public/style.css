@@ -375,9 +375,9 @@ input[type="checkbox"] {
   }
   
   #board-container {
-    /* Allow more zoom out in landscape mode */
-    max-height: min(100vh - 120px, 75vw);
-    max-width: min(100vw - 20px, 75vh);
+    /* In landscape, let board fill the full container width */
+    max-height: 90vw; /* Use viewport width for height constraint */
+    max-width: none; /* Remove width constraint to fill container */
     /* Smaller minimum size to allow more zoom out */
     min-height: 200px;
     min-width: 200px;
@@ -416,8 +416,9 @@ input[type="checkbox"] {
   }
   
   #board-container {
-    max-height: min(100vh - 80px, 80vw);
-    max-width: min(100vw - 10px, 80vh);
+    /* In landscape, let board fill the full container width */
+    max-height: 90vw; /* Use viewport width for height constraint */
+    max-width: none; /* Remove width constraint to fill container */
     min-height: 150px;
     min-width: 150px;
   }

@@ -498,9 +498,9 @@ class HexGame {
         const svgWidth = boardWidth + 2 * padding + edgeBorderWidth + diagonalOffset;
         const svgHeight = boardHeight + 2 * padding + edgeBorderWidth;
         
-        // Set SVG dimensions
-        this.svg.setAttribute('width', svgWidth);
-        this.svg.setAttribute('height', svgHeight);
+        // Set SVG dimensions - use percentage to allow CSS to control sizing
+        this.svg.setAttribute('width', '100%');
+        this.svg.setAttribute('height', '100%');
         this.svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
         this.svg.style.background = '#f8f8fa';
         
