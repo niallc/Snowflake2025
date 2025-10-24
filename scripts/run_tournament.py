@@ -17,19 +17,19 @@ Examples:
 
 1. Compare strategies using 100 diverse openings:
    PYTHONPATH=. python scripts/run_tournament.py \
-     --model=current_best \
+     --model=best \
      --strategies=policy,mcts_122,fixed_tree_13_8 \
      --num-openings=100
 
 2. Use specific opening file:
    PYTHONPATH=. python scripts/run_tournament.py \
-     --model=current_best \
+     --model=best \
      --strategies=mcts_100,mcts_200 \
      --opening-file=data/deterministic_openings.txt
 
 3. Use custom temperature:
    PYTHONPATH=. python scripts/run_tournament.py \
-     --model=current_best \
+     --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=150 \
      --temperature=0.1
@@ -37,13 +37,13 @@ Examples:
 4. Get different opening sets for multiple runs:
    # Each run automatically gets a different seed (from time)
    PYTHONPATH=. python scripts/run_tournament.py \
-     --model=current_best \
+     --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=100
    
    # Or manually specify seeds for reproducible results
    PYTHONPATH=. python scripts/run_tournament.py \
-     --model=current_best \
+     --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=100 \
      --seed=123
@@ -306,30 +306,30 @@ def parse_args():
         epilog="""
 Examples:
   # Compare strategies using model registry names
-  %(prog)s --models=current_best,best,model2 --strategies=policy,mcts,mcts --mcts-sims=100,200 --num-openings=100
+  %(prog)s --models=best,model2 --strategies=policy,mcts,mcts --mcts-sims=100,200 --num-openings=100
   
   # Compare same strategy with different models from registry
-  %(prog)s --models=current_best,previous_best --strategies=mcts,mcts --mcts-sims=100,100 --num-openings=50
+  %(prog)s --models=best,previous_best --strategies=mcts,mcts --mcts-sims=100,100 --num-openings=50
   
   # Compare strategies using direct model file specification
   %(prog)s --model-files=epoch13_mini31.pt.gz,epoch13_mini27.pt.gz --model-dirs=checkpoints/dir1,checkpoints/dir2 --strategies=mcts,mcts --mcts-sims=30,30 --num-openings=50
   
   # Use specific opening file with different models
-  %(prog)s --models=current_best,best --strategies=mcts,mcts --mcts-sims=100,200 --opening-file=data/deterministic_openings.txt
+  %(prog)s --models=best --strategies=mcts,mcts --mcts-sims=100,200 --opening-file=data/deterministic_openings.txt
   
   # Compare with custom opening length and temperature
-  %(prog)s --models=current_best,best --strategies=policy,mcts --mcts-sims=122 --num-openings=200 --opening-length=5 --temperature=0.1
+  %(prog)s --models=best --strategies=policy,mcts --mcts-sims=122 --num-openings=200 --opening-length=5 --temperature=0.1
   
   # Compare same strategy with different temperatures
-  %(prog)s --models=current_best,current_best --strategies=policy,policy --temperatures=0.1,1.0 --num-openings=100
+  %(prog)s --models=best,best --strategies=policy,policy --temperatures=0.1,1.0 --num-openings=100
   
   # Use single model for multiple strategies (convenience feature)
-  %(prog)s --models=current_best --strategies=policy,mcts,mcts --mcts-sims=100,200 --num-openings=100
+  %(prog)s --models=best --strategies=policy,mcts,mcts --mcts-sims=100,200 --num-openings=100
         """
     )
     
     parser.add_argument('--models', type=str,
-                       help='Comma-separated list of model registry names (e.g., "current_best,best,model2"). If only one model is provided, it will be used for all strategies.')
+                       help='Comma-separated list of model registry names (e.g., "best,model2"). If only one model is provided, it will be used for all strategies.')
     parser.add_argument('--model-files', type=str,
                        help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz")')
     parser.add_argument('--model-dirs', type=str,

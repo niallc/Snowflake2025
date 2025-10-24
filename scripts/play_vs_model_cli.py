@@ -39,7 +39,7 @@ from hex_ai.config import BOARD_SIZE, DEFAULT_TEMPERATURE_START
 DEFAULT_BOARD_SIZE = BOARD_SIZE
 DEFAULT_TOP_K = 20
 
-DEFAULT_CHKPT_PATH = get_model_path("current_best")
+DEFAULT_CHKPT_PATH = get_model_path("best")
 
 def get_human_move(state: HexGameState, shutdown_handler: GracefulShutdown):
     while True:

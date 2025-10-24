@@ -195,7 +195,7 @@ Examples:
     
     # Resume training arguments
     parser.add_argument(
-        '--use-current-best-model',
+        '--use-best-model',
         action='store_true',
         help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
@@ -268,16 +268,16 @@ Examples:
 
     # Handle current best model option
     resume_from = None
-    if args.use_current_best_model:
+    if args.use_best_model:
         try:
             from hex_ai.inference.model_config import get_model_path
-            resume_from = get_model_path("current_best")
-            print(f"Using current best model: {resume_from}")
+            resume_from = get_model_path("best")
+            print(f"Using best model: {resume_from}")
         except ImportError:
             print("ERROR: Could not import hex_ai.inference.model_config")
             sys.exit(1)
         except Exception as e:
-            print(f"ERROR: Could not get current best model path: {e}")
+            print(f"ERROR: Could not get best model path: {e}")
             sys.exit(1)
 
     # Validate resume arguments

@@ -28,7 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate large-scale self-play games")
     parser.add_argument('--num_games', type=int, default=1000, help='Number of games to generate')
     parser.add_argument('--model_path', type=str, 
-                       default=get_model_path("current_best"),
+                       default=get_model_path("best"),
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')

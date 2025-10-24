@@ -952,8 +952,8 @@ def main():
             
             try:
                 from hex_ai.inference.model_config import get_model_path, get_model_dir
-                model_path = get_model_path("current_best")
-                args.model_path = get_model_dir("current_best")
+                model_path = get_model_path("best")
+                args.model_path = get_model_dir("best")
                 
                 # Extract epoch and mini from the filename
                 import os

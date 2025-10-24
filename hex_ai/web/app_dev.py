@@ -167,7 +167,7 @@ def get_available_models():
     all_models = get_all_model_info()
     
     # Filter to only show the main model IDs (best, model2) to avoid duplicates
-    # since current_best/previous_best point to the same files
+    # since best/previous_best point to the same files
     main_models = [model for model in all_models if model['id'] in ['best', 'model2']]
     
     # Add 'name' field that the frontend expects

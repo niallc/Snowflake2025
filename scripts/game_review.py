@@ -7,7 +7,7 @@ mistakes, better options, and game flow. It compares actual moves against MCTS
 recommendations and value network assessments.
 
 Usage:
-    python scripts/game_review.py --game "g7g6j4h6i6h7i7h9f7g8d8d10g9h8e9e10f9f5e5d4j8i10h10i9k9j11l10k12j12k11i11j10c6f3f4g3g4h3h4i3i5k2l2k3l3k4l4k5j2j3e3e4c4c5a6b6a7b7a8b8a9b9a10b10a11b12b11e11" --model current_best
+    python scripts/game_review.py --game "g7g6j4h6i6h7i7h9f7g8d8d10g9h8e9e10f9f5e5d4j8i10h10i9k9j11l10k12j12k11i11j10c6f3f4g3g4h3h4i3i5k2l2k3l3k4l4k5j2j3e3e4c4c5a6b6a7b7a8b8a9b9a10b10a11b12b11e11" --model best
     python scripts/game_review.py --file games.json --output-dir temp/reviews/
 """
 
@@ -573,8 +573,8 @@ Examples:
     input_group.add_argument("--file", type=str, help="JSON file containing game(s) to review")
     
     # Model options
-    parser.add_argument("--model", type=str, default="current_best", 
-                       help="Model to use for analysis (default: current_best)")
+    parser.add_argument("--model", type=str, default="best", 
+                       help="Model to use for analysis (default: best)")
     
     # Output options
     parser.add_argument("--output", type=str, help="Output JSON file")

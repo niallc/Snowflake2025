@@ -317,8 +317,8 @@ Examples:
                        help="Number of games to sample and evaluate (default: 100)")
     
     # Model options
-    parser.add_argument("--model", type=str, default="current_best", 
-                       help="Model to use for evaluation (default: current_best)")
+    parser.add_argument("--model", type=str, default="best", 
+                       help="Model to use for evaluation (default: best)")
     
     # Output options
     parser.add_argument("--output-dir", type=str, default="analysis/game_evals/results",
