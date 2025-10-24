@@ -363,19 +363,20 @@ REFILL_RATE = 1.0       # Tokens per second (60/minute)
 # MCTS: every 2 seconds (5 tokens cost, 1 token/sec refill = 2 sec wait)
 # Policy: every 1 second (2 tokens cost, 1 token/sec refill = 1 sec wait)
 ENDPOINT_COSTS = {
-    'api_state': 0.25,                # Read-only, cheap (40 burst calls)
-    'api_apply_move': 0.25,           # Simple move application (20 burst calls)
-    'api_policy_move': 0.5,          # Model inference (10 burst calls, 1/sec sustained)
+    'api_state': 0.5,                # Read-only, cheap (40 burst calls)
+    'api_apply_move': 0.5,           # Simple move application (20 burst calls)
+    'api_policy_move': 1.0,          # Model inference (20 burst calls, 2/sec sustained)
     'api_apply_trmph_sequence': 5.0, # Batch operation (10 burst calls)
-    'api_mcts_move': 1.5,            # Expensive MCTS (4 burst calls, 2/sec sustained)
+    'api_mcts_move': 2,            # Expensive MCTS (4 burst calls, 2/sec sustained)
+    'api_constants': 0.1,            # Constants endpoint (very cheap)
 }
 
-def rate_limit(cost: float = 1.0):
+def rate_limit(cost: float):
     """
     Token bucket rate limiting decorator with weighted costs.
     
     Args:
-        cost (float): Number of tokens this request costs (default 1.0)
+        cost (float): Number of tokens this request costs.
         
     Returns:
         decorator: Flask route decorator
@@ -820,6 +821,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
 # =============================================================================
 
 @app.route("/api/constants", methods=["GET"])
+@rate_limit(ENDPOINT_COSTS['api_constants'])
 def api_constants():
     """Return game constants for frontend use."""
     return jsonify({
@@ -841,7 +843,7 @@ def api_constants():
 
 
 @app.route("/api/state", methods=["POST"])
-@rate_limit(cost=0.5)
+@rate_limit(ENDPOINT_COSTS['api_state'])
 def api_state():
     data = request.get_json()
     
@@ -876,7 +878,7 @@ def api_state():
     return jsonify(response)
 
 @app.route("/api/apply_move", methods=["POST"])
-@rate_limit(cost=1.0)
+@rate_limit(ENDPOINT_COSTS['api_apply_move'])
 def api_apply_move():
     """Apply only a human move without making a computer move."""
     data = request.get_json()
@@ -923,7 +925,7 @@ def api_apply_move():
     return jsonify(response)
 
 @app.route("/api/policy_move", methods=["POST"])
-@rate_limit(cost=2.0)
+@rate_limit(ENDPOINT_COSTS['api_policy_move'])
 def api_policy_move():
     """Make a computer move using policy sampling."""
     data = request.get_json()
@@ -978,7 +980,7 @@ def api_policy_move():
         return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
 
 @app.route("/api/mcts_move", methods=["POST"])
-@rate_limit(cost=5.0)
+@rate_limit(ENDPOINT_COSTS['api_mcts_move'])
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
@@ -1033,7 +1035,7 @@ def api_mcts_move():
     return jsonify(result)
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
-@rate_limit(cost=2.0)
+@rate_limit(ENDPOINT_COSTS['api_apply_trmph_sequence'])
 def api_apply_trmph_sequence():
     """Apply a sequence of TRMPH moves to the current game state."""
     data = request.get_json()
