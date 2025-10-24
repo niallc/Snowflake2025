@@ -320,7 +320,7 @@ input[type="checkbox"] {
 @media (min-width: 768px) {
   /* Tablet and Desktop */
   #app-container {
-    max-width: 800px;
+    max-width: 600px; /* Reduced from 800px to better fit board + margins */
     margin: 20px auto;
     border-radius: 12px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.08);
@@ -345,10 +345,23 @@ input[type="checkbox"] {
   }
 }
 
+/* Large screens - give board more space */
+@media (min-width: 1200px) {
+  #app-container {
+    max-width: 700px; /* Slightly wider for large screens */
+  }
+  
+  #board-container {
+    max-width: min(100vw - 100px, 650px);
+    max-height: min(100vh - 300px, 650px);
+  }
+}
+
 @media (orientation: landscape) and (max-height: 600px) {
   /* Mobile Landscape - Critical for board visibility with better zoom control */
   #app-container {
     padding: 5px;
+    max-width: 100vw; /* Allow full width in landscape */
   }
   
   #board-container {
