@@ -93,7 +93,7 @@ h1 {
   color: var(--text-secondary);
 }
 
-/* Board Container - Critical Mobile Sizing for Hexagonal Board */
+/* Board Container - Mobile-first sizing (overridden by landscape media query) */
 #board-container {
   display: flex;
   justify-content: center;
@@ -101,26 +101,16 @@ h1 {
   margin-bottom: 15px;
   width: 100%;
   height: auto;
-  /* Mobile-first: ensure hexagonal board fits in viewport with better zoom control */
+  /* Default mobile sizing - will be overridden in landscape */
   max-width: min(100vw - 20px, 85vh - 150px);
   max-height: min(85vh - 150px, 100vw - 20px);
-  /* Ensure board is always visible but allow more zoom out */
   min-height: 250px;
   min-width: 250px;
-  /* Hexagonal boards need more space due to diamond shape */
   overflow: hidden;
-  /* Allow user to zoom out more on mobile */
   transform-origin: center;
 }
 
-/* Landscape orientation fallback - ensure board gets space */
-@media (orientation: landscape) {
-  #board-container {
-    /* In landscape, prioritize width over height for the board */
-    max-width: min(100vw - 20px, 80vh);
-    max-height: min(100vh - 120px, 80vw);
-  }
-}
+/* Removed redundant landscape fallback - handled by main landscape media query */
 
 /* SVG Board Sizing - Critical for Mobile Hexagonal Board */
 #board-container svg {
@@ -136,14 +126,7 @@ h1 {
   transition: transform 0.2s ease;
 }
 
-/* Landscape mode - ensure SVG fits within height constraint */
-@media (orientation: landscape) {
-  #board-container svg {
-    /* In landscape, let SVG scale to fit the height constraint */
-    height: 100%;
-    width: auto; /* Let width scale with height to maintain aspect ratio */
-  }
-}
+/* Removed redundant SVG landscape rules - handled by main landscape media query */
 
 /* Allow native touch gestures (pinch-zoom, pan) */
 #board-container, #board-container svg {
@@ -421,35 +404,7 @@ input[type="checkbox"] {
   }
 }
 
-/* Additional mobile landscape targeting for very small screens */
-@media (orientation: landscape) and (max-height: 500px) {
-  #app-container {
-    padding: 2px;
-  }
-  
-  #board-container {
-    /* In landscape, fit board to viewport while maintaining aspect ratio */
-    max-height: 60vh; /* Limit height to fit viewport */
-    max-width: 100%; /* Fill container width */
-    min-height: 150px;
-    min-width: 150px;
-  }
-  
-  .control-panel {
-    padding: 4px;
-    margin-bottom: 4px;
-  }
-  
-  h3 {
-    font-size: 0.8em;
-    margin-bottom: 4px;
-  }
-  
-  button {
-    padding: 6px 10px;
-    font-size: 0.8em;
-  }
-}
+/* Removed redundant very small screen rules - handled by main landscape media query */
 
 /* Touch Interactions */
 @media (hover: none) and (pointer: coarse) {

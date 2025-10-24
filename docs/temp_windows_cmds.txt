@@ -87,7 +87,7 @@ python scripts/run_tournament.py `
   --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251023_124549/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="56,59" `
+  --epoch-range="59,60" `
   --mini-epoch-range="1,100" `
   --games-per-match=50 `
   --round-robin-games=100 `
