@@ -384,13 +384,15 @@ input[type="checkbox"] {
   }
   
   #board-container {
-    /* In landscape, fit board to viewport while maintaining aspect ratio */
-    max-height: 60vh; /* Limit height to fit viewport */
-    max-width: 70%; /* Leave some padding on sides */
+    /* In landscape, prioritize width constraint over height */
+    max-height: 70vh; /* More flexible height constraint */
+    max-width: 70%; /* Leave some padding on sides - this takes priority */
     margin: 0 auto; /* Center the board */
     /* Smaller minimum size to allow more zoom out */
     min-height: 200px;
     min-width: 200px;
+    /* Ensure width constraint is respected */
+    width: 70%;
   }
   
   .control-panel {
