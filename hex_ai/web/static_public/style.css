@@ -113,6 +113,15 @@ h1 {
   transform-origin: center;
 }
 
+/* Landscape orientation fallback - ensure board gets space */
+@media (orientation: landscape) {
+  #board-container {
+    /* In landscape, prioritize width over height for the board */
+    max-width: min(100vw - 20px, 80vh);
+    max-height: min(100vh - 120px, 80vw);
+  }
+}
+
 /* SVG Board Sizing - Critical for Mobile Hexagonal Board */
 #board-container svg {
   width: 100%;
@@ -357,8 +366,9 @@ input[type="checkbox"] {
   }
 }
 
-@media (orientation: landscape) and (max-height: 600px) {
-  /* Mobile Landscape - Critical for board visibility with better zoom control */
+/* Mobile Landscape - More inclusive media query */
+@media (orientation: landscape) and (max-width: 1024px) {
+  /* Mobile/Tablet Landscape - Critical for board visibility with better zoom control */
   #app-container {
     padding: 5px;
     max-width: 100vw; /* Allow full width in landscape */
@@ -396,6 +406,35 @@ input[type="checkbox"] {
   select, input[type="range"] {
     padding: 6px;
     font-size: 0.9em;
+  }
+}
+
+/* Additional mobile landscape targeting for very small screens */
+@media (orientation: landscape) and (max-height: 500px) {
+  #app-container {
+    padding: 2px;
+  }
+  
+  #board-container {
+    max-height: min(100vh - 80px, 80vw);
+    max-width: min(100vw - 10px, 80vh);
+    min-height: 150px;
+    min-width: 150px;
+  }
+  
+  .control-panel {
+    padding: 4px;
+    margin-bottom: 4px;
+  }
+  
+  h3 {
+    font-size: 0.8em;
+    margin-bottom: 4px;
+  }
+  
+  button {
+    padding: 6px 10px;
+    font-size: 0.8em;
   }
 }
 
