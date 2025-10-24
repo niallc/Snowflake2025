@@ -136,6 +136,15 @@ h1 {
   transition: transform 0.2s ease;
 }
 
+/* Landscape mode - ensure SVG fits within height constraint */
+@media (orientation: landscape) {
+  #board-container svg {
+    /* In landscape, let SVG scale to fit the height constraint */
+    height: 100%;
+    width: auto; /* Let width scale with height to maintain aspect ratio */
+  }
+}
+
 /* Allow native touch gestures (pinch-zoom, pan) */
 #board-container, #board-container svg {
   touch-action: auto;
@@ -375,9 +384,10 @@ input[type="checkbox"] {
   }
   
   #board-container {
-    /* In landscape, let board fill the full container width */
-    max-height: 90vw; /* Use viewport width for height constraint */
-    max-width: none; /* Remove width constraint to fill container */
+    /* In landscape, fit board to viewport while maintaining aspect ratio */
+    max-height: 60vh; /* Limit height to fit viewport */
+    max-width: 70%; /* Leave some padding on sides */
+    margin: 0 auto; /* Center the board */
     /* Smaller minimum size to allow more zoom out */
     min-height: 200px;
     min-width: 200px;
@@ -416,9 +426,9 @@ input[type="checkbox"] {
   }
   
   #board-container {
-    /* In landscape, let board fill the full container width */
-    max-height: 90vw; /* Use viewport width for height constraint */
-    max-width: none; /* Remove width constraint to fill container */
+    /* In landscape, fit board to viewport while maintaining aspect ratio */
+    max-height: 60vh; /* Limit height to fit viewport */
+    max-width: 100%; /* Fill container width */
     min-height: 150px;
     min-width: 150px;
   }
