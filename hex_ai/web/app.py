@@ -488,13 +488,14 @@ def get_difficulty_parameters(elo_rating):
         (500,  1.1,  0 , "policy", "simple"),   # Novice
         (800,  0.8,  0 , "policy", "simple"),   # Novice
         (1199, 0.6,  0 , "policy", "simple"),   # Medium
-        (1200, 0.70, 0 , "policy", "best"),     # NEW - transition point
-        (1500, 0.55, 0 , "policy", "best"),     # Hard
-        (1800, 0.30, 0 , "policy", "best"),     # Very Hard
-        (2100, 0.08, 0 , "policy", "best"),     # Expert
-        (2150, 0.1,  8 , "mcts",   "best"),     # Extra Hard - Gumbel MCTS
-        (2250, 0.1,  20, "mcts",   "best"),     # Ultra Hard - Gumbel MCTS
-        (2350, 0.1,  39, "mcts",   "best"),     # Ultra Difficult - Gumbel MCTS
+        (1200, 1.0,  0 , "policy", "best"),     # NEW - transition point
+        (1500, 0.75, 0 , "policy", "best"),     # Hard
+        (1800, 0.55, 0 , "policy", "best"),     # Very Hard
+        (2100, 0.12, 0 , "policy", "best"),     # Expert 1
+        (2149, 0.08, 0 , "policy", "best"),     # Expert 2
+        (2150, 1.0,  8 , "mcts",   "best"),     # Extra Hard - Gumbel MCTS
+        (2250, 1.0,  20, "mcts",   "best"),     # Ultra Hard - Gumbel MCTS
+        (2350, 1.0,  39, "mcts",   "best"),     # Ultra Difficult - Gumbel MCTS
     ]
     
     # Find the appropriate segment for linear interpolation
