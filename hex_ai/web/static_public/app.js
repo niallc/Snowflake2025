@@ -14,6 +14,7 @@ class HexGame {
         this.redComputer = true;
         this.isLoading = false;
         this.isInitialLoad = true; // Track if this is the initial page load
+        this.darkMode = false; // Dark mode state
         
         // Track previous board state for efficient updates
         this.previousBoard = null;
@@ -22,6 +23,7 @@ class HexGame {
         this.initializeElements();
         this.setupEventListeners();
         this.loadGameConstants();
+        this.initializeDarkMode();
     }
     
     // =============================================================================
@@ -46,6 +48,7 @@ class HexGame {
         this.copyTrmphBtn = document.getElementById('copy-trmph');
         this.applyTrmphBtn = document.getElementById('apply-trmph');
         this.trmphError = document.getElementById('trmph-error');
+        this.darkModeToggle = document.getElementById('dark-mode-toggle');
     }
     
     setupEventListeners() {
@@ -75,6 +78,130 @@ class HexGame {
         this.redComputerCheck.addEventListener('change', (e) => {
             this.redComputer = e.target.checked;
         });
+        
+        this.darkModeToggle.addEventListener('click', () => this.toggleDarkMode());
+    }
+    
+    // =============================================================================
+    // DARK MODE FUNCTIONS
+    // =============================================================================
+    
+    toggleDarkMode() {
+        this.darkMode = !this.darkMode;
+        
+        // Update the data-theme attribute on the document
+        if (this.darkMode) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
+        
+        // Update the toggle button text and icon
+        if (this.darkMode) {
+            this.darkModeToggle.textContent = '☀️ Light';
+            this.darkModeToggle.title = 'Switch to light mode';
+        } else {
+            this.darkModeToggle.textContent = '🌙 Dark';
+            this.darkModeToggle.title = 'Switch to dark mode';
+        }
+        
+        // Redraw the board with new colors
+        if (this.svg) {
+            this.drawHexBoard(this.previousBoard);
+        }
+        
+        // Save preference to localStorage
+        localStorage.setItem('hex_ai_dark_mode', this.darkMode.toString());
+    }
+    
+    initializeDarkMode() {
+        // Check localStorage for saved preference
+        const savedDarkMode = localStorage.getItem('hex_ai_dark_mode');
+        if (savedDarkMode !== null) {
+            this.darkMode = savedDarkMode === 'true';
+        } else {
+            this.darkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+        
+        // Apply the theme
+        if (this.darkMode) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
+        
+        // Update the toggle button
+        if (this.darkMode) {
+            this.darkModeToggle.textContent = '☀️ Light';
+            this.darkModeToggle.title = 'Switch to light mode';
+        } else {
+            this.darkModeToggle.textContent = '🌙 Dark';
+            this.darkModeToggle.title = 'Switch to dark mode';
+        }
+    }
+    
+    // =============================================================================
+    // COLOR PALETTES FOR DARK MODE
+    // =============================================================================
+    
+    getColors() {
+        return this.darkMode ? this.DARK_COLORS : this.LIGHT_COLORS;
+    }
+    
+    get LIGHT_COLORS() {
+        return {
+            WHITE: '#fff',
+            LIGHT_GRAY: '#f8f8fa',
+            MEDIUM_GRAY: '#bbb',
+            DARK_GRAY: '#222',
+            
+            // Board colors
+            EMPTY_HEX_GRAY: '#f0f0f0',      // ⭐ LIGHT GRAY for empty hexagons
+            GRID_WHITE: '#f8f8fa',          // ⭐ LIGHT GRAY for grid lines between hexagons
+            BOARD_BACKGROUND: '#f8f8fa',     // ⭐ LIGHT GRAY for board background
+            
+            // Blue palette - using original bright colors
+            LIGHT_BLUE: '#e7fcfc',
+            MEDIUM_BLUE: '#bbeeee',         // ⭐ LIGHT CYAN - used for grid lines
+            DARK_BLUE: '#0099ff',           // ⭐ ORIGINAL BRIGHT BLUE - used for blue pieces
+            VERY_DARK_BLUE: '#0099ff',      // ⭐ VIVID BLUE - used for edges and winning pieces
+            DARKER_BLUE: '#0066cc',         // ⭐ DARK BLUE - used for last moves
+            
+            // Red palette - using original bright colors
+            LIGHT_RED: '#fff4ea',
+            MEDIUM_RED: '#ffe1c8',
+            DARK_RED: '#ff4444',            // ⭐ ORIGINAL BRIGHT RED - used for red pieces
+            VERY_DARK_RED: '#ff4444',       // ⭐ ORIGINAL BRIGHT RED - used for edges and winning pieces
+            DARKER_RED: '#cc3300',          // ⭐ DARK RED - used for last moves
+        };
+    }
+    
+    get DARK_COLORS() {
+        return {
+            WHITE: '#2d2d2d',
+            LIGHT_GRAY: '#1a1a1a',
+            MEDIUM_GRAY: '#666',
+            DARK_GRAY: '#e0e0e0',
+            
+            // Board colors
+            EMPTY_HEX_GRAY: '#3a3a3a',      // ⭐ DARK GRAY for empty hexagons
+            GRID_WHITE: '#4a4a4a',          // ⭐ DARK GRAY for grid lines between hexagons
+            BOARD_BACKGROUND: '#1a1a1a',     // ⭐ DARK GRAY for board background
+            
+            // Blue palette - using bright blue for dark theme
+            LIGHT_BLUE: '#1a3a4a',
+            MEDIUM_BLUE: '#2a5a6a',         // ⭐ DARKER CYAN for grid lines
+            DARK_BLUE: '#0099ff',           // ⭐ SAME BRIGHT BLUE as light theme
+            VERY_DARK_BLUE: '#0099ff',      // ⭐ SAME BRIGHT BLUE as light theme
+            DARKER_BLUE: '#0066cc',         // ⭐ DARKER BLUE for last moves
+            
+            // Red palette - using bright red for dark theme
+            LIGHT_RED: '#4a2a1a',
+            MEDIUM_RED: '#6a3a2a',
+            DARK_RED: '#ff4444',            // ⭐ SAME BRIGHT RED as light theme
+            VERY_DARK_RED: '#ff4444',       // ⭐ SAME BRIGHT RED as light theme
+            DARKER_RED: '#cc3300',          // ⭐ DARKER RED for last moves
+        };
     }
     
     updateDifficultyPreset() {
@@ -380,9 +507,10 @@ class HexGame {
     }
     
     getHexColor(cellValue) {
-        if (cellValue === this.pieceValues.BLUE) return '#0099ff';
-        if (cellValue === this.pieceValues.RED) return '#ff4444';
-        return '#f0f0f0'; // Empty hex color
+        const colors = this.getColors();
+        if (cellValue === this.pieceValues.BLUE) return colors.DARK_BLUE;
+        if (cellValue === this.pieceValues.RED) return colors.DARK_RED;
+        return colors.EMPTY_HEX_GRAY; // Empty hex color
     }
     
     shouldShadeHex(row, col) {
@@ -506,7 +634,7 @@ class HexGame {
         this.svg.setAttribute('width', svgWidth);
         this.svg.setAttribute('height', svgHeight);
         this.svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
-        this.svg.style.background = '#f8f8fa';
+        this.svg.style.background = this.getColors().BOARD_BACKGROUND;
         
         // Draw edge indicators (blue: top/bottom, red: left/right)
         this.drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE);
@@ -549,6 +677,8 @@ class HexGame {
     }
     
     drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE) {
+        const colors = this.getColors();
+        
         // Blue edges (top and bottom) - adapted from working dev version
         const w = HEX_RADIUS * Math.sqrt(3);
         
@@ -556,7 +686,7 @@ class HexGame {
         const topLine = this.makeEdgeLine(
             this.hexCenter(0, 0, HEX_RADIUS).x, this.hexCenter(0, 0, HEX_RADIUS).y - HEX_RADIUS,
             this.hexCenter(0, BOARD_SIZE - 1, HEX_RADIUS).x, this.hexCenter(0, BOARD_SIZE - 1, HEX_RADIUS).y - HEX_RADIUS,
-            '#0099ff',
+            colors.VERY_DARK_BLUE,
             18
         );
         this.svg.appendChild(topLine);
@@ -565,7 +695,7 @@ class HexGame {
         const bottomLine = this.makeEdgeLine(
             this.hexCenter(BOARD_SIZE - 1, 0, HEX_RADIUS).x, this.hexCenter(BOARD_SIZE - 1, 0, HEX_RADIUS).y + HEX_RADIUS,
             this.hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1, HEX_RADIUS).x, this.hexCenter(BOARD_SIZE - 1, BOARD_SIZE - 1, HEX_RADIUS).y + HEX_RADIUS,
-            '#0099ff',
+            colors.VERY_DARK_BLUE,
             18
         );
         this.svg.appendChild(bottomLine);
@@ -579,13 +709,13 @@ class HexGame {
         // Left edge - between vertices 2 and 3
         const leftTopMid = this.edgeMidpoint(tl[2], tl[3]);
         const leftBotMid = this.edgeMidpoint(bl[2], bl[3]);
-        const leftLine = this.makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, '#ff4444', 22);
+        const leftLine = this.makeEdgeLine(leftTopMid.x, leftTopMid.y, leftBotMid.x, leftBotMid.y, colors.VERY_DARK_RED, 22);
         this.svg.appendChild(leftLine);
         
         // Right edge - between vertices 0 and 5
         const rightTopMid = this.edgeMidpoint(tr[0], tr[5]);
         const rightBotMid = this.edgeMidpoint(br[0], br[5]);
-        const rightLine = this.makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, '#ff4444', 22);
+        const rightLine = this.makeEdgeLine(rightTopMid.x, rightTopMid.y, rightBotMid.x, rightBotMid.y, colors.VERY_DARK_RED, 22);
         this.svg.appendChild(rightLine);
     }
     

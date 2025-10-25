@@ -6,9 +6,13 @@
   --bg-primary: #f8f8fa;
   --bg-secondary: #fff;
   --bg-tertiary: #f8f8fa;
+  --bg-quaternary: #f4f8ff;
   --text-primary: #2a3a4a;
   --text-secondary: #666;
+  --text-tertiary: #888;
   --border-primary: #e0e0e0;
+  --border-secondary: #dde6f7;
+  --border-tertiary: #ccc;
   --button-bg: #bbeeee;
   --button-bg-hover: #8bd6d6;
   --button-primary-bg: #0099ff;
@@ -17,6 +21,10 @@
   --button-secondary-bg-hover: #5a6268;
   --input-bg: #fff;
   --input-border: #ccc;
+  --modal-bg: #fff;
+  --modal-overlay: rgba(0, 0, 0, 0.5);
+  --debug-bg: #fff;
+  --status-bg: #f4f4f4;
 }
 
 /* Dark theme */
@@ -24,9 +32,13 @@
   --bg-primary: #1a1a1a;
   --bg-secondary: #2d2d2d;
   --bg-tertiary: #3a3a3a;
+  --bg-quaternary: #2a3a4a;
   --text-primary: #e0e0e0;
   --text-secondary: #b0b0b0;
+  --text-tertiary: #888;
   --border-primary: #4a4a4a;
+  --border-secondary: #5a5a5a;
+  --border-tertiary: #666;
   --button-bg: #4a4a4a;
   --button-bg-hover: #5a5a5a;
   --button-primary-bg: #0066cc;
@@ -35,6 +47,10 @@
   --button-secondary-bg-hover: #666;
   --input-bg: #3a3a3a;
   --input-border: #666;
+  --modal-bg: #2d2d2d;
+  --modal-overlay: rgba(0, 0, 0, 0.8);
+  --debug-bg: #3a3a3a;
+  --status-bg: #4a4a4a;
 }
 
 /* Base Styles */
@@ -164,6 +180,18 @@ h1 {
   fill: #d6d6ff !important; /* Slightly darker purple on hover */
   stroke-width: 2;
   stroke: #b0b0ff;
+}
+
+/* Dark mode purple shading */
+[data-theme="dark"] #board-container svg polygon.purple-shaded {
+  fill: rgba(255, 0, 255, 0.25) !important; /* Lighter magenta - increased from 0.15 to 0.25 */
+  stroke: #d0d0ff; /* Light purple/violet border - same as light mode */
+}
+
+[data-theme="dark"] #board-container svg polygon.purple-shaded:hover {
+  fill: rgba(255, 0, 255, 0.35) !important; /* Even lighter magenta on hover - increased from 0.25 to 0.35 */
+  stroke-width: 2;
+  stroke: #b0b0ff; /* Slightly darker purple/violet border on hover */
 }
 
 /* Controls - Touch Friendly */

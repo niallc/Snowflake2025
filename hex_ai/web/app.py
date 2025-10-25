@@ -484,10 +484,10 @@ def get_difficulty_parameters(elo_rating):
     # Format: (elo, temperature, num_simulations, algorithm, model)
     difficulty_points = [
         (1,    2.2,  0 , "policy", "simple"),   # Mindless
-        (300,  1.5,  0 , "policy", "simple"),   # Beginner  
-        (500,  1.1,  0 , "policy", "simple"),   # Novice
-        (800,  0.8,  0 , "policy", "simple"),   # Novice
-        (1199, 0.6,  0 , "policy", "simple"),   # Medium
+        (300,  1.7,  0 , "policy", "simple"),   # Beginner  
+        (500,  1.3,  0 , "policy", "simple"),   # Novice 1
+        (800,  0.9,  0 , "policy", "simple"),   # Novice 2
+        (1199, 0.7,  0 , "policy", "simple"),   # Medium
         (1200, 1.0,  0 , "policy", "best"),     # NEW - transition point
         (1500, 0.75, 0 , "policy", "best"),     # Hard
         (1800, 0.55, 0 , "policy", "best"),     # Very Hard
