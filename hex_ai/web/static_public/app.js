@@ -388,9 +388,13 @@ class HexGame {
     shouldShadeHex(row, col) {
         // Shade all hexes except the edge hexes
         // Edge hexes are: top row (row=0), bottom row (row=12), 
-        // left column (col=0), right column (col=12),
-        // second column (col=1), second-to-last column (col=11)
-        return row > 0 && row < 12 && col > 1 && col < 11;
+        // second left-most column (col=1), second right-most column (col=11),
+        // first column (col=0), last column (col=12)
+        let shouldShade = row > 1 && row < 11 && col > 0 && col < 12;
+        // Also shade (row=11 and col=2), and (row=2 and col=11)
+        shouldShade = shouldShade || (row === 11 && col === 1) || (row === 1 && col === 11);
+        shouldShade = shouldShade || (row === 11 && col === 2) || (row === 1 && col === 10);
+        return shouldShade;
     }
     
     isBoardEmpty(board) {
@@ -498,9 +502,9 @@ class HexGame {
         const svgWidth = boardWidth + 2 * padding + edgeBorderWidth + diagonalOffset;
         const svgHeight = boardHeight + 2 * padding + edgeBorderWidth;
         
-        // Set SVG dimensions - use percentage to allow CSS to control sizing
-        this.svg.setAttribute('width', '100%');
-        this.svg.setAttribute('height', '100%');
+        // Set SVG dimensions
+        this.svg.setAttribute('width', svgWidth);
+        this.svg.setAttribute('height', svgHeight);
         this.svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
         this.svg.style.background = '#f8f8fa';
         
