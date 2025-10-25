@@ -170,6 +170,18 @@ h1 {
   stroke: #333;
 }
 
+/* Dark mode hover effects */
+[data-theme="dark"] #board-container svg polygon:hover {
+  stroke-width: 2;
+  stroke: #999; /* Lighter gray for dark mode */
+}
+
+[data-theme="dark"] #board-container svg polygon.clickable:hover {
+  fill-opacity: 0.8;
+  stroke-width: 3;
+  stroke: #ccc; /* Light gray for dark mode */
+}
+
 /* Purple shading for central hexes on empty board */
 #board-container svg polygon.purple-shaded {
   fill: #e6e6ff !important; /* Subtle purple tint */
