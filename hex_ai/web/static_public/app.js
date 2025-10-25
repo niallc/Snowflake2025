@@ -120,7 +120,8 @@ class HexGame {
         if (savedDarkMode !== null) {
             this.darkMode = savedDarkMode === 'true';
         } else {
-            this.darkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            // Default to light mode instead of following system preference
+            this.darkMode = false;
         }
         
         // Apply the theme

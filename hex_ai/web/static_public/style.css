@@ -96,7 +96,7 @@ h1 {
 #instruction-text {
   text-align: center;
   font-size: 0.9em;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -104,7 +104,7 @@ h1 {
 #status-line {
   text-align: center;
   font-size: 1.1em;
-  margin-bottom: 10px;
+  margin-bottom: 0px;
   min-height: 1.5em;
   color: var(--text-secondary);
 }
@@ -114,7 +114,7 @@ h1 {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-bottom: 15px;
+  margin-bottom: 0px;
   width: 100%;
   height: auto;
   /* Default mobile sizing - will be overridden in landscape */
