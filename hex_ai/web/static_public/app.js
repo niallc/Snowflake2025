@@ -187,7 +187,7 @@ class HexGame {
             // Board colors
             EMPTY_HEX_GRAY: '#3a3a3a',      // ⭐ DARK GRAY for empty hexagons
             GRID_WHITE: '#4a4a4a',          // ⭐ DARK GRAY for grid lines between hexagons
-            BOARD_BACKGROUND: '#1a1a1a',     // ⭐ DARK GRAY for board background
+            BOARD_BACKGROUND: '#232323',     // ⭐ LIGHTER GRAY - halfway between #1a1a1a and #2d2d2d
             
             // Blue palette - using bright blue for dark theme
             LIGHT_BLUE: '#1a3a4a',
