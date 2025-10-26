@@ -11,7 +11,7 @@
     <!-- Game Board Section -->
     <div id="board-section">
       <h1>Snowflake 25</h1>
-      <div id="instruction-text">Even game: don't use purple hexes on move 1. Purple hexes give an easier game.</div>
+      <div id="instruction-text">For an even game: avoid purple hexes on move 1. Purple hexes give an easier game.</div>
       <div id="status-line"></div>
       <div id="board-container"></div>
       
@@ -34,14 +34,16 @@
         <div class="difficulty-row">
           <label for="difficulty-preset">Preset:</label>
           <select id="difficulty-preset">
-            <option value="500">Novice (ELO 500)</option>
-            <option value="1000" selected>Medium (ELO 1000)</option>
+            <option value="300">Beginner (ELO 300)</option>
+            <option value="500">New Player (ELO 500)</option>
+            <option value="900" selected>Medium (ELO 900)</option>
+            <option value="1200">Spicy (ELO 1200)</option>
             <option value="1500">Hard (ELO 1500)</option>
             <option value="1800">Very Hard (ELO 1800)</option>
-            <option value="2100">Expert (ELO 2100)</option>
+            <option value="2050">Expert (ELO 2050)</option>
             <option value="2150">Extra Hard (ELO 2150)</option>
             <option value="2250">Ultra Hard (ELO 2250)</option>
-            <option value="2350">Ultra Difficult (ELO 2350)</option>
+            <option value="2350">Master (ELO 2350)</option>
           </select>
         </div>
         <div class="difficulty-row">

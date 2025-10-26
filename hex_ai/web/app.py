@@ -495,7 +495,7 @@ def get_difficulty_parameters(elo_rating):
         (2149, 0.08, 0 , "policy", "best"),     # Expert 2
         (2150, 1.0,  8 , "mcts",   "best"),     # Extra Hard - Gumbel MCTS
         (2250, 1.0,  20, "mcts",   "best"),     # Ultra Hard - Gumbel MCTS
-        (2350, 1.0,  39, "mcts",   "best"),     # Ultra Difficult - Gumbel MCTS
+        (2350, 1.0,  39, "mcts",   "best"),     # Master - Gumbel MCTS
     ]
     
     # Find the appropriate segment for linear interpolation
