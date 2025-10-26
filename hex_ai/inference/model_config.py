@@ -58,7 +58,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549/"
 # CURRENT_BEST_MODEL_FILE = "epoch60_mini37.pt.gz" # epoch60_mini44 epoch59_mini15
 CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251025_210806/"
-CURRENT_BEST_MODEL_FILE = "epoch61_mini46.pt.gz" # epoch60_mini44 epoch59_mini15
+CURRENT_BEST_MODEL_FILE = "epoch61_mini45.pt.gz" # epoch60_mini44 epoch59_mini15
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
@@ -69,7 +69,7 @@ PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODE
 
 # Fallback model configuration (used when current best model is unavailable)
 FALLBACK_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549/"
-FALLBACK_MODEL_FILE = "epoch59_mini15.pt.gz"
+FALLBACK_MODEL_FILE = "epoch60_mini37.pt.gz"
 FALLBACK_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, FALLBACK_MODEL_DIR, FALLBACK_MODEL_FILE)
 
 # Simple model configuration (used to generate lower ELO play, rather than best-possible play)

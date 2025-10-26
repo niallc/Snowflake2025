@@ -1082,6 +1082,13 @@ class HexGame {
             return;
         }
         
+        // Clear purple shading immediately when applying a sequence
+        // This ensures the new pieces show properly without purple overlay
+        this.clearAllPurpleShading();
+        
+        // Hide instruction text since purple hexes are no longer relevant
+        this.hideInstructionText();
+        
         this.setLoading(true);
         try {
             const response = await fetch('/api/apply_trmph_sequence', {

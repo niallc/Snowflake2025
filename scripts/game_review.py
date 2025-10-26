@@ -529,13 +529,23 @@ def create_index_html(reviews: List[GameReview]) -> str:
 def save_review_files(reviews: List[GameReview], output_dir: Path) -> None:
     """Save review files (JSON and HTML) to the specified directory."""
     for i, review in enumerate(reviews):
+        # Find the next available file number to avoid overwriting
+        file_counter = i + 1
+        while True:
+            json_file = output_dir / f"game_{file_counter}_review.json"
+            html_file = output_dir / f"game_{file_counter}_review.html"
+            
+            # Check if both files exist
+            if json_file.exists() or html_file.exists():
+                file_counter += 1
+            else:
+                break
+        
         # Save JSON
-        json_file = output_dir / f"game_{i+1}_review.json"
         with open(json_file, 'w') as f:
             json.dump(format_review_as_json(review), f, indent=2)
         
         # Save HTML
-        html_file = output_dir / f"game_{i+1}_review.html"
         with open(html_file, 'w') as f:
             f.write(format_review_as_html(review))
         

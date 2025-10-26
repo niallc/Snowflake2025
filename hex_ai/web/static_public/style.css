@@ -184,14 +184,14 @@ h1 {
 
 /* Purple shading for central hexes on empty board */
 #board-container svg polygon.purple-shaded {
-  fill: #e6e6ff !important; /* Subtle purple tint */
-  stroke: #d0d0ff;
+  fill: #d4d4ff !important; /* More visible purple tint - increased from #e6e6ff */
+  stroke: #c0c0ff; /* Slightly darker purple border */
 }
 
 #board-container svg polygon.purple-shaded:hover {
-  fill: #d6d6ff !important; /* Slightly darker purple on hover */
+  fill: #c4c4ff !important; /* More visible purple on hover - increased from #d6d6ff */
   stroke-width: 2;
-  stroke: #b0b0ff;
+  stroke: #a0a0ff; /* Darker purple border on hover */
 }
 
 /* Dark mode purple shading */
