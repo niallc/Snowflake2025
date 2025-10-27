@@ -77,7 +77,9 @@ python scripts/training_pipeline.py `
 # PowerShell Tournament Command for Windows
 
 # Activate the virtual environment
+cd .\Documents\Niall\programming\Snowflake2025\
 hex_ai_env\Scripts\Activate.ps1
+# git pull origin oct10
 
 # Set PYTHONPATH for the project
 $env:PYTHONPATH = "."
