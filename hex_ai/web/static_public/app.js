@@ -368,6 +368,20 @@ class HexGame {
             const data = await response.json();
             
             if (data.success) {
+                // Log the MCTS configuration that was actually used
+                if (data.mcts_config) {
+                    console.log('=== COMPUTER MOVE CONFIGURATION ===');
+                    console.log('ELO Rating:', this.currentElo);
+                    console.log('Algorithm:', data.mcts_config.algorithm || 'mcts');
+                    console.log('Model:', data.mcts_config.model);
+                    console.log('Simulations:', data.mcts_config.num_simulations);
+                    // console.log('Exploration constant (c_puct):', data.mcts_config.exploration_constant);
+                    // console.log('Temperature:', data.mcts_config.temperature, '->', data.mcts_config.temperature_end);
+                    // console.log('Gumbel enabled:', data.mcts_config.enable_gumbel);
+                    // console.log('Gumbel max sims:', data.mcts_config.gumbel_max_sims);
+                    console.log('=====================================');
+                }
+                
                 this.currentTRMPH = data.new_trmph;
                 this.gameHistory.push(this.currentTRMPH);
                 this.moveCount++;

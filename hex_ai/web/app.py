@@ -717,7 +717,34 @@ def _create_mcts_configuration(num_simulations, exploration_constant, temperatur
         enable_gumbel_root_selection=enable_gumbel,
         gumbel_sim_threshold=gumbel_max_sims
     )
-    app.logger.info(f"MCTS config created: {mcts_config}")
+    
+    # Log detailed MCTS configuration
+    app.logger.info(f"=== DETAILED MCTS CONFIG ===")
+    app.logger.info(f"Simulations: {mcts_config.sims}")
+    # app.logger.info(f"Batch cap: {mcts_config.batch_cap}")
+    # app.logger.info(f"C_PUCT: {mcts_config.c_puct}")
+    # app.logger.info(f"Cache size: {mcts_config.cache_size}")
+    # app.logger.info(f"Temperature start: {mcts_config.temperature_start}")
+    # app.logger.info(f"Temperature end: {mcts_config.temperature_end}")
+    # app.logger.info(f"Temperature decay type: {mcts_config.temperature_decay_type}")
+    # app.logger.info(f"Add root noise: {mcts_config.add_root_noise}")
+    # app.logger.info(f"Dirichlet alpha: {mcts_config.dirichlet_alpha}")
+    # app.logger.info(f"Dirichlet eps: {mcts_config.dirichlet_eps}")
+    # app.logger.info(f"Enable terminal move detection: {mcts_config.enable_terminal_move_detection}")
+    # app.logger.info(f"Terminal detection max depth: {mcts_config.terminal_detection_max_depth}")
+    # app.logger.info(f"Terminal move boost: {mcts_config.terminal_move_boost}")
+    # app.logger.info(f"Prefer immediate terminal: {mcts_config.prefer_immediate_terminal}")
+    # app.logger.info(f"Enable confidence termination: {mcts_config.enable_confidence_termination}")
+    # app.logger.info(f"Confidence termination threshold: {mcts_config.confidence_termination_threshold}")
+    # app.logger.info(f"Enable depth discounting: {mcts_config.enable_depth_discounting}")
+    # app.logger.info(f"Depth discount factor: {mcts_config.depth_discount_factor}")
+    # app.logger.info(f"Gumbel temperature enabled: {mcts_config.gumbel_temperature_enabled}")
+    # app.logger.info(f"Temperature deterministic cutoff: {mcts_config.temperature_deterministic_cutoff}")
+    # app.logger.info(f"Distinct target: {mcts_config.distinct_target}")
+    # app.logger.info(f"Adaptive distinct target: {mcts_config.adaptive_distinct_target}")
+    # app.logger.info(f"Distinct target min: {mcts_config.distinct_target_min}")
+    # app.logger.info(f"Distinct target max: {mcts_config.distinct_target_max}")
+    
     return mcts_config
 
 def _execute_mcts_search(state, model_id, mcts_config):
@@ -805,13 +832,33 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             enable_gumbel, gumbel_max_sims
         )
         
+        # Log the complete configuration that will be used
+        app.logger.info(f"=== MCTS CONFIGURATION ===")
+        app.logger.info(f"Model: {model_id}")
+        app.logger.info(f"Simulations: {mcts_params['num_simulations']}")
+        # app.logger.info(f"Exploration constant (c_puct): {mcts_params['exploration_constant']}")
+        # app.logger.info(f"Temperature: {mcts_params['temperature']} -> {mcts_params['temperature_end']}")
+        app.logger.info(f"Gumbel enabled: {mcts_params['enable_gumbel']}")
+        # app.logger.info(f"Gumbel max sims: {mcts_params['gumbel_max_sims']}")
+        
         # Execute MCTS workflow
         result = _execute_mcts_move_workflow(state, model_id, mcts_params)
         
-        app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
-        app.logger.debug(f"Move made: {result.get('move_made', 'N/A')}")
-        app.logger.debug(f"Game over: {result.get('game_over', 'N/A')}")
-        app.logger.debug(f"Winner: {result.get('winner', 'N/A')}")
+        # Add configuration to result for frontend verification
+        result['mcts_config'] = {
+            'model': model_id,
+            'num_simulations': mcts_params['num_simulations'],
+            'exploration_constant': mcts_params['exploration_constant'],
+            'temperature': mcts_params['temperature'],
+            'temperature_end': mcts_params['temperature_end'],
+            'enable_gumbel': mcts_params['enable_gumbel'],
+            'gumbel_max_sims': mcts_params['gumbel_max_sims']
+        }
+        
+        # app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
+        # app.logger.debug(f"Move made: {result.get('move_made', 'N/A')}")
+        # app.logger.debug(f"Game over: {result.get('game_over', 'N/A')}")
+        # app.logger.debug(f"Winner: {result.get('winner', 'N/A')}")
         
         return result
     except Exception as e:
@@ -966,6 +1013,16 @@ def api_policy_move():
         temperature = difficulty_params["temperature"]
         model_id = difficulty_params["model"]
         
+        # Log the policy configuration being used
+        app.logger.info(f"=== POLICY CONFIGURATION ===")
+        app.logger.info(f"ELO Rating: {elo_rating}")
+        app.logger.info(f"Algorithm: {difficulty_params['algorithm']}")
+        app.logger.info(f"Model: {model_id}")
+        app.logger.info(f"Temperature: {temperature}")
+        app.logger.info(f"Simulations: {difficulty_params['num_simulations']}")
+        app.logger.info(f"Exploration constant: {difficulty_params['exploration_constant']}")
+        app.logger.info(f"Enable Gumbel: {difficulty_params['enable_gumbel']}")
+        
         # Get model and make policy move
         model = get_model(model_id)
         move = select_policy_move(state, model, temperature)
@@ -978,6 +1035,18 @@ def api_policy_move():
         new_state = apply_move_to_state_trmph(state, move_trmph)
         
         result = build_move_response(new_state, move_made=move_trmph)
+        
+        # Add configuration to result for frontend verification
+        result['mcts_config'] = {
+            'model': model_id,
+            'num_simulations': difficulty_params['num_simulations'],
+            'exploration_constant': difficulty_params['exploration_constant'],
+            'temperature': temperature,
+            'temperature_end': temperature,  # Policy moves use same temperature throughout
+            'enable_gumbel': difficulty_params['enable_gumbel'],
+            'gumbel_max_sims': difficulty_params.get('gumbel_max_sims', 0),
+            'algorithm': difficulty_params['algorithm']
+        }
         
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph}")
