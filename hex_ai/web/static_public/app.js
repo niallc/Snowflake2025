@@ -9,7 +9,7 @@ class HexGame {
         this.gameHistory = [];
         this.redoHistory = []; // Track undone moves for redo functionality
         this.moveCount = 0;
-        this.currentElo = 1000;
+        this.currentElo = 900;
         this.blueComputer = false;
         this.redComputer = true;
         this.isLoading = false;
@@ -19,6 +19,9 @@ class HexGame {
         // Track previous board state for efficient updates
         this.previousBoard = null;
         this.hexElements = new Map(); // Cache hex elements by position
+        
+        // Difficulty levels will be loaded from backend in loadGameConstants()
+        this.difficultyLevels = null;
         
         this.initializeElements();
         this.setupEventListeners();
@@ -49,6 +52,23 @@ class HexGame {
         this.applyTrmphBtn = document.getElementById('apply-trmph');
         this.trmphError = document.getElementById('trmph-error');
         this.darkModeToggle = document.getElementById('dark-mode-toggle');
+    }
+    
+    initializeDifficultyDropdown() {
+        if (!this.difficultyLevels) {
+            throw new Error('Difficulty levels not loaded from backend - this should not happen');
+        }
+        
+        // Build all options first, then replace the dropdown content
+        const optionsHtml = this.difficultyLevels.map(level => 
+            `<option value="${level.elo}">${level.label} (ELO ${level.elo})</option>`
+        ).join('');
+        
+        // Replace all options at once to avoid empty state
+        this.difficultyPreset.innerHTML = optionsHtml;
+        
+        // Set the dropdown to show the appropriate level for current ELO
+        this.updateDifficultyPreset();
     }
     
     setupEventListeners() {
@@ -206,12 +226,22 @@ class HexGame {
     }
     
     updateDifficultyPreset() {
-        // Find closest preset to current ELO
-        const presets = [500, 1000, 1500, 1800, 2100, 2150, 2250, 2350];
-        const closest = presets.reduce((prev, curr) => 
-            Math.abs(curr - this.currentElo) < Math.abs(prev - this.currentElo) ? curr : prev
-        );
-        this.difficultyPreset.value = closest;
+        if (!this.difficultyLevels) {
+            throw new Error('Difficulty levels not loaded from backend - this should not happen');
+        }
+        
+        // Find the highest difficulty level that the user hasn't exceeded
+        let selectedLevel = this.difficultyLevels[0]; // Default to first level
+        for (const level of this.difficultyLevels) {
+            if (this.currentElo >= level.elo) {
+                selectedLevel = level;
+            } else {
+                break;
+            }
+        }
+        
+        // Update the dropdown to show the selected level
+        this.difficultyPreset.value = selectedLevel.elo;
     }
     
     // =============================================================================
@@ -226,6 +256,12 @@ class HexGame {
             this.pieceValues = data.PIECE_VALUES;
             this.playerValues = data.PLAYER_VALUES;
             this.winnerValues = data.WINNER_VALUES;
+            
+            // Load difficulty levels from backend
+            this.difficultyLevels = data.DIFFICULTY_LEVELS;
+            
+            // Initialize difficulty dropdown now that we have the data
+            this.initializeDifficultyDropdown();
             
             this.initializeBoard();
             // Initial load - allow computer auto-move
