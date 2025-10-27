@@ -4,12 +4,12 @@
 
 class HexGame {
     constructor() {
-        this.boardSize = 13;
+        this.boardSize = null;  // Must be set from backend - fail fast if not
         this.currentTRMPH = "";
         this.gameHistory = [];
         this.redoHistory = []; // Track undone moves for redo functionality
         this.moveCount = 0;
-        this.currentElo = 900;
+        this.currentElo = null;  // Must be set from backend - fail fast if not
         this.blueComputer = false;
         this.redComputer = true;
         this.isLoading = false;
@@ -245,8 +245,22 @@ class HexGame {
     }
     
     // =============================================================================
-    // GAME STATE MANAGEMENT
+    // VALIDATION HELPERS
     // =============================================================================
+    
+    validateEloRating() {
+        if (this.currentElo === null) {
+            throw new Error('ELO rating not initialized from backend - this indicates a configuration error');
+        }
+        return this.currentElo;
+    }
+    
+    validateBoardSize() {
+        if (this.boardSize === null) {
+            throw new Error('Board size not initialized from backend - this indicates a configuration error');
+        }
+        return this.boardSize;
+    }
     
     async loadGameConstants() {
         try {
@@ -259,6 +273,17 @@ class HexGame {
             
             // Load difficulty levels from backend
             this.difficultyLevels = data.DIFFICULTY_LEVELS;
+            
+            // Load ELO configuration from backend
+            this.minElo = data.ELO_CONFIG.MIN_ELO;
+            this.maxElo = data.ELO_CONFIG.MAX_ELO;
+            this.currentElo = data.ELO_CONFIG.DEFAULT_ELO;
+            
+            // Update slider and display with backend values
+            this.eloSlider.min = this.minElo;
+            this.eloSlider.max = this.maxElo;
+            this.eloSlider.value = this.currentElo;
+            this.eloDisplay.textContent = this.currentElo;
             
             // Initialize difficulty dropdown now that we have the data
             this.initializeDifficultyDropdown();
@@ -361,7 +386,7 @@ class HexGame {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
-                    elo_rating: this.currentElo
+                    elo_rating: this.validateEloRating()
                 })
             });
             
@@ -371,7 +396,7 @@ class HexGame {
                 // Log the MCTS configuration that was actually used
                 if (data.mcts_config) {
                     console.log('=== COMPUTER MOVE CONFIGURATION ===');
-                    console.log('ELO Rating:', this.currentElo);
+                    console.log('ELO Rating:', this.validateEloRating());
                     console.log('Algorithm:', data.mcts_config.algorithm || 'mcts');
                     console.log('Model:', data.mcts_config.model);
                     console.log('Simulations:', data.mcts_config.num_simulations);
@@ -421,14 +446,14 @@ class HexGame {
     
     async loadGameState(autoMove = true) {
         try {
-            console.log(`Loading game state with TRMPH: '${this.currentTRMPH}', ELO: ${this.currentElo}`);
+            console.log(`Loading game state with TRMPH: '${this.currentTRMPH}', ELO: ${this.validateEloRating()}`);
             
             const response = await fetch('/api/state', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
-                    elo_rating: this.currentElo
+                    elo_rating: this.validateEloRating()
                 })
             });
             
@@ -512,8 +537,9 @@ class HexGame {
     
     updateBoardIncremental(newBoard) {
         // Only update hexes that have changed
-        for (let row = 0; row < this.boardSize; row++) {
-            for (let col = 0; col < this.boardSize; col++) {
+        const boardSize = this.validateBoardSize();
+        for (let row = 0; row < boardSize; row++) {
+            for (let col = 0; col < boardSize; col++) {
                 const oldValue = this.previousBoard[row][col];
                 const newValue = newBoard[row][col];
                 
@@ -566,20 +592,27 @@ class HexGame {
     
     shouldShadeHex(row, col) {
         // Shade all hexes except the edge hexes
-        // Edge hexes are: top row (row=0), bottom row (row=12), 
-        // second left-most column (col=1), second right-most column (col=11),
-        // first column (col=0), last column (col=12)
-        let shouldShade = row > 1 && row < 11 && col > 0 && col < 12;
-        // Also shade (row=11 and col=2), and (row=2 and col=11)
-        shouldShade = shouldShade || (row === 11 && col === 1) || (row === 1 && col === 11);
-        shouldShade = shouldShade || (row === 11 && col === 2) || (row === 1 && col === 10);
+        const boardSize = this.validateBoardSize();
+        const lastRow = boardSize - 1;
+        const lastCol = boardSize - 1;
+        
+        // Edge hexes are: top row (row=0), bottom row (row=lastRow), 
+        // second left-most column (col=1), second right-most column (col=lastCol-1),
+        // first column (col=0), last column (col=lastCol)
+        let shouldShade = row > 1 && row < lastRow - 1 && col > 0 && col < lastCol - 1;
+        // Also shade specific edge cases for 13x13 board
+        if (boardSize === 13) {
+            shouldShade = shouldShade || (row === lastRow - 1 && col === 1) || (row === 1 && col === lastCol - 1);
+            shouldShade = shouldShade || (row === lastRow - 1 && col === 2) || (row === 1 && col === lastCol - 2);
+        }
         return shouldShade;
     }
     
     isBoardEmpty(board) {
         // Check if board is completely empty (first move)
-        for (let row = 0; row < this.boardSize; row++) {
-            for (let col = 0; col < this.boardSize; col++) {
+        const boardSize = this.validateBoardSize();
+        for (let row = 0; row < boardSize; row++) {
+            for (let col = 0; col < boardSize; col++) {
                 if (board[row][col] !== this.pieceValues.EMPTY) {
                     return false;
                 }
@@ -590,8 +623,9 @@ class HexGame {
     
     clearAllPurpleShading() {
         // Remove purple shading from all hexes
-        for (let row = 0; row < this.boardSize; row++) {
-            for (let col = 0; col < this.boardSize; col++) {
+        const boardSize = this.validateBoardSize();
+        for (let row = 0; row < boardSize; row++) {
+            for (let col = 0; col < boardSize; col++) {
                 const key = `${row},${col}`;
                 const hexElement = this.hexElements.get(key);
                 if (hexElement) {
@@ -617,8 +651,9 @@ class HexGame {
     
     updateLegalMovesHighlighting() {
         // Only update clickability for empty hexes to avoid unnecessary DOM operations
-        for (let row = 0; row < this.boardSize; row++) {
-            for (let col = 0; col < this.boardSize; col++) {
+        const boardSize = this.validateBoardSize();
+        for (let row = 0; row < boardSize; row++) {
+            for (let col = 0; col < boardSize; col++) {
                 const key = `${row},${col}`;
                 const hexElement = this.hexElements.get(key);
                 if (hexElement) {
@@ -663,7 +698,7 @@ class HexGame {
     drawHexBoard(board) {
         // Constants for hexagonal board - adapted from working dev version
         const HEX_RADIUS = 18; // Slightly smaller for mobile
-        const BOARD_SIZE = this.boardSize;
+        const BOARD_SIZE = this.validateBoardSize();
         
         // Math for flat-topped hex grid, blue at top/bottom
         const w = HEX_RADIUS * Math.sqrt(3);
@@ -866,7 +901,7 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     move: move,
-                    elo_rating: this.currentElo
+                    elo_rating: this.validateEloRating()
                 })
             });
             
@@ -940,7 +975,8 @@ class HexGame {
     
     rowColToTRMPH(row, col) {
         // Convert row, col to TRMPH format
-        const letters = 'abcdefghijklm';
+        const boardSize = this.validateBoardSize();
+        const letters = 'abcdefghijklmnopqrstuvwxyz'.substring(0, boardSize);
         return letters[col] + (row + 1);
     }
     
@@ -1057,7 +1093,8 @@ class HexGame {
     
     parseTrmphMoves(trmphString) {
         // Parse TRMPH string into individual moves (matches Python split_trmph_moves + strip_trmph_preamble)
-        const letters = 'abcdefghijklm';
+        const boardSize = this.validateBoardSize();
+        const letters = 'abcdefghijklmnopqrstuvwxyz'.substring(0, boardSize);
         
         // Strip preamble first (like Python strip_trmph_preamble)
         let bareMoves = trmphString;
@@ -1098,7 +1135,8 @@ class HexGame {
         // This handles moves of varying length (a1, b13, m12, etc.)
         try {
             const moves = this.parseTrmphMoves(trimmed);
-            const maxMoves = 13 * 13; // 169 moves for a complete game
+            const boardSize = this.validateBoardSize();
+            const maxMoves = boardSize * boardSize; // Complete game moves
             if (moves.length > maxMoves) {
                 return { valid: false, error: `Too many moves (maximum ${maxMoves} moves for a complete game)` };
             }
@@ -1106,12 +1144,23 @@ class HexGame {
             return { valid: false, error: `Invalid TRMPH format: ${error.message}` };
         }
         
-        // Validate TRMPH format: ([a-m]([1-9]|1[0-3]))+
-        const trmphRegex = /^([a-m]([1-9]|1[0-3]))+$/;
+        // Validate TRMPH format dynamically based on board size
+        const boardSize = this.validateBoardSize();
+        const lastLetter = String.fromCharCode(96 + boardSize); // 'a' + boardSize - 1
+        const lastNumber = boardSize;
+        
+        let numberPattern;
+        if (boardSize <= 9) {
+            numberPattern = `[1-${lastNumber}]`;
+        } else {
+            numberPattern = `(1[0-${lastNumber % 10}]|[1-9])`;
+        }
+        
+        const trmphRegex = new RegExp(`^([a-${lastLetter}]${numberPattern})+$`);
         if (!trmphRegex.test(trimmed)) {
             return { 
                 valid: false, 
-                error: 'Invalid format. Only letters a-m followed by numbers 1-13 are allowed (e.g., a1b2c3)' 
+                error: `Invalid format. Only letters a-${lastLetter} followed by numbers 1-${lastNumber} are allowed (e.g., a1b2c3)` 
             };
         }
         
@@ -1147,7 +1196,7 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     trmph_sequence: input,
-                    elo_rating: this.currentElo
+                    elo_rating: this.validateEloRating()
                 })
             });
             

@@ -34,6 +34,15 @@ app = Flask(__name__, static_folder="static_public")
 CORS(app)
 
 # =============================================================================
+# DIFFICULTY CONFIGURATION CONSTANTS
+# =============================================================================
+
+# Difficulty configuration constants
+MIN_ELO = 1
+MAX_ELO = 2350
+DEFAULT_ELO = 900
+
+# =============================================================================
 # FLASK APP CONFIGURATION
 # =============================================================================
 
@@ -208,7 +217,7 @@ def validate_elo_rating(value):
         value: ELO rating value (int, float, str, or None)
         
     Returns:
-        int: Validated ELO rating in range [1, 2350]
+        int: Validated ELO rating in range [MIN_ELO, MAX_ELO]
         
     Raises:
         ValueError: If value is None, cannot be converted, or is out of range
@@ -223,8 +232,8 @@ def validate_elo_rating(value):
     except (ValueError, TypeError):
         raise ValueError("ELO rating must be a number")
     
-    if not (1 <= elo_int <= 2350):
-        raise ValueError("ELO rating must be between 1 and 2350")
+    if not (MIN_ELO <= elo_int <= MAX_ELO):
+        raise ValueError(f"ELO rating must be between {MIN_ELO} and {MAX_ELO}")
     
     return elo_int
 
@@ -476,7 +485,7 @@ def get_cached_model_wrapper(model_id: str):
 # Define difficulty breakpoints for linear interpolation
 # Format: (elo, temperature, num_simulations, algorithm, model, label)
 DIFFICULTY_POINTS = [
-    (1,    2.2,  0 , "policy", "simple", "Mindless"),
+    (MIN_ELO,    2.2,  0 , "policy", "simple", "Mindless"),
     (300,  1.7,  0 , "policy", "simple", "Beginner"),  
     (500,  1.3,  0 , "policy", "simple", "Novice 1"),
     (800,  0.9,  0 , "policy", "simple", "Novice 2"),
@@ -488,7 +497,7 @@ DIFFICULTY_POINTS = [
     (2149, 0.08, 0 , "policy", "best",   "Expert 2"),
     (2150, 1.0,  8 , "mcts",   "best",   "Extra Hard"), # Gumbel MCTS
     (2250, 1.0,  20, "mcts",   "best",   "Ultra Hard"), # Gumbel MCTS
-    (2350, 1.0,  39, "mcts",   "best",   "Master"),     # Gumbel MCTS
+    (MAX_ELO, 1.0,  39, "mcts",   "best",   "Master"),     # Gumbel MCTS
 ]
 
 def get_difficulty_levels():
@@ -497,10 +506,10 @@ def get_difficulty_levels():
 
 def get_difficulty_parameters(elo_rating):
     """Convert ELO rating to appropriate algorithm parameters."""
-    if elo_rating < 1:
-        elo_rating = 1
-    elif elo_rating > 2350:
-        elo_rating = 2350
+    if elo_rating < MIN_ELO:
+        elo_rating = MIN_ELO
+    elif elo_rating > MAX_ELO:
+        elo_rating = MAX_ELO
     
     # Use the global DIFFICULTY_POINTS array
     difficulty_points = [(elo, temp, sims, algo, model) for elo, temp, sims, algo, model, _ in DIFFICULTY_POINTS]
@@ -894,7 +903,12 @@ def api_constants():
             "BLUE": TRMPH_BLUE_WIN,
             "RED": TRMPH_RED_WIN
         },
-        "DIFFICULTY_LEVELS": get_difficulty_levels()
+        "DIFFICULTY_LEVELS": get_difficulty_levels(),
+        "ELO_CONFIG": {
+            "MIN_ELO": MIN_ELO,
+            "MAX_ELO": MAX_ELO,
+            "DEFAULT_ELO": DEFAULT_ELO
+        }
     })
 
 
@@ -915,7 +929,7 @@ def api_state():
         return jsonify({"error": error_msg}), 400
     
     trmph = validated_data.get("trmph", "")
-    elo_rating = validated_data.get("elo_rating", 1000)  # Default to Medium difficulty
+    elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)  # Default to configured default difficulty
     
     app.logger.info(f"api_state called with trmph='{trmph}', elo_rating={elo_rating}")
     
