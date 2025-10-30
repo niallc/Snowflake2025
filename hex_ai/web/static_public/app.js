@@ -23,6 +23,16 @@ class HexGame {
         // Difficulty levels will be loaded from backend in loadGameConstants()
         this.difficultyLevels = null;
         
+        // Purple hexes configuration using TRMPH coordinates
+        this.PURPLE_HEXES = ['b10', 'b11', 'b12', 'b3', 'b4', 'b5', 'b6', 'd10', 
+            'b7', 'b8', 'b9', 'c10', 'c11', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 
+            'd11', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9', 'e10', 'e11', 'e3', 'e4', 'e5', 
+            'e6', 'e7', 'e8', 'e9', 'f10', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'g10', 'g4', 
+            'g5', 'g6', 'g7', 'g8', 'g9', 'h10', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9', 'i10', 
+            'i11', 'i3', 'i4', 'i5', 'i6', 'i7', 'i8', 'i9', 'j10', 'j11', 'j3', 'j4', 'j5', 'j6', 
+            'j7', 'j8', 'j9', 'k10', 'k11', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'l2', 'l3', 
+            'l4', 'l5', 'l6', 'l7', 'l8', 'l9', 'l10', 'l11'];
+        
         this.initializeElements();
         this.setupEventListeners();
         this.loadGameConstants();
@@ -591,21 +601,9 @@ class HexGame {
     }
     
     shouldShadeHex(row, col) {
-        // Shade all hexes except the edge hexes
-        const boardSize = this.validateBoardSize();
-        const lastRow = boardSize - 1;
-        const lastCol = boardSize - 1;
-        
-        // Edge hexes are: top row (row=0), bottom row (row=lastRow), 
-        // second left-most column (col=1), second right-most column (col=lastCol-1),
-        // first column (col=0), last column (col=lastCol)
-        let shouldShade = row > 1 && row < lastRow - 1 && col > 0 && col < lastCol - 1;
-        // Also shade specific edge cases for 13x13 board
-        if (boardSize === 13) {
-            shouldShade = shouldShade || (row === lastRow - 1 && col === 1) || (row === 1 && col === lastCol - 1);
-            shouldShade = shouldShade || (row === lastRow - 1 && col === 2) || (row === 1 && col === lastCol - 2);
-        }
-        return shouldShade;
+        // Convert row/col to TRMPH format and check if it's in the purple hex list
+        const trmph = this.rowColToTRMPH(row, col);
+        return this.PURPLE_HEXES.includes(trmph);
     }
     
     isBoardEmpty(board) {
