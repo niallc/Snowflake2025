@@ -86,15 +86,15 @@ $env:PYTHONPATH = "."
 
 # Run the tournament
 python scripts/run_tournament.py `
-  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251027_065000/ `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251029_212557/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="61,64" `
+  --epoch-range="64,67" `
   --mini-epoch-range="1,100" `
   --games-per-match=50 `
   --round-robin-games=100 `
-  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251025_210806,checkpoints/hyperparameter_tuning/pipeline_20251023_124549,checkpoints/hyperparameter_tuning/pipeline_20251021_104711" `
-  --model-files="epoch64_mini35.pt.gz,epoch60_mini37.pt.gz,epoch55_mini13.pt.gz" `
+  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251027_065000,checkpoints/hyperparameter_tuning/pipeline_20251025_210806,checkpoints/hyperparameter_tuning/pipeline_20251023_124549" `
+  --model-files="epoch64_mini20.pt.gz,epoch64_mini35.pt.gz,epoch60_mini37.pt.gz" `
   --strategies="mcts,mcts,mcts" `
   --mcts-sims=39 `
   --enable-gumbel=true `
