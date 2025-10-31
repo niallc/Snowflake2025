@@ -2,74 +2,153 @@
 Central configuration for model checkpoint paths.
 
 This module provides a single source of truth for model checkpoint paths
-used throughout the project. This makes it easy to update to new best models
-and ensures consistency across all scripts and modules.
+used throughout the project. Models are organized by generation numbers,
+where each generation represents a directory of models from a training run.
+The current best model is derived from the highest generation number.
+
+To add a new generation:
+1. Add a new entry to MODEL_GENERATIONS with the next generation number
+2. Format: {generation_number: {"dir": "path/to/dir", "models": ["file1.pt.gz", "file2.pt.gz"]}}
+3. The first model in the list is considered the primary model for that generation
 """
 
 import os
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 
 # Base directory for all checkpoints
 CHECKPOINTS_BASE_DIR = "checkpoints"
 
-# Current best model configuration
-# Temporary honourable mention models: sep6th.../epoch4_mini135.pt.gz, sep6th.../epoch4_mini40.pt.gz
+# Model generations: Each generation represents a directory of models from a training run
+# Keys are generation numbers (integers starting from 1)
+# Values contain directory path and list of model files of interest
+# The current best model is derived from the highest generation number
+MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
+    1: {
+        "dir": "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629",
+        "models": ["epoch6_mini90.pt.gz", "epoch7_mini105.pt.gz"]
+    },
+    2: {
+        "dir": "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250",
+        "models": ["epoch9_mini12.pt.gz", "epoch8_mini1.pt.gz"]
+    },
+    3: {
+        "dir": "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446",
+        "models": ["epoch11_mini15.pt.gz"]
+    },
+    4: {
+        "dir": "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100",
+        "models": ["epoch13_mini5.pt.gz"]
+    },
+    5: {
+        "dir": "hyperparameter_tuning/pipeline_20250924_151002/pipeline_sweep_exp0__99914b_20250924_151002",
+        "models": ["epoch14_mini34.pt.gz"]
+    },
+    6: {
+        "dir": "hyperparameter_tuning/pipeline_20250926_003151/pipeline_sweep_0",
+        "models": ["epoch18_mini30.pt.gz"]
+    },
+    7: {
+        "dir": "hyperparameter_tuning/pipeline_20250929_142959/pipeline_sweep_0",
+        "models": ["epoch15_mini24.pt.gz", "epoch13_mini19.pt.gz", "epoch14_mini9.pt.gz", "epoch14_mini18.pt.gz"]
+    },
+    8: {
+        "dir": "hyperparameter_tuning/pipeline_20251003_205950/",
+        "models": ["epoch19_mini6.pt.gz", "epoch18_mini23.pt.gz", "epoch19_mini7.pt.gz", "epoch19_mini5.pt.gz", "epoch17_mini7.pt.gz", "epoch16_mini7.pt.gz", "epoch19_mini19.pt.gz"]
+    },
+    9: {
+        "dir": "hyperparameter_tuning/pipeline_20251005_123332/",
+        "models": ["epoch23_mini35.pt.gz", "epoch22_mini15.pt.gz", "epoch22_mini19.pt.gz", "epoch21_mini11.pt.gz"]
+    },
+    10: {
+        "dir": "hyperparameter_tuning/pipeline_20251009_082022/",
+        "models": ["epoch30_mini24.pt.gz", "epoch31_mini32.pt.gz"]
+    },
+    11: {
+        "dir": "hyperparameter_tuning/pipeline_20251011_102118/",
+        "models": ["epoch37_mini47.pt.gz"]
+    },
+    12: {
+        "dir": "hyperparameter_tuning/pipeline_20251013_181038/",
+        "models": ["epoch43_mini34.pt.gz"]
+    },
+    13: {
+        "dir": "hyperparameter_tuning/pipeline_20251016_184020/",
+        "models": ["epoch48_mini11.pt.gz"]
+    },
+    14: {
+        "dir": "hyperparameter_tuning/pipeline_20251018_152819/",
+        "models": ["epoch49_mini57.pt.gz"]
+    },
+    15: {
+        "dir": "hyperparameter_tuning/pipeline_20251020_171353/",
+        "models": ["epoch51_mini30.pt.gz", "epoch50_mini52.pt.gz"]
+    },
+    16: {
+        "dir": "hyperparameter_tuning/pipeline_20251021_104711/",
+        "models": ["epoch55_mini13.pt.gz"]
+    },
+    17: {
+        "dir": "hyperparameter_tuning/pipeline_20251023_124549/",
+        "models": ["epoch60_mini37.pt.gz", "epoch60_mini44.pt.gz", "epoch59_mini15.pt.gz"]
+    },
+    18: {
+        "dir": "hyperparameter_tuning/pipeline_20251025_210806/",
+        "models": ["epoch64_mini35.pt.gz"]
+    },
+    19: {
+        "dir": "hyperparameter_tuning/pipeline_20251027_065000/",
+        "models": ["epoch64_mini20.pt.gz", "epoch65_mini33.pt.gz"]
+    },
+    20: {
+        "dir": "hyperparameter_tuning/pipeline_20251029_212557/",
+        "models": ["epoch68_mini15.pt.gz", "epoch67_mini4.pt.gz"]
+    },
+}
 
-# # Temporary state for retraining:
+
+def _get_current_generation() -> int:
+    """Get the highest generation number (current best model generation)."""
+    if not MODEL_GENERATIONS:
+        raise ValueError("MODEL_GENERATIONS is empty")
+    return max(MODEL_GENERATIONS.keys())
 
 
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
-# CURRENT_BEST_MODEL_FILE = "epoch6_mini90.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629"
-# CURRENT_BEST_MODEL_FILE = "epoch7_mini105.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
-# CURRENT_BEST_MODEL_FILE = "epoch8_mini1.pt.gz" #epoch9_mini12.pt.gz
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250922_071957/pipeline_sweep_exp0__99914b_20250922_072446"
-# CURRENT_BEST_MODEL_FILE = "epoch11_mini15.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250923_072259/pipeline_sweep_exp0__99914b_20250923_073100"
-# CURRENT_BEST_MODEL_FILE = "epoch13_mini5.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250924_151002/pipeline_sweep_exp0__99914b_20250924_151002"
-# CURRENT_BEST_MODEL_FILE = "epoch14_mini34.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning//pipeline_20250926_003151/pipeline_sweep_0"
-# CURRENT_BEST_MODEL_FILE = "epoch18_mini30.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20250929_142959/pipeline_sweep_0"
-# CURRENT_BEST_MODEL_FILE = "epoch15_mini24.pt.gz" #epoch13_mini19, epoch14_mini9 # epoch14_mini18 # epoch15_mini24
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251003_205950/"
-# CURRENT_BEST_MODEL_FILE = "epoch19_mini6.pt.gz" #(18,23 or 19,7 or 19,5), epoch17_mini7, epoch16_mini7,epoch19_mini19
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251005_123332/"
-# CURRENT_BEST_MODEL_FILE = "epoch23_mini35.pt.gz" # 22,15 or 22,19 or 21,11
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
-# CURRENT_BEST_MODEL_FILE = "epoch30_mini24.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251009_082022/"
-# CURRENT_BEST_MODEL_FILE = "epoch31_mini32.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251011_102118/"
-# CURRENT_BEST_MODEL_FILE = "epoch37_mini47.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251013_181038/"
-# CURRENT_BEST_MODEL_FILE = "epoch43_mini34.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251016_184020/"
-# CURRENT_BEST_MODEL_FILE = "epoch48_mini11.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251018_152819/"
-# CURRENT_BEST_MODEL_FILE = "epoch49_mini57.pt.gz"
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251020_171353/"
-# CURRENT_BEST_MODEL_FILE = "epoch51_mini30.pt.gz" # epoch50_mini52
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251021_104711/"
-# CURRENT_BEST_MODEL_FILE = "epoch55_mini13.pt.gz" 
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549/"
-# CURRENT_BEST_MODEL_FILE = "epoch60_mini37.pt.gz" # epoch60_mini44 epoch59_mini15
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251025_210806/"
-# CURRENT_BEST_MODEL_FILE = "epoch64_mini35.pt.gz" # epoch60_mini44 epoch59_mini15
-# CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251027_065000/"
-# CURRENT_BEST_MODEL_FILE = "epoch64_mini20.pt.gz" # epoch65_mini33
-CURRENT_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251029_212557/"
-CURRENT_BEST_MODEL_FILE = "epoch67_mini4.pt.gz"
+def _get_current_best_model() -> Tuple[str, str]:
+    """Get the directory and primary model file from the highest generation."""
+    gen = _get_current_generation()
+    gen_data = MODEL_GENERATIONS[gen]
+    return gen_data["dir"], gen_data["models"][0]
+
+
+def _get_previous_best_model() -> Optional[Tuple[str, str]]:
+    """Get the directory and primary model file from the second highest generation."""
+    if len(MODEL_GENERATIONS) < 2:
+        return None
+    sorted_gens = sorted(MODEL_GENERATIONS.keys())
+    gen = sorted_gens[-2]  # Second highest
+    gen_data = MODEL_GENERATIONS[gen]
+    return gen_data["dir"], gen_data["models"][0]
+
+
+# Derive current best model from highest generation
+_current_dir, _current_file = _get_current_best_model()
+CURRENT_BEST_MODEL_DIR = _current_dir
+CURRENT_BEST_MODEL_FILE = _current_file
 
 CURRENT_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR, CURRENT_BEST_MODEL_FILE)
 
 # Previous best model (kept for comparison/testing)
-PREVIOUS_BEST_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549"
-PREVIOUS_BEST_MODEL_FILE = "epoch59_mini15.pt.gz"
-PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
+# Derived from the second highest generation
+_previous_best = _get_previous_best_model()
+if _previous_best is not None:
+    PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE = _previous_best
+    PREVIOUS_BEST_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, PREVIOUS_BEST_MODEL_DIR, PREVIOUS_BEST_MODEL_FILE)
+else:
+    # Fallback if there's only one generation
+    PREVIOUS_BEST_MODEL_DIR = CURRENT_BEST_MODEL_DIR
+    PREVIOUS_BEST_MODEL_FILE = CURRENT_BEST_MODEL_FILE
+    PREVIOUS_BEST_MODEL_PATH = CURRENT_BEST_MODEL_PATH
 
 # Fallback model configuration (used when current best model is unavailable)
 FALLBACK_MODEL_DIR = "hyperparameter_tuning/pipeline_20251023_124549/"
