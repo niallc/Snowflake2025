@@ -89,12 +89,12 @@ python scripts/run_tournament.py `
   --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251029_212557_2/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="64,68" `
+  --epoch-range="68,70" `
   --mini-epoch-range="1,100" `
   --games-per-match=50 `
   --round-robin-games=100 `
-  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251027_065000,checkpoints/hyperparameter_tuning/pipeline_20251025_210806,checkpoints/hyperparameter_tuning/pipeline_20251023_124549" `
-  --model-files="epoch64_mini20.pt.gz,epoch64_mini35.pt.gz,epoch60_mini37.pt.gz" `
+  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251029_212557,checkpoints/hyperparameter_tuning/pipeline_20251027_065000,checkpoints/hyperparameter_tuning/pipeline_20251025_210806" `
+  --model-files="epoch68_mini15.pt.gz,epoch64_mini20.pt.gz,epoch64_mini35.pt.gz" `
   --strategies="mcts,mcts,mcts" `
   --mcts-sims=39 `
   --enable-gumbel=true `
