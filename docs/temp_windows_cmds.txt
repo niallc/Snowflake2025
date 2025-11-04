@@ -86,10 +86,10 @@ $env:PYTHONPATH = "."
 
 # Run the tournament
 python scripts/run_tournament.py `
-  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251029_212557_2/ `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251102_235603/ `
   --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="68,70" `
+  --epoch-range="69,70" `
   --mini-epoch-range="1,100" `
   --games-per-match=50 `
   --round-robin-games=100 `
