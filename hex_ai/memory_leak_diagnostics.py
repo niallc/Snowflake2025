@@ -1,0 +1,231 @@
+"""
+Memory leak diagnostic tracking for data pipeline.
+
+This module provides lightweight diagnostic tracking to detect potential memory leaks
+in the data pipeline, specifically:
+- Array reference sharing (positions sharing memory with shard data)
+- Pool size growth over time
+- Shard data retention issues
+
+Results are written to temp/memoryProfile/ for analysis.
+"""
+
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+from collections import deque
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryLeakDiagnostics:
+    """
+    Tracks internal state to detect potential memory leaks in the data pipeline.
+    
+    Writes diagnostic results to temp/memoryProfile/ directory.
+    """
+    
+    def __init__(self, output_dir: str = "temp/memoryProfile", enabled: bool = True):
+        """
+        Initialize diagnostic tracker.
+        
+        Args:
+            output_dir: Directory to write diagnostic reports
+            enabled: Whether diagnostics are enabled
+        """
+        self.enabled = enabled
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate timestamp for this session
+        self.session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.diagnostic_file = self.output_dir / f"memory_leak_diagnostics_{self.session_timestamp}.txt"
+        
+        # Tracking state
+        self.pool_size_history: deque = deque(maxlen=50)  # Keep last 50 measurements
+        self.array_sharing_detected = False
+        self.pool_growth_warnings = 0
+        self.shard_load_count = 0
+        
+        # Write header
+        if self.enabled:
+            with open(self.diagnostic_file, 'w') as f:
+                f.write("Memory Leak Diagnostics Report\n")
+                f.write("=" * 80 + "\n")
+                f.write(f"Session timestamp: {self.session_timestamp}\n")
+                f.write(f"Started: {datetime.now().isoformat()}\n\n")
+    
+    def check_array_sharing(self, example: Dict, shard_data: Dict, shard_path: str) -> bool:
+        """
+        Check if position arrays share memory with shard data (memory leak indicator).
+        
+        Args:
+            example: Position example from shard
+            shard_data: Original shard data dict
+            shard_path: Path to shard file (for logging)
+            
+        Returns:
+            True if array sharing detected, False otherwise
+        """
+        if not self.enabled:
+            return False
+        
+        if not example or 'board' not in example:
+            return False
+        
+        if 'examples' not in shard_data or not shard_data['examples']:
+            return False
+        
+        # Check if board array shares memory address with original
+        example_board_id = id(example['board'])
+        shard_board_id = id(shard_data['examples'][0]['board'])
+        
+        if example_board_id == shard_board_id:
+            self.array_sharing_detected = True
+            self._log_diagnostic(
+                "🚨 ARRAY SHARING DETECTED",
+                f"Position arrays share memory with shard data!\n"
+                f"  Shard: {shard_path}\n"
+                f"  Board array ID: {example_board_id}\n"
+                f"  This prevents shard data from being freed.\n"
+                f"  FIX: Copy arrays when adding positions to pool."
+            )
+            return True
+        
+        # Also check policy array if present
+        if 'policy' in example and 'policy' in shard_data['examples'][0]:
+            example_policy_id = id(example['policy'])
+            shard_policy_id = id(shard_data['examples'][0]['policy'])
+            if example_policy_id == shard_policy_id:
+                self.array_sharing_detected = True
+                self._log_diagnostic(
+                    "🚨 ARRAY SHARING DETECTED",
+                    f"Policy arrays share memory with shard data!\n"
+                    f"  Shard: {shard_path}\n"
+                    f"  Policy array ID: {example_policy_id}\n"
+                    f"  This prevents shard data from being freed.\n"
+                    f"  FIX: Copy arrays when adding positions to pool."
+                )
+                return True
+        
+        return False
+    
+    def track_pool_size(self, pool_size: int, threshold: int = 2_000_000):
+        """
+        Track pool size and warn if it grows unexpectedly.
+        
+        Args:
+            pool_size: Current size of position pool
+            threshold: Size threshold for warnings (default: 2M positions)
+        """
+        if not self.enabled:
+            return
+        
+        self.pool_size_history.append(pool_size)
+        self.shard_load_count += 1
+        
+        # Check if pool exceeds threshold
+        if pool_size > threshold:
+            # Check if pool is growing over time
+            if len(self.pool_size_history) >= 5:
+                recent_avg = sum(list(self.pool_size_history)[-5:]) / 5
+                if pool_size > recent_avg * 1.5:
+                    self.pool_growth_warnings += 1
+                    self._log_diagnostic(
+                        "⚠️ POOL SIZE GROWING",
+                        f"Position pool size is growing unexpectedly:\n"
+                        f"  Current size: {pool_size:,} positions\n"
+                        f"  Recent average: {recent_avg:,.0f} positions\n"
+                        f"  Growth: {(pool_size / recent_avg - 1) * 100:.1f}%\n"
+                        f"  This may indicate a memory leak."
+                    )
+                elif pool_size > threshold:
+                    # Pool is large but not necessarily growing
+                    self._log_diagnostic(
+                        "⚠️ LARGE POOL SIZE",
+                        f"Position pool is very large: {pool_size:,} positions\n"
+                        f"  This is ~{pool_size * 3 / 1024 / 1024:.1f} GB in position dicts alone."
+                    )
+    
+    def _log_diagnostic(self, level: str, message: str):
+        """Write diagnostic message to file."""
+        timestamp = datetime.now().isoformat()
+        with open(self.diagnostic_file, 'a') as f:
+            f.write(f"\n[{timestamp}] {level}\n")
+            f.write(f"{message}\n")
+            f.write("-" * 80 + "\n")
+        
+        # Also log to Python logger at appropriate level
+        if "🚨" in level:
+            logger.error(f"{level}: {message}")
+        elif "⚠️" in level:
+            logger.warning(f"{level}: {message}")
+        else:
+            logger.info(f"{level}: {message}")
+    
+    def write_summary(self):
+        """Write final diagnostic summary."""
+        if not self.enabled:
+            return
+        
+        with open(self.diagnostic_file, 'a') as f:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("Diagnostic Summary\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Session ended: {datetime.now().isoformat()}\n")
+            f.write(f"Total shard loads tracked: {self.shard_load_count}\n")
+            f.write(f"Array sharing detected: {self.array_sharing_detected}\n")
+            f.write(f"Pool growth warnings: {self.pool_growth_warnings}\n")
+            
+            if self.pool_size_history:
+                f.write(f"\nPool size statistics:\n")
+                f.write(f"  Min: {min(self.pool_size_history):,}\n")
+                f.write(f"  Max: {max(self.pool_size_history):,}\n")
+                f.write(f"  Final: {self.pool_size_history[-1]:,}\n")
+            
+            if self.array_sharing_detected:
+                f.write("\n⚠️ ACTION REQUIRED: Array sharing was detected!\n")
+                f.write("   This is a confirmed memory leak. Arrays must be copied\n")
+                f.write("   when adding positions to the pool.\n")
+            
+            if self.pool_growth_warnings > 0:
+                f.write(f"\n⚠️ WARNING: {self.pool_growth_warnings} pool growth warnings detected.\n")
+                f.write("   Monitor memory usage over longer periods.\n")
+
+
+# Global diagnostic instance (None when not enabled)
+_global_diagnostics: Optional[MemoryLeakDiagnostics] = None
+
+
+def get_diagnostics() -> Optional[MemoryLeakDiagnostics]:
+    """Get the global diagnostic tracker instance, or None if not enabled."""
+    return _global_diagnostics
+
+
+def start_diagnostics(output_dir: str = "temp/memoryProfile") -> MemoryLeakDiagnostics:
+    """
+    Start global memory leak diagnostics.
+    
+    Args:
+        output_dir: Directory to write diagnostic reports
+        
+    Returns:
+        MemoryLeakDiagnostics instance
+    """
+    global _global_diagnostics
+    if _global_diagnostics is not None:
+        logger.warning("Memory leak diagnostics already started")
+        return _global_diagnostics
+    
+    _global_diagnostics = MemoryLeakDiagnostics(output_dir=output_dir, enabled=True)
+    return _global_diagnostics
+
+
+def stop_diagnostics():
+    """Stop global memory leak diagnostics and write final summary."""
+    global _global_diagnostics
+    if _global_diagnostics is not None:
+        _global_diagnostics.write_summary()
+        _global_diagnostics = None
+

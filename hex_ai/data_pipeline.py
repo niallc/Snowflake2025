@@ -18,6 +18,7 @@ import json
 import logging
 import random
 import time
+import copy
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union, Any
 from datetime import datetime
@@ -29,6 +30,7 @@ from .models import TwoHeadedResNet
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB, VALIDATION_DATA_COMPRESSION_RATIO, MAX_TEMP_MEMORY_GB
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
 from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
+from hex_ai.memory_leak_diagnostics import get_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +195,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.approx_batch_count = 0
         self._memory_warning_logged = False  # Track if we've already logged the memory warning
         self._shards_exhausted_logged = False  # Track if we've already logged that shards are exhausted
+        
+        # Memory leak diagnostics (if enabled)
+        self.diagnostics = get_diagnostics()
         
         # Initialize shard discovery and weighting
         if self.verbose:
@@ -655,11 +660,28 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
                     continue
                 
-                # Add positions to pool
+                # Check for array sharing (memory leak diagnostic)
+                if self.diagnostics and file_examples:
+                    self.diagnostics.check_array_sharing(file_examples[0], data, str(shard_path))
+                
+                # Add positions to pool (with explicit copying to break any shared references)
+                # Use deepcopy to ensure all fields (including metadata) are properly copied
                 for example in file_examples:
                     if positions_added >= positions_needed:
                         break
-                    self.position_pool.append(example)
+                    
+                    # Deep copy the entire example to break all shared references
+                    # This ensures the original 'data' dict can be garbage collected
+                    example_copy = copy.deepcopy(example)
+                    
+                    # Explicitly copy numpy arrays to ensure they're independent
+                    # (deepcopy should handle this, but being explicit for clarity and performance)
+                    if isinstance(example_copy.get('board'), np.ndarray):
+                        example_copy['board'] = example_copy['board'].copy()
+                    if isinstance(example_copy.get('policy'), np.ndarray) and example_copy['policy'] is not None:
+                        example_copy['policy'] = example_copy['policy'].copy()
+                    
+                    self.position_pool.append(example_copy)
                     positions_added += 1
                 
                 # Mark shard as loaded and remove from queue
@@ -686,6 +708,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if self.verbose >= 3:
                 self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
                                f"(total pool size: {len(self.position_pool):,})")
+            
+            # Track pool size for memory leak diagnostics
+            if self.diagnostics:
+                self.diagnostics.track_pool_size(len(self.position_pool))
         
         # Show completion message for initial pool loading
         if len(self.position_pool) == positions_added and self.verbose and shards_loaded_this_refill > 0:

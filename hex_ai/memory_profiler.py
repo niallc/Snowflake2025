@@ -15,6 +15,9 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import logging
 
+# Import diagnostics to start/stop together
+from hex_ai.memory_leak_diagnostics import start_diagnostics, stop_diagnostics
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +61,19 @@ class MemoryProfiler:
         
         # Process reference
         self.process = psutil.Process()
+        
+        # Try importing torch once at initialization to catch import errors early
+        # This prevents repeated warnings if torch import fails
+        self._torch_available = None
+        try:
+            import torch
+            self._torch_available = torch
+        except ImportError as e:
+            # Torch should be available - if not, this is a configuration error
+            raise ImportError(
+                f"torch is required for memory profiling but import failed: {e}\n"
+                f"This indicates a configuration problem that should be fixed before running."
+            ) from e
         
         logger.info(f"Memory profiler initialized. Output directory: {self.output_dir}")
     
@@ -108,15 +124,16 @@ class MemoryProfiler:
     
     def _get_gpu_memory_mb(self) -> Optional[float]:
         """Get GPU memory usage in MB if available."""
-        try:
-            import torch
-            if torch.cuda.is_available():
-                return torch.cuda.memory_allocated() / (1024 ** 2)
-            elif torch.backends.mps.is_available():
-                # MPS doesn't expose memory stats, return None
-                return None
-        except ImportError:
-            pass
+        # torch was already imported and checked at initialization
+        if self._torch_available is None:
+            return None
+        
+        torch = self._torch_available
+        if torch.cuda.is_available():
+            return torch.cuda.memory_allocated() / (1024 ** 2)
+        elif torch.backends.mps.is_available():
+            # MPS doesn't expose memory stats, return None
+            return None
         return None
     
     def log_measurement(self, label: Optional[str] = None):
@@ -419,6 +436,15 @@ def start_profiling(output_dir: str = "temp/memoryProfile", interval_seconds: in
     
     _global_profiler = MemoryProfiler(output_dir=output_dir, interval_seconds=interval_seconds)
     _global_profiler.start()
+    
+    # Also start memory leak diagnostics
+    diagnostics = start_diagnostics(output_dir=output_dir)
+    if diagnostics is None:
+        raise RuntimeError(
+            "Memory leak diagnostics failed to start (returned None). "
+            "This indicates a bug in diagnostics initialization."
+        )
+    
     return _global_profiler
 
 
@@ -428,16 +454,27 @@ def stop_profiling():
     if _global_profiler is not None:
         _global_profiler.stop()
         _global_profiler = None
+    
+    # Also stop memory leak diagnostics
+    stop_diagnostics()
 
 
 def take_snapshot(label: str):
     """Take a memory snapshot (convenience function)."""
-    if _global_profiler is not None:
-        _global_profiler.take_snapshot(label)
+    if _global_profiler is None:
+        raise RuntimeError(
+            f"take_snapshot('{label}') called but memory profiling is not enabled. "
+            f"This indicates a bug - profiling functions should only be called when profiling is enabled."
+        )
+    _global_profiler.take_snapshot(label)
 
 
 def write_epoch_summary(epoch: int):
     """Write epoch-specific summary (convenience function)."""
-    if _global_profiler is not None:
-        _global_profiler.write_epoch_summary(epoch)
+    if _global_profiler is None:
+        raise RuntimeError(
+            f"write_epoch_summary({epoch}) called but memory profiling is not enabled. "
+            f"This indicates a bug - profiling functions should only be called when profiling is enabled."
+        )
+    _global_profiler.write_epoch_summary(epoch)
 
