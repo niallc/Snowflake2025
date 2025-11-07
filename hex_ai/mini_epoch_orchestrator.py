@@ -1,6 +1,6 @@
 import logging
-from typing import Optional
 from hex_ai.error_handling import GracefulShutdownRequested
+from hex_ai.memory_profiler import get_profiler, write_epoch_summary
 
 class MiniEpochOrchestrator:
     """
@@ -112,6 +112,12 @@ class MiniEpochOrchestrator:
                     msg += f"| Batches processed: {batch_count}"
                     self.logger.info(msg)
                 mini_epoch_idx += 1
+            
+            # Take memory snapshot and write epoch summary after each epoch (if profiling enabled)
+            profiler = get_profiler()
+            if profiler is not None:
+                profiler.take_snapshot(f"epoch_{epoch+1}_end")
+                write_epoch_summary(epoch+1)
         
         self.logger.info(f"Training completed: processed {batch_count} total batches across {self.num_epochs - self.start_epoch} epochs")
         return {'total_batches': batch_count, 'epochs_completed': self.num_epochs - self.start_epoch} 

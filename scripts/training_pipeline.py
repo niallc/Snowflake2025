@@ -39,6 +39,7 @@ from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SH
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
 from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 from hex_ai.data_pipeline import DataShuffler
+from hex_ai.memory_profiler import start_profiling, take_snapshot, stop_profiling
 
 
 @dataclass
@@ -47,8 +48,8 @@ class PipelineConfig:
     
     # Model configuration
     model_path: str
-    model_epoch: int = 4
-    model_mini: int = 1
+    model_epoch: int  # No default - must be explicitly set
+    model_mini: int  # No default - must be explicitly set
     
     # Self-play configuration
     num_games: int = 100000
@@ -90,6 +91,7 @@ class PipelineConfig:
     run_shuffling: bool = True
     run_training: bool = True
     cleanup_intermediate: bool = True
+    enable_memory_profiling: bool = False  # Enable memory profiling
     
     def __post_init__(self):
         """Generate derived paths and validate configuration."""
@@ -138,9 +140,20 @@ class PipelineConfig:
                 f"Please specify only one directory or implement multi-directory support."
             )
         
-        # Validate shard ranges match training data directories
-        if self.shard_ranges and len(self.shard_ranges) != len(self.training_data_dirs):
-            raise ValueError(f"Number of shard ranges ({len(self.shard_ranges)}) must match number of training data directories ({len(self.training_data_dirs)})")
+        # Validate shard ranges are provided when training data directories are specified
+        if self.run_training and self.training_data_dirs:
+            if self.shard_ranges is None:
+                raise ValueError(
+                    f"--shard-ranges is required when --training-data-dirs is provided.\n"
+                    f"Found {len(self.training_data_dirs)} training data directories but no shard ranges.\n"
+                    f"Provide --shard-ranges with {len(self.training_data_dirs)} range(s) (one per directory)."
+                )
+            if len(self.shard_ranges) != len(self.training_data_dirs):
+                raise ValueError(
+                    f"Number of shard ranges ({len(self.shard_ranges)}) must match number of training data directories ({len(self.training_data_dirs)}).\n"
+                    f"Training data dirs: {self.training_data_dirs}\n"
+                    f"Shard ranges: {self.shard_ranges}"
+                )
         
         # Resolve validation configuration
         resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
@@ -578,6 +591,10 @@ class TrainingStep:
                 'hyperparameters': config
             })
         
+        # Take snapshot before training starts (if profiling enabled)
+        if self.config.enable_memory_profiling:
+            take_snapshot("training_start")
+        
         # Run training
         if new_shuffled_dir:
             all_data_dirs = [new_shuffled_dir] + self.config.training_data_dirs
@@ -654,6 +671,11 @@ class TrainingPipeline:
         )
         
         start_time = time.time()
+        
+        # Start memory profiling if enabled
+        if self.config.enable_memory_profiling:
+            start_profiling()
+            take_snapshot("pipeline_start")
         
         try:
             # Step 0: Game collection (optional)
@@ -758,6 +780,11 @@ class TrainingPipeline:
             self.logger.info(f"Total time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
             self.logger.info(f"Results: {self.step_results}")
             
+            # Stop memory profiling if enabled
+            if self.config.enable_memory_profiling:
+                take_snapshot("pipeline_end")
+                stop_profiling()
+            
         except GracefulShutdownRequested:
             self.logger.info("Pipeline interrupted by graceful shutdown request")
             raise
@@ -766,6 +793,10 @@ class TrainingPipeline:
             self.logger.error("Step results so far:")
             for step, result in self.step_results.items():
                 self.logger.error(f"  {step}: {result}")
+            # Stop memory profiling if enabled (even on error)
+            if self.config.enable_memory_profiling:
+                take_snapshot("pipeline_error")
+                stop_profiling()
             raise
     
     def _cleanup_intermediate_files(self):
@@ -850,8 +881,8 @@ Examples:
     
     # Model configuration
     parser.add_argument("--model-path", help="Path to model checkpoint directory")
-    parser.add_argument("--model-epoch", type=int, default=4, help="Model epoch number")
-    parser.add_argument("--model-mini", type=int, default=1, help="Model mini-epoch number")
+    parser.add_argument("--model-epoch", type=int, help="Model epoch number (required unless using --use-current-best-model)")
+    parser.add_argument("--model-mini", type=int, help="Model mini-epoch number (required unless using --use-current-best-model)")
     parser.add_argument("--use-current-best-model", action="store_true", 
                        help="Use current best model from hex_ai.inference.model_config")
     
@@ -931,6 +962,8 @@ Examples:
     parser.add_argument("--no-shuffling", action="store_true", help="Skip shuffling step")
     parser.add_argument("--no-training", action="store_true", help="Skip training step")
     parser.add_argument("--no-cleanup", action="store_true", help="Keep intermediate files")
+    parser.add_argument("--enable-memory-profiling", action="store_true", 
+                       help="Enable memory profiling (tracks RSS vs heap and takes snapshots)")
     
     return parser.parse_args()
 
@@ -957,15 +990,19 @@ def main():
                 
                 # Extract epoch and mini from the filename
                 import os
+                import re
                 filename = os.path.basename(model_path)
                 # Expected format: epoch2_mini201.pt.gz
-                if 'epoch' in filename and 'mini' in filename:
-                    parts = filename.split('_')
-                    for part in parts:
-                        if part.startswith('epoch'):
-                            args.model_epoch = int(part[5:])
-                        elif part.startswith('mini'):
-                            args.model_mini = int(part[4:].split('.')[0])
+                # Use regex to extract epoch and mini numbers
+                match = re.search(r'epoch(\d+)_mini(\d+)\.pt\.gz', filename)
+                if not match:
+                    raise ValueError(
+                        f"Could not extract epoch and mini from model filename: {filename}\n"
+                        f"Expected format: epoch<number>_mini<number>.pt.gz\n"
+                        f"Full model path: {model_path}"
+                    )
+                args.model_epoch = int(match.group(1))
+                args.model_mini = int(match.group(2))
                 
                 logger.info(f"Using current best model: {model_path}")
                 logger.info(f"Model directory: {args.model_path}")
@@ -976,6 +1013,13 @@ def main():
                 raise ValueError(f"Could not get current best model path: {e}")
         elif not args.model_path:
             raise ValueError("Must specify either --model-path or --use-current-best-model")
+        
+        # Validate that model_epoch and model_mini are set when using --model-path
+        if not args.use_current_best_model:
+            if args.model_epoch is None:
+                raise ValueError("--model-epoch is required when using --model-path")
+            if args.model_mini is None:
+                raise ValueError("--model-mini is required when using --model-path")
         
 
         # Collect hyperparameter overrides
@@ -1010,7 +1054,7 @@ def main():
             cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
             ordered_positions_dirs=args.ordered_positions_dirs,
             training_data_dirs=args.training_data_dirs,
-            shard_ranges=getattr(args, 'shard_ranges', None),
+            shard_ranges=args.shard_ranges,
             validation_dirs=args.validation_dirs,
             validation_shard_ranges=args.validation_shard_ranges,
             no_validation=args.no_validation,
@@ -1030,7 +1074,8 @@ def main():
             run_trmph_processing=not args.no_trmph_processing,
             run_shuffling=not args.no_shuffling,
             run_training=not args.no_training,
-            cleanup_intermediate=not args.no_cleanup
+            cleanup_intermediate=not args.no_cleanup,
+            enable_memory_profiling=args.enable_memory_profiling
         )
         
         # Create and run pipeline

@@ -86,17 +86,19 @@ $env:PYTHONPATH = "."
 
 # Run the tournament
 python scripts/run_tournament.py `
-  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251102_235603/ `
-  --knockout-config='{\"mcts_sims\": 39, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251106_124025/ `
+  --knockout-config='{\"mcts_sims\": 38, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
   --top-k=2 `
-  --epoch-range="69,70" `
+  --epoch-range="73,76" `
   --mini-epoch-range="1,100" `
   --games-per-match=50 `
   --round-robin-games=100 `
-  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251029_212557,checkpoints/hyperparameter_tuning/pipeline_20251027_065000,checkpoints/hyperparameter_tuning/pipeline_20251025_210806" `
-  --model-files="epoch68_mini15.pt.gz,epoch64_mini20.pt.gz,epoch64_mini35.pt.gz" `
-  --strategies="mcts,mcts,mcts" `
-  --mcts-sims=39 `
+  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251105_220508,checkpoints/hyperparameter_tuning/pipeline_20251102_235603,checkpoints/hyperparameter_tuning/pipeline_20251029_212557,checkpoints/hyperparameter_tuning/pipeline_20251027_065000" `
+  --model-files="epoch74_mini13.pt.gz,epoch72_mini7.pt.gz,epoch68_mini15.pt.gz,epoch64_mini20.pt.gz" `
+  --strategies="mcts,mcts,mcts,mcts" `
+  --mcts-sims=38 `
   --enable-gumbel=true `
   --trmph-source=data/sf25/oct14/ `
   --temperature=1.0
+
+  
