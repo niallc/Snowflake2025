@@ -315,7 +315,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         
@@ -370,7 +370,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         
@@ -420,7 +420,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         

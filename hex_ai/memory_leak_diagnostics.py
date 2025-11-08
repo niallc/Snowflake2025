@@ -60,13 +60,17 @@ class MemoryLeakDiagnostics:
         """
         Check if position arrays share memory with shard data (memory leak indicator).
         
+        This should be called AFTER copying the example. If the copied example still
+        shares memory with the original shard data, that indicates the copy failed
+        and the shard data cannot be garbage collected.
+        
         Args:
-            example: Position example from shard
+            example: Position example (should be the COPIED example, not the original)
             shard_data: Original shard data dict
             shard_path: Path to shard file (for logging)
             
         Returns:
-            True if array sharing detected, False otherwise
+            True if array sharing detected (memory leak), False otherwise
         """
         if not self.enabled:
             return False

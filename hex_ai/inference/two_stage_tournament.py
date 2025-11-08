@@ -157,14 +157,14 @@ class TwoStageTournament:
             
             # Validate that we have enough checkpoints for a tournament
             if len(checkpoints) <= 1:
-                self._raise_insufficient_checkpoints_error(discovery, self.epoch_range, self.mini_epoch_range)
+                self._raise_insufficient_checkpoints_error(discovery, self.epoch_range, self.mini_epoch_range, len(checkpoints))
         else:
             checkpoints = discovery.discover_checkpoints()
             logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
             
             # Validate that we have enough checkpoints for a tournament
             if len(checkpoints) <= 1:
-                self._raise_insufficient_checkpoints_error(discovery, None, None)
+                self._raise_insufficient_checkpoints_error(discovery, None, None, len(checkpoints))
         
         # Create participants from checkpoints
         participants = []
@@ -523,7 +523,8 @@ class TwoStageTournament:
     
     def _raise_insufficient_checkpoints_error(self, discovery: CheckpointDiscovery, 
                                             epoch_range: Optional[Tuple[int, int]], 
-                                            mini_epoch_range: Optional[Tuple[int, int]]) -> None:
+                                            mini_epoch_range: Optional[Tuple[int, int]],
+                                            filtered_count: int) -> None:
         """
         Raise a helpful error when insufficient checkpoints are found.
         
@@ -531,6 +532,7 @@ class TwoStageTournament:
             discovery: The checkpoint discovery object
             epoch_range: The epoch range filter that was applied (if any)
             mini_epoch_range: The mini epoch range filter that was applied (if any)
+            filtered_count: The number of checkpoints found after filtering
         """
         # Get directory contents for helpful error message
         checkpoint_dir = discovery.checkpoint_dir
@@ -543,20 +545,35 @@ class TwoStageTournament:
             checkpoint_files = []
             other_files = []
         
+        # Get total checkpoints in directory for comparison
+        # This should never fail since discover_checkpoints() was already called successfully
+        # earlier in the flow and uses caching
+        all_checkpoints = discovery.discover_checkpoints()
+        total_checkpoints = len(all_checkpoints)
+        
         # Build error message
         error_parts = [
-            f"Tournament requires at least 2 checkpoints, but found {len(checkpoint_files)} matching files.",
+            f"Tournament requires at least 2 checkpoints, but found {filtered_count} matching checkpoints after filtering.",
             f"",
             f"Directory: {checkpoint_dir}",
         ]
         
-        # Add filter information
-        if epoch_range:
-            start_epoch, end_epoch = epoch_range
-            error_parts.append(f"Epoch range filter: {start_epoch}-{end_epoch-1}")
-        if mini_epoch_range:
-            start_mini, end_mini = mini_epoch_range
-            error_parts.append(f"Mini epoch range filter: {start_mini}-{end_mini-1}")
+        # Add information about total vs filtered
+        if filtered_count < total_checkpoints:
+            error_parts.append(f"Total checkpoints in directory: {total_checkpoints}")
+            error_parts.append(f"Filtered checkpoints: {filtered_count}")
+            error_parts.append("")
+        
+        # Add filter information (only if filters were applied)
+        if epoch_range or mini_epoch_range:
+            error_parts.append("Applied filters:")
+            if epoch_range:
+                start_epoch, end_epoch = epoch_range
+                error_parts.append(f"  Epoch range: {start_epoch}-{end_epoch-1}")
+            if mini_epoch_range:
+                start_mini, end_mini = mini_epoch_range
+                error_parts.append(f"  Mini epoch range: {start_mini}-{end_mini-1}")
+            error_parts.append("")
         
         # Add directory contents
         error_parts.extend([

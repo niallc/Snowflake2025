@@ -660,12 +660,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
                     continue
                 
-                # Check for array sharing (memory leak diagnostic)
-                if self.diagnostics and file_examples:
-                    self.diagnostics.check_array_sharing(file_examples[0], data, str(shard_path))
-                
                 # Add positions to pool (with explicit copying to break any shared references)
                 # Use deepcopy to ensure all fields (including metadata) are properly copied
+                first_copy_checked = False  # Track if we've checked the first copy for diagnostics
                 for example in file_examples:
                     if positions_added >= positions_needed:
                         break
@@ -680,6 +677,12 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         example_copy['board'] = example_copy['board'].copy()
                     if isinstance(example_copy.get('policy'), np.ndarray) and example_copy['policy'] is not None:
                         example_copy['policy'] = example_copy['policy'].copy()
+                    
+                    # Check for array sharing AFTER copying (memory leak diagnostic)
+                    # This verifies that the copy actually broke the memory sharing
+                    if self.diagnostics and not first_copy_checked:
+                        self.diagnostics.check_array_sharing(example_copy, data, str(shard_path))
+                        first_copy_checked = True
                     
                     self.position_pool.append(example_copy)
                     positions_added += 1
