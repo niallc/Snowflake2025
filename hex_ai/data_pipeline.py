@@ -469,6 +469,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     if isinstance(data, dict) and 'examples' in data:
                         all_validation_positions.extend(data['examples'])
                     
+                    # Explicitly clear shard data dict after extending (examples are kept in all_validation_positions)
+                    # This ensures the 'data' dict wrapper can be freed
+                    del data
+                    
                     shards_loaded += 1
                     if self.verbose and total_shards_to_load > 5:  # Only show dots for multiple files
                         print(".", end="", flush=True)
@@ -655,6 +659,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 
                 file_examples = data['examples'] if 'examples' in data else []
                 
+                # Track shard data loading for diagnostics
+                if self.diagnostics:
+                    self.diagnostics.track_shard_data_loaded(data, str(shard_path))
+                
                 if not file_examples:
                     self.logger.warning(f"Shard {shard_path} contains no examples, skipping")
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
@@ -700,6 +708,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 if self.verbose >= 3:
                     self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
                                    f"(added {min(positions_added, positions_needed)} to pool)")
+                
+                # Explicitly clear shard data to help garbage collection
+                # This ensures the loaded shard data can be freed immediately
+                if self.diagnostics:
+                    self.diagnostics.verify_shard_data_freed(str(shard_path))
+                del data
+                del file_examples
                 
             except Exception as e:
                 self.logger.error(f"Failed to load shard {shard_path}: {e}")
