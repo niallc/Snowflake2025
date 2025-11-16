@@ -35,6 +35,7 @@ class TwoStageTournament:
     
     def __init__(self,
                  knockout_dir: Optional[str] = None,
+                 knockout_participants: Optional[List[TournamentParticipant]] = None,
                  knockout_config: Optional[Dict[str, Any]] = None,
                  round_robin_participants: Optional[List[TournamentParticipant]] = None,
                  games_per_match: int = 50,
@@ -49,19 +50,38 @@ class TwoStageTournament:
         Initialize the two-stage tournament.
         
         Args:
-            knockout_dir: Directory containing checkpoints for knockout stage
+            knockout_dir: Directory containing checkpoints for knockout stage (mutually exclusive with knockout_participants)
+            knockout_participants: List of participants for knockout stage (mutually exclusive with knockout_dir)
             knockout_config: Configuration for knockout stage MCTS strategy
             round_robin_participants: Additional participants for round-robin stage
             games_per_match: Number of games per knockout match
             top_k: Number of winners from knockout stage to advance
             round_robin_games: Number of games per round-robin match
-            epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints
-            mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter knockout checkpoints
+            epoch_range: Optional tuple of (start_epoch, end_epoch) to filter knockout checkpoints (only used with knockout_dir)
+            mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter knockout checkpoints (only used with knockout_dir)
             command_line: Command line that was used to run the tournament
             run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
             trmph_source: Directory containing TRMPH files for opening generation
+        
+        Raises:
+            ValueError: If both knockout_dir and knockout_participants are provided, or if neither is provided
         """
+        # Validate that exactly one of knockout_dir or knockout_participants is provided
+        if knockout_dir is not None and knockout_participants is not None:
+            raise ValueError(
+                "Cannot specify both knockout_dir and knockout_participants. "
+                "Use knockout_dir to discover checkpoints from a directory, "
+                "or knockout_participants to provide participants directly."
+            )
+        if knockout_dir is None and knockout_participants is None:
+            raise ValueError(
+                "Must specify either knockout_dir or knockout_participants. "
+                "Use knockout_dir to discover checkpoints from a directory, "
+                "or knockout_participants to provide participants directly."
+            )
+        
         self.knockout_dir = knockout_dir
+        self.knockout_participants = knockout_participants
         self.knockout_config = knockout_config or self._get_default_knockout_config()
         self.round_robin_participants = round_robin_participants or []
         self.games_per_match = games_per_match
@@ -77,7 +97,7 @@ class TwoStageTournament:
         self.knockout_winners: List[TournamentParticipant] = []
         self.output_dir: Optional[str] = None
         
-        logger.info(f"Initialized two-stage tournament: knockout_dir={knockout_dir}, top_k={top_k}")
+        logger.info(f"Initialized two-stage tournament: knockout_dir={knockout_dir}, knockout_participants={len(knockout_participants) if knockout_participants else 0}, top_k={top_k}")
     
     def _get_default_knockout_config(self) -> Dict[str, Any]:
         """Get default knockout configuration."""
@@ -109,7 +129,7 @@ class TwoStageTournament:
         }
         
         # Stage 1: Knockout tournament
-        if self.knockout_dir:
+        if self.knockout_dir or self.knockout_participants:
             logger.info("Running knockout stage")
             knockout_results = self._run_knockout_stage()
             results["knockout_results"] = knockout_results
@@ -133,44 +153,57 @@ class TwoStageTournament:
     
     def _run_knockout_stage(self) -> Dict[str, Any]:
         """Run the knockout elimination stage."""
-        # Discover checkpoints
-        discovery = CheckpointDiscovery(self.knockout_dir)
-        
-        # Filter by epoch and/or mini epoch ranges if specified
-        if self.epoch_range or self.mini_epoch_range:
-            checkpoints = discovery.get_checkpoints_by_combined_range(
-                epoch_range=self.epoch_range,
-                mini_epoch_range=self.mini_epoch_range
-            )
+        # Use provided participants directly, or discover from directory
+        if self.knockout_participants is not None:
+            # Use provided participants directly
+            participants = self.knockout_participants
+            logger.info(f"Using {len(participants)} provided participants for knockout")
             
-            # Create descriptive filter message
-            filter_parts = []
-            if self.epoch_range:
-                start_epoch, end_epoch = self.epoch_range
-                filter_parts.append(f"epochs {start_epoch}-{end_epoch-1}")
-            if self.mini_epoch_range:
-                start_mini, end_mini = self.mini_epoch_range
-                filter_parts.append(f"mini epochs {start_mini}-{end_mini-1}")
-            
-            filter_desc = " and ".join(filter_parts)
-            logger.info(f"Filtered to {len(checkpoints)} checkpoints for {filter_desc}")
-            
-            # Validate that we have enough checkpoints for a tournament
-            if len(checkpoints) <= 1:
-                self._raise_insufficient_checkpoints_error(discovery, self.epoch_range, self.mini_epoch_range, len(checkpoints))
+            # Validate that we have enough participants for a tournament
+            if len(participants) <= 1:
+                raise ValueError(
+                    f"Tournament requires at least 2 participants, got {len(participants)}. "
+                    f"Please provide at least 2 participants to run a tournament."
+                )
         else:
-            checkpoints = discovery.discover_checkpoints()
-            logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
+            # Discover checkpoints from directory (existing logic)
+            discovery = CheckpointDiscovery(self.knockout_dir)
             
-            # Validate that we have enough checkpoints for a tournament
-            if len(checkpoints) <= 1:
-                self._raise_insufficient_checkpoints_error(discovery, None, None, len(checkpoints))
-        
-        # Create participants from checkpoints
-        participants = []
-        for checkpoint in checkpoints:
-            participant = self._create_checkpoint_participant(checkpoint)
-            participants.append(participant)
+            # Filter by epoch and/or mini epoch ranges if specified
+            if self.epoch_range or self.mini_epoch_range:
+                checkpoints = discovery.get_checkpoints_by_combined_range(
+                    epoch_range=self.epoch_range,
+                    mini_epoch_range=self.mini_epoch_range
+                )
+                
+                # Create descriptive filter message
+                filter_parts = []
+                if self.epoch_range:
+                    start_epoch, end_epoch = self.epoch_range
+                    filter_parts.append(f"epochs {start_epoch}-{end_epoch-1}")
+                if self.mini_epoch_range:
+                    start_mini, end_mini = self.mini_epoch_range
+                    filter_parts.append(f"mini epochs {start_mini}-{end_mini-1}")
+                
+                filter_desc = " and ".join(filter_parts)
+                logger.info(f"Filtered to {len(checkpoints)} checkpoints for {filter_desc}")
+                
+                # Validate that we have enough checkpoints for a tournament
+                if len(checkpoints) <= 1:
+                    self._raise_insufficient_checkpoints_error(discovery, self.epoch_range, self.mini_epoch_range, len(checkpoints))
+            else:
+                checkpoints = discovery.discover_checkpoints()
+                logger.info(f"Discovered {len(checkpoints)} checkpoints for knockout")
+                
+                # Validate that we have enough checkpoints for a tournament
+                if len(checkpoints) <= 1:
+                    self._raise_insufficient_checkpoints_error(discovery, None, None, len(checkpoints))
+            
+            # Create participants from checkpoints
+            participants = []
+            for checkpoint in checkpoints:
+                participant = self._create_checkpoint_participant(checkpoint)
+                participants.append(participant)
         
         # Create knockout tournament
         knockout_tournament = KnockoutTournament(
@@ -445,6 +478,7 @@ class TwoStageTournament:
         """Get a summary of the tournament configuration and results."""
         summary = {
             "knockout_dir": self.knockout_dir,
+            "knockout_participants_count": len(self.knockout_participants) if self.knockout_participants else None,
             "knockout_config": self.knockout_config,
             "games_per_match": self.games_per_match,
             "top_k": self.top_k,
@@ -478,6 +512,7 @@ class TwoStageTournament:
             "timestamp": timestamp,
             "configuration": {
                 "knockout_dir": self.knockout_dir,
+                "knockout_participants_count": len(self.knockout_participants) if self.knockout_participants else None,
                 "knockout_config": self.knockout_config,
                 "games_per_match": self.games_per_match,
                 "top_k": self.top_k,

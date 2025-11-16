@@ -43,7 +43,7 @@ scripts/evaluate_game_strength.py
 scripts/example_strength_evaluation.py
 
 tests/test_winner_to_color_failfast.py
-
+docs/MathsJam 2025, Snowflake, Hex, AlphaGo - Google Slides.pdf
 
 # VSCode
 .vscode/

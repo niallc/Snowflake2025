@@ -68,7 +68,7 @@ from hex_ai.config import (
 )
 from hex_ai.enums import Player
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
-from hex_ai.inference.model_config import get_model_path, validate_model_path
+from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
 from hex_ai.utils.gumbel_validation import validate_gumbel_configurations, print_gumbel_warnings, check_gumbel_configurations
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
@@ -79,7 +79,7 @@ from hex_ai.utils.format_conversion import (
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
-from hex_ai.utils.tournament_utils import parse_tournament_parameters
+from hex_ai.utils.tournament_utils import parse_tournament_parameters, extract_model_name_from_label
 from hex_ai.utils.deterministic_tournament_utils import (
     setup_tournament_output,
     save_opening_positions,
@@ -379,7 +379,9 @@ Examples:
     
     # 2-stage tournament arguments
     parser.add_argument('--knockout-dir', type=str,
-                       help='Directory containing checkpoints for knockout stage')
+                       help='Directory containing checkpoints for knockout stage (mutually exclusive with --knockout-from-generations)')
+    parser.add_argument('--knockout-from-generations', action='store_true',
+                       help='Use all models from MODEL_GENERATIONS for knockout stage (mutually exclusive with --knockout-dir)')
     parser.add_argument('--knockout-config', type=str,
                        help='JSON configuration for knockout stage MCTS strategy (e.g., \'{"mcts_sims": 100, "enable_gumbel_root_selection": true}\')')
     parser.add_argument('--epoch-range', type=str,
@@ -478,7 +480,8 @@ def parse_mini_epoch_range(mini_epoch_range_str: str) -> Tuple[int, int]:
 
 def is_knockout_only_tournament(args) -> bool:
     """Check if this is a knockout-only tournament (no round-robin participants)."""
-    return args.knockout_dir and not args.models and not args.model_files
+    has_knockout = args.knockout_dir or args.knockout_from_generations
+    return has_knockout and not args.models and not args.model_files
 
 
 def parse_model_specifications(args, strategy_names):
@@ -643,6 +646,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     return strategy_configs
 
 
+
+
 def run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line):
     """
     Run a 2-stage tournament: knockout elimination followed by round-robin.
@@ -659,6 +664,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     """
     
     # Parse knockout configuration
+    # Start with JSON config if provided
     knockout_config = {}
     if args.knockout_config:
         try:
@@ -666,6 +672,60 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         except json.JSONDecodeError as e:
             print(f"ERROR: Invalid JSON in --knockout-config: {e}")
             sys.exit(1)
+    
+    # Parse command-line MCTS parameters and merge into knockout_config
+    # This allows users to specify --mcts-sims, --enable-gumbel, etc. directly
+    parsed_params = parse_tournament_parameters(args)
+    
+    # For knockout-only tournaments, validate that only single values are provided
+    # (Multiple values are only meaningful for round-robin stage where different configs are compared)
+    is_knockout_only = is_knockout_only_tournament(args)
+    if is_knockout_only:
+        params_with_multiple_values = []
+        if parsed_params.get('mcts_sims') and len(parsed_params['mcts_sims']) > 1:
+            params_with_multiple_values.append(f"mcts_sims (got {len(parsed_params['mcts_sims'])} values: {parsed_params['mcts_sims']})")
+        if parsed_params.get('enable_gumbel') and len(parsed_params['enable_gumbel']) > 1:
+            params_with_multiple_values.append(f"enable_gumbel (got {len(parsed_params['enable_gumbel'])} values: {parsed_params['enable_gumbel']})")
+        if parsed_params.get('temperatures') and isinstance(parsed_params['temperatures'], list) and len(parsed_params['temperatures']) > 1:
+            params_with_multiple_values.append(f"temperatures (got {len(parsed_params['temperatures'])} values: {parsed_params['temperatures']})")
+        if parsed_params.get('c_pucts') and len(parsed_params['c_pucts']) > 1:
+            params_with_multiple_values.append(f"c_puct (got {len(parsed_params['c_pucts'])} values: {parsed_params['c_pucts']})")
+        if parsed_params.get('batch_sizes') and len(parsed_params['batch_sizes']) > 1:
+            params_with_multiple_values.append(f"batch_sizes (got {len(parsed_params['batch_sizes'])} values: {parsed_params['batch_sizes']})")
+        if parsed_params.get('gumbel_sim_thresholds') and len(parsed_params['gumbel_sim_thresholds']) > 1:
+            params_with_multiple_values.append(f"gumbel_sim_threshold (got {len(parsed_params['gumbel_sim_thresholds'])} values: {parsed_params['gumbel_sim_thresholds']})")
+        if parsed_params.get('gumbel_c_scales') and len(parsed_params['gumbel_c_scales']) > 1:
+            params_with_multiple_values.append(f"gumbel_c_scale (got {len(parsed_params['gumbel_c_scales'])} values: {parsed_params['gumbel_c_scales']})")
+        
+        if params_with_multiple_values:
+            print("ERROR: Knockout-only tournaments use a single config for all participants.")
+            print("Multiple values provided for the following parameters:")
+            for param in params_with_multiple_values:
+                print(f"  - {param}")
+            print("\nFor knockout-only tournaments, provide only a single value per parameter.")
+            print("Multiple values are only meaningful when you also have round-robin participants.")
+            sys.exit(1)
+    
+    # Extract first value from each parameter list (for knockout, we use single values)
+    # Only override if the parameter was actually provided (non-empty list)
+    if parsed_params.get('mcts_sims') and len(parsed_params['mcts_sims']) > 0:
+        knockout_config['mcts_sims'] = parsed_params['mcts_sims'][0]
+    if parsed_params.get('enable_gumbel') and len(parsed_params['enable_gumbel']) > 0:
+        # enable_gumbel is already a list of booleans from parse_tournament_parameters
+        knockout_config['enable_gumbel_root_selection'] = parsed_params['enable_gumbel'][0]
+    if parsed_params.get('temperatures') and isinstance(parsed_params['temperatures'], list) and len(parsed_params['temperatures']) > 0:
+        knockout_config['temperature'] = parsed_params['temperatures'][0]
+    elif args.temperature is not None:
+        # Also check for singular --temperature argument
+        knockout_config['temperature'] = args.temperature
+    if parsed_params.get('c_pucts') and len(parsed_params['c_pucts']) > 0:
+        knockout_config['c_puct'] = parsed_params['c_pucts'][0]
+    if parsed_params.get('batch_sizes') and len(parsed_params['batch_sizes']) > 0:
+        knockout_config['batch_size'] = parsed_params['batch_sizes'][0]
+    if parsed_params.get('gumbel_sim_thresholds') and len(parsed_params['gumbel_sim_thresholds']) > 0:
+        knockout_config['gumbel_sim_threshold'] = parsed_params['gumbel_sim_thresholds'][0]
+    if parsed_params.get('gumbel_c_scales') and len(parsed_params['gumbel_c_scales']) > 0:
+        knockout_config['gumbel_c_scale'] = parsed_params['gumbel_c_scales'][0]
     
     # Parse epoch range if specified
     epoch_range = None
@@ -696,8 +756,12 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         participant_strategy_config["strategy"] = strategy_config.strategy_type  # FIX: Add strategy type
         participant_strategy_config["temperature"] = strategy_config.temperature  # FIX: Add temperature
         
+        # Extract model filename without extension for participant name
+        # Use the same path for both parameters since we don't have a separate label
+        model_name = extract_model_name_from_label(model_path, model_path)
+        
         participant = TournamentParticipant(
-            name=f"round_robin_{i}",
+            name=model_name,
             strategy_config=participant_strategy_config,
             metadata={
                 "strategy_name": str(strategy_config)
@@ -705,9 +769,23 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         )
         round_robin_participants.append(participant)
     
+    # Handle knockout participants: either from directory or from MODEL_GENERATIONS
+    knockout_participants = None
+    if args.knockout_from_generations:
+        # Get all participants from MODEL_GENERATIONS
+        knockout_participants = get_all_model_participants_from_generations(knockout_config)
+        print(f"Loaded {len(knockout_participants)} models from MODEL_GENERATIONS")
+    
+    # Validate epoch/mini epoch ranges are not used with knockout-from-generations
+    if args.knockout_from_generations and (epoch_range or mini_epoch_range):
+        print("WARNING: --epoch-range and --mini-epoch-range are ignored when using --knockout-from-generations")
+        epoch_range = None
+        mini_epoch_range = None
+    
     # Create and run two-stage tournament
     tournament = TwoStageTournament(
-        knockout_dir=args.knockout_dir,
+        knockout_dir=args.knockout_dir if not args.knockout_from_generations else None,
+        knockout_participants=knockout_participants,
         knockout_config=knockout_config,
         round_robin_participants=round_robin_participants,
         games_per_match=args.games_per_match,
@@ -721,7 +799,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     )
     
     print("Running 2-stage tournament...")
-    print(f"  Knockout directory: {args.knockout_dir}")
+    if args.knockout_from_generations:
+        print(f"  Knockout participants: {len(knockout_participants)} models from MODEL_GENERATIONS")
+    else:
+        print(f"  Knockout directory: {args.knockout_dir}")
     print(f"  Knockout config: {knockout_config}")
     print(f"  Games per match: {args.games_per_match}")
     print(f"  Top K: {args.top_k}")
@@ -801,8 +882,14 @@ def main():
         print("ERROR: Cannot specify both --models and --model-files/--model-dirs. Use one or the other.")
         sys.exit(1)
     
+    # Validate knockout tournament arguments
+    if args.knockout_dir and args.knockout_from_generations:
+        print("ERROR: Cannot specify both --knockout-dir and --knockout-from-generations. Use one or the other.")
+        sys.exit(1)
+    
     # For 2-stage tournaments, models/strategies are optional (only for round-robin stage)
-    if not args.knockout_dir:
+    # Skip this check if using knockout-from-generations (which provides its own participants)
+    if not args.knockout_dir and not args.knockout_from_generations:
         if not args.models and not (args.model_files and args.model_dirs):
             print("ERROR: Must specify either --models (registry) or both --model-files and --model-dirs (direct)")
             sys.exit(1)
@@ -814,14 +901,20 @@ def main():
     else:
         strategy_names = []
     
-    # Parse model specifications
-    model_paths = parse_model_specifications(args, strategy_names)
-    
-    # Create strategy configurations
-    strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
-    
-    # Check for Gumbel algorithm issues and print warnings
-    check_gumbel_configurations(args, strategy_configs)
+    # Parse model specifications (only needed if not knockout-only tournament)
+    if is_knockout_only_tournament(args):
+        # Knockout-only tournament - no model paths or strategy configs needed
+        model_paths = []
+        strategy_configs = []
+    else:
+        # Parse model specifications
+        model_paths = parse_model_specifications(args, strategy_names)
+        
+        # Create strategy configurations
+        strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
+        
+        # Check for Gumbel algorithm issues and print warnings
+        check_gumbel_configurations(args, strategy_configs)
     
     # Determine how many games to play
     # Always use --round-robin-games for the unified tournament system

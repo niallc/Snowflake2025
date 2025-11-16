@@ -13,8 +13,11 @@ To add a new generation:
 """
 
 import os
-from typing import List, Optional, Dict, Any, Tuple
+import re
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from pathlib import Path
+
+from hex_ai.inference.knockout_tournament import TournamentParticipant
 
 # Base directory for all checkpoints
 CHECKPOINTS_BASE_DIR = "checkpoints"
@@ -24,10 +27,10 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # Values contain directory path and list of model files of interest
 # The current best model is derived from the highest generation number
 MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
-    1: {
-        "dir": "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629",
-        "models": ["epoch6_mini90.pt.gz", "epoch7_mini105.pt.gz"]
-    },
+    # 1: {
+    #     "dir": "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629",
+    #     "models": ["epoch6_mini90.pt.gz", "epoch7_mini105.pt.gz"]
+    # },
     2: {
         "dir": "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250",
         "models": ["epoch9_mini12.pt.gz", "epoch8_mini1.pt.gz"]
@@ -110,7 +113,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     22: {
         "dir": "hyperparameter_tuning/pipeline_20251105_220508/",
-        "models": ["epoch74_mini13.pt.gz", "epoch75_mini32.pt.gz", "epoch76_mini15.pt.gz",]
+        "models": ["epoch74_mini13.pt.gz"]
     },
     23: {
         "dir": "hyperparameter_tuning/pipeline_20251106_124025/",
@@ -119,9 +122,21 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     24: {
         "dir": "hyperparameter_tuning/pipeline_20251108_134726/",
         "models": ["epoch76_mini41.pt.gz"]
-    }
+    },
+    25: {
+        "dir": "hyperparameter_tuning/pipeline_20251110_100611/",
+        "models": ["epoch79_mini26.pt.gz", "epoch80_mini1", "epoch77_mini13.pt.gz"]
+    },
+    25: {
+        "dir": "hyperparameter_tuning/pipeline_20251112_205851/",
+        "models": ["epoch82_mini11.pt.gz", "epoch80_mini25.pt.gz"]
+    },
+    26: {
+        "dir": "hyperparameter_tuning/pipeline_20251114_230638/",
+        "models": ["epoch86_mini30.pt.gz"]
+    },
 }
-
+# 
 
 def _get_current_generation() -> int:
     """Get the highest generation number (current best model generation)."""
@@ -395,4 +410,85 @@ def get_available_model_with_fallback(model_name: str = "best") -> str:
 
 # Convenience variables for backward compatibility
 DEFAULT_MODEL_PATH = CURRENT_BEST_MODEL_PATH
-DEFAULT_MODEL_DIR = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR) 
+DEFAULT_MODEL_DIR = os.path.join(CHECKPOINTS_BASE_DIR, CURRENT_BEST_MODEL_DIR)
+
+
+def get_all_model_participants_from_generations(knockout_config: Dict[str, Any]) -> List['TournamentParticipant']:
+    """
+    Convert all models in MODEL_GENERATIONS into TournamentParticipant objects.
+    
+    This function iterates through all entries in MODEL_GENERATIONS and creates
+    TournamentParticipant objects for each model file, suitable for use in
+    knockout tournaments.
+    
+    Args:
+        knockout_config: Configuration dictionary for knockout tournament strategy.
+            Should contain MCTS parameters like "mcts_sims", "enable_gumbel_root_selection", etc.
+            Will be merged with each participant's strategy_config.
+    
+    Returns:
+        List of TournamentParticipant objects, one for each model in MODEL_GENERATIONS
+    
+    Example:
+        >>> config = {"mcts_sims": 220, "enable_gumbel_root_selection": True, "temperature": 1.0}
+        >>> participants = get_all_model_participants_from_generations(config)
+        >>> len(participants)  # Total number of models across all generations
+    """
+    from hex_ai.inference.knockout_tournament import TournamentParticipant
+    
+    participants = []
+    checkpoint_pattern = re.compile(r'epoch(\d+)_mini(\d+)(?:\.pt\.gz)?$')
+    
+    for gen_num, gen_data in sorted(MODEL_GENERATIONS.items()):
+        gen_dir = gen_data["dir"]
+        model_files = gen_data["models"]
+        
+        for model_file in model_files:
+            # Ensure model_file has .pt.gz extension if not present
+            if not model_file.endswith('.pt.gz'):
+                model_file = model_file + '.pt.gz'
+            
+            # Create full path to model
+            model_path = os.path.join(CHECKPOINTS_BASE_DIR, gen_dir, model_file)
+            
+            # Extract epoch and mini from filename for naming
+            match = checkpoint_pattern.match(model_file)
+            if match:
+                epoch = int(match.group(1))
+                mini = int(match.group(2))
+                # Create descriptive name: gen{gen}_epoch{epoch}_mini{mini}
+                participant_name = f"gen{gen_num}_epoch{epoch}_mini{mini}"
+            else:
+                # Fallback if pattern doesn't match
+                model_name_base = model_file.replace('.pt.gz', '')
+                participant_name = f"gen{gen_num}_{model_name_base}"
+            
+            # Create strategy config for this participant
+            strategy_config = {
+                "strategy": "mcts",
+                "model_path": model_path,
+                **knockout_config
+            }
+            
+            # Create metadata
+            metadata = {
+                "generation": gen_num,
+                "model_file": model_file,
+                "model_dir": gen_dir,
+                "model_path": model_path
+            }
+            
+            # Add epoch/mini to metadata if extracted
+            if match:
+                metadata["epoch"] = epoch
+                metadata["mini"] = mini
+            
+            participant = TournamentParticipant(
+                name=participant_name,
+                strategy_config=strategy_config,
+                metadata=metadata
+            )
+            
+            participants.append(participant)
+    
+    return participants 

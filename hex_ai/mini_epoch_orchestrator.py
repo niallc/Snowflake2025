@@ -1,6 +1,7 @@
 import logging
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.memory_profiler import get_profiler, write_epoch_summary
+from hex_ai.memory_leak_diagnostics import get_diagnostics
 
 class MiniEpochOrchestrator:
     """
@@ -118,6 +119,22 @@ class MiniEpochOrchestrator:
             if profiler is not None:
                 profiler.take_snapshot(f"epoch_{epoch+1}_end")
                 write_epoch_summary(epoch+1)
+            
+            # Analyze shared array memory at end of epoch (if diagnostics enabled)
+            diagnostics = get_diagnostics()
+            if diagnostics is not None and hasattr(self.train_loader.dataset, 'position_pool'):
+                position_pool = self.train_loader.dataset.position_pool
+                result = diagnostics.estimate_shared_array_memory(position_pool)
+                
+                if result['shared_position_count'] > 0:
+                    diagnostics._log_diagnostic(
+                        "📊 EPOCH MEMORY ANALYSIS",
+                        f"Epoch {epoch+1} shared array analysis:\n"
+                        f"  Positions with shared arrays: {result['shared_position_count']:,}\n"
+                        f"  Estimated memory from shared arrays: {result['estimated_memory_mb']:.2f} MB ({result['estimated_memory_gb']:.2f} GB)\n"
+                        f"  Total pool size: {len(position_pool):,} positions\n"
+                        f"{'🚨 CONFIRMED: Shared arrays account for >2GB memory leak!' if result['estimated_memory_gb'] > 2.0 else '⚠️  Shared arrays <2GB, other sources may be responsible'}"
+                    )
         
         self.logger.info(f"Training completed: processed {batch_count} total batches across {self.num_epochs - self.start_epoch} epochs")
         return {'total_batches': batch_count, 'epochs_completed': self.num_epochs - self.start_epoch} 

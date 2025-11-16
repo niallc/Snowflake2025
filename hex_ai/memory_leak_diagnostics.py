@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 from collections import deque
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class MemoryLeakDiagnostics:
         self.pool_growth_warnings = 0
         self.shard_load_count = 0
         self.shard_data_tracking: Dict[str, int] = {}  # Track shard data dict IDs to detect retention
+        self.shared_array_ids: Dict[int, Dict] = {}  # Track shared array IDs: array_id -> {size_bytes, shard_path, array_type}
         
         # Write header
         if self.enabled:
@@ -88,31 +90,60 @@ class MemoryLeakDiagnostics:
         
         if example_board_id == shard_board_id:
             self.array_sharing_detected = True
+            # Track this shared array for memory estimation
+            self.shared_array_ids[example_board_id] = {
+                'size_bytes': example['board'].nbytes,
+                'shard_path': str(shard_path),
+                'array_type': 'board'
+            }
             self._log_diagnostic(
                 "🚨 ARRAY SHARING DETECTED",
                 f"Position arrays share memory with shard data!\n"
                 f"  Shard: {shard_path}\n"
                 f"  Board array ID: {example_board_id}\n"
+                f"  Array size: {example['board'].nbytes / (1024*1024):.2f} MB\n"
                 f"  This prevents shard data from being freed.\n"
                 f"  FIX: Copy arrays when adding positions to pool."
             )
             return True
         
-        # Also check policy array if present
-        if 'policy' in example and 'policy' in shard_data['examples'][0]:
-            example_policy_id = id(example['policy'])
-            shard_policy_id = id(shard_data['examples'][0]['policy'])
-            if example_policy_id == shard_policy_id:
-                self.array_sharing_detected = True
-                self._log_diagnostic(
-                    "🚨 ARRAY SHARING DETECTED",
-                    f"Policy arrays share memory with shard data!\n"
-                    f"  Shard: {shard_path}\n"
-                    f"  Policy array ID: {example_policy_id}\n"
-                    f"  This prevents shard data from being freed.\n"
-                    f"  FIX: Copy arrays when adding positions to pool."
-                )
-                return True
+        # Check policy array sharing if present
+        # NOTE: Policy can be None for terminal positions (final moves with no next move).
+        # This is expected and valid - about 1% of examples have None policy.
+        # If policy is None, there's no array to check for memory sharing, so we skip.
+        example_policy = example.get('policy')
+        if example_policy is None:
+            return False  # No array to check - this is expected for terminal positions
+        
+        # Policy exists in copied example - check if it shares memory with shard data
+        # We compare against the first example in the shard (the diagnostic only runs once per shard)
+        shard_policy = shard_data['examples'][0].get('policy')
+        if shard_policy is None:
+            # First shard example has None policy but copied example has policy - they're different examples
+            # This is fine - we can't check for sharing between different examples
+            return False
+        
+        # Both have policy arrays - check if they share memory
+        example_policy_id = id(example_policy)
+        shard_policy_id = id(shard_policy)
+        if example_policy_id == shard_policy_id:
+            self.array_sharing_detected = True
+            # Track this shared array for memory estimation
+            self.shared_array_ids[example_policy_id] = {
+                'size_bytes': example_policy.nbytes,
+                'shard_path': str(shard_path),
+                'array_type': 'policy'
+            }
+            self._log_diagnostic(
+                "🚨 ARRAY SHARING DETECTED",
+                f"Policy arrays share memory with shard data!\n"
+                f"  Shard: {shard_path}\n"
+                f"  Policy array ID: {example_policy_id}\n"
+                f"  Array size: {example_policy.nbytes / (1024*1024):.2f} MB\n"
+                f"  This prevents shard data from being freed.\n"
+                f"  FIX: Copy arrays when adding positions to pool."
+            )
+            return True
         
         return False
     
@@ -188,6 +219,48 @@ class MemoryLeakDiagnostics:
                         f"Position pool is very large: {pool_size:,} positions\n"
                         f"  This is ~{pool_size * 3 / 1024 / 1024:.1f} GB in position dicts alone."
                     )
+    
+    def estimate_shared_array_memory(self, position_pool: List[Dict]) -> Dict:
+        """
+        Scan position pool to estimate memory from shared arrays.
+        
+        This scans the entire position pool and counts how many positions have arrays
+        that match IDs we've detected as shared. This gives us a quantitative measure
+        of the memory leak from array sharing.
+        
+        Args:
+            position_pool: List of position dictionaries from the dataset
+            
+        Returns:
+            Dict with:
+            - shared_position_count: number of positions with shared arrays
+            - estimated_memory_mb: estimated memory retained from shared arrays (MB)
+            - estimated_memory_gb: estimated memory retained from shared arrays (GB)
+        """
+        if not self.enabled:
+            return {'shared_position_count': 0, 'estimated_memory_mb': 0.0, 'estimated_memory_gb': 0.0}
+        
+        shared_count = 0
+        total_memory_bytes = 0
+        
+        for position in position_pool:
+            board_id = id(position.get('board')) if position.get('board') is not None else None
+            policy_id = id(position.get('policy')) if position.get('policy') is not None else None
+            
+            if board_id and board_id in self.shared_array_ids:
+                shared_count += 1
+                total_memory_bytes += self.shared_array_ids[board_id]['size_bytes']
+            
+            if policy_id and policy_id in self.shared_array_ids:
+                shared_count += 1
+                if position.get('policy') is not None:
+                    total_memory_bytes += self.shared_array_ids[policy_id]['size_bytes']
+        
+        return {
+            'shared_position_count': shared_count,
+            'estimated_memory_mb': total_memory_bytes / (1024 * 1024),
+            'estimated_memory_gb': total_memory_bytes / (1024 * 1024 * 1024)
+        }
     
     def _log_diagnostic(self, level: str, message: str):
         """Write diagnostic message to file."""

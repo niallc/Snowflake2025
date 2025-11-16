@@ -174,11 +174,11 @@ const userModifiedSettings = {
 // Smart defaults for different modes
 const SMART_DEFAULTS = {
   gumbel: {
-    num_simulations: 80,
+    num_simulations: 38,
     temperature: 1.0
   },
   mcts: {
-    num_simulations: 480,
+    num_simulations: 38,
     temperature: 0.25
   },
   policy: {
