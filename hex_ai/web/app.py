@@ -181,37 +181,44 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
     
     validated_data = {}
     
-    # Check required fields
+    # Process all allowed fields present in data
+    for field in all_allowed:
+        if field in data:
+            if field in ['trmph', 'move', 'trmph_sequence']:
+                # Normalize input first (handle LittleGolem format, swap, etc.)
+                try:
+                    normalized_input = fc.normalize_game_input(data[field])
+                    data[field] = normalized_input
+                    validated_data[field] = normalized_input
+                except ValueError as e:
+                    # Strict validation failed for malformed input
+                    app.logger.warning(f"Normalization failed for {field}: {e}")
+                    return False, f"Invalid format for {field}: {str(e)}", None
+                except Exception as e:
+                    # DEBUG: Return unexpected errors to user to diagnose the issue
+                    app.logger.error(f"Input normalization failed for {field}: {e}")
+                    return False, f"Normalization error for {field}: {str(e)}", None
+                
+                # These are TRMPH fields that need special validation
+                is_valid, error_msg = validate_trmph_input(data[field])
+                if not is_valid:
+                    return False, f"Invalid {field} [DEBUG-CHECK]: {error_msg}", None
+            elif field == 'elo_rating':
+                # ELO rating needs special validation
+                try:
+                    validated_data[field] = validate_elo_rating(data[field])
+                except ValueError as e:
+                    app.logger.warning(f"Validation failed for {field}: {e}")
+                    return False, f"Invalid {field}: {e}", None
+            else:
+                # Other fields just copy over
+                validated_data[field] = data[field]
+
+    # Check required fields are present
     if required_fields:
         for field in required_fields:
-            if field not in data:
+            if field not in validated_data:
                 return False, f"Missing required field: {field}", None
-            validated_data[field] = data[field]
-    
-    # Validate optional fields if present
-    if optional_fields:
-        for field in optional_fields:
-            if field in data:
-                if field in ['trmph', 'move', 'trmph_sequence']:
-                    # These are TRMPH fields that need special validation
-                    is_valid, error_msg = validate_trmph_input(data[field])
-                    if not is_valid:
-                        return False, f"Invalid {field}: {error_msg}", None
-                    validated_data[field] = data[field]
-                elif field == 'elo_rating':
-                    # ELO rating needs special validation
-                    try:
-                        validated_data[field] = validate_elo_rating(data[field])
-                    except ValueError as e:
-                        # Strict validation failed for malformed input
-                        app.logger.warning(f"Normalization failed for {field}: {e}")
-                        return False, f"Invalid format for {field}: {str(e)}", None
-                    except Exception as e:
-                        # DEBUG: Return unexpected errors to user to diagnose the issue
-                        app.logger.error(f"Input normalization failed for {field}: {e}")
-                        return False, f"An unexpected error occurred during validation for {field}: {str(e)}", None
-                else:
-                    validated_data[field] = data[field]
     
     return True, None, validated_data
 
@@ -1164,6 +1171,7 @@ def api_apply_trmph_sequence():
         if trmph_sequence and trmph_sequence.strip():
             # Use the proper TRMPH parsing utility instead of naive string slicing
             try:
+                app.logger.info(f"Attempting to split TRMPH sequence: '{trmph_sequence}'")
                 moves = fc.split_trmph_moves(trmph_sequence.strip())
                 app.logger.info(f"Applying {len(moves)} moves from sequence: {moves}")
                 
@@ -1178,7 +1186,7 @@ def api_apply_trmph_sequence():
                         break
             except ValueError as e:
                 app.logger.error(f"Invalid TRMPH sequence format: {e}")
-                return jsonify({"error": "Invalid TRMPH sequence format. Please check the format and try again."}), 400
+                return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
         
         new_trmph = state.to_trmph()
         

@@ -16,6 +16,7 @@ from hex_ai.enums import Piece, Channel, piece_to_char, channel_to_int, player_t
 
 import string
 import logging
+import re
 logger = logging.getLogger(__name__)
 
 LETTERS = string.ascii_lowercase
@@ -26,9 +27,10 @@ LETTERS = string.ascii_lowercase
 
 # --- TRMPH/Move Conversion Functions (from data_utils.py) ---
 def strip_trmph_preamble(trmph_text: str) -> str:
-    match = __import__('re').compile(r"#(\d+),").search(trmph_text)
+    match = re.compile(r"#(\d+),").search(trmph_text)
     if not match:
         raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
+    
     return trmph_text[match.end():]
 
 def split_trmph_moves(bare_moves: str) -> list[str]:
@@ -244,3 +246,63 @@ def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
     board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     
     return board_nxn
+
+def normalize_game_input(text: str, board_size: int = BOARD_SIZE) -> str:
+    if not text:
+        return ""
+        
+    # Check for swap
+    is_swap = "swap" in text.lower()
+    
+    # Clean up the text
+    try:
+        if text.startswith('#'):
+             text = strip_trmph_preamble(text)
+    except ValueError:
+        pass
+
+    # Remove "swap" keyword
+    clean_text = re.sub(r'swap', '', text, flags=re.IGNORECASE)
+    
+    # Remove move numbers (e.g. "1.", "10.")
+    clean_text = re.sub(r'\b\d+\.', '', clean_text)
+    
+    # Remove all non-alphanumeric characters
+    clean_text = re.sub(r'[^a-zA-Z0-9]', '', clean_text)
+    
+    # If it was a swap game, we need to transpose all moves EXCEPT the first one
+    # The user wants the original move preserved, but the rest of the game reflected
+    if is_swap:
+        try:
+            # Ensure lowercase for move processing
+            moves = split_trmph_moves(clean_text.lower())
+            processed_moves = []
+            
+            # Handle first move (keep original)
+            if moves:
+                processed_moves.append(moves[0])
+                
+            # Handle subsequent moves (transpose)
+            for move in moves[1:]:
+                row, col = trmph_move_to_rowcol(move, board_size)
+                # Transpose: swap row and col
+                processed_moves.append(rowcol_to_trmph(col, row, board_size))
+                
+            return "".join(processed_moves)
+        except ValueError as e:
+            # If parsing fails, return original cleaned text and let validation handle it
+            logger.warning(f"Failed to transpose swap moves: {e}")
+            
+    # Strict Validation
+    if not clean_text.isalnum():
+        raise ValueError("Invalid format: Input contains characters other than letters and numbers.")
+
+    if clean_text and not any(c.isdigit() for c in clean_text):
+         raise ValueError("Invalid format: Input must contain move numbers (e.g. a3).")
+         
+    if clean_text:
+        if not re.match(r'^([a-zA-Z]\d+)+$', clean_text):
+             raise ValueError("Invalid format: Input does not look like a sequence of moves (e.g. a3e6).")
+
+    # Convert to lowercase to ensure consistency with TRMPH format (e.g. a3, not A3)
+    return clean_text.lower()

@@ -1118,6 +1118,19 @@ class HexGame {
         return moves;
     }
 
+    cleanInput(input) {
+        // Remove move numbers (e.g. "1.", "12.")
+        let cleaned = input.replace(/\b\d+\./g, '');
+
+        // Remove "swap" keyword (case insensitive)
+        cleaned = cleaned.replace(/swap/gi, '');
+
+        // Remove all non-alphanumeric characters
+        cleaned = cleaned.replace(/[^a-zA-Z0-9]/g, '');
+
+        return cleaned;
+    }
+
     validateTrmphInput(input) {
         // Enhanced TRMPH validation with detailed error messages
         if (!input || typeof input !== 'string') {
@@ -1129,17 +1142,21 @@ class HexGame {
             return { valid: false, error: 'Input cannot be empty or just whitespace' };
         }
 
+        // Clean the input for validation purposes (remove numbers, swap, etc.)
+        // We validate the *intent* (the moves), not the exact formatting
+        const cleaned = this.cleanInput(trimmed);
+
         // Check move count by parsing the TRMPH string properly
         // This handles moves of varying length (a1, b13, m12, etc.)
         try {
-            const moves = this.parseTrmphMoves(trimmed);
+            const moves = this.parseTrmphMoves(cleaned);
             const boardSize = this.validateBoardSize();
             const maxMoves = boardSize * boardSize; // Complete game moves
             if (moves.length > maxMoves) {
-                return { valid: false, error: `Too many moves (maximum ${maxMoves} moves for a complete game)` };
+                return { valid: false, error: `[Frontend: Count] Too many moves (maximum ${maxMoves} moves for a complete game)` };
             }
         } catch (error) {
-            return { valid: false, error: `Invalid TRMPH format: ${error.message}` };
+            return { valid: false, error: `[Frontend: Parse] Invalid TRMPH format: ${error.message}` };
         }
 
         // Validate TRMPH format dynamically based on board size
@@ -1154,20 +1171,16 @@ class HexGame {
             numberPattern = `(1[0-${lastNumber % 10}]|[1-9])`;
         }
 
-        // Relaxed validation: Allow backend to handle flexible formats (e.g. "1.f3 2.swap")
-        // We only check for basic validity here to avoid blocking legitimate flexible inputs
-
-        // Only check if it looks vaguely reasonable (alphanumeric + punctuation)
-        if (!/^[a-zA-Z0-9\s.,#]+$/.test(trimmed)) {
+        // Regex check on the CLEANED input
+        // Note: We use case-insensitive flag 'i' here to allow "A1" to pass validation
+        // The backend will normalize it to lowercase
+        const trmphRegex = new RegExp(`^([a-${lastLetter}]${numberPattern})+$`, 'i');
+        if (!trmphRegex.test(cleaned)) {
             return {
                 valid: false,
-                error: `Invalid characters. Input should only contain letters, numbers, and basic punctuation.`
+                error: `[Frontend: Regex] Invalid format. Only letters a-${lastLetter} followed by numbers 1-${lastNumber} are allowed (e.g., a1b2c3)`
             };
         }
-
-        // We skip the strict regex check here and let the backend normalize it
-        // const trmphRegex = new RegExp(`^([a-${lastLetter}]${numberPattern})+$`);
-        // if (!trmphRegex.test(trimmed)) { ... }
 
         return { valid: true, error: null };
     }
