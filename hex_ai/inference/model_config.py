@@ -135,8 +135,11 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
         "dir": "hyperparameter_tuning/pipeline_20251114_230638/",
         "models": ["epoch86_mini32.pt.gz", "epoch86_mini30.pt.gz"]
     },
+    27: {
+        "dir": "hyperparameter_tuning/pipeline_20251117_195834/",
+        "models": ["epoch89_mini20.pt.gz", "epoch88_mini28.pt.gz"]
+    },
 }
-# 
 
 def _get_current_generation() -> int:
     """Get the highest generation number (current best model generation)."""

@@ -178,7 +178,7 @@ const SMART_DEFAULTS = {
     temperature: 1.0
   },
   mcts: {
-    num_simulations: 38,
+    num_simulations: 2048,
     temperature: 0.25
   },
   policy: {

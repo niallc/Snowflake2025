@@ -203,7 +203,13 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
                     try:
                         validated_data[field] = validate_elo_rating(data[field])
                     except ValueError as e:
-                        return False, f"Invalid {field}: {e}", None
+                        # Strict validation failed for malformed input
+                        app.logger.warning(f"Normalization failed for {field}: {e}")
+                        return False, f"Invalid format for {field}: {str(e)}", None
+                    except Exception as e:
+                        # DEBUG: Return unexpected errors to user to diagnose the issue
+                        app.logger.error(f"Input normalization failed for {field}: {e}")
+                        return False, f"An unexpected error occurred during validation for {field}: {str(e)}", None
                 else:
                     validated_data[field] = data[field]
     
