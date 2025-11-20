@@ -558,9 +558,26 @@ class HexGameState:
     @classmethod
     def from_trmph(cls, trmph: str) -> 'HexGameState':
         """Create game state from TRMPH format using split_trmph_moves utility."""
-        if not trmph.startswith("#13,"):
-            raise ValueError("Invalid TRMPH format")
-        moves_str = trmph[4:]  # Remove "#13," prefix
+        # Handle empty string as empty board
+        if not trmph:
+            return make_empty_hex_state()
+            
+        # Handle optional prefix
+        moves_str = trmph
+        if trmph.startswith("#13,"):
+            moves_str = trmph[4:]  # Remove "#13," prefix
+        elif trmph.startswith("#"):
+            # Handle other sizes if needed, or just strip up to comma
+            try:
+                comma_idx = trmph.index(',')
+                moves_str = trmph[comma_idx+1:]
+            except ValueError:
+                # No comma, maybe just preamble?
+                return make_empty_hex_state()
+                
+        if not moves_str:
+            return make_empty_hex_state()
+            
         moves = split_trmph_moves(moves_str)
         
         # First create an EMPTY BOARD, then add moves to it.

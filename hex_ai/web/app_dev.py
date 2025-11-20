@@ -8,7 +8,7 @@ from typing import Tuple
 from datetime import datetime
 import time # Added for time.time()
 
-
+import re
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
 from hex_ai.inference.simple_model_inference import SimpleModelInference
@@ -113,6 +113,80 @@ def preload_default_models():
 
 # Preload models on startup
 preload_default_models()
+
+# --- Input Validation ---
+def validate_trmph_input(trmph):
+    """Validate TRMPH format using regex."""
+    if trmph == "":
+        return True, None
+    
+    if not trmph:
+        return False, "Empty TRMPH string"
+    
+    # Basic format check: comma-separated moves
+    # Allow empty board (just preamble) or moves
+    # Preamble is typically "#[size]," or similar, but we focus on moves
+    
+    # Check for invalid characters
+    # Allowed: a-z, 0-9, #, ,, space, newline
+    if not re.match(r'^[a-z0-9#,\s]*$', trmph):
+        return False, "Invalid characters in TRMPH string"
+        
+    return True, None
+
+def validate_api_input(data, required_fields=None, optional_fields=None):
+    """
+    Validate API input data and normalize TRMPH fields.
+    
+    Args:
+        data: The JSON data from the request
+        required_fields: List of fields that must be present
+        optional_fields: List of optional fields to validate if present
+        
+    Returns:
+        tuple: (is_valid, error_response_or_None)
+    """
+    if not data:
+        return False, (jsonify({"error": "No data provided"}), 400)
+    
+    if required_fields:
+        for field in required_fields:
+            if field not in data:
+                return False, (jsonify({"error": f"Missing required field: {field}"}), 400)
+    
+    # List of fields that contain game input strings to be normalized
+    game_input_fields = ['trmph', 'move', 'trmph_sequence']
+    
+    # Combine required and optional fields to check for game inputs
+    all_fields = (required_fields or []) + (optional_fields or [])
+    
+    for field in all_fields:
+        if field in data and field in game_input_fields:
+            try:
+                # Normalize the game input (handles LittleGolem format, swap, etc.)
+                # This modifies the data dictionary in-place
+                data[field] = fc.normalize_game_input(data[field])
+                
+                # For 'trmph' and 'move' fields, perform additional validation
+                if field in ['trmph', 'move']:
+                    is_valid, error_msg = validate_trmph_input(data[field])
+                    if not is_valid:
+                        return False, (jsonify({"error": f"Invalid {field} format: {error_msg} [DEBUG-CHECK]"}), 400)
+                        
+            except ValueError as e:
+                app.logger.warning(f"Normalization failed for {field}: {e}")
+                return False, (jsonify({"error": f"Invalid {field} format: {str(e)} [DEBUG-CHECK]"}), 400)
+
+    # Validate ELO rating if present
+    if 'elo_rating' in data:
+        try:
+            elo = int(data['elo_rating'])
+            if not (MIN_ELO <= elo <= MAX_ELO):
+                return False, (jsonify({"error": f"ELO rating must be between {MIN_ELO} and {MAX_ELO}"}), 400)
+        except (ValueError, TypeError):
+             return False, (jsonify({"error": "ELO rating must be an integer"}), 400)
+
+    return True, None
 
 # --- Model Management ---
 def get_model(model_id="best"):
@@ -1171,6 +1245,11 @@ def api_refresh_models():
 @app.route("/api/state", methods=["POST"])
 def api_state():
     data = request.get_json()
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "temperature", "verbose"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     model_id = data.get("model_id", "best")  # Default to best
     temperature = data.get("temperature", 1.0)  # Default temperature
@@ -1226,6 +1305,11 @@ def api_state():
 def api_apply_move():
     """Apply only a human move without making a computer move."""
     data = request.get_json()
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph", "move"], optional_fields=["model_id", "temperature", "verbose"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     move = data.get("move")
     model_id = data.get("model_id", "model1")
@@ -1288,6 +1372,11 @@ def api_apply_move():
 def api_apply_trmph_sequence():
     """Apply a sequence of TRMPH moves to the board state."""
     data = request.get_json()
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["trmph_sequence", "model_id", "temperature", "verbose"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     trmph_sequence = data.get("trmph_sequence", "")
     model_id = data.get("model_id", "model1")
@@ -1316,6 +1405,9 @@ def api_apply_trmph_sequence():
                 break  # Stop if game is already over
             state = apply_move_to_state_trmph(state, move)
         
+    except ValueError as e:
+        # Specific handling for format conversion errors
+        return jsonify({"error": f"Invalid TRMPH sequence format: {e} [DEBUG-CHECK]"}), 400
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH sequence: {e}"}), 400
 
@@ -1364,6 +1456,11 @@ def api_policy_move():
     app.logger.info(f"=== POLICY API CALL ===")
     app.logger.info(f"Request data: {data}")
     
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "temperature", "verbose"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     temperature = data.get("temperature", 0.15)  # Default policy temperature
@@ -1448,6 +1545,11 @@ def api_mcts_move():
     app.logger.info(f"=== MCTS API CALL ===")
     app.logger.info(f"Request data: {data}")
     
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "num_simulations", "exploration_constant", "temperature", "temperature_end", "verbose", "enable_gumbel", "gumbel_max_sims"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     num_simulations = data.get("num_simulations", 200)
@@ -1501,6 +1603,11 @@ def api_fixed_tree_move():
     app.logger.info(f"=== FIXED TREE API CALL ===")
     app.logger.info(f"Request data: {data}")
     
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph", "search_widths"], optional_fields=["model_id", "temperature", "verbose"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
     search_widths = data.get("search_widths")  # Required parameter
@@ -1564,6 +1671,11 @@ def api_save_game():
     app.logger.info(f"=== SAVE GAME API CALL ===")
     app.logger.info(f"Request data: {data}")
     
+    # Validate input
+    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["winner", "model_id", "mcts_params"])
+    if not is_valid:
+        return error_response
+
     trmph = data.get("trmph")
     winner = data.get("winner")  # "blue", "red", or None if game not finished
     model_id = data.get("model_id", "model1")

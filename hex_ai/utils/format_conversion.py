@@ -27,9 +27,16 @@ LETTERS = string.ascii_lowercase
 
 # --- TRMPH/Move Conversion Functions (from data_utils.py) ---
 def strip_trmph_preamble(trmph_text: str) -> str:
+    """Strip TRMPH preamble if present, otherwise return input as-is.
+    
+    This allows the function to work with both full TRMPH strings (#13,a1b2)
+    and already-normalized strings (a1b2).
+    """
     match = re.compile(r"#(\d+),").search(trmph_text)
     if not match:
-        raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
+        # No preamble found - assume input is already normalized (bare moves).
+        # Validation of move format happens downstream in split_trmph_moves().
+        return trmph_text
     
     return trmph_text[match.end():]
 
@@ -294,7 +301,7 @@ def normalize_game_input(text: str, board_size: int = BOARD_SIZE) -> str:
             logger.warning(f"Failed to transpose swap moves: {e}")
             
     # Strict Validation
-    if not clean_text.isalnum():
+    if clean_text and not clean_text.isalnum():
         raise ValueError("Invalid format: Input contains characters other than letters and numbers.")
 
     if clean_text and not any(c.isdigit() for c in clean_text):
