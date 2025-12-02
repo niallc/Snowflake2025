@@ -756,12 +756,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         participant_strategy_config["strategy"] = strategy_config.strategy_type  # FIX: Add strategy type
         participant_strategy_config["temperature"] = strategy_config.temperature  # FIX: Add temperature
         
-        # Extract model filename without extension for participant name
-        # Use the same path for both parameters since we don't have a separate label
-        model_name = extract_model_name_from_label(model_path, model_path)
-        
+        # Use the strategy config's name (which includes model, strategy, and parameters)
+        # This ensures the participant name matches what will be used in tournament results
         participant = TournamentParticipant(
-            name=model_name,
+            name=strategy_config.name,
             strategy_config=participant_strategy_config,
             metadata={
                 "strategy_name": str(strategy_config)

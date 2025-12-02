@@ -127,17 +127,33 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
         "dir": "hyperparameter_tuning/pipeline_20251110_100611/",
         "models": ["epoch79_mini26.pt.gz", "epoch80_mini1", "epoch77_mini13.pt.gz"]
     },
-    25: {
+    26: {
         "dir": "hyperparameter_tuning/pipeline_20251112_205851/",
         "models": ["epoch82_mini11.pt.gz", "epoch80_mini25.pt.gz"]
     },
-    26: {
+    27: {
         "dir": "hyperparameter_tuning/pipeline_20251114_230638/",
         "models": ["epoch86_mini32.pt.gz", "epoch86_mini30.pt.gz"]
     },
-    27: {
+    28: {
         "dir": "hyperparameter_tuning/pipeline_20251117_195834/",
         "models": ["epoch89_mini20.pt.gz", "epoch88_mini28.pt.gz"]
+    },
+    29: {
+        "dir": "hyperparameter_tuning/pipeline_20251119_175908/",
+        "models": ["epoch92_mini37.pt.gz"]
+    },
+    30: {
+        "dir": "hyperparameter_tuning/pipeline_20251124_130617/",
+        "models": ["epoch95_mini51.pt.gz", "epoch95_mini40.pt.gz"]
+    },
+    31: {
+        "dir": "hyperparameter_tuning/pipeline_20251126_213922/",
+        "models": ["epoch102_mini24.pt.gz"]
+    },
+    32: {
+        "dir": "hyperparameter_tuning/pipeline_20251130_122123/",
+        "models": ["epoch104_mini65.pt.gz", "epoch104_mini52.pt.gz", "epoch103_mini43.pt.gz"]
     },
 }
 

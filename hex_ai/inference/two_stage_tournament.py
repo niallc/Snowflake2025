@@ -73,12 +73,12 @@ class TwoStageTournament:
                 "Use knockout_dir to discover checkpoints from a directory, "
                 "or knockout_participants to provide participants directly."
             )
-        if knockout_dir is None and knockout_participants is None:
-            raise ValueError(
-                "Must specify either knockout_dir or knockout_participants. "
-                "Use knockout_dir to discover checkpoints from a directory, "
-                "or knockout_participants to provide participants directly."
-            )
+        # if knockout_dir is None and knockout_participants is None:
+        #     raise ValueError(
+        #         "Must specify either knockout_dir or knockout_participants. "
+        #         "Use knockout_dir to discover checkpoints from a directory, "
+        #         "or knockout_participants to provide participants directly."
+        #     )
         
         self.knockout_dir = knockout_dir
         self.knockout_participants = knockout_participants
