@@ -51,7 +51,7 @@ def main():
                        help='Save games incrementally to avoid data loss')
     parser.add_argument('--no_batched_inference', action='store_true',
                        help='Disable batched inference (use individual calls)')
-    parser.add_argument('--progress_interval', type=int, default=10, 
+    parser.add_argument('--progress_interval', type=int, default=20, 
                        help='How often to print progress updates')
     
     args = parser.parse_args()

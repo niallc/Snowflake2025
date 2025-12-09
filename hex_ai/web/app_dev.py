@@ -177,15 +177,6 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
                 app.logger.warning(f"Normalization failed for {field}: {e}")
                 return False, (jsonify({"error": f"Invalid {field} format: {str(e)} [DEBUG-CHECK]"}), 400)
 
-    # Validate ELO rating if present
-    if 'elo_rating' in data:
-        try:
-            elo = int(data['elo_rating'])
-            if not (MIN_ELO <= elo <= MAX_ELO):
-                return False, (jsonify({"error": f"ELO rating must be between {MIN_ELO} and {MAX_ELO}"}), 400)
-        except (ValueError, TypeError):
-             return False, (jsonify({"error": "ELO rating must be an integer"}), 400)
-
     return True, None
 
 # --- Model Management ---
