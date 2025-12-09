@@ -45,7 +45,8 @@ def create_datasets(data_dirs: List[str],
                    refill_threshold: int = DEFAULT_REFILL_THRESHOLD,
                    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
-                   verbose: int = 2):
+                   verbose: int = 2,
+                   shutdown_handler=None):
     """
     Create DataLoader objects from StreamingMixedShardDataset for train and val sets.
     Returns (train_loader, val_loader).
@@ -63,7 +64,8 @@ def create_datasets(data_dirs: List[str],
             enable_augmentation=True,
             max_examples_unaugmented=max_examples_unaugmented,
             verbose=verbose,
-            random_seed=random_seed
+            random_seed=random_seed,
+            shutdown_handler=shutdown_handler
         )
         logger.info("Training dataset created. Done.")
         
@@ -79,7 +81,8 @@ def create_datasets(data_dirs: List[str],
                 max_examples_unaugmented=max_validation_examples,
                 verbose=verbose,
                 random_seed=random_seed,
-                is_validation=True  # Enable validation-specific behavior
+                is_validation=True,  # Enable validation-specific behavior
+                shutdown_handler=shutdown_handler
             )
             logger.info("Validation dataset created. Done.")
         else:
@@ -492,7 +495,8 @@ def run_hyperparameter_tuning_current_data(
         refill_threshold=refill_threshold,
         max_memory_gb=max_memory_gb,
         random_seed=random_seed,
-        verbose=verbose
+        verbose=verbose,
+        shutdown_handler=shutdown_handler
     )
     logger.info("Datasets created. Done.")
     

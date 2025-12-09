@@ -49,6 +49,11 @@ class MiniEpochOrchestrator:
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
             
+            # Check for shutdown before resetting datasets (which can be expensive)
+            if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
+                self.logger.info("Shutdown requested before dataset reset, stopping training")
+                raise GracefulShutdownRequested()
+            
             # Reset datasets for new epoch (if they have a reset method)
             if hasattr(self.train_loader.dataset, 'reset'):
                 self.logger.info("Resetting training dataset for new epoch")

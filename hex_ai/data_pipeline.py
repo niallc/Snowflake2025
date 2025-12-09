@@ -133,6 +133,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         verbose: Verbose level (2=default, 3=detailed pool/shard info)
         random_seed: Random seed for reproducible behavior
         is_validation: Whether this is a validation dataset (enables special validation behavior)
+        shutdown_handler: Optional graceful shutdown handler to check for interrupts during pool refill
     """
     
     def __init__(self,
@@ -145,7 +146,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                  max_examples_unaugmented: Optional[int] = None,
                  verbose: int = 2,
                  random_seed: Optional[int] = None,
-                 is_validation: bool = False):
+                 is_validation: bool = False,
+                 shutdown_handler: Optional[Any] = None):
         super().__init__()
         
         # Validate inputs
@@ -172,6 +174,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.verbose = verbose
         self.random_seed = random_seed
         self.is_validation = is_validation
+        self.shutdown_handler = shutdown_handler
         
         # Set up random seed
         if random_seed is not None:
@@ -644,6 +647,12 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         shards_loaded_this_refill = 0
         
         while positions_added < positions_needed and self._has_available_shards():
+            # Check for shutdown periodically during pool refill
+            if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
+                self.logger.info("Shutdown requested during pool refill, stopping data loading")
+                from hex_ai.error_handling import GracefulShutdownRequested
+                raise GracefulShutdownRequested()
+            
             # Select directory to load from based on weights
             selected_dir_idx = self._select_directory_for_loading()
             if selected_dir_idx is None:
