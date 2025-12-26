@@ -359,6 +359,16 @@ class AlgorithmTerminationChecker:
         if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
             signed_value = self._get_root_signed_value(root, eval_cache)
             if self._is_position_clearly_decided(signed_value):
+                # In self-play, we sometimes keep running MCTS even for clearly decided positions.
+                # This reduces drift by ensuring a small fraction of training targets remain
+                # MCTS-improved instead of pure-policy fallbacks.
+                if random.random() >= self.cfg.confidence_termination_probability:
+                    if verbose >= 3:
+                        print(
+                            f"🎮 MCTS: Confidence termination suppressed (prob={self.cfg.confidence_termination_probability:.3f}, "
+                            f"signed value: {signed_value:.3f})"
+                        )
+                    return None
                 if verbose >= 2:
                     print(f"🎮 MCTS: Confidence-based termination (signed value: {signed_value:.3f})")
                 return AlgorithmTerminationInfo(
@@ -433,6 +443,7 @@ class BaselineMCTSConfig:
     # Confidence-based termination parameters
     enable_confidence_termination: bool = False
     confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD  # Distance from neutral (0) for termination
+    confidence_termination_probability: float = 0.98 # Probability of early termination when threshold is exceeded
     
     # Depth-based discounting parameters
     enable_depth_discounting: bool = True
@@ -502,6 +513,11 @@ class BaselineMCTSConfig:
             raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
         if not 0 <= self.confidence_termination_threshold <= 1:
             raise ValueError(f"confidence_termination_threshold must be between 0 and 1 (represents distance from neutral), got {self.confidence_termination_threshold}")
+        if not 0 <= self.confidence_termination_probability <= 0.98:
+            raise ValueError(
+                "confidence_termination_probability must be between 0 and 1 "
+                f"(probability of early termination when threshold is exceeded), got {self.confidence_termination_probability}"
+            )
         if not 0 < self.depth_discount_factor <= 1:
             raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
         
@@ -2050,6 +2066,7 @@ def create_mcts_config(
     config_type: str = "tournament",
     sims: Optional[int] = None,
     confidence_termination_threshold: Optional[float] = None,
+    confidence_termination_probability: Optional[float] = None,
     cache_size: Optional[int] = None,
     **kwargs
 ) -> BaselineMCTSConfig:
@@ -2060,6 +2077,7 @@ def create_mcts_config(
         config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
         sims: Number of simulations (overrides preset default)
         confidence_termination_threshold: Distance from neutral for confidence termination (overrides preset default)
+        confidence_termination_probability: Probability of early termination when threshold is exceeded (overrides preset default)
         cache_size: Cache size for MCTS evaluation cache (overrides preset default)
         **kwargs: Additional parameters to override in the configuration
         
@@ -2071,6 +2089,7 @@ def create_mcts_config(
         "tournament": {
             "sims": 200,
             "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
+            "confidence_termination_probability": 0.95,
             "temperature_start": 1.0,
             "temperature_end": 1.0,  # Fixed: No temperature decay in tournaments
             "add_root_noise": True,
@@ -2078,6 +2097,9 @@ def create_mcts_config(
         "selfplay": {
             "sims": 500,
             "confidence_termination_threshold": 0.85,
+            # Only early-terminate most of the time in self-play to keep a small fraction
+            # of high-confidence positions as MCTS-improved targets.
+            "confidence_termination_probability": 0.95,
             "temperature_start": 0.5,
             "temperature_end": 0.01,
             "add_root_noise": True,  # Enable for exploration in self-play
@@ -2102,6 +2124,8 @@ def create_mcts_config(
         config_params["sims"] = sims
     if confidence_termination_threshold is not None:
         config_params["confidence_termination_threshold"] = confidence_termination_threshold
+    if confidence_termination_probability is not None:
+        config_params["confidence_termination_probability"] = confidence_termination_probability
     if cache_size is not None:
         config_params["cache_size"] = cache_size
     
