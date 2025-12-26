@@ -13,7 +13,7 @@ import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config, FixedTreeSearchConfig
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import (
@@ -34,6 +34,7 @@ from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -424,6 +425,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         
         mcts_config = create_mcts_config(
             config_type="tournament",
+            confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
             sims=num_simulations,
             c_puct=exploration_constant,
             temperature_start=temperature,

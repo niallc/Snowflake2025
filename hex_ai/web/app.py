@@ -11,7 +11,7 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 import re
 import string
 
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config, TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.value_utils import (
     Winner, 
@@ -29,6 +29,7 @@ from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
 from hex_ai.inference.model_cache import get_model_cache
+from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
 
 app = Flask(__name__, static_folder="static_public")
 CORS(app)
@@ -732,6 +733,7 @@ def _create_mcts_configuration(num_simulations, exploration_constant, temperatur
     
     mcts_config = create_mcts_config(
         config_type="tournament",
+        confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
         sims=num_simulations,
         c_puct=exploration_constant,
         temperature_start=temperature,

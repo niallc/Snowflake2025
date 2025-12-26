@@ -14,7 +14,6 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
-from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.config import (
     DEFAULT_GUMBEL_SIM_THRESHOLD,
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
@@ -127,6 +126,8 @@ class MCTSStrategy(MoveSelectionStrategy):
 
     def __init__(self, verbose: int = 0):
         self.verbose = verbose
+        # Reuse a single engine instance across moves; constructing this repeatedly adds overhead.
+        self._engine = HexGameEngine()
 
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
@@ -166,13 +167,17 @@ class MCTSStrategy(MoveSelectionStrategy):
         mcts_config.add_root_noise = False
         
         
-        # Create required components
-        engine = HexGameEngine()
-        model_cache = get_model_cache()
-        model_wrapper = model_cache.get_wrapper_model(model.checkpoint_path)
+        # Use the already-loaded wrapper inside SimpleModelInference.
+        # This avoids duplicating model loads (and avoids a second global cache path).
+        model_wrapper = getattr(model, "model", None)
+        if model_wrapper is None:
+            raise ValueError(
+                "MCTSStrategy expected model to be a SimpleModelInference with a loaded ModelWrapper in `model`, "
+                f"but got {type(model)!r} with no `.model`."
+            )
         
         # Run MCTS and select move
-        mcts = BaselineMCTS(engine, model_wrapper, mcts_config)
+        mcts = BaselineMCTS(self._engine, model_wrapper, mcts_config)
         
         # DEBUG: Print MCTS configuration to confirm what's actually being used
         if verbose >= 5:

@@ -93,6 +93,8 @@ DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel 
 DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
 DEFAULT_GUMBEL_C_SCALE = 100  # Default Gumbel-AlphaZero c_scale parameter
 DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
+# Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
+TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.90
 
 # Gumbel candidate scaling defaults (power-law scaling)
 DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 75.0  # Scale factor for power-law candidate scaling

@@ -546,7 +546,7 @@ def run_round_robin_tournament(
 
         logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
         
-        # Load models temporarily for this match only
+        # Load models temporarily for this match only (keeps peak memory lower).
         match_model_paths = [strategy_a.model_path, strategy_b.model_path]
         model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
 

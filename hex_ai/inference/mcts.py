@@ -88,7 +88,8 @@ from hex_ai.config import (
     DEFAULT_MCTS_DIRICHLET_ALPHA,
     DEFAULT_GUMBEL_C_SCALE,
     DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
-    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
+    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 )
 from hex_ai.value_utils import ValuePredictor, winner_to_color
 
@@ -104,9 +105,6 @@ PUCT_CALCULATION_THRESHOLD = 1e-9
 
 # Default confidence-based termination threshold (distance from neutral for signed values)
 DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
-
-# Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
-TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
 
 # Default terminal move boost factor
 DEFAULT_TERMINAL_MOVE_BOOST = 2.0
