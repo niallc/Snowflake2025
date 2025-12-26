@@ -45,7 +45,8 @@ class TwoStageTournament:
                  mini_epoch_range: Optional[Tuple[int, int]] = None,
                  command_line: Optional[str] = None,
                  run_desc: Optional[str] = None,
-                 trmph_source: str = "data/sf25/sep28"):
+                 trmph_source: str = "data/sf25/sep28",
+                 mps_empty_cache_per_pair: bool = False):
         """
         Initialize the two-stage tournament.
         
@@ -92,6 +93,7 @@ class TwoStageTournament:
         self.command_line = command_line
         self.run_desc = run_desc
         self.trmph_source = trmph_source
+        self.mps_empty_cache_per_pair = mps_empty_cache_per_pair
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
@@ -254,7 +256,8 @@ class TwoStageTournament:
             seed=None,
             output_dir=self.output_dir,  # Use the same output directory as knockout stage
             command_line=self.command_line,
-            run_desc=self.run_desc
+            run_desc=self.run_desc,
+            mps_empty_cache_per_pair=self.mps_empty_cache_per_pair
         )
         
         # Extract ranking from tournament results

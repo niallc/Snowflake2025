@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
 import logging
+import json
 
 # Import diagnostics to start/stop together
 from hex_ai.memory_leak_diagnostics import start_diagnostics, stop_diagnostics
@@ -54,6 +55,10 @@ class MemoryProfiler:
         # Timeline tracking
         self.timeline_file = self.output_dir / f"memory_timeline_{self.session_timestamp}.txt"
         self.timeline_data: List[Dict] = []
+
+        # Object census tracking (for long-running leak triage)
+        # Long-format CSV: timestamp,label,metric,value,json
+        self.object_census_file = self.output_dir / f"object_census_{self.session_timestamp}.csv"
         
         # Snapshot tracking
         self.snapshots: List[tuple] = []  # List of (label, snapshot, timestamp)
@@ -92,6 +97,11 @@ class MemoryProfiler:
         with open(self.timeline_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['timestamp', 'rss_gb', 'heap_mb', 'heap_peak_mb', 'gpu_mb', 'label'])
+
+        # Write object census header (long format, stable schema)
+        with open(self.object_census_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['timestamp', 'metric', 'value', 'label', 'json'])
         
         # Start background thread for periodic logging
         self.logging_thread = threading.Thread(target=self._periodic_logging, daemon=True)
@@ -132,9 +142,38 @@ class MemoryProfiler:
         if torch.cuda.is_available():
             return torch.cuda.memory_allocated() / (1024 ** 2)
         elif torch.backends.mps.is_available():
-            # MPS doesn't expose memory stats, return None
+            # MPS memory stats availability varies by torch version.
+            # If available, prefer "currently allocated" as the analog of CUDA allocated.
+            try:
+                if hasattr(torch, "mps") and hasattr(torch.mps, "current_allocated_memory"):
+                    return float(torch.mps.current_allocated_memory()) / (1024 ** 2)
+            except Exception:
+                return None
             return None
         return None
+
+    def _get_gpu_memory_extra(self) -> Dict[str, float]:
+        """
+        Best-effort extra GPU memory stats (CUDA reserved / MPS driver allocated, etc.).
+        Returns an empty dict when not available.
+        """
+        extra: Dict[str, float] = {}
+        if self._torch_available is None:
+            return extra
+        torch = self._torch_available
+        try:
+            if torch.cuda.is_available():
+                extra["cuda_allocated_mb"] = float(torch.cuda.memory_allocated()) / (1024 ** 2)
+                extra["cuda_reserved_mb"] = float(torch.cuda.memory_reserved()) / (1024 ** 2)
+            elif torch.backends.mps.is_available():
+                if hasattr(torch, "mps"):
+                    if hasattr(torch.mps, "current_allocated_memory"):
+                        extra["mps_allocated_mb"] = float(torch.mps.current_allocated_memory()) / (1024 ** 2)
+                    if hasattr(torch.mps, "driver_allocated_memory"):
+                        extra["mps_driver_allocated_mb"] = float(torch.mps.driver_allocated_memory()) / (1024 ** 2)
+        except Exception:
+            return {}
+        return extra
     
     def log_measurement(self, label: Optional[str] = None):
         """
@@ -175,6 +214,40 @@ class MemoryProfiler:
                 f"{gpu_mb:.2f}" if gpu_mb is not None else "",
                 label or ""
             ])
+
+        # Also log backend-specific GPU memory stats in the object census (if enabled).
+        try:
+            extra = self._get_gpu_memory_extra()
+            if extra:
+                self.log_object_census(extra, label=label)
+        except Exception:
+            pass
+
+    def log_object_census(self, metrics: Dict[str, float], label: Optional[str] = None, extra_json: Optional[Dict] = None):
+        """
+        Log a set of object / runtime metrics in long format.
+
+        Intended for leak triage: e.g., live model instance counts, cache sizes, etc.
+        """
+        if not self.is_running:
+            return
+        ts = time.time()
+        extra_str = ""
+        if extra_json is not None:
+            try:
+                extra_str = json.dumps(extra_json, sort_keys=True)
+            except Exception:
+                extra_str = ""
+        with open(self.object_census_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            for k, v in metrics.items():
+                writer.writerow([
+                    datetime.fromtimestamp(ts).isoformat(),
+                    str(k),
+                    f"{float(v)}",
+                    label or "",
+                    extra_str
+                ])
     
     def take_snapshot(self, label: str):
         """

@@ -34,6 +34,10 @@ class ModelWrapper:
         self.model = self._load_model(checkpoint_path, model_type)
         self.model.eval()
         self.model.to(self.device)
+        # Memory note:
+        # - Model parameters live on device (CPU/CUDA/MPS). Even after Python objects are freed,
+        #   backends (especially CUDA/MPS) may keep memory "reserved" for performance.
+        # - So, OS-reported RSS/VRAM not dropping after a round is not, by itself, proof of a leak.
         self._logged_batch_predict_info = False
         # Log effective device details for diagnostics (only once per tournament)
         if not ModelWrapper._initialization_logged:

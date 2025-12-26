@@ -122,6 +122,12 @@ class SimpleModelInference:
         
         # Initialize caching
         self.enable_caching = enable_caching
+        # Memory note:
+        # - This cache stores (policy np.ndarray[169], value float) per board position.
+        # - policy[169] as float32 is 169*4=676 bytes, but Python + ndarray overhead makes each entry
+        #   closer to ~1-2 KiB in practice.
+        # - With default cache_size=30,000, a *single model instance* can easily use ~30-60 MiB just
+        #   for cached inference results (plus the model weights themselves).
         self.cache = LRUCache(cache_size) if enable_caching else None
         if enable_caching and verbose >= 2:
             print(f"Cache enabled with size {cache_size}")

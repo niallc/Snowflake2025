@@ -615,7 +615,7 @@ class TrainingStep:
             validation_shard_ranges=all_validation_shard_ranges,
             results_dir=results_dir,
             train_ratio=0.8,
-            num_epochs=8, 
+            num_epochs=4, 
             early_stopping_patience=None,
             random_seed=42,
             max_examples_unaugmented=self.config.max_samples,

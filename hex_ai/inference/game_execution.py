@@ -15,6 +15,7 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
+import gc
 
 from hex_ai.config import (
     BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
@@ -39,6 +40,7 @@ from hex_ai.utils.deterministic_tournament_utils import (
     play_strategy_pair_games,
     report_strategy_pair_results
 )
+from hex_ai.memory_profiler import get_profiler
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ class DeterministicTournamentResult(BaseTournamentResult):
         # Track timing data for each strategy
         self.strategy_timings = {name: 0.0 for name in participants}
         self.strategy_move_counts = {name: 0 for name in participants}
+        # Memory note: This is a small amount of information per game, unlikely to be a significant memory issue.
         self.game_timings = []  # List of individual game timing data
         self.start_time = time.time()
         self.end_time: Optional[float] = None
@@ -491,7 +494,8 @@ def run_round_robin_tournament(
     seed: Optional[int] = None,
     output_dir: Optional[str] = None,
     command_line: str = None,
-    run_desc: Optional[str] = None
+    run_desc: Optional[str] = None,
+    mps_empty_cache_per_pair: bool = False,
 ) -> DeterministicTournamentResult:
     """
     Run a round-robin tournament using pre-generated opening positions.
@@ -536,11 +540,35 @@ def run_round_robin_tournament(
     
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
+        profiler = get_profiler()
+        if profiler is not None:
+            profiler.log_measurement(label=f"pair_start:{strategy_a.name}_vs_{strategy_b.name}")
+
         logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
         
         # Load models temporarily for this match only
         match_model_paths = [strategy_a.model_path, strategy_b.model_path]
         model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
+
+        # Best-effort census: counts of live model objects (helps distinguish true retention vs allocator high-water).
+        if profiler is not None:
+            try:
+                from hex_ai.inference.simple_model_inference import SimpleModelInference
+                from hex_ai.inference.model_wrapper import ModelWrapper
+                n_simple = 0
+                n_wrapper = 0
+                for o in gc.get_objects():
+                    if isinstance(o, SimpleModelInference):
+                        n_simple += 1
+                    elif isinstance(o, ModelWrapper):
+                        n_wrapper += 1
+                profiler.log_object_census(
+                    {"live_simple_model_inference": n_simple, "live_model_wrapper": n_wrapper},
+                    label=f"after_model_load:{strategy_a.name}_vs_{strategy_b.name}",
+                )
+            except Exception:
+                # Diagnostics should never break tournament execution.
+                pass
         
         # Set up output files for this strategy pair
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
@@ -572,6 +600,34 @@ def run_round_robin_tournament(
         # Clean up temporary models to free memory
         # The temporary models will be garbage collected when this iteration ends
         logger.debug(f"Cleaning up temporary models for match: {strategy_a.name} vs {strategy_b.name}")
+
+        # Diagnostic only: on MPS, empty the backend cache between pairs to test allocator behavior.
+        if mps_empty_cache_per_pair:
+            try:
+                import torch
+                if torch.backends.mps.is_available() and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                    torch.mps.empty_cache()
+            except Exception:
+                pass
+
+        if profiler is not None:
+            profiler.log_measurement(label=f"pair_end:{strategy_a.name}_vs_{strategy_b.name}")
+            try:
+                from hex_ai.inference.simple_model_inference import SimpleModelInference
+                from hex_ai.inference.model_wrapper import ModelWrapper
+                n_simple = 0
+                n_wrapper = 0
+                for o in gc.get_objects():
+                    if isinstance(o, SimpleModelInference):
+                        n_simple += 1
+                    elif isinstance(o, ModelWrapper):
+                        n_wrapper += 1
+                profiler.log_object_census(
+                    {"live_simple_model_inference": n_simple, "live_model_wrapper": n_wrapper},
+                    label=f"after_pair_end:{strategy_a.name}_vs_{strategy_b.name}",
+                )
+            except Exception:
+                pass
     
     logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
     return result

@@ -63,6 +63,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
 
+from hex_ai.memory_profiler import start_profiling, stop_profiling
 from hex_ai.config import (
     BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
 )
@@ -396,6 +397,16 @@ Examples:
                        help='Number of games per round-robin match (default: 100)')
     parser.add_argument('--run-desc', type=str,
                        help='Description of this tournament run (e.g., "Testing c_scale = 1.5") - will be included in output headers')
+
+    # Memory profiling / leak triage
+    parser.add_argument('--memory-profile', action='store_true',
+                       help='Enable RSS/heap memory profiling (writes to temp/memoryProfile/).')
+    parser.add_argument('--memory-profile-interval', type=int, default=60,
+                       help='Seconds between automatic memory timeline samples (default: 60).')
+    parser.add_argument('--memory-profile-dir', type=str, default="temp/memoryProfile",
+                       help='Output directory for memory profiling files (default: temp/memoryProfile).')
+    parser.add_argument('--mps-empty-cache-per-pair', action='store_true',
+                       help='If running on MPS, call torch.mps.empty_cache() after each match/pair (diagnostic only).')
     
     return parser.parse_args()
 
@@ -793,7 +804,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         mini_epoch_range=mini_epoch_range,
         command_line=command_line,
         run_desc=args.run_desc,
-        trmph_source=args.trmph_source
+        trmph_source=args.trmph_source,
+        mps_empty_cache_per_pair=args.mps_empty_cache_per_pair
     )
     
     print("Running 2-stage tournament...")
@@ -1033,9 +1045,18 @@ def main():
         print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
         print()
     
-    # Always use the unified 2-stage tournament system
-    # If knockout_dir is None, it will skip the knockout stage and go straight to round-robin
-    result, actual_output_dir = run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line)
+    # Optional: memory profiling (RSS + tracemalloc heap).
+    # This is intended for long-run leak triage. It should not be enabled by default.
+    if args.memory_profile:
+        start_profiling(output_dir=args.memory_profile_dir, interval_seconds=args.memory_profile_interval)
+
+    try:
+        # Always use the unified 2-stage tournament system
+        # If knockout_dir is None, it will skip the knockout stage and go straight to round-robin
+        result, actual_output_dir = run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line)
+    finally:
+        if args.memory_profile:
+            stop_profiling()
     
     # Print results using unified analyzer
     # Use the actual output directory from the tournament, not a new timestamp
