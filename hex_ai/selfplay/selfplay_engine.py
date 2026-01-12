@@ -31,7 +31,10 @@ class SelfPlayEngine:
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
-                 command_line: str = None):
+                 command_line: str = None,
+                 mcts_profile: bool = False,
+                 mcts_profile_every: int = 10,
+                 mcts_profile_max_calls: int = 50):
         
         # Generate a unique run seed based on current time
         self.run_seed = int(time.time() * 1000000) % (2**32)
@@ -69,6 +72,10 @@ class SelfPlayEngine:
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
         self.command_line = command_line
+        self.mcts_profile = mcts_profile
+        self.mcts_profile_every = mcts_profile_every
+        self.mcts_profile_max_calls = mcts_profile_max_calls
+        self._mcts_profile_calls = 0
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -192,6 +199,37 @@ class SelfPlayEngine:
             start_time = time.perf_counter()
             mcts_result = mcts.run(state)
             search_time = time.perf_counter() - start_time
+
+            if self.mcts_profile and self._mcts_profile_calls < self.mcts_profile_max_calls:
+                self._mcts_profile_calls += 1
+                if (self._mcts_profile_calls % self.mcts_profile_every) == 0:
+                    try:
+                        stats = mcts_result.stats or {}
+                        h2d_ms = float(stats.get("h2d_ms", 0.0))
+                        forward_ms = float(stats.get("forward_ms", 0.0))
+                        d2h_ms = float(stats.get("d2h_ms", 0.0))
+                        nn_ms = h2d_ms + forward_ms + d2h_ms
+                        cpu_ms = 0.0
+                        for k in ("select_ms", "encode_ms", "stack_ms", "expand_ms", "backprop_ms", "cache_lookup_ms", "state_creation_ms"):
+                            cpu_ms += float(stats.get(k, 0.0))
+                        total_ms = nn_ms + cpu_ms
+                        nn_pct = (nn_ms / total_ms * 100.0) if total_ms > 0 else 0.0
+                        batch_sizes = stats.get("batch_sizes", []) or []
+                        try:
+                            bs = [float(x) for x in batch_sizes]
+                        except Exception:
+                            bs = []
+                        avg_batch = (sum(bs) / max(1, len(bs))) if bs else 0.0
+                        device = stats.get("device", None)
+                        device_s = str(device) if device is not None else "unknown"
+                        print(
+                            f"[MCTS_PROFILE] device={device_s} move={len(state.move_history)} "
+                            f"batches={int(stats.get('batch_count', 0))} avg_batch={avg_batch:.1f} "
+                            f"NN_ms={nn_ms:.1f} CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f} "
+                            f"search_time_s={search_time:.3f}"
+                        )
+                    except Exception as e:
+                        print(f"[MCTS_PROFILE] failed to summarize stats: {e}")
             
             # Get the best move from the result
             move = mcts_result.move

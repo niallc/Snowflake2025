@@ -650,19 +650,31 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                 "gumbel_total_leaves_evaluated": stats.get('gumbel_total_leaves_evaluated', 0),
                 "gumbel_distinct_leaves_evaluated": stats.get('gumbel_distinct_leaves_evaluated', 0),
                 "gumbel_avg_nn_batch_size": stats.get('gumbel_avg_nn_batch_size', 0.0),
-                "gumbel_leaves_distinct_ratio": stats.get('gumbel_leaves_distinct_ratio', 0.0)
+                "gumbel_leaves_distinct_ratio": stats.get('gumbel_leaves_distinct_ratio', 0.0),
+                # Explain why the selected move can differ from top visits / top direct-policy:
+                # Gumbel uses a deterministic final re-ranking based on log prior + c_scale * (q - v_pi).
+                "gumbel_selected_tensor_action": stats.get("gumbel_selected_tensor_action", None),
+                "gumbel_v_pi_01": stats.get("gumbel_v_pi_01", None),
+                "gumbel_final_rank_top_move": stats.get("gumbel_final_rank_top_move", None),
+                "gumbel_final_rank_top5": stats.get("gumbel_final_rank_top5", None),
+                "gumbel_selection_note": "Gumbel final selection uses log(prior) + c_scale*(q - v_pi) over a candidate set; it is not the visit-count argmax."
             },
             "summary": {
+                # Always include the move actually played (this may differ from argmax due to temperature sampling or Gumbel)
+                "selected_move": selected_move_trmph,
                 "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
+                # "Top MCTS Move" is defined as the argmax under the root MCTS distribution (derived from visit counts).
                 "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
                 "top_mcts_move_temperature_scaled": max(temperature_scaled_mcts_probs.items(), key=lambda x: x[1])[0] if temperature_scaled_mcts_probs and len(temperature_scaled_mcts_probs) > 0 else None,
-                "top_mcts_move_raw_visits": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
+                # Raw visit-count argmax (can differ from argmax over normalized probabilities only by tie-breaking).
+                "top_mcts_move_raw_visits": max(tree_data["visit_counts"].items(), key=lambda x: x[1])[0] if tree_data.get("visit_counts") and len(tree_data["visit_counts"]) > 0 else None,
                 "total_legal_moves": original_legal_moves_count,
-                "moves_explored": f"{tree_data['total_visits']}/{original_legal_moves_count}" if not algorithm_termination_info else "N/A (Algorithm Termination)",
+                # Total number of simulations/visits performed at the root.
+                "moves_explored": tree_data["total_visits"] if not algorithm_termination_info else None,
                 "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
                 "algorithm_summary": algorithm,
                 "gumbel_summary": f"Gumbel: {'ON' if stats.get('gumbel_candidates_m', 0) > 0 else 'OFF'} (candidates: {stats.get('gumbel_candidates_m', 0)}, rounds: {stats.get('gumbel_rounds_R', 0)})",
-                "move_selection_explanation": "Top MCTS Move shows raw visit counts. Top MCTS Move (Temperature Scaled) shows what's actually used for move selection."
+                "move_selection_explanation": "Selected Move is the move played (may be sampled). Top MCTS Move (Raw Visits) is the visit-count argmax. Top MCTS Move (Temperature Scaled) is the argmax after temperature scaling (closer to move selection)."
             },
                     "profiling_summary": {
             "total_compute_ms": int(mcts_search_time * 1000.0),

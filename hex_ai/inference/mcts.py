@@ -867,6 +867,21 @@ class BaselineMCTS:
             raise RuntimeError("Cannot run MCTS on a terminal game state")
         if verbose < 0:
             raise ValueError(f"verbose must be non-negative, got {verbose}")
+
+        # Reset per-run Gumbel state to avoid leaking selections/stats across runs.
+        # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
+        self._used_gumbel_root_selection = False
+        self._gumbel_selected_action = None
+        self._gumbel_selected_tensor_action = None
+        self._gumbel_final_rank_top_move_trmph = None
+        self._gumbel_final_rank_top5 = None
+        self._gumbel_v_pi_01 = None
+        self._gumbel_nn_calls_per_move = 0
+        self._gumbel_total_leaves_evaluated = 0
+        self._gumbel_distinct_leaves_evaluated = 0
+        self._gumbel_candidates_m = 0
+        self._gumbel_rounds_R = 0
+        self._gumbel_timing_breakdown = {}
         
         # Enable detailed exploration tracking if needed
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
@@ -920,7 +935,7 @@ class BaselineMCTS:
         )
         
         # Add Gumbel-specific performance metrics if available
-        if hasattr(self, '_gumbel_nn_calls_per_move'):
+        if getattr(self, "_used_gumbel_root_selection", False):
             # Use actual MCTS metrics for distinct leaves evaluation
             actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
             stats.update({
@@ -931,7 +946,12 @@ class BaselineMCTS:
                 "gumbel_rounds_R": self._gumbel_rounds_R,
                 "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
                 "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
-                "gumbel_timing_breakdown": getattr(self, '_gumbel_timing_breakdown', {})
+                "gumbel_timing_breakdown": getattr(self, '_gumbel_timing_breakdown', {}),
+                # Debug/inspection fields (small and safe to serialize)
+                "gumbel_selected_tensor_action": self._gumbel_selected_tensor_action,
+                "gumbel_final_rank_top_move": self._gumbel_final_rank_top_move_trmph,
+                "gumbel_v_pi_01": self._gumbel_v_pi_01,
+                "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
             })
         
         return MCTSResult(
@@ -1200,6 +1220,71 @@ class BaselineMCTS:
         
         # Store the Gumbel-selected action for later use
         self._gumbel_selected_action = selected_action
+        self._gumbel_selected_tensor_action = int(selected_tensor_action)
+        self._used_gumbel_root_selection = True
+
+        # Compute and store the deterministic final ranking used by gumbel_utils.
+        # This explains why the selected move can differ from the top visit-count move.
+        try:
+            legal_actions = root.legal_indices
+            priors_full_no_noise = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
+            logits_no_noise = np.log(np.clip(priors_full_no_noise, 1e-12, 1.0))
+
+            def q_of_child_01(action: int) -> float:
+                legal_move_idx = root.legal_indices.index(action)
+                if int(root.N[legal_move_idx]) == 0:
+                    return 0.5
+                q_raw = float(root.Q[legal_move_idx])
+                return (q_raw + 1.0) / 2.0
+
+            def n_of_child(action: int) -> int:
+                legal_move_idx = root.legal_indices.index(action)
+                return int(root.N[legal_move_idx])
+
+            # v_pi in [0,1], matching gumbel_utils.completed_baseline_v_pi()
+            pi_unvisited = 0.0
+            num = 0.0
+            for a in legal_actions:
+                if n_of_child(a) > 0:
+                    num += float(priors_full_no_noise[a]) * q_of_child_01(a)
+                else:
+                    pi_unvisited += float(priors_full_no_noise[a])
+            denom = 1.0 - pi_unvisited
+            v_pi = 0.5 if denom <= 1e-12 else (num / denom)
+            self._gumbel_v_pi_01 = float(v_pi)
+
+            sigma = float(self.cfg.gumbel_c_scale)
+            scored: List[Dict[str, Any]] = []
+
+            for a in legal_actions:
+                legal_move_idx = root.legal_indices.index(a)
+                row, col = index_to_move(int(a), board_size)
+                move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+                visits = int(root.N[legal_move_idx])
+                q_signed = float(root.Q[legal_move_idx]) if visits > 0 else 0.0
+                q_01 = q_of_child_01(a) if visits > 0 else float(v_pi)
+                adv = q_01 - float(v_pi)
+                score = float(logits_no_noise[a] + sigma * adv)
+                scored.append({
+                    "move": move_trmph,
+                    "tensor_action": int(a),
+                    "visits": visits,
+                    "prior": float(priors_full_no_noise[a]),
+                    "log_prior": float(logits_no_noise[a]),
+                    "q_ptm_signed": q_signed,
+                    "q_01": float(q_01),
+                    "adv_01": float(adv),
+                    "score": score,
+                })
+
+            scored.sort(key=lambda d: d["score"], reverse=True)
+            self._gumbel_final_rank_top5 = scored[:5]
+            self._gumbel_final_rank_top_move_trmph = scored[0]["move"] if scored else None
+        except Exception:
+            # Best-effort debug only: do not risk crashing inference due to debug formatting.
+            self._gumbel_final_rank_top5 = None
+            self._gumbel_final_rank_top_move_trmph = None
+            self._gumbel_v_pi_01 = None
         
         return timing_tracker.get_final_stats()
 
@@ -1802,8 +1887,10 @@ class BaselineMCTS:
     def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
         """Compute the selected move from the root node."""
         # Check if Gumbel selection was used and return the selected action
-        if hasattr(self, '_gumbel_selected_action'):
+        if getattr(self, "_used_gumbel_root_selection", False):
             selected_action = self._gumbel_selected_action
+            if selected_action is None:
+                raise RuntimeError("Gumbel root selection marked as used, but no selected action was recorded.")
             selected_move = root.legal_moves[selected_action]
             if verbose >= 2:
                 print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")

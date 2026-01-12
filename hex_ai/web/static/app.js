@@ -1557,13 +1557,42 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n\n`;
   }
   
+  // Gumbel Root Selection (if used)
+  if (mctsDebugInfo.gumbel_analysis && mctsDebugInfo.gumbel_analysis.gumbel_used) {
+    const g = mctsDebugInfo.gumbel_analysis;
+    output += '=== GUMBEL ROOT SELECTION ===\n';
+    if (g.gumbel_selection_note) output += `${g.gumbel_selection_note}\n`;
+    if (g.gumbel_final_rank_top_move) output += `Top Final-Rank Move: ${g.gumbel_final_rank_top_move}\n`;
+    if (g.gumbel_v_pi_01 !== null && g.gumbel_v_pi_01 !== undefined) output += `v_pi (0-1): ${Number(g.gumbel_v_pi_01).toFixed(4)}\n`;
+    if (Array.isArray(g.gumbel_final_rank_top5) && g.gumbel_final_rank_top5.length > 0) {
+      output += 'Final-Rank Top 5 (log_prior + c_scale*(q - v_pi)):\n';
+      g.gumbel_final_rank_top5.forEach((row) => {
+        const score = (row.score !== null && row.score !== undefined) ? Number(row.score).toFixed(4) : 'N/A';
+        const logPrior = (row.log_prior !== null && row.log_prior !== undefined) ? Number(row.log_prior).toFixed(4) : 'N/A';
+        const adv = (row.adv_01 !== null && row.adv_01 !== undefined) ? Number(row.adv_01).toFixed(4) : 'N/A';
+        const q01 = (row.q_01 !== null && row.q_01 !== undefined) ? Number(row.q_01).toFixed(4) : 'N/A';
+        output += `  ${row.move}: score=${score} (log_prior=${logPrior}, q01=${q01}, adv=${adv}, visits=${row.visits})\n`;
+      });
+    }
+    output += '\n';
+  }
+  
   // Summary
   if (mctsDebugInfo.summary) {
     output += '=== SUMMARY ===\n';
     const summary = mctsDebugInfo.summary;
-    output += `Top MCTS Move: ${summary.top_mcts_move || 'N/A'}\n`;
+    // Selected move can differ from argmax due to temperature sampling / Gumbel.
+    output += `Selected Move: ${summary.selected_move || (mctsDebugInfo.move_selection ? mctsDebugInfo.move_selection.selected_move : 'N/A')}\n`;
+    output += `Top MCTS Move (Raw Visits): ${summary.top_mcts_move_raw_visits || summary.top_mcts_move || 'N/A'}\n`;
+    if (summary.top_mcts_move_temperature_scaled) {
+      output += `Top MCTS Move (Temperature Scaled): ${summary.top_mcts_move_temperature_scaled}\n`;
+    }
     output += `Top Direct Move: ${summary.top_direct_move || 'N/A'}\n`;
-    output += `Moves Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
+    if (summary.moves_explored !== null && summary.moves_explored !== undefined) {
+      output += `Moves Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
+    } else {
+      output += `Moves Explored: N/A (Algorithm Termination)\n`;
+    }
     output += `Search Efficiency: ${summary.search_efficiency.toFixed(2)} inferences/simulation\n\n`;
   }
   

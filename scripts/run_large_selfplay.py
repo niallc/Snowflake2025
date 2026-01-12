@@ -53,6 +53,14 @@ def main():
                        help='Disable batched inference (use individual calls)')
     parser.add_argument('--progress_interval', type=int, default=20, 
                        help='How often to print progress updates')
+
+    # Lightweight MCTS timing profiler (GPU vs CPU breakdown)
+    parser.add_argument('--mcts-profile', action='store_true',
+                       help='Print lightweight MCTS timing breakdown every N calls (GPU vs CPU time).')
+    parser.add_argument('--mcts-profile-every', type=int, default=10,
+                       help='Print MCTS profile once every N MCTS move selections (default: 10).')
+    parser.add_argument('--mcts-profile-max-calls', type=int, default=50,
+                       help='Maximum number of MCTS move selections to profile (default: 50).')
     
     args = parser.parse_args()
     
@@ -137,7 +145,10 @@ def main():
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
-        command_line=command_line
+        command_line=command_line,
+        mcts_profile=args.mcts_profile,
+        mcts_profile_every=args.mcts_profile_every,
+        mcts_profile_max_calls=args.mcts_profile_max_calls,
     )
     
     start_time = time.time()

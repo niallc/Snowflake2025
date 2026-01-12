@@ -407,6 +407,14 @@ Examples:
                        help='Output directory for memory profiling files (default: temp/memoryProfile).')
     parser.add_argument('--mps-empty-cache-per-pair', action='store_true',
                        help='If running on MPS, call torch.mps.empty_cache() after each match/pair (diagnostic only).')
+
+    # Lightweight MCTS timing profiler (GPU vs CPU breakdown)
+    parser.add_argument('--mcts-profile', action='store_true',
+                       help='Print lightweight MCTS timing breakdown every N calls (GPU vs CPU time).')
+    parser.add_argument('--mcts-profile-every', type=int, default=10,
+                       help='Print MCTS profile once every N MCTS move selections (default: 10).')
+    parser.add_argument('--mcts-profile-max-calls', type=int, default=50,
+                       help='Maximum number of MCTS move selections to profile (default: 50).')
     
     return parser.parse_args()
 
@@ -871,6 +879,15 @@ def main():
     
     # Configure logging verbosity based on --verbose argument
     configure_logging_verbosity(args.verbose)
+
+    # Optional: lightweight MCTS timing breakdown (GPU vs CPU).
+    if args.mcts_profile:
+        from hex_ai.inference.move_selection import configure_mcts_profiling
+        configure_mcts_profiling(
+            enabled=True,
+            every_n_calls=args.mcts_profile_every,
+            max_calls=args.mcts_profile_max_calls,
+        )
     
     # Get command line early - crash if not available
     try:
