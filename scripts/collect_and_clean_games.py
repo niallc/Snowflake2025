@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 import hex_ai
 from hex_ai.data_collection import (
     collect_and_organize_data, combine_and_clean_files, collect_tournament_data_since_date,
-    validate_tournament_patterns, test_tournament_patterns_with_examples
+    find_trmph_files_with_date_filter
 )
 from hex_ai.data_config import (
     DEFAULT_SOURCE_DIRS, DEFAULT_CHUNK_SIZE,
@@ -103,66 +103,44 @@ def process_mode(args):
 
 
 def test_mode(args):
-    """Test tournament pattern configuration and validation."""
-    logging.info("Testing tournament pattern configuration...")
-    
-    # Test pattern validation
-    config_errors = validate_tournament_patterns()
-    if config_errors:
-        logging.error("Configuration validation failed:")
-        for error in config_errors:
-            logging.error(f"  - {error}")
-        return 1
+    """Inspect `.trmph` discovery and (optional) mtime filtering."""
+    source_dirs = [Path(d) for d in (args.source_dirs or DEFAULT_SOURCE_DIRS)]
+
+    # Parse optional since date
+    since_date = None
+    if getattr(args, "since_days", None):
+        since_date = datetime.now() - timedelta(days=args.since_days)
+    elif getattr(args, "since_date", None):
+        since_date = datetime.strptime(args.since_date, "%Y-%m-%d")
+
+    for source_dir in source_dirs:
+        if not source_dir.exists():
+            logging.error(f"Source directory {source_dir} does not exist")
+            return 1
+
+    if since_date:
+        logging.info(f"Inspecting .trmph files with mtime >= {since_date}")
+        files = find_trmph_files_with_date_filter(source_dirs, start_date=since_date)
     else:
-        logging.info("✓ Configuration validation passed")
-    
-    # Test patterns with examples
-    logging.info("\nTesting patterns with example directory names:")
-    test_results = test_tournament_patterns_with_examples()
-    
-    for pattern_name, results in test_results.items():
-        logging.info(f"\nPattern '{pattern_name}':")
-        for result in results:
-            logging.info(f"  {result}")
-    
-    # Test with actual source directories if provided
-    if args.source_dirs:
-        logging.info(f"\nTesting with actual source directories:")
-        for source_dir_str in args.source_dirs:
-            source_dir = Path(source_dir_str)
-            if not source_dir.exists():
-                logging.warning(f"  Source directory {source_dir} does not exist")
-                continue
-            
-            try:
-                from hex_ai.data_collection import find_tournament_directories
-                tournament_dirs = find_tournament_directories(source_dir)
-                logging.info(f"  {source_dir}: Found {len(tournament_dirs)} tournament directories")
-                
-                # Show first few examples
-                for i, tournament_dir in enumerate(tournament_dirs[:3]):
-                    logging.info(f"    - {tournament_dir.name}")
-                if len(tournament_dirs) > 3:
-                    logging.info(f"    ... and {len(tournament_dirs) - 3} more")
-                    
-            except Exception as e:
-                logging.error(f"  {source_dir}: Error - {e}")
-    
-    logging.info("\n✓ Pattern testing completed")
+        logging.info("Inspecting .trmph files (no date filter)")
+        files = find_trmph_files_with_date_filter(source_dirs)
+
+    logging.info(f"Source directories: {[str(d) for d in source_dirs]}")
+    logging.info(f"Found {len(files)} .trmph files")
+
+    # Show a few newest examples
+    newest = sorted(files, key=lambda t: t[1].stat().st_mtime, reverse=True)[:10]
+    if newest:
+        logging.info("Newest files:")
+        for _, path in newest:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            logging.info(f"  {path} (mtime {mtime})")
+
     return 0
 
 
 def tournament_mode(args):
     """Handle tournament data collection since a specific date."""
-    # Validate configuration first
-    config_errors = validate_tournament_patterns()
-    if config_errors:
-        logging.error("Tournament pattern configuration errors:")
-        for error in config_errors:
-            logging.error(f"  - {error}")
-        logging.error("\nRun 'python scripts/collect_and_clean_games.py test' to diagnose configuration issues.")
-        return 1
-    
     source_dirs = [Path(d) for d in args.source_dirs]
     output_dir = Path(args.output_dir) if args.output_dir else get_collected_dir_name("tournament_data")
     
@@ -194,15 +172,10 @@ def tournament_mode(args):
         
         logging.info("Tournament data collection completed successfully!")
         logging.info(f"Collected {stats['unique_games']} unique games from {stats['total_files']} files")
-        logging.info(f"Found {stats['total_tournament_dirs']} tournament directories")
+        logging.info(f"Directories with data: {stats['total_dirs_with_data']}")
         return 0
     except Exception as e:
         logging.error(f"Tournament data collection failed: {e}")
-        logging.error("\nThis might indicate:")
-        logging.error("1. Directory naming patterns have changed (check TOURNAMENT_PATTERNS config)")
-        logging.error("2. Source directory structure is different than expected")
-        logging.error("3. Configuration errors in date parsing")
-        logging.error("\nRun 'python scripts/collect_and_clean_games.py test' to diagnose issues.")
         return 1
 
 
@@ -217,7 +190,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test tournament pattern configuration
+  # Inspect .trmph discovery (and optional date filtering)
   python scripts/collect_and_clean_games.py test
   
   # Test with actual source directories
@@ -266,10 +239,18 @@ Examples:
     )
     
     # Test mode parser
-    test_parser = subparsers.add_parser('test', help='Test tournament pattern configuration and validation')
+    test_parser = subparsers.add_parser('test', help='Inspect .trmph discovery (optionally filtered by mtime)')
     test_parser.add_argument(
         "--source-dirs", nargs="+", 
-        help="Optional source directories to test with actual data"
+        help="Optional source directories to inspect (default: DEFAULT_SOURCE_DIRS)"
+    )
+    test_parser.add_argument(
+        "--since-date",
+        help="Only show files with mtime >= this date (format: YYYY-MM-DD)"
+    )
+    test_parser.add_argument(
+        "--since-days", type=int,
+        help="Only show files with mtime >= N days ago (alternative to --since-date)"
     )
     
     # Tournament mode parser
