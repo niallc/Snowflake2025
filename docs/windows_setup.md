@@ -103,27 +103,21 @@ pip install -r requirements.txt
 
 ## 5. Configure Environment Variables
 
-Most project commands expect `PYTHONPATH` to include the repository root. You can set it for the current session with:
+Most project commands expect `hex_ai` to be importable. The recommended approach is an editable install (one-time per virtual environment):
 
 ```powershell
-$env:PYTHONPATH = "."
+pip install -e .
 ```
 
-Or to set it permanently for future sessions:
-
-```powershell
-setx PYTHONPATH "."
-```
-
-Close and reopen your terminal (or run `RefreshEnv`) so the new `PYTHONPATH` value is available. When using a new terminal session, remember to reactivate the virtual environment with `.\hex_ai_env\Scripts\Activate.ps1`.
+This avoids needing to set `PYTHONPATH` manually.
 
 ## 6. Verify the Installation
 
-With the virtual environment active and `PYTHONPATH` set, run the quick setup validation scripts:
+With the virtual environment active, run the quick setup validation script and verify imports:
 
 ```powershell
 python scripts\agent_setup.py
-python scripts\validate_environment.py
+python -c "import hex_ai; print('hex_ai import OK')"
 ```
 
 If you want to confirm PyTorch can see your hardware:
@@ -144,13 +138,13 @@ This command is safe to run multiple times.
 
 ## 8. Next Steps
 
-- **Run the web app**: `$env:PYTHONPATH="."; python -m hex_ai.web.app --port 5001`
+- **Run the web app**: `python -m hex_ai.web.app --port 5001`
 - **Start training**: Follow the command examples in `README.md` under "Training"
 - **Update to latest branch**: Pull new changes with `git pull` and switch branches with `git checkout <branch>`
 
 ## 9. Generating Training Data from a Fresh Terminal
 
-When you open a new PowerShell window, you'll need to reactivate the virtual environment and set PYTHONPATH:
+When you open a new PowerShell window, reactivate the virtual environment (the editable install persists in that venv):
 
 ```powershell
 # Navigate to the project directory
@@ -158,9 +152,6 @@ cd C:\path\to\Snowflake2025
 
 # Activate the virtual environment
 .\hex_ai_env\Scripts\Activate.ps1
-
-# Set PYTHONPATH for the current session
-$env:PYTHONPATH = "."
 
 # Now you can run commands like:
 python scripts\run_large_selfplay.py --num_games 100000 --verbose 1 --streaming_save --output_dir data\sf25\oct15 --progress_interval 50 --mcts_sims 37 --temperature 1.0

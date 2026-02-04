@@ -28,7 +28,7 @@ from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig
 from hex_ai.enums import Player, Winner
-from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
+from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph, normalize_game_input
 from hex_ai.data_processing import parse_trmph_to_gamerecord
 from hex_ai.value_utils import red_ref_signed_to_ptm_ref_signed
 from hex_ai.config import BOARD_SIZE, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_BATCH_CAP
@@ -622,7 +622,9 @@ Examples:
         
         if args.game:
             # Single TRMPH game
-            trmph_string = args.game
+            # Accept multiple input formats (e.g. LittleGolem "1.c2 2.e6 ...", raw TRMPH moves, etc.)
+            # Normalize to bare TRMPH move stream (e.g. "c2e6...") then add the standard preamble.
+            trmph_string = normalize_game_input(args.game, board_size=BOARD_SIZE)
             if not trmph_string.startswith("#13,"):
                 trmph_string = f"#13,{trmph_string}"
             game = parse_trmph_to_gamerecord(trmph_string)

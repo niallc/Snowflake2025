@@ -39,7 +39,7 @@ def main():
     """Run example commands."""
     
     # Set up environment
-    env_cmd = "source hex_ai_env/bin/activate && export PYTHONPATH=."
+    env_cmd = "source hex_ai_env/bin/activate"
     
     print("SF18 vs SF25 Tournament Examples")
     print("=" * 60)

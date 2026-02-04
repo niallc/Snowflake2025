@@ -5,7 +5,9 @@
 **ALWAYS run these commands first:**
 ```bash
 source hex_ai_env/bin/activate
-export PYTHONPATH=.
+# Recommended (once per venv):
+pip install -r requirements.txt
+pip install -e .
 ```
 
 **Or use the setup script:**
@@ -15,14 +17,14 @@ export PYTHONPATH=.
 
 **Then validate the environment:**
 ```bash
-python scripts/validate_environment.py
+python -c "import hex_ai"
 ```
 
 ## Principles
 1. Strongly to fail fast and catch bugs. Avoid fallback mechanisms -- these can hide problems, producing silent failures.
 2. Be very careful about memory usage when handling the data. A common pattern is for coding agents ot try to read in all of the data to calculate things. *NEVER READ IN LARGE AMOUNTS OF DATA at once*.
 3. Avoid duplicating code and forking the code path unnecessarily. Use existing utilities. When we update, clean up old code paths.
-4. Use `PYTHONPATH=.` for portability, rather than absolute paths
+4. Prefer standard packaging (`pip install -e .`) over `PYTHONPATH` hacks
 5. Do not try to write your own hex games, ask me for game sequences that achieve certain goals. In trmph format here are some sequences that you can use:
  - A finished game where BLUE has won: g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
  - A finished game where RED has won: a1g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
@@ -47,7 +49,7 @@ python scripts/validate_environment.py
 
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions
-2. Run `python scripts/validate_environment.py` to check setup
+2. Check imports: `python -c "import hex_ai"`
 3. **Understand structure**: Review `scripts/agent_setup.py` for project overview
 
 ## 📁 Project Structure
@@ -76,7 +78,7 @@ import hex_ai  # This automatically validates environment
 
 **The validation checks:**
 - Virtual environment is activated (`hex_ai_env`)
-- PYTHONPATH includes project root (accepts `PYTHONPATH=.`)
+- Repo is importable (typically via editable install)
 
 **No manual validation calls needed** - it's handled automatically in `hex_ai/__init__.py`
 
@@ -88,9 +90,9 @@ from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 ```
 
 ### Testing
-Tests must be run with PYTHONPATH set:
+After editable install, tests can be run without `PYTHONPATH`:
 ```bash
-PYTHONPATH=. pytest tests/
+pytest tests/
 ```
 
 ## 📝 Code Style Guidelines

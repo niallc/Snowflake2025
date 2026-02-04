@@ -16,19 +16,19 @@ maintaining deterministic gameplay within each run.
 Examples:
 
 1. Compare strategies using 100 diverse openings:
-   PYTHONPATH=. python scripts/run_tournament.py \
+   python scripts/run_tournament.py \
      --model=best \
      --strategies=policy,mcts_122,fixed_tree_13_8 \
      --num-openings=100
 
 2. Use specific opening file:
-   PYTHONPATH=. python scripts/run_tournament.py \
+   python scripts/run_tournament.py \
      --model=best \
      --strategies=mcts_100,mcts_200 \
      --opening-file=data/deterministic_openings.txt
 
 3. Use custom temperature:
-   PYTHONPATH=. python scripts/run_tournament.py \
+   python scripts/run_tournament.py \
      --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=150 \
@@ -36,13 +36,13 @@ Examples:
 
 4. Get different opening sets for multiple runs:
    # Each run automatically gets a different seed (from time)
-   PYTHONPATH=. python scripts/run_tournament.py \
+   python scripts/run_tournament.py \
      --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=100
    
    # Or manually specify seeds for reproducible results
-   PYTHONPATH=. python scripts/run_tournament.py \
+   python scripts/run_tournament.py \
      --model=best \
      --strategies=policy,mcts_122 \
      --num-openings=100 \

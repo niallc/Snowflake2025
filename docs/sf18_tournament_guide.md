@@ -15,7 +15,7 @@ The SF18 vs SF25 tournament system allows you to:
 
 1. **SF18 Server**: The SF18 AI must be running as a webserver
 2. **SF25 Models**: Your current model files or registry entries
-3. **Environment**: Virtual environment activated with PYTHONPATH set
+3. **Environment**: Virtual environment activated (recommended: `pip install -e .` once per venv)
 
 ## Starting the SF18 Server
 
@@ -40,7 +40,6 @@ Compare one SF25 model against SF18:
 
 ```bash
 source hex_ai_env/bin/activate
-export PYTHONPATH=.
 python scripts/run_sf18_tournament.py \
   --models=current_best \
   --strategies=mcts \

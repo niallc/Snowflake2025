@@ -205,7 +205,23 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     45: {
         "dir": "hyperparameter_tuning/pipeline_20260112_145409/",
-        "models": ["epoch141_mini51.pt.gz"]
+        "models": ["epoch141_mini4.pt.gz", "epoch141_mini68.pt.gz", "epoch141_mini4.pt.gz", "epoch142_mini12.pt.gz", "epoch142_mini14.pt.gz"]
+    },
+    46: {
+        "dir": "hyperparameter_tuning/pipeline_20260117_001518/",
+        "models": ["epoch144_mini14.pt.gz", "epoch143_mini38.pt.gz", "epoch143_mini87.pt.gz", "epoch144_mini19.pt.gz"]
+    },
+    47: {
+        "dir": "hyperparameter_tuning/pipeline_20260121_183446/",
+        "models": ["epoch146_mini18.pt.gz", "epoch146_mini93.pt.gz", "epoch147_mini16.pt.gz"]
+    },
+    48: {
+        "dir": "hyperparameter_tuning/pipeline_20260127_073129/",
+        "models": ["epoch149_mini46.pt.gz", "epoch149_mini47.pt.gz", "epoch147_mini122.pt.gz"]
+    },
+    49: {
+        "dir": "hyperparameter_tuning/pipeline_20260202_143643/",
+        "models": ["epoch151_mini103.pt.gz"]
     },
 }
 

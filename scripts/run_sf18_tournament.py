@@ -11,7 +11,7 @@ This script communicates with it via HTTP API calls.
 Examples:
 
 1. Compare SF25 models against SF18 with default settings:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
+   python scripts/run_sf18_tournament.py \
      --model-files=epoch11_mini15.pt.gz,epoch16_mini23.pt.gz \
      --model-dirs=checkpoints/dir1,checkpoints/dir2 \
      --strategies=mcts,mcts \
@@ -19,7 +19,7 @@ Examples:
      --num-openings=100
 
 2. Use specific SF18 difficulty and server URL:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
+   python scripts/run_sf18_tournament.py \
      --models=best \
      --strategies=mcts,mcts \
      --mcts-sims=100,100 \
@@ -28,7 +28,7 @@ Examples:
      --num-openings=50
 
 3. Use custom opening file:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
+   python scripts/run_sf18_tournament.py \
      --models=best \
      --strategies=mcts \
      --mcts-sims=30 \
