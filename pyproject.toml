@@ -1,0 +1,23 @@
+ [build-system]
+ requires = ["setuptools>=69", "wheel"]
+ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "snowflake2025"
+ version = "0.0.0"
+ description = "Hex AI training/inference framework (Snowflake2025)"
+ readme = "README.md"
+ requires-python = ">=3.10"
+ license = { file = "LICENSE" }
+ authors = [{ name = "Niall Cardin" }]
+ 
+ # Keep dependencies in requirements.txt for now to avoid duplication drift.
+ # Install with:
+ #   pip install -r requirements.txt
+ #   pip install -e .
+ dependencies = []
+ 
+ [tool.setuptools.packages.find]
+ where = ["."]
+ include = ["hex_ai*"]
+ 
