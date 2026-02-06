@@ -221,7 +221,11 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     49: {
         "dir": "hyperparameter_tuning/pipeline_20260202_143643/",
-        "models": ["epoch151_mini87.pt.gz", "epoch151_mini133.pt.gz", "epoch152_mini6.pt.gz"]
+        "models": ["epoch151_mini60.pt.gz", "epoch152_mini6.pt.gz"]
+    },
+    50: {
+        "dir": "hyperparameter_tuning/sf18_2026_retrain_beginner_models/",
+        "models": ["epoch1_mini1.pt.gz",]
     },
 }
 

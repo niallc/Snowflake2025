@@ -499,19 +499,19 @@ def get_cached_model_wrapper(model_id: str):
 # Define difficulty breakpoints for linear interpolation
 # Format: (elo, temperature, num_simulations, algorithm, model, label)
 DIFFICULTY_POINTS = [
-    (MIN_ELO,    2.2,  0 , "policy", "beginner", "Mindless"),
-    (300,  1.7,  0 , "policy", "beginner", "Beginner"),  
-    (500,  1.3,  0 , "policy", "beginner", "Novice 1"),
-    (800,  0.9,  0 , "policy", "beginner", "Novice 2"),
-    (1199, 0.7,  0 , "policy", "beginner", "Medium"),
-    (1200, 1.0,  0 , "policy", "best",   "Spicy"),     
-    (1500, 0.75, 0 , "policy", "best",   "Hard"),
-    (1800, 0.55, 0 , "policy", "best",   "Very Hard"),
-    (2100, 0.12, 0 , "policy", "best",   "Expert 1"),
-    (2149, 0.08, 0 , "policy", "best",   "Expert 2"),
-    (2150, 1.0,  8 , "mcts",   "best",   "Extra Hard"), # Gumbel MCTS
-    (2250, 1.0,  20, "mcts",   "best",   "Ultra Hard"), # Gumbel MCTS
-    (MAX_ELO, 1.0,  39, "mcts",   "best",   "Master"),     # Gumbel MCTS
+    (MIN_ELO, 2.2,  0 , "policy", "beginner", "Mindless"),
+    (300    , 1.2,  0 , "policy", "beginner", "Beginner"),  
+    (500    , 0.8,  0 , "policy", "beginner", "Novice 1"),
+    (800    , 0.5,  0 , "policy", "beginner", "Novice 2"),
+    (1199   , 0.3,  0 , "policy", "beginner", "Medium"),
+    (1200   , 1.0,  0 , "policy", "simple",   "Spicy"),     
+    (1500   , 0.75, 0 , "policy", "best",     "Hard"),
+    (1800   , 0.55, 0 , "policy", "best",     "Very Hard"),
+    (2100   , 0.12, 0 , "policy", "best",     "Expert 1"),
+    (2149   , 0.08, 0 , "policy", "best",     "Expert 2"),
+    (2150   , 1.0,  8 , "mcts",   "best",     "Extra Hard"), # Gumbel MCTS
+    (2250   , 1.0,  20, "mcts",   "best",     "Ultra Hard"), # Gumbel MCTS
+    (MAX_ELO, 1.0,  39, "mcts",   "best",     "Master"),     # Gumbel MCTS
 ]
 
 def get_difficulty_levels():

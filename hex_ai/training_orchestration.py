@@ -97,6 +97,18 @@ def create_datasets(data_dirs: List[str],
         logger.info(f"Estimated total games: ~{train_summary['estimated_total_games']:,}")
         logger.info(f"Total shards: {train_summary['total_shards']}")
         logger.info(f"Data directories: {train_summary['directories']}")
+        if max_examples_unaugmented is not None and train_summary['estimated_total_positions'] > 0:
+            estimated_positions = train_summary['estimated_total_positions']
+            coverage = min(1.0, max_examples_unaugmented / estimated_positions)
+            logger.info(
+                f"Per-epoch training cap: {max_examples_unaugmented:,} unaugmented samples "
+                f"(~{coverage:.1%} of estimated available positions)"
+            )
+            if coverage < 0.5:
+                logger.warning(
+                    "Per-epoch cap is significantly below estimated available training data. "
+                    "Increase max_examples_unaugmented/--max_samples if you want longer epochs."
+                )
         logger.info("=" * 60)
         
         # Log validation data summary if validation dataset exists

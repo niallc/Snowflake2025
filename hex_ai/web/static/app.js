@@ -126,6 +126,10 @@ let state = {
   red_model_id: 'best',  // Use current best model for both players by default
   blue_temperature: 1.0,
   red_temperature: 1.0,
+  blue_policy_temperature: 0.15,
+  red_policy_temperature: 0.15,
+  blue_fixed_tree_temperature: 1.0,
+  red_fixed_tree_temperature: 1.0,
   // MCTS settings
   blue_num_simulations: 39,
   red_num_simulations: 39,
@@ -201,24 +205,38 @@ const HEX_RADIUS = 22; // px, radius of each hex (increased from 16 for 1.4x lar
 // --- Utility: Get per-player settings ---
 function getCurrentPlayerSettings() {
   if (state.player === 'blue') {
+    const move_method = state.blue_move_method;
     return {
       model_id: state.blue_model_id,
-      temperature: state.blue_temperature,
+      temperature: getPlayerTemperature('blue', move_method),
       num_simulations: state.blue_num_simulations,
       exploration_constant: state.blue_exploration_constant,
       enable_gumbel: state.blue_enable_gumbel,
-      gumbel_max_sims: state.blue_gumbel_max_sims
+      gumbel_max_sims: state.blue_gumbel_max_sims,
+      move_method
     };
   } else {
+    const move_method = state.red_move_method;
     return {
       model_id: state.red_model_id,
-      temperature: state.red_temperature,
+      temperature: getPlayerTemperature('red', move_method),
       num_simulations: state.red_num_simulations,
       exploration_constant: state.red_exploration_constant,
       enable_gumbel: state.red_enable_gumbel,
-      gumbel_max_sims: state.red_gumbel_max_sims
+      gumbel_max_sims: state.red_gumbel_max_sims,
+      move_method
     };
   }
+}
+
+function getPlayerTemperature(player, moveMethod) {
+  if (moveMethod === 'policy') {
+    return state[`${player}_policy_temperature`];
+  }
+  if (moveMethod === 'fixed_tree') {
+    return state[`${player}_fixed_tree_temperature`];
+  }
+  return state[`${player}_temperature`];
 }
 
 // --- Smart Settings Management ---
@@ -847,13 +865,27 @@ function updateUI() {
   // Update MCTS controls
   const blueNumSimulations = document.getElementById('blue-num-simulations');
   const blueExplorationConstant = document.getElementById('blue-exploration-constant');
+  const blueTemperature = document.getElementById('blue-temperature');
   const redNumSimulations = document.getElementById('red-num-simulations');
   const redExplorationConstant = document.getElementById('red-exploration-constant');
+  const redTemperature = document.getElementById('red-temperature');
   
   if (blueNumSimulations) blueNumSimulations.value = state.blue_num_simulations;
   if (blueExplorationConstant) blueExplorationConstant.value = state.blue_exploration_constant;
+  if (blueTemperature) blueTemperature.value = state.blue_temperature;
   if (redNumSimulations) redNumSimulations.value = state.red_num_simulations;
   if (redExplorationConstant) redExplorationConstant.value = state.red_exploration_constant;
+  if (redTemperature) redTemperature.value = state.red_temperature;
+
+  const bluePolicyTemperature = document.getElementById('blue-policy-temperature');
+  const redPolicyTemperature = document.getElementById('red-policy-temperature');
+  if (bluePolicyTemperature) bluePolicyTemperature.value = state.blue_policy_temperature;
+  if (redPolicyTemperature) redPolicyTemperature.value = state.red_policy_temperature;
+
+  const blueFixedTreeTemperature = document.getElementById('blue-fixed-tree-temperature');
+  const redFixedTreeTemperature = document.getElementById('red-fixed-tree-temperature');
+  if (blueFixedTreeTemperature) blueFixedTreeTemperature.value = state.blue_fixed_tree_temperature;
+  if (redFixedTreeTemperature) redFixedTreeTemperature.value = state.red_fixed_tree_temperature;
   
   // Update Gumbel controls
   const blueEnableGumbel = document.getElementById('blue-enable-gumbel');
@@ -917,18 +949,19 @@ async function onCellClick(e) {
       
       // Determine which player's settings to use for the computer move
       const computerPlayer = state.player; // Current player after human move
-      let computerModelId, computerTemperature, computerNumSimulations, computerExplorationConstant, computerEnableGumbel, computerGumbelMaxSims;
+      const computerMoveMethod = computerPlayer === 'blue' ? state.blue_move_method : state.red_move_method;
+      const computerSearchWidths = computerPlayer === 'blue' ? state.blue_search_widths : state.red_search_widths;
+      const computerTemperature = getPlayerTemperature(computerPlayer, computerMoveMethod);
+      let computerModelId, computerNumSimulations, computerExplorationConstant, computerEnableGumbel, computerGumbelMaxSims;
       
       if (computerPlayer === 'blue') {
         computerModelId = state.blue_model_id;
-        computerTemperature = state.blue_temperature;
         computerNumSimulations = state.blue_num_simulations;
         computerExplorationConstant = state.blue_exploration_constant;
         computerEnableGumbel = state.blue_enable_gumbel;
         computerGumbelMaxSims = state.blue_gumbel_max_sims;
       } else {
         computerModelId = state.red_model_id;
-        computerTemperature = state.red_temperature;
         computerNumSimulations = state.red_num_simulations;
         computerExplorationConstant = state.red_exploration_constant;
         computerEnableGumbel = state.red_enable_gumbel;
@@ -936,9 +969,6 @@ async function onCellClick(e) {
       }
       
       // Make computer move with verbose output
-      const computerMoveMethod = computerPlayer === 'blue' ? state.blue_move_method : state.red_move_method;
-      const computerSearchWidths = computerPlayer === 'blue' ? state.blue_search_widths : state.red_search_widths;
-      
       const computerResult = await makeComputerMove(
         state.trmph, 
         computerModelId, 
@@ -1112,12 +1142,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.red_search_widths = [FIXED_TREE_DEFAULT_WIDTH];
       state.blue_search_widths_str = FIXED_TREE_DEFAULT_WIDTH.toString();
       state.red_search_widths_str = FIXED_TREE_DEFAULT_WIDTH.toString();
+      state.blue_fixed_tree_temperature = FIXED_TREE_DEFAULT_TEMPERATURE;
+      state.red_fixed_tree_temperature = FIXED_TREE_DEFAULT_TEMPERATURE;
       
       // Update UI with backend constants
       const blueSearchWidths = document.getElementById('blue-search-widths');
       const redSearchWidths = document.getElementById('red-search-widths');
       if (blueSearchWidths) blueSearchWidths.value = FIXED_TREE_DEFAULT_WIDTH.toString();
       if (redSearchWidths) redSearchWidths.value = FIXED_TREE_DEFAULT_WIDTH.toString();
+      const blueFixedTreeTemperature = document.getElementById('blue-fixed-tree-temperature');
+      const redFixedTreeTemperature = document.getElementById('red-fixed-tree-temperature');
+      if (blueFixedTreeTemperature) blueFixedTreeTemperature.value = FIXED_TREE_DEFAULT_TEMPERATURE;
+      if (redFixedTreeTemperature) redFixedTreeTemperature.value = FIXED_TREE_DEFAULT_TEMPERATURE;
     }
     
     state.constants = constantsResult;
@@ -1178,7 +1214,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initial state fetch
   try {
     // Use blue's settings for initial fetch
-    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
+    const result = await fetchState(
+      state.trmph,
+      state.blue_model_id,
+      getPlayerTemperature('blue', state.blue_move_method)
+    );
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;
@@ -1210,6 +1250,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('red-temperature').addEventListener('input', (e) => {
     markSettingAsModified('red', 'temperature');
     state.red_temperature = parseFloat(e.target.value);
+  });
+
+  // Policy temperatures
+  const bluePolicyTemperature = document.getElementById('blue-policy-temperature');
+  const redPolicyTemperature = document.getElementById('red-policy-temperature');
+  if (bluePolicyTemperature) bluePolicyTemperature.addEventListener('input', (e) => {
+    state.blue_policy_temperature = parseFloat(e.target.value);
+  });
+  if (redPolicyTemperature) redPolicyTemperature.addEventListener('input', (e) => {
+    state.red_policy_temperature = parseFloat(e.target.value);
+  });
+
+  // Fixed tree temperatures
+  const blueFixedTreeTemperature = document.getElementById('blue-fixed-tree-temperature');
+  const redFixedTreeTemperature = document.getElementById('red-fixed-tree-temperature');
+  if (blueFixedTreeTemperature) blueFixedTreeTemperature.addEventListener('input', (e) => {
+    state.blue_fixed_tree_temperature = parseFloat(e.target.value);
+  });
+  if (redFixedTreeTemperature) redFixedTreeTemperature.addEventListener('input', (e) => {
+    state.red_fixed_tree_temperature = parseFloat(e.target.value);
   });
 
   // MCTS controls
@@ -1314,7 +1374,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     state.trmph = '#13,';
     // Use blue's settings for reset
-    const result = await fetchState(state.trmph, state.blue_model_id, state.blue_temperature);
+    const result = await fetchState(
+      state.trmph,
+      state.blue_model_id,
+      getPlayerTemperature('blue', state.blue_move_method)
+    );
     state.board = result.board;
     state.player = result.player;
     state.legal_moves = result.legal_moves;

@@ -55,7 +55,9 @@ SHORT_LABELS = HYPERPARAMETER_SHORT_LABELS
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 1_000_000  # Training samples (will be 4x larger with augmentation)
+# max_samples is a per-epoch cap on unaugmented positions yielded by the dataset.
+# Augmentation is applied on-the-fly per sample; this does not multiply the sample count.
+MAX_SAMPLES = 1_000_000
 MAX_VALIDATION_SAMPLES = 95_000  # Validation samples (no augmentation)
 
 # Mini-epoch configuration - more intuitive parameters
@@ -215,7 +217,7 @@ Examples:
                        help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
     parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, 
-                       help="Max training samples (unaugmented)")
+                       help="Max training samples per epoch (unaugmented). This is a per-epoch cap, not total dataset size.")
     parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, 
                        help="Max validation samples (unaugmented)")
     parser.add_argument("--min_mini_epochs_per_epoch", type=int, default=MIN_MINI_EPOCHS_PER_EPOCH,
@@ -330,6 +332,12 @@ Examples:
     results_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Starting hyperparameter sweep with random seed: {args.random_seed}")
+    print(f"Per-epoch training cap (--max_samples): {args.max_samples:,} unaugmented samples")
+    if args.max_samples == MAX_SAMPLES:
+        print(
+            f"NOTE: Using default --max_samples={MAX_SAMPLES:,}. "
+            "Increase this if you want each epoch to cover more of the available shard data."
+        )
 
     start_time = time.time()
     results = None
@@ -348,7 +356,16 @@ Examples:
             target_samples_per_mini_epoch=args.target_samples_per_mini_epoch
         )
         
-        print(f"Mini-epochs: {args.max_samples // args.target_samples_per_mini_epoch} target, {args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch} range, {mini_epoch_samples:,} samples each")
+        target_mini_epochs = args.max_samples // args.target_samples_per_mini_epoch
+        actual_mini_epochs = max(
+            args.min_mini_epochs_per_epoch,
+            min(args.max_mini_epochs_per_epoch, target_mini_epochs)
+        )
+        print(
+            f"Mini-epochs per epoch: {actual_mini_epochs} "
+            f"(target={target_mini_epochs}, bounds={args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch}), "
+            f"{mini_epoch_samples:,} samples each"
+        )
         
         # Run hyperparameter tuning
         results = run_hyperparameter_tuning_current_data(
