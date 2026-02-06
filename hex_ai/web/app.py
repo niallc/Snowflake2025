@@ -70,23 +70,18 @@ MODEL_CACHE = get_model_cache()
 
 # Preload default models on startup
 def preload_default_model():
-    """Preload both simple and best models to avoid loading delays when switching difficulty."""
+    """Preload commonly used models to avoid loading delays when switching difficulty."""
     try:
         app.logger.info("Preloading models...")
-        
-        # Load best model
-        best_model_path = get_model_path_with_fallback("best")
-        app.logger.info(f"Preloading best model from {best_model_path}")
-        MODEL_CACHE.get_simple_model(best_model_path)
-        MODEL_CACHE.get_wrapper_model(best_model_path)
-        app.logger.info("Successfully preloaded best model")
-        
-        # Load simple model
-        from hex_ai.inference.model_config import SIMPLE_MODEL_PATH
-        app.logger.info(f"Preloading simple model from {SIMPLE_MODEL_PATH}")
-        MODEL_CACHE.get_simple_model(SIMPLE_MODEL_PATH)
-        MODEL_CACHE.get_wrapper_model(SIMPLE_MODEL_PATH)
-        app.logger.info("Successfully preloaded simple model")
+
+        # Preload strongest and lower-difficulty models used in DIFFICULTY_POINTS.
+        # Keep "simple" for tiers that still reference it.
+        for model_id in ["best", "beginner", "simple"]:
+            model_path = get_model_path_with_fallback(model_id)
+            app.logger.info(f"Preloading {model_id} model from {model_path}")
+            MODEL_CACHE.get_simple_model(model_path)
+            MODEL_CACHE.get_wrapper_model(model_path)
+            app.logger.info(f"Successfully preloaded {model_id} model")
         
     except Exception as e:
         app.logger.error(f"Error during model preloading: {e}")
@@ -499,11 +494,11 @@ def get_cached_model_wrapper(model_id: str):
 # Define difficulty breakpoints for linear interpolation
 # Format: (elo, temperature, num_simulations, algorithm, model, label)
 DIFFICULTY_POINTS = [
-    (MIN_ELO, 1.2,  0 , "policy", "beginner", "Mindless"),
+    (MIN_ELO, 1.2,  0 , "policy", "beginner", "Very Easy"),
     (300    , 0.7,  0 , "policy", "beginner", "Beginner"),  
     (500    , 0.15, 0 , "policy", "beginner", "Novice 1"),
-    (800    , 1.00, 0 , "policy", "simple", "Novice 2"),
-    (1199   , 0.50, 0 , "policy", "simple", "Medium"),
+    (800    , 1.00, 0 , "policy", "simple",   "Novice 2"),
+    (1199   , 0.50, 0 , "policy", "simple",   "Medium"),
     (1200   , 0.15, 0 , "policy", "simple",   "Spicy"),     
     (1500   , 0.75, 0 , "policy", "best",     "Hard"),
     (1800   , 0.55, 0 , "policy", "best",     "Very Hard"),

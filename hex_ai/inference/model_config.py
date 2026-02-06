@@ -27,10 +27,10 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 # Values contain directory path and list of model files of interest
 # The current best model is derived from the highest generation number
 MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
-    # 1: {
-    #     "dir": "hyperparameter_tuning/loss_weight_sweep_exp0__99914b_20250917_192629",
-    #     "models": ["epoch6_mini90.pt.gz", "epoch7_mini105.pt.gz"]
-    # },
+    1: {
+        "dir": "hyperparameter_tuning/sf18_2026_retrain_beginner_models/",
+        "models": ["epoch1_mini1.pt.gz", "epoch1_mini15.pt.gz", "epoch1_mini30.pt.gz"]
+    },
     2: {
         "dir": "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250",
         "models": ["epoch9_mini12.pt.gz", "epoch8_mini1.pt.gz"]
@@ -221,11 +221,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     49: {
         "dir": "hyperparameter_tuning/pipeline_20260202_143643/",
-        "models": ["epoch151_mini60.pt.gz", "epoch152_mini6.pt.gz"]
-    },
-    50: {
-        "dir": "hyperparameter_tuning/sf18_2026_retrain_beginner_models/",
-        "models": ["epoch1_mini1.pt.gz",]
+        "models": ["epoch151_mini60.pt.gz", "epoch151_mini2.pt.gz"]
     },
 }
 
@@ -284,8 +280,8 @@ SIMPLE_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, SIMPLE_MODEL_DIR, SIMPLE_
 
 # Beginner model configuration (intended for sf18_shuffled-only training runs)
 # TODO: Update BEGINNER_MODEL_DIR/FILE to the sf18-only checkpoint once trained.
-BEGINNER_MODEL_DIR = SIMPLE_MODEL_DIR
-BEGINNER_MODEL_FILE = SIMPLE_MODEL_FILE
+BEGINNER_MODEL_DIR = "hyperparameter_tuning/sf18_2026_retrain_beginner_models"
+BEGINNER_MODEL_FILE = "epoch1_mini1.pt.gz"
 BEGINNER_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, BEGINNER_MODEL_DIR, BEGINNER_MODEL_FILE)
 # Legacy models (for historical comparison)
 LEGACY_MODELS = {}
