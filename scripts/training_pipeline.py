@@ -866,7 +866,10 @@ Examples:
   python scripts/training_pipeline.py --use-current-best-model --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 data/collected/sep8_games --no-selfplay --no-preprocessing --no-trmph-processing --no-shuffling
   
   # Mix all data types
-  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 --processed-data-dirs data/processed/sf18_shuffled --shard-ranges "221-250" --run-game-collection --no-selfplay
+  python scripts/training_pipeline.py --use-current-best-model --raw-trmph-data-dirs data/sf25/sep8 --cleaned-trmph-data-dirs data/collected/tournament_sep3_8 --training-data-dirs data/processed/sf18_shuffled --shard-ranges "221-250" --run-game-collection --no-selfplay
+
+  # Train only on sf18_shuffled (no self-play or preprocessing)
+  python scripts/training_pipeline.py --use-current-best-model --training-data-dirs data/processed/sf18_shuffled --shard-ranges "all" --no-selfplay --no-preprocessing --no-trmph-processing --no-shuffling
   
   # Run only self-play and preprocessing
   python scripts/training_pipeline.py --use-current-best-model --no-training --no-shuffling --no-trmph-processing
@@ -909,7 +912,7 @@ Examples:
                        default=[str(d) for d in hex_ai.data_config.DEFAULT_TRAINING_DATA_DIRS],
                        help="Existing training data directories (shuffled positions) for training")
     parser.add_argument("--shard-ranges", type=str, nargs='+',
-                       help='Shard ranges for training data directories. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).')
+                       help='Shard ranges for training data directories. Format: "start-end", comma-separated ranges like "0-206,208-498", or "all" (e.g., --shard-ranges "251-300" "all").')
     # Validation data arguments
     validation_group = parser.add_argument_group('validation data')
     

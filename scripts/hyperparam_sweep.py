@@ -151,8 +151,11 @@ Examples:
   # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
   python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard-ranges "251-300" "all"
 
+  # Skip missing shards with a non-contiguous range
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled --shard-ranges "0-206,208-498"
+
   # Use current best model from model_config.py
-  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-current-best-model
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-best-model
 
   # Use data shards in sorted order (no shuffling)
   python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --no-shuffle-shards
@@ -167,7 +170,7 @@ Examples:
         '--shard-ranges',
         type=str,
         nargs='+',
-        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
+        help='Shard ranges for each data directory. Format: "start-end", comma-separated ranges like "0-206,208-498", or "all" (e.g., --shard-ranges "251-300" "all").'
     )
     
     # Validation data arguments

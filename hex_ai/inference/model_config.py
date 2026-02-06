@@ -221,7 +221,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     49: {
         "dir": "hyperparameter_tuning/pipeline_20260202_143643/",
-        "models": ["epoch151_mini103.pt.gz"]
+        "models": ["epoch151_mini87.pt.gz", "epoch151_mini133.pt.gz", "epoch152_mini6.pt.gz"]
     },
 }
 
@@ -277,6 +277,12 @@ FALLBACK_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, FALLBACK_MODEL_DIR, FAL
 SIMPLE_MODEL_DIR = "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250"
 SIMPLE_MODEL_FILE = "epoch8_mini1.pt.gz"
 SIMPLE_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, SIMPLE_MODEL_DIR, SIMPLE_MODEL_FILE)
+
+# Beginner model configuration (intended for sf18_shuffled-only training runs)
+# TODO: Update BEGINNER_MODEL_DIR/FILE to the sf18-only checkpoint once trained.
+BEGINNER_MODEL_DIR = SIMPLE_MODEL_DIR
+BEGINNER_MODEL_FILE = SIMPLE_MODEL_FILE
+BEGINNER_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, BEGINNER_MODEL_DIR, BEGINNER_MODEL_FILE)
 # Legacy models (for historical comparison)
 LEGACY_MODELS = {}
 
@@ -288,6 +294,7 @@ MODEL_REGISTRY = {
     "previous_best": PREVIOUS_BEST_MODEL_PATH,
     "fallback": FALLBACK_MODEL_PATH,
     "simple": SIMPLE_MODEL_PATH,
+    "beginner": BEGINNER_MODEL_PATH,
 }
 
 def get_model_path(model_name: str = "best") -> str:
@@ -299,6 +306,7 @@ def get_model_path(model_name: str = "best") -> str:
             - "best": Latest best model (preferred)
             - "previous_best": Previous best model
             - "model2": Alias for previous_best
+            - "beginner": Beginner-friendly model (sf18-only when configured)
             - Any key from LEGACY_MODELS
     
     Returns:

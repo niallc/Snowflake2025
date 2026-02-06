@@ -391,10 +391,10 @@ def combine_and_clean_files(input_dirs: List[Path], output_dir: Path, chunk_size
 
 def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
     """
-    Parse shard range string and return (start, end) tuple.
+    Parse a single shard range segment and return (start, end) tuple.
     
     Args:
-        range_str: Range string in format "start-end" or "all"
+        range_str: Single range segment in format "start-end" or "all"
         data_dir: Optional data directory for validation (not used in parsing)
         
     Returns:
@@ -426,6 +426,52 @@ def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
         raise
 
 
+def expand_shard_range_spec(range_str: str, data_dir: str = None) -> Optional[List[int]]:
+    """
+    Expand a shard range spec into explicit shard numbers.
+
+    Supported formats:
+    - "all"
+    - "start-end"
+    - Comma-separated non-contiguous ranges, e.g. "0-206,208-498"
+
+    Args:
+        range_str: Shard range specification string
+        data_dir: Optional data directory for context in errors
+
+    Returns:
+        Sorted list of shard numbers, or None for "all"
+
+    Raises:
+        ValueError: If any segment is invalid
+    """
+    normalized = range_str.strip().lower()
+    if normalized == "all":
+        return None
+
+    segments = [segment.strip() for segment in range_str.split(",") if segment.strip()]
+    if not segments:
+        raise ValueError("Shard range spec cannot be empty")
+
+    if any(segment.lower() == "all" for segment in segments):
+        if len(segments) > 1:
+            raise ValueError(
+                f"Invalid shard range format: {range_str}. "
+                "Use either 'all' or comma-separated 'start-end' segments, not both."
+            )
+        return None
+
+    expanded = []
+    for segment in segments:
+        start, end = parse_shard_range(segment, data_dir)
+        if end is None:
+            return None
+        expanded.extend(range(start, end + 1))
+
+    # Deduplicate and sort so overlapping segments behave predictably.
+    return sorted(set(expanded))
+
+
 def validate_shard_ranges(data_dirs: List[str], 
                          shard_ranges: List[str], 
                          context_name: str = "data",
@@ -435,7 +481,7 @@ def validate_shard_ranges(data_dirs: List[str],
     
     Args:
         data_dirs: List of data directory paths
-        shard_ranges: List of shard range strings (e.g., ["251-300", "all", "None"])
+        shard_ranges: List of shard range strings (e.g., ["251-300", "0-206,208-498", "all", "None"])
         context_name: Context name for logging (e.g., "training", "validation")
         logger: Optional logger instance
         
@@ -454,16 +500,15 @@ def validate_shard_ranges(data_dirs: List[str],
                 continue
             
             # Parse shard range for this directory
-            start, end = parse_shard_range(shard_range, data_dir)
+            shard_numbers = expand_shard_range_spec(shard_range, data_dir)
             
             # Discover files in this directory using shard-based approach
             process_context = f"{context_name} data validation"
             
-            if end is None:  # 'all' case - get all files
+            if shard_numbers is None:  # 'all' case - get all files
                 data_files = discover_training_data_files_all(data_dir, process_context=process_context)
             else:
-                # Use shard-based approach
-                shard_numbers = list(range(start, end + 1))
+                # Use explicit shard-based approach
                 data_files = discover_training_data_files_by_shards(data_dir, shard_numbers, process_context=process_context)
             
             if not data_files:
@@ -472,5 +517,12 @@ def validate_shard_ranges(data_dirs: List[str],
             logger.info(f"{context_name.title()} directory {i+1}: Found {len(data_files)} shards in {data_dir} (range: {shard_range})")
             
         except Exception as e:
-            logger.error(f"Failed to validate {context_name} data in {data_dir}: {e}")
-            raise RuntimeError(f"Failed to validate {context_name} data in {data_dir}: {e}")
+            message = str(e)
+            if "Missing expected shards" in message:
+                message = (
+                    f"{message} "
+                    "Tip: if your dataset has intentional gaps, use a comma-separated range "
+                    '(for example, "0-206,208-498"), or use "all" to load every available shard.'
+                )
+            logger.error(f"Failed to validate {context_name} data in {data_dir}: {message}")
+            raise RuntimeError(f"Failed to validate {context_name} data in {data_dir}: {message}")

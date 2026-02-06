@@ -227,7 +227,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     
     def _discover_shards(self):
         """Discover and organize shards from all directories."""
-        from hex_ai.data_collection import parse_shard_range
+        from hex_ai.data_collection import expand_shard_range_spec
         
         self.shard_queues = []
         
@@ -240,25 +240,17 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.shard_queues.append([])  # Empty queue for this directory
                     continue
                 
-                # Parse shard range for this directory
-                start, end = parse_shard_range(shard_range, data_dir)
-                
-                if end is None:  # 'all' case
-                    skip_files = 0
-                    max_files = None
-                else:
-                    skip_files = start
-                    max_files = end - start + 1
+                # Parse shard range for this directory.
+                shard_numbers = expand_shard_range_spec(shard_range, data_dir)
                 
                 # Discover files in this directory
                 dataset_type = "validation" if self.is_validation else "training"
                 process_context = f"{dataset_type} dataset initialization"
                 
-                if end is None:  # 'all' case - get all files
+                if shard_numbers is None:  # 'all' case - get all files
                     data_files = discover_training_data_files_all(data_dir, process_context=process_context)
                 else:
                     # Use shard-based approach
-                    shard_numbers = list(range(start, end + 1))
                     data_files = discover_training_data_files_by_shards(data_dir, shard_numbers, process_context=process_context)
                 
                 if not data_files:
@@ -984,15 +976,28 @@ def discover_training_data_files_by_shards(data_dir: str, shard_numbers: List[in
     # Crash if any expected shards are missing
     if missing_shards:
         available_shards = sorted(shard_to_file.keys())
+        missing_preview = missing_shards[:20]
+        available_span = (
+            f"{available_shards[0]}-{available_shards[-1]}"
+            if available_shards
+            else "none"
+        )
         raise ValueError(
-            f"Missing expected shards {missing_shards} in {data_dir}. "
-            f"Available shards: {available_shards[:10]}{'...' if len(available_shards) > 10 else ''}"
+            f"Missing expected shards (count={len(missing_shards)}; first={missing_preview}) in {data_dir}. "
+            f"Available shard span: {available_span} (count={len(available_shards)}). "
+            "If the dataset has gaps, use non-contiguous ranges (e.g. '0-206,208-498') or use 'all'."
         )
     
     # Sort by shard number for consistent ordering
     found_files.sort(key=lambda p: int(re.match(expected_format, p.name).group(1)))
     
-    logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(found_files)} files for shards {shard_numbers} in {data_dir}")
+    if shard_numbers:
+        logger.info(
+            f"[DATA_DISCOVERY] {process_context}: Found {len(found_files)} files for "
+            f"{len(shard_numbers)} requested shards ({shard_numbers[0]}-{shard_numbers[-1]}) in {data_dir}"
+        )
+    else:
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found 0 files in {data_dir}")
     return found_files
 
 
@@ -1396,7 +1401,5 @@ class DataShuffler:
         except Exception as e:
             logger.error(f"Error during shuffling process: {e}")
             raise
-
-
 
 
