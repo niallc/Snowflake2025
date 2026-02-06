@@ -499,12 +499,12 @@ def get_cached_model_wrapper(model_id: str):
 # Define difficulty breakpoints for linear interpolation
 # Format: (elo, temperature, num_simulations, algorithm, model, label)
 DIFFICULTY_POINTS = [
-    (MIN_ELO, 2.2,  0 , "policy", "beginner", "Mindless"),
-    (300    , 1.2,  0 , "policy", "beginner", "Beginner"),  
-    (500    , 0.8,  0 , "policy", "beginner", "Novice 1"),
-    (800    , 0.5,  0 , "policy", "beginner", "Novice 2"),
-    (1199   , 0.3,  0 , "policy", "beginner", "Medium"),
-    (1200   , 1.0,  0 , "policy", "simple",   "Spicy"),     
+    (MIN_ELO, 1.2,  0 , "policy", "beginner", "Mindless"),
+    (300    , 0.7,  0 , "policy", "beginner", "Beginner"),  
+    (500    , 0.15, 0 , "policy", "beginner", "Novice 1"),
+    (800    , 1.00, 0 , "policy", "simple", "Novice 2"),
+    (1199   , 0.50, 0 , "policy", "simple", "Medium"),
+    (1200   , 0.15, 0 , "policy", "simple",   "Spicy"),     
     (1500   , 0.75, 0 , "policy", "best",     "Hard"),
     (1800   , 0.55, 0 , "policy", "best",     "Very Hard"),
     (2100   , 0.12, 0 , "policy", "best",     "Expert 1"),
