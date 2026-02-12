@@ -35,7 +35,7 @@ from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
-from hex_ai.web.move_heatmap import build_next_move_value_heatmap
+from hex_ai.web.move_heatmap import build_policy_value_heatmap
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -1319,26 +1319,54 @@ def api_move_heatmap():
     is_valid, error_response = validate_api_input(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id"]
+        optional_fields=["model_id", "score_type", "selection_mode", "top_k", "policy_temperature"]
     )
     if not is_valid:
         return error_response
 
     trmph = data.get("trmph")
     model_id = data.get("model_id", "best")
+    score_type = data.get("score_type", "policy_value")
+    selection_mode = data.get("selection_mode", "all_legal")
+    top_k = data.get("top_k", 12)
+    policy_temperature = data.get("policy_temperature", 1.0)
 
     try:
+        if score_type != "policy_value":
+            return jsonify({"success": False, "error": f"Unsupported score_type: {score_type}"}), 400
+        if selection_mode not in {"policy_top_k", "all_legal"}:
+            return jsonify({"success": False, "error": f"Invalid selection_mode: {selection_mode}"}), 400
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "top_k must be an integer"}), 400
+        if top_k < 1:
+            return jsonify({"success": False, "error": "top_k must be >= 1"}), 400
+        try:
+            policy_temperature = float(policy_temperature)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "policy_temperature must be numeric"}), 400
+        if policy_temperature <= 0:
+            return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
+
         state = HexGameState.from_trmph(trmph)
     except Exception as e:
         return jsonify({"success": False, "error": f"Invalid TRMPH: {e}"}), 400
 
     try:
         model = get_model(model_id)
-        heatmap = build_next_move_value_heatmap(state, model)
+        heatmap = build_policy_value_heatmap(
+            state=state,
+            model=model,
+            selection_mode=selection_mode,
+            top_k=top_k,
+            policy_temperature=policy_temperature,
+        )
         response = {
             "success": True,
             "trmph": trmph,
             "model_id": model_id,
+            "score_type": score_type,
         }
         response.update(heatmap.to_dict())
         return jsonify(response)

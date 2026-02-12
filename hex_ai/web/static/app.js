@@ -161,9 +161,14 @@ let state = {
   heatmap_loading: false,
   heatmap_error: null,
   heatmap_scores: {},
+  heatmap_policy_probs: {},
   heatmap_min_score: null,
   heatmap_max_score: null,
-  heatmap_opacity: 0.62
+  heatmap_opacity: 0.62,
+  heatmap_scope: 'policy_top_k',
+  heatmap_top_k: 12,
+  heatmap_score_type: 'policy_value',
+  heatmap_policy_temperature: 1.0
 };
 
 let heatmapRequestToken = 0;
@@ -537,11 +542,25 @@ async function fetchState(trmph, model_id = 'best', temperature = 1.0) {
   return await resp.json();
 }
 
-async function fetchMoveHeatmap(trmph, model_id = 'best') {
+async function fetchMoveHeatmap(
+  trmph,
+  model_id = 'best',
+  scoreType = 'policy_value',
+  selectionMode = 'policy_top_k',
+  topK = 12,
+  policyTemperature = 1.0
+) {
   const resp = await fetch('/api/move_heatmap', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id }),
+    body: JSON.stringify({
+      trmph,
+      model_id,
+      score_type: scoreType,
+      selection_mode: selectionMode,
+      top_k: topK,
+      policy_temperature: policyTemperature
+    }),
   });
   if (!resp.ok) {
     let message = `API error (${resp.status})`;
@@ -626,6 +645,7 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
 
 function clearHeatmapData() {
   state.heatmap_scores = {};
+  state.heatmap_policy_probs = {};
   state.heatmap_min_score = null;
   state.heatmap_max_score = null;
   state.heatmap_error = null;
@@ -658,6 +678,9 @@ function updateHeatmapControls() {
   const status = document.getElementById('heatmap-status');
   const opacity = document.getElementById('heatmap-opacity');
   const opacityValue = document.getElementById('heatmap-opacity-value');
+  const scope = document.getElementById('heatmap-scope');
+  const topK = document.getElementById('heatmap-top-k');
+  const refresh = document.getElementById('heatmap-refresh');
 
   if (enabled) {
     enabled.checked = state.heatmap_enabled;
@@ -667,6 +690,17 @@ function updateHeatmapControls() {
   }
   if (opacityValue) {
     opacityValue.textContent = `${Math.round(state.heatmap_opacity * 100)}%`;
+  }
+  if (scope) {
+    scope.value = state.heatmap_scope;
+  }
+  if (topK) {
+    topK.value = state.heatmap_top_k;
+    topK.disabled = state.heatmap_scope === 'all_legal';
+  }
+  if (refresh) {
+    refresh.disabled = !state.heatmap_enabled || state.heatmap_loading;
+    refresh.textContent = state.heatmap_loading ? 'Analyzing...' : 'Analyze';
   }
   if (status) {
     if (!state.heatmap_enabled) {
@@ -679,10 +713,14 @@ function updateHeatmapControls() {
       Number.isFinite(state.heatmap_min_score) &&
       Number.isFinite(state.heatmap_max_score)
     ) {
+      const selected = Object.keys(state.heatmap_scores).length;
+      const scopeLabel = state.heatmap_scope === 'all_legal'
+        ? 'all legal'
+        : `top ${state.heatmap_top_k}`;
       if (window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function') {
-        status.textContent = `${window.HexHeatmap.formatPercent(state.heatmap_min_score)} to ${window.HexHeatmap.formatPercent(state.heatmap_max_score)}`;
+        status.textContent = `${scopeLabel}: ${selected} moves, ${window.HexHeatmap.formatPercent(state.heatmap_min_score)} to ${window.HexHeatmap.formatPercent(state.heatmap_max_score)}`;
       } else {
-        status.textContent = `${(state.heatmap_min_score * 100).toFixed(1)}% to ${(state.heatmap_max_score * 100).toFixed(1)}%`;
+        status.textContent = `${scopeLabel}: ${selected} moves, ${(state.heatmap_min_score * 100).toFixed(1)}% to ${(state.heatmap_max_score * 100).toFixed(1)}%`;
       }
     } else {
       status.textContent = 'No legal moves';
@@ -709,11 +747,19 @@ async function refreshMoveHeatmap() {
 
   try {
     const { model_id } = getCurrentPlayerSettings();
-    const result = await fetchMoveHeatmap(state.trmph, model_id);
+    const result = await fetchMoveHeatmap(
+      state.trmph,
+      model_id,
+      state.heatmap_score_type,
+      state.heatmap_scope,
+      state.heatmap_top_k,
+      state.heatmap_policy_temperature
+    );
     if (requestToken !== heatmapRequestToken) {
       return;
     }
     state.heatmap_scores = result.scores || {};
+    state.heatmap_policy_probs = result.policy_probs || {};
     state.heatmap_min_score = Number.isFinite(result.min_score) ? result.min_score : null;
     state.heatmap_max_score = Number.isFinite(result.max_score) ? result.max_score : null;
     state.heatmap_error = null;
@@ -1283,6 +1329,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       PLAYER_VALUES: constantsResult.PLAYER_VALUES,
       WINNER_VALUES: constantsResult.WINNER_VALUES
     };
+    const maxMoves = GAME_CONSTANTS.BOARD_SIZE * GAME_CONSTANTS.BOARD_SIZE;
+    state.heatmap_top_k = Math.min(state.heatmap_top_k, maxMoves);
+    const heatmapTopKInput = document.getElementById('heatmap-top-k');
+    if (heatmapTopKInput) {
+      heatmapTopKInput.max = String(maxMoves);
+      heatmapTopKInput.value = String(state.heatmap_top_k);
+    }
     
     // Load fixed tree constants from backend
     if (constantsResult.FIXED_TREE) {
@@ -1586,6 +1639,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     heatmapOpacity.addEventListener('input', (e) => {
       state.heatmap_opacity = parseFloat(e.target.value);
       updateUI();
+    });
+  }
+
+  const heatmapScope = document.getElementById('heatmap-scope');
+  if (heatmapScope) {
+    heatmapScope.addEventListener('change', (e) => {
+      state.heatmap_scope = e.target.value === 'all_legal' ? 'all_legal' : 'policy_top_k';
+      updateUI();
+      if (state.heatmap_enabled) {
+        void refreshMoveHeatmap();
+      }
+    });
+  }
+
+  const heatmapTopK = document.getElementById('heatmap-top-k');
+  if (heatmapTopK) {
+    heatmapTopK.addEventListener('input', (e) => {
+      const parsed = parseInt(e.target.value, 10);
+      if (Number.isFinite(parsed)) {
+        state.heatmap_top_k = Math.min(GAME_CONSTANTS.BOARD_SIZE * GAME_CONSTANTS.BOARD_SIZE, Math.max(1, parsed));
+      }
+      updateUI();
+    });
+    heatmapTopK.addEventListener('change', () => {
+      if (state.heatmap_enabled) {
+        void refreshMoveHeatmap();
+      }
+    });
+  }
+
+  const heatmapRefresh = document.getElementById('heatmap-refresh');
+  if (heatmapRefresh) {
+    heatmapRefresh.addEventListener('click', () => {
+      if (state.heatmap_enabled) {
+        void refreshMoveHeatmap();
+      }
     });
   }
 

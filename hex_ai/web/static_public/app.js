@@ -19,9 +19,14 @@ class HexGame {
         this.heatmapLoading = false;
         this.heatmapError = null;
         this.heatmapScores = {};
+        this.heatmapPolicyProbs = {};
         this.heatmapMinScore = null;
         this.heatmapMaxScore = null;
         this.heatmapOpacity = 0.62;
+        this.heatmapScope = 'policy_top_k';
+        this.heatmapTopK = 12;
+        this.heatmapScoreType = 'policy_value';
+        this.heatmapPolicyTemperature = 1.0;
         this.heatmapRequestToken = 0;
 
         // Track previous board state for efficient updates
@@ -75,6 +80,9 @@ class HexGame {
         this.heatmapOpacityInput = document.getElementById('heatmap-opacity');
         this.heatmapOpacityValue = document.getElementById('heatmap-opacity-value');
         this.heatmapStatus = document.getElementById('heatmap-status');
+        this.heatmapScopeSelect = document.getElementById('heatmap-scope');
+        this.heatmapTopKInput = document.getElementById('heatmap-top-k');
+        this.heatmapRefreshBtn = document.getElementById('heatmap-refresh');
     }
 
     initializeDifficultyDropdown() {
@@ -145,6 +153,41 @@ class HexGame {
                 this.updateHeatmapControls();
                 if (this.heatmapEnabled) {
                     this.redrawCurrentBoard();
+                }
+            });
+        }
+
+        if (this.heatmapScopeSelect) {
+            this.heatmapScopeSelect.addEventListener('change', async (e) => {
+                this.heatmapScope = e.target.value === 'all_legal' ? 'all_legal' : 'policy_top_k';
+                this.updateHeatmapControls();
+                if (this.heatmapEnabled) {
+                    await this.refreshHeatmap(true);
+                }
+            });
+        }
+
+        if (this.heatmapTopKInput) {
+            this.heatmapTopKInput.addEventListener('input', (e) => {
+                const parsed = parseInt(e.target.value, 10);
+                if (Number.isFinite(parsed)) {
+                    const boardSize = this.boardSize || 13;
+                    const maxMoves = boardSize * boardSize;
+                    this.heatmapTopK = Math.max(1, Math.min(maxMoves, parsed));
+                }
+                this.updateHeatmapControls();
+            });
+            this.heatmapTopKInput.addEventListener('change', async () => {
+                if (this.heatmapEnabled) {
+                    await this.refreshHeatmap(true);
+                }
+            });
+        }
+
+        if (this.heatmapRefreshBtn) {
+            this.heatmapRefreshBtn.addEventListener('click', async () => {
+                if (this.heatmapEnabled) {
+                    await this.refreshHeatmap(true);
                 }
             });
         }
@@ -294,6 +337,7 @@ class HexGame {
 
     clearHeatmapData() {
         this.heatmapScores = {};
+        this.heatmapPolicyProbs = {};
         this.heatmapMinScore = null;
         this.heatmapMaxScore = null;
         this.heatmapError = null;
@@ -333,6 +377,17 @@ class HexGame {
         if (this.heatmapOpacityValue) {
             this.heatmapOpacityValue.textContent = `${Math.round(this.heatmapOpacity * 100)}%`;
         }
+        if (this.heatmapScopeSelect) {
+            this.heatmapScopeSelect.value = this.heatmapScope;
+        }
+        if (this.heatmapTopKInput) {
+            this.heatmapTopKInput.value = this.heatmapTopK;
+            this.heatmapTopKInput.disabled = this.heatmapScope === 'all_legal';
+        }
+        if (this.heatmapRefreshBtn) {
+            this.heatmapRefreshBtn.disabled = !this.heatmapEnabled || this.heatmapLoading;
+            this.heatmapRefreshBtn.textContent = this.heatmapLoading ? 'Analyzing...' : 'Analyze';
+        }
         if (this.heatmapStatus) {
             if (!this.heatmapEnabled) {
                 this.heatmapStatus.textContent = 'Off';
@@ -341,10 +396,14 @@ class HexGame {
             } else if (this.heatmapError) {
                 this.heatmapStatus.textContent = `Error: ${this.heatmapError}`;
             } else if (Number.isFinite(this.heatmapMinScore) && Number.isFinite(this.heatmapMaxScore)) {
+                const selected = Object.keys(this.heatmapScores).length;
+                const scopeLabel = this.heatmapScope === 'all_legal'
+                    ? 'all legal'
+                    : `top ${this.heatmapTopK}`;
                 if (window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function') {
-                    this.heatmapStatus.textContent = `${window.HexHeatmap.formatPercent(this.heatmapMinScore)} to ${window.HexHeatmap.formatPercent(this.heatmapMaxScore)}`;
+                    this.heatmapStatus.textContent = `${scopeLabel}: ${selected} moves, ${window.HexHeatmap.formatPercent(this.heatmapMinScore)} to ${window.HexHeatmap.formatPercent(this.heatmapMaxScore)}`;
                 } else {
-                    this.heatmapStatus.textContent = `${(this.heatmapMinScore * 100).toFixed(1)}% to ${(this.heatmapMaxScore * 100).toFixed(1)}%`;
+                    this.heatmapStatus.textContent = `${scopeLabel}: ${selected} moves, ${(this.heatmapMinScore * 100).toFixed(1)}% to ${(this.heatmapMaxScore * 100).toFixed(1)}%`;
                 }
             } else {
                 this.heatmapStatus.textContent = 'No legal moves';
@@ -358,7 +417,11 @@ class HexGame {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 trmph: this.currentTRMPH,
-                elo_rating: this.validateEloRating()
+                elo_rating: this.validateEloRating(),
+                score_type: this.heatmapScoreType,
+                selection_mode: this.heatmapScope,
+                top_k: this.heatmapTopK,
+                policy_temperature: this.heatmapPolicyTemperature
             })
         });
 
@@ -410,6 +473,7 @@ class HexGame {
                 return;
             }
             this.heatmapScores = data.scores || {};
+            this.heatmapPolicyProbs = data.policy_probs || {};
             this.heatmapMinScore = Number.isFinite(data.min_score) ? data.min_score : null;
             this.heatmapMaxScore = Number.isFinite(data.max_score) ? data.max_score : null;
             this.heatmapError = null;
@@ -469,6 +533,12 @@ class HexGame {
             this.minElo = data.ELO_CONFIG.MIN_ELO;
             this.maxElo = data.ELO_CONFIG.MAX_ELO;
             this.currentElo = data.ELO_CONFIG.DEFAULT_ELO;
+            const maxMoves = this.boardSize * this.boardSize;
+            this.heatmapTopK = Math.min(this.heatmapTopK, maxMoves);
+            if (this.heatmapTopKInput) {
+                this.heatmapTopKInput.max = String(maxMoves);
+                this.heatmapTopKInput.value = String(this.heatmapTopK);
+            }
 
             // Update slider and display with backend values
             this.eloSlider.min = this.minElo;

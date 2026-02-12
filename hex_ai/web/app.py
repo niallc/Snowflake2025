@@ -34,7 +34,7 @@ from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
-from hex_ai.web.move_heatmap import build_next_move_value_heatmap
+from hex_ai.web.move_heatmap import build_policy_value_heatmap
 
 app = Flask(__name__, static_folder="static_public")
 CORS(app)
@@ -1207,7 +1207,15 @@ def api_move_heatmap():
     is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=None,
-        optional_fields=["trmph", "elo_rating", "model_id"]
+        optional_fields=[
+            "trmph",
+            "elo_rating",
+            "model_id",
+            "score_type",
+            "selection_mode",
+            "top_k",
+            "policy_temperature",
+        ]
     )
     if not is_valid:
         app.logger.warning(f"Invalid input rejected: {error_msg}")
@@ -1216,19 +1224,47 @@ def api_move_heatmap():
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)
     model_id = validated_data.get("model_id")
+    score_type = validated_data.get("score_type", "policy_value")
+    selection_mode = validated_data.get("selection_mode", "all_legal")
+    top_k = validated_data.get("top_k", 12)
+    policy_temperature = validated_data.get("policy_temperature", 1.0)
 
     try:
+        if score_type != "policy_value":
+            return jsonify({"success": False, "error": f"Unsupported score_type: {score_type}"}), 400
+        if selection_mode not in {"policy_top_k", "all_legal"}:
+            return jsonify({"success": False, "error": f"Invalid selection_mode: {selection_mode}"}), 400
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "top_k must be an integer"}), 400
+        if top_k < 1:
+            return jsonify({"success": False, "error": "top_k must be >= 1"}), 400
+        try:
+            policy_temperature = float(policy_temperature)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "policy_temperature must be numeric"}), 400
+        if policy_temperature <= 0:
+            return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
+
         state = create_game_state_from_trmph(trmph, "for move heatmap")
         if model_id is None:
             model_id = get_difficulty_parameters(elo_rating)["model"]
 
         model = get_model(model_id)
-        heatmap = build_next_move_value_heatmap(state, model)
+        heatmap = build_policy_value_heatmap(
+            state=state,
+            model=model,
+            selection_mode=selection_mode,
+            top_k=top_k,
+            policy_temperature=policy_temperature,
+        )
 
         response = {
             "success": True,
             "trmph": state.to_trmph(),
             "model_id": model_id,
+            "score_type": score_type,
         }
         response.update(heatmap.to_dict())
 
@@ -1239,6 +1275,10 @@ def api_move_heatmap():
             status=200,
             elo_rating=elo_rating,
             model_id=model_id,
+            score_type=score_type,
+            selection_mode=selection_mode,
+            top_k=top_k,
+            selected_move_count=response["selected_move_count"],
             legal_move_count=response["legal_move_count"],
             **trmph_stats,
             **seq_info
