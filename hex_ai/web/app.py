@@ -1,15 +1,19 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, g
 import os
 from flask_cors import CORS
+import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
+from pathlib import Path
+import re
+import string
+import uuid
 
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph, make_empty_hex_state
 from hex_ai.inference.simple_model_inference import SimpleModelInference
-import re
-import string
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -30,9 +34,84 @@ from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.web.move_heatmap import build_next_move_value_heatmap
 
 app = Flask(__name__, static_folder="static_public")
 CORS(app)
+
+# =============================================================================
+# ANALYTICS CONFIGURATION
+# =============================================================================
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_ANALYTICS_LOG_PATH = BASE_DIR / "logs" / "web_usage.jsonl"
+
+ANALYTICS_ENABLED = os.getenv("SF25_ANALYTICS_ENABLED", "1").lower() not in ("0", "false", "no")
+ANALYTICS_LOG_PATH = os.getenv("SF25_ANALYTICS_LOG_PATH", str(DEFAULT_ANALYTICS_LOG_PATH))
+ANALYTICS_SALT = os.getenv("SF25_ANALYTICS_SALT", "")
+ANALYTICS_HASH_IP = os.getenv("SF25_ANALYTICS_HASH_IP", "1").lower() not in ("0", "false", "no")
+ANALYTICS_COOKIE_NAME = os.getenv("SF25_ANALYTICS_COOKIE_NAME", "sf25_cid")
+ANALYTICS_COOKIE_DAYS = int(os.getenv("SF25_ANALYTICS_COOKIE_DAYS", "365"))
+ANALYTICS_SEQUENCE_TTL_SECONDS = int(os.getenv("SF25_ANALYTICS_SEQUENCE_TTL_SECONDS", "3600"))
+ANALYTICS_SEQUENCE_MAX_CLIENTS = int(os.getenv("SF25_ANALYTICS_SEQUENCE_MAX_CLIENTS", "10000"))
+
+class MonthlyJsonlHandler(logging.Handler):
+    def __init__(self, base_path: str):
+        super().__init__()
+        self.base_path = Path(base_path)
+        self._current_month = None
+        self._stream = None
+        self._open_for_datetime(datetime.now(timezone.utc))
+
+    def _path_for_datetime(self, dt: datetime) -> Path:
+        stem = self.base_path.stem
+        suffix = self.base_path.suffix or ".jsonl"
+        return self.base_path.with_name(f"{stem}_{dt:%Y_%m}{suffix}")
+
+    def _open_for_datetime(self, dt: datetime) -> None:
+        path = self._path_for_datetime(dt)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if self._stream:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+        self._stream = open(path, "a", encoding="utf-8")
+        self._current_month = (dt.year, dt.month)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            now = datetime.now(timezone.utc)
+            if self._current_month != (now.year, now.month):
+                self._open_for_datetime(now)
+            msg = self.format(record)
+            self._stream.write(msg + "\n")
+            self._stream.flush()
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        if self._stream:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+        super().close()
+
+analytics_logger = logging.getLogger("sf25.analytics")
+if ANALYTICS_ENABLED and not analytics_logger.handlers:
+    try:
+        handler = MonthlyJsonlHandler(ANALYTICS_LOG_PATH)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        analytics_logger.setLevel(logging.INFO)
+        analytics_logger.addHandler(handler)
+        analytics_logger.propagate = False
+        if not ANALYTICS_SALT:
+            app.logger.warning("SF25_ANALYTICS_SALT not set; IP hashes are less private.")
+        app.logger.info(f"Web analytics enabled (monthly files): {ANALYTICS_LOG_PATH}")
+    except Exception as e:
+        ANALYTICS_ENABLED = False
+        app.logger.warning(f"Web analytics disabled (init failed): {e}")
 
 # =============================================================================
 # DIFFICULTY CONFIGURATION CONSTANTS
@@ -64,6 +143,152 @@ def bad_request(e):
     """Handle bad request errors (including malformed JSON)."""
     app.logger.warning(f"Bad request: {e}")
     return jsonify({"error": "Invalid request format. Please check your input."}), 400
+
+# =============================================================================
+# ANALYTICS HELPERS
+# =============================================================================
+
+_last_trmph_by_client = {}
+
+def _is_request_secure():
+    if request.is_secure:
+        return True
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip().lower() == "https"
+    return False
+
+def _get_client_ip():
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.remote_addr
+
+def _hash_identifier(value):
+    if not value:
+        return None
+    salt = ANALYTICS_SALT or "sf25"
+    digest = hashlib.sha256(f"{salt}|{value}".encode("utf-8")).hexdigest()
+    return digest[:16]
+
+def _safe_count_trmph_moves(trmph_text):
+    try:
+        return fc.count_trmph_moves(trmph_text)
+    except Exception:
+        return None
+
+def _update_sequence_info(client_id, trmph):
+    if not client_id:
+        return {"sequence_continuation": None, "prev_trmph_len": None, "prev_age_ms": None}
+
+    now = time.time()
+    prev_entry = _last_trmph_by_client.get(client_id)
+    sequence_continuation = None
+    prev_trmph_len = None
+    prev_age_ms = None
+
+    if prev_entry:
+        prev_trmph, prev_ts = prev_entry
+        if now - prev_ts <= ANALYTICS_SEQUENCE_TTL_SECONDS:
+            prev_bare = fc.strip_trmph_preamble((prev_trmph or "").strip())
+            curr_bare = fc.strip_trmph_preamble((trmph or "").strip())
+            prev_trmph_len = len(prev_bare)
+            prev_age_ms = int((now - prev_ts) * 1000)
+            if not prev_bare:
+                sequence_continuation = True
+            else:
+                sequence_continuation = curr_bare.startswith(prev_bare)
+
+    _last_trmph_by_client[client_id] = (trmph, now)
+
+    if len(_last_trmph_by_client) > ANALYTICS_SEQUENCE_MAX_CLIENTS:
+        cutoff = now - ANALYTICS_SEQUENCE_TTL_SECONDS
+        for key in list(_last_trmph_by_client.keys()):
+            _, ts = _last_trmph_by_client[key]
+            if ts < cutoff:
+                del _last_trmph_by_client[key]
+        if len(_last_trmph_by_client) > ANALYTICS_SEQUENCE_MAX_CLIENTS:
+            overflow = len(_last_trmph_by_client) - ANALYTICS_SEQUENCE_MAX_CLIENTS
+            for key in list(_last_trmph_by_client.keys())[:overflow]:
+                del _last_trmph_by_client[key]
+
+    return {
+        "sequence_continuation": sequence_continuation,
+        "prev_trmph_len": prev_trmph_len,
+        "prev_age_ms": prev_age_ms
+    }
+
+def _build_trmph_stats(trmph):
+    bare = fc.strip_trmph_preamble((trmph or "").strip())
+    return {
+        "trmph_len": len(bare),
+        "trmph_moves": _safe_count_trmph_moves(trmph)
+    }
+
+def _prune_none_values(payload):
+    return {k: v for k, v in payload.items() if v is not None}
+
+def log_usage_event(event, **fields):
+    if not ANALYTICS_ENABLED:
+        return
+    try:
+        status = fields.pop("status", None)
+        duration_ms = fields.pop("duration_ms", None)
+        if duration_ms is None and hasattr(g, "analytics_start"):
+            duration_ms = int((time.time() - g.analytics_start) * 1000)
+
+        client_ip = _get_client_ip()
+        ip_value = _hash_identifier(client_ip) if ANALYTICS_HASH_IP else client_ip
+        user_agent = request.headers.get("User-Agent", "")
+        ua_hash = _hash_identifier(user_agent) if user_agent else None
+
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "path": request.path,
+            "endpoint": request.endpoint,
+            "method": request.method,
+            "status": status,
+            "duration_ms": duration_ms,
+            "client_id": getattr(g, "analytics_client_id", None),
+            "ip_hash": ip_value if ANALYTICS_HASH_IP else None,
+            "ip": ip_value if not ANALYTICS_HASH_IP else None,
+            "ua_hash": ua_hash,
+        }
+        payload.update(fields)
+
+        analytics_logger.info(json.dumps(_prune_none_values(payload), separators=(",", ":"), default=str))
+    except Exception as e:
+        app.logger.warning(f"Analytics logging failed: {e}")
+
+@app.before_request
+def _analytics_before_request():
+    if not ANALYTICS_ENABLED:
+        return
+    g.analytics_start = time.time()
+    client_id = request.cookies.get(ANALYTICS_COOKIE_NAME)
+    if not client_id:
+        client_id = uuid.uuid4().hex
+        g.analytics_set_cookie = True
+    else:
+        g.analytics_set_cookie = False
+    g.analytics_client_id = client_id
+
+@app.after_request
+def _analytics_after_request(response):
+    if not ANALYTICS_ENABLED:
+        return response
+    if getattr(g, "analytics_set_cookie", False):
+        max_age = ANALYTICS_COOKIE_DAYS * 24 * 3600
+        response.set_cookie(
+            ANALYTICS_COOKIE_NAME,
+            g.analytics_client_id,
+            max_age=max_age,
+            httponly=True,
+            samesite="Lax",
+            secure=_is_request_secure()
+        )
+    return response
 
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
@@ -387,6 +612,7 @@ ENDPOINT_COSTS = {
     'api_apply_trmph_sequence': 5.0, # Batch operation (10 burst calls)
     'api_mcts_move': 2,            # Expensive MCTS (4 burst calls, 2/sec sustained)
     'api_constants': 0.1,            # Constants endpoint (very cheap)
+    'api_move_heatmap': 8.0,         # Heavy batch of value inferences
 }
 
 def rate_limit(cost: float):
@@ -955,7 +1181,84 @@ def api_state():
     
     # Build response using helper function
     response = build_game_response(state, elo_rating, trmph_for_inference, {"trmph": trmph})
+
+    trmph_stats = _build_trmph_stats(trmph)
+    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+    log_usage_event(
+        "state",
+        status=200,
+        elo_rating=elo_rating,
+        **trmph_stats,
+        **seq_info
+    )
     return jsonify(response)
+
+
+@app.route("/api/move_heatmap", methods=["POST"])
+@rate_limit(ENDPOINT_COSTS['api_move_heatmap'])
+def api_move_heatmap():
+    """
+    Return value-head win-rate heatmap for every legal next move.
+
+    Scores are always from the *current player to move* perspective.
+    """
+    data = request.get_json()
+
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=None,
+        optional_fields=["trmph", "elo_rating", "model_id"]
+    )
+    if not is_valid:
+        app.logger.warning(f"Invalid input rejected: {error_msg}")
+        return jsonify({"success": False, "error": error_msg}), 400
+
+    trmph = validated_data.get("trmph", "")
+    elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)
+    model_id = validated_data.get("model_id")
+
+    try:
+        state = create_game_state_from_trmph(trmph, "for move heatmap")
+        if model_id is None:
+            model_id = get_difficulty_parameters(elo_rating)["model"]
+
+        model = get_model(model_id)
+        heatmap = build_next_move_value_heatmap(state, model)
+
+        response = {
+            "success": True,
+            "trmph": state.to_trmph(),
+            "model_id": model_id,
+        }
+        response.update(heatmap.to_dict())
+
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "move_heatmap",
+            status=200,
+            elo_rating=elo_rating,
+            model_id=model_id,
+            legal_move_count=response["legal_move_count"],
+            **trmph_stats,
+            **seq_info
+        )
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"Error in api_move_heatmap: {e}")
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "move_heatmap",
+            status=500,
+            success=False,
+            reason="exception",
+            elo_rating=elo_rating,
+            model_id=model_id,
+            **trmph_stats,
+            **seq_info
+        )
+        return jsonify({"success": False, "error": "Failed to compute move heatmap"}), 500
 
 @app.route("/api/apply_move", methods=["POST"])
 @rate_limit(ENDPOINT_COSTS['api_apply_move'])
@@ -993,6 +1296,18 @@ def api_apply_move():
             "new_trmph": trmph,
             "model_move": None  # No computer move made
         })
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "apply_move",
+            status=200,
+            move=move,
+            move_valid=False,
+            elo_rating=elo_rating,
+            moves_requested=1,
+            **trmph_stats,
+            **seq_info
+        )
         return jsonify(response)
 
     new_trmph = state.to_trmph()
@@ -1002,6 +1317,20 @@ def api_apply_move():
         "new_trmph": new_trmph,
         "model_move": None  # No computer move made
     })
+    trmph_stats = _build_trmph_stats(trmph)
+    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+    log_usage_event(
+        "apply_move",
+        status=200,
+        move=move,
+        move_valid=True,
+        elo_rating=elo_rating,
+        moves_requested=1,
+        new_trmph_len=len(fc.strip_trmph_preamble((new_trmph or "").strip())),
+        new_trmph_moves=_safe_count_trmph_moves(new_trmph),
+        **trmph_stats,
+        **seq_info
+    )
     return jsonify(response)
 
 @app.route("/api/policy_move", methods=["POST"])
@@ -1052,6 +1381,21 @@ def api_policy_move():
         move = select_policy_move(state, model, temperature)
         
         if move is None:
+            trmph_stats = _build_trmph_stats(trmph)
+            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+            log_usage_event(
+                "policy_move",
+                status=400,
+                success=False,
+                reason="no_valid_moves",
+                elo_rating=elo_rating,
+                algorithm=difficulty_params["algorithm"],
+                model_id=model_id,
+                temperature=temperature,
+                num_simulations=difficulty_params["num_simulations"],
+                **trmph_stats,
+                **seq_info
+            )
             return jsonify({"success": False, "error": "No valid moves available"}), 400
         
         # Apply the move
@@ -1074,11 +1418,42 @@ def api_policy_move():
         
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph}")
+
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "policy_move",
+            status=200,
+            success=True,
+            elo_rating=elo_rating,
+            algorithm=difficulty_params["algorithm"],
+            model_id=model_id,
+            temperature=temperature,
+            num_simulations=difficulty_params["num_simulations"],
+            exploration_constant=difficulty_params["exploration_constant"],
+            enable_gumbel=difficulty_params["enable_gumbel"],
+            gumbel_max_sims=difficulty_params.get("gumbel_max_sims", 0),
+            move_made=move_trmph,
+            moves_requested=1,
+            **trmph_stats,
+            **seq_info
+        )
         
         return jsonify(result)
         
     except Exception as e:
         app.logger.error(f"Policy move error: {e}")
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "policy_move",
+            status=500,
+            success=False,
+            reason="exception",
+            elo_rating=elo_rating,
+            **trmph_stats,
+            **seq_info
+        )
         return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
 
 @app.route("/api/mcts_move", methods=["POST"])
@@ -1133,6 +1508,27 @@ def api_mcts_move():
         app.logger.info(f"Winner: {result.get('winner', 'MISSING')}")
     else:
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
+
+    trmph_stats = _build_trmph_stats(trmph)
+    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+    log_usage_event(
+        "mcts_move",
+        status=200,
+        success=bool(result.get("success")),
+        elo_rating=elo_rating,
+        algorithm=difficulty_params["algorithm"],
+        model_id=difficulty_params["model"],
+        temperature=difficulty_params["temperature"],
+        temperature_end=difficulty_params["temperature_end"],
+        num_simulations=difficulty_params["num_simulations"],
+        exploration_constant=difficulty_params["exploration_constant"],
+        enable_gumbel=difficulty_params["enable_gumbel"],
+        gumbel_max_sims=difficulty_params["gumbel_max_sims"],
+        move_made=result.get("move_made"),
+        moves_requested=1,
+        **trmph_stats,
+        **seq_info
+    )
     
     return jsonify(result)
 
@@ -1183,6 +1579,17 @@ def api_apply_trmph_sequence():
                         break
             except ValueError as e:
                 app.logger.error(f"Invalid TRMPH sequence format: {e}")
+                trmph_stats = _build_trmph_stats(trmph)
+                seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+                log_usage_event(
+                    "apply_trmph_sequence",
+                    status=400,
+                    success=False,
+                    reason="invalid_sequence",
+                    elo_rating=elo_rating,
+                    **trmph_stats,
+                    **seq_info
+                )
                 return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
         
         new_trmph = state.to_trmph()
@@ -1192,10 +1599,33 @@ def api_apply_trmph_sequence():
             "new_trmph": new_trmph,
             "moves_applied": moves_applied
         })
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "apply_trmph_sequence",
+            status=200,
+            success=True,
+            elo_rating=elo_rating,
+            moves_requested=_safe_count_trmph_moves(trmph_sequence),
+            moves_applied=moves_applied,
+            **trmph_stats,
+            **seq_info
+        )
         return jsonify(response)
         
     except Exception as e:
         app.logger.error(f"TRMPH sequence application error: {e}")
+        trmph_stats = _build_trmph_stats(trmph)
+        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+        log_usage_event(
+            "apply_trmph_sequence",
+            status=500,
+            success=False,
+            reason="exception",
+            elo_rating=elo_rating,
+            **trmph_stats,
+            **seq_info
+        )
         return jsonify({"error": "Failed to apply TRMPH sequence. Please check the sequence and try again."}), 500
 
 
@@ -1206,6 +1636,10 @@ def favicon():
 @app.route("/static/<path:path>")
 def serve_static(path):
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), path)
+
+@app.route("/shared/<path:path>")
+def serve_shared(path):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_shared"), path)
 
 @app.route("/")
 def serve_index():

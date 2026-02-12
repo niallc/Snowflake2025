@@ -280,7 +280,7 @@ h3 {
 }
 
 /* Form Controls */
-.difficulty-row, .player-row, .trmph-row {
+.difficulty-row, .player-row, .trmph-row, .heatmap-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -288,11 +288,11 @@ h3 {
   flex-wrap: wrap;
 }
 
-.difficulty-row:last-child, .player-row:last-child, .trmph-row:last-child {
+.difficulty-row:last-child, .player-row:last-child, .trmph-row:last-child, .heatmap-row:last-child {
   margin-bottom: 0;
 }
 
-.difficulty-row label, .player-row label, .trmph-row label {
+.difficulty-row label, .player-row label, .trmph-row label, .heatmap-row label {
   min-width: 80px;
   font-weight: 500;
   color: var(--text-primary);
@@ -346,6 +346,17 @@ input[type="checkbox"] {
   text-align: center;
 }
 
+.heatmap-status {
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+.heatmap-legend {
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
 /* Game Info */
 #game-info {
   text-align: center;
@@ -377,11 +388,11 @@ input[type="checkbox"] {
     max-height: min(100vh - 300px, 600px);
   }
   
-  .difficulty-row, .player-row {
+  .difficulty-row, .player-row, .heatmap-row {
     flex-wrap: nowrap;
   }
   
-  .difficulty-row label, .player-row label {
+  .difficulty-row label, .player-row label, .heatmap-row label {
     min-width: 120px;
   }
 }
@@ -428,7 +439,7 @@ input[type="checkbox"] {
     margin-bottom: 6px;
   }
   
-  .difficulty-row, .player-row {
+  .difficulty-row, .player-row, .heatmap-row {
     margin-bottom: 6px;
   }
   

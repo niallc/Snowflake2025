@@ -15,6 +15,14 @@ class HexGame {
         this.isLoading = false;
         this.isInitialLoad = true; // Track if this is the initial page load
         this.darkMode = false; // Dark mode state
+        this.heatmapEnabled = false;
+        this.heatmapLoading = false;
+        this.heatmapError = null;
+        this.heatmapScores = {};
+        this.heatmapMinScore = null;
+        this.heatmapMaxScore = null;
+        this.heatmapOpacity = 0.62;
+        this.heatmapRequestToken = 0;
 
         // Track previous board state for efficient updates
         this.previousBoard = null;
@@ -37,6 +45,7 @@ class HexGame {
         this.setupEventListeners();
         this.loadGameConstants();
         this.initializeDarkMode();
+        this.updateHeatmapControls();
     }
 
     // =============================================================================
@@ -62,6 +71,10 @@ class HexGame {
         this.applyTrmphBtn = document.getElementById('apply-trmph');
         this.trmphError = document.getElementById('trmph-error');
         this.darkModeToggle = document.getElementById('dark-mode-toggle');
+        this.heatmapEnabledCheck = document.getElementById('heatmap-enabled');
+        this.heatmapOpacityInput = document.getElementById('heatmap-opacity');
+        this.heatmapOpacityValue = document.getElementById('heatmap-opacity-value');
+        this.heatmapStatus = document.getElementById('heatmap-status');
     }
 
     initializeDifficultyDropdown() {
@@ -110,6 +123,31 @@ class HexGame {
         });
 
         this.darkModeToggle.addEventListener('click', () => this.toggleDarkMode());
+
+        if (this.heatmapEnabledCheck) {
+            this.heatmapEnabledCheck.addEventListener('change', async (e) => {
+                this.heatmapEnabled = e.target.checked;
+                if (!this.heatmapEnabled) {
+                    this.heatmapRequestToken += 1;
+                    this.heatmapLoading = false;
+                    this.clearHeatmapData();
+                    this.updateHeatmapControls();
+                    this.redrawCurrentBoard();
+                } else {
+                    await this.refreshHeatmap(true);
+                }
+            });
+        }
+
+        if (this.heatmapOpacityInput) {
+            this.heatmapOpacityInput.addEventListener('input', (e) => {
+                this.heatmapOpacity = parseFloat(e.target.value);
+                this.updateHeatmapControls();
+                if (this.heatmapEnabled) {
+                    this.redrawCurrentBoard();
+                }
+            });
+        }
     }
 
     // =============================================================================
@@ -252,6 +290,149 @@ class HexGame {
 
         // Update the dropdown to show the selected level
         this.difficultyPreset.value = selectedLevel.elo;
+    }
+
+    clearHeatmapData() {
+        this.heatmapScores = {};
+        this.heatmapMinScore = null;
+        this.heatmapMaxScore = null;
+        this.heatmapError = null;
+    }
+
+    getHeatmapScoreForMove(row, col) {
+        if (!this.heatmapEnabled) {
+            return null;
+        }
+        const trmph = this.rowColToTRMPH(row, col);
+        const value = this.heatmapScores[trmph];
+        return Number.isFinite(value) ? value : null;
+    }
+
+    getHeatmapFillColor(score) {
+        const fallback = this.getColors().EMPTY_HEX_GRAY;
+        if (!Number.isFinite(score)) {
+            return fallback;
+        }
+        if (window.HexHeatmap && typeof window.HexHeatmap.scoreToColor === 'function') {
+            return window.HexHeatmap.scoreToColor(score, {
+                alpha: this.heatmapOpacity,
+                darkMode: this.darkMode,
+                fallback
+            });
+        }
+        return fallback;
+    }
+
+    updateHeatmapControls() {
+        if (this.heatmapEnabledCheck) {
+            this.heatmapEnabledCheck.checked = this.heatmapEnabled;
+        }
+        if (this.heatmapOpacityInput) {
+            this.heatmapOpacityInput.value = this.heatmapOpacity.toFixed(2);
+        }
+        if (this.heatmapOpacityValue) {
+            this.heatmapOpacityValue.textContent = `${Math.round(this.heatmapOpacity * 100)}%`;
+        }
+        if (this.heatmapStatus) {
+            if (!this.heatmapEnabled) {
+                this.heatmapStatus.textContent = 'Off';
+            } else if (this.heatmapLoading) {
+                this.heatmapStatus.textContent = 'Loading...';
+            } else if (this.heatmapError) {
+                this.heatmapStatus.textContent = `Error: ${this.heatmapError}`;
+            } else if (Number.isFinite(this.heatmapMinScore) && Number.isFinite(this.heatmapMaxScore)) {
+                if (window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function') {
+                    this.heatmapStatus.textContent = `${window.HexHeatmap.formatPercent(this.heatmapMinScore)} to ${window.HexHeatmap.formatPercent(this.heatmapMaxScore)}`;
+                } else {
+                    this.heatmapStatus.textContent = `${(this.heatmapMinScore * 100).toFixed(1)}% to ${(this.heatmapMaxScore * 100).toFixed(1)}%`;
+                }
+            } else {
+                this.heatmapStatus.textContent = 'No legal moves';
+            }
+        }
+    }
+
+    async fetchMoveHeatmap() {
+        const response = await fetch('/api/move_heatmap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                trmph: this.currentTRMPH,
+                elo_rating: this.validateEloRating()
+            })
+        });
+
+        if (!response.ok) {
+            let message = `API error (${response.status})`;
+            try {
+                const errorData = await response.json();
+                if (errorData && errorData.error) {
+                    message = errorData.error;
+                }
+            } catch (_ignore) {
+                // Keep default message when body is not JSON.
+            }
+            throw new Error(message);
+        }
+
+        return await response.json();
+    }
+
+    redrawCurrentBoard() {
+        if (!this.previousBoard) {
+            return;
+        }
+        const boardCopy = this.previousBoard.map(row => [...row]);
+        this.clearBoard();
+        this.drawHexBoard(boardCopy);
+        this.previousBoard = boardCopy.map(row => [...row]);
+    }
+
+    async refreshHeatmap(redraw = true) {
+        if (!this.heatmapEnabled) {
+            this.heatmapLoading = false;
+            this.clearHeatmapData();
+            this.updateHeatmapControls();
+            if (redraw) {
+                this.redrawCurrentBoard();
+            }
+            return;
+        }
+
+        const requestToken = ++this.heatmapRequestToken;
+        this.heatmapLoading = true;
+        this.heatmapError = null;
+        this.updateHeatmapControls();
+
+        try {
+            const data = await this.fetchMoveHeatmap();
+            if (requestToken !== this.heatmapRequestToken) {
+                return;
+            }
+            this.heatmapScores = data.scores || {};
+            this.heatmapMinScore = Number.isFinite(data.min_score) ? data.min_score : null;
+            this.heatmapMaxScore = Number.isFinite(data.max_score) ? data.max_score : null;
+            this.heatmapError = null;
+        } catch (error) {
+            if (requestToken !== this.heatmapRequestToken) {
+                return;
+            }
+            this.clearHeatmapData();
+            this.heatmapError = error.message || 'Failed to load heatmap';
+        } finally {
+            if (requestToken === this.heatmapRequestToken) {
+                this.heatmapLoading = false;
+                this.updateHeatmapControls();
+                if (redraw) {
+                    this.redrawCurrentBoard();
+                }
+            }
+        }
+    }
+
+    async renderBoardWithHeatmap(board) {
+        await this.refreshHeatmap(false);
+        await this.renderBoard(board);
     }
 
     // =============================================================================
@@ -420,10 +601,11 @@ class HexGame {
                 this.currentTRMPH = data.new_trmph;
                 this.gameHistory.push(this.currentTRMPH);
                 this.moveCount++;
+                this.legalMoves = data.legal_moves || [];
 
                 // Clear redo history when new moves are made
                 this.redoHistory = [];
-                await this.renderBoard(data.board);
+                await this.renderBoardWithHeatmap(data.board);
                 this.updateTrmphDisplay();
                 this.updateButtonStates();
 
@@ -492,7 +674,7 @@ class HexGame {
             // Store legal moves for move validation
             this.legalMoves = data.legal_moves || [];
 
-            await this.renderBoard(data.board);
+            await this.renderBoardWithHeatmap(data.board);
             this.updateTrmphDisplay();
 
             // Handle game over and auto-move logic
@@ -523,6 +705,13 @@ class HexGame {
 
     async renderBoard(board) {
         if (!this.svg) return;
+
+        if (this.heatmapEnabled) {
+            this.clearBoard();
+            this.drawHexBoard(board);
+            this.previousBoard = board.map(row => [...row]);
+            return;
+        }
 
         // If this is the first render or we don't have cached elements, do full render
         if (this.previousBoard === null || this.hexElements.size === 0) {
@@ -573,14 +762,14 @@ class HexGame {
         if (!hexElement) {
             // Create new hex if it doesn't exist (shouldn't happen in normal flow)
             const { x, y } = this.hexCenter(row, col, 18);
-            hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue), false);
+            hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue, row, col), false);
             hexElement.setAttribute('data-row', row);
             hexElement.setAttribute('data-col', col);
             this.svg.appendChild(hexElement);
             this.hexElements.set(key, hexElement);
         } else {
             // Update existing hex with immediate color change (no transition during moves)
-            const newColor = this.getHexColor(newValue);
+            const newColor = this.getHexColor(newValue, row, col);
             hexElement.style.transition = 'none'; // Disable transition for instant update
             hexElement.setAttribute('fill', newColor);
 
@@ -593,10 +782,16 @@ class HexGame {
         }
     }
 
-    getHexColor(cellValue) {
+    getHexColor(cellValue, row = null, col = null) {
         const colors = this.getColors();
         if (cellValue === this.pieceValues.BLUE) return colors.DARK_BLUE;
         if (cellValue === this.pieceValues.RED) return colors.DARK_RED;
+        if (row !== null && col !== null) {
+            const score = this.getHeatmapScoreForMove(row, col);
+            if (Number.isFinite(score)) {
+                return this.getHeatmapFillColor(score);
+            }
+        }
         return colors.EMPTY_HEX_GRAY; // Empty hex color
     }
 
@@ -733,10 +928,10 @@ class HexGame {
                 const cell = board[row]?.[col] || this.pieceValues.EMPTY;
 
                 // Determine fill color
-                const fill = this.getHexColor(cell);
+                const fill = this.getHexColor(cell, row, col);
 
                 const isLegal = this.isLegalMove(row, col);
-                const shouldShade = isEmpty && this.shouldShadeHex(row, col);
+                const shouldShade = !this.heatmapEnabled && isEmpty && this.shouldShadeHex(row, col);
                 const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal, shouldShade);
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
@@ -913,10 +1108,11 @@ class HexGame {
             this.currentTRMPH = data.new_trmph;
             this.gameHistory.push(this.currentTRMPH);
             this.moveCount++;
+            this.legalMoves = data.legal_moves || [];
 
             // Clear redo history when new moves are made
             this.redoHistory = [];
-            await this.renderBoard(data.board);
+            await this.renderBoardWithHeatmap(data.board);
             this.updateTrmphDisplay();
             this.updateButtonStates();
 
@@ -1228,11 +1424,12 @@ class HexGame {
             this.currentTRMPH = data.new_trmph;
             this.gameHistory.push(this.currentTRMPH);
             this.moveCount += data.moves_applied || 0;
+            this.legalMoves = data.legal_moves || [];
 
             // Clear redo history when new moves are made
             this.redoHistory = [];
             this.updateTrmphDisplay();
-            await this.renderBoard(data.board);
+            await this.renderBoardWithHeatmap(data.board);
             this.updateButtonStates();
 
             // Clear the input

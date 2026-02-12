@@ -29,7 +29,7 @@ CHECKPOINTS_BASE_DIR = "checkpoints"
 MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     1: {
         "dir": "hyperparameter_tuning/sf18_2026_retrain_beginner_models/",
-        "models": ["epoch1_mini1.pt.gz", "epoch1_mini15.pt.gz", "epoch1_mini30.pt.gz"]
+        "models": ["epoch1_mini1.pt.gz", "epoch1_mini15.pt.gz", "epoch1_mini30.pt.gz", "epoch1_mini45.pt.gz"]
     },
     2: {
         "dir": "hyperparameter_tuning/pipeline_20250921_095250/pipeline_sweep_exp0__99914b_20250921_095250",
@@ -222,6 +222,10 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     49: {
         "dir": "hyperparameter_tuning/pipeline_20260202_143643/",
         "models": ["epoch151_mini60.pt.gz", "epoch151_mini2.pt.gz"]
+    },
+    50: {
+        "dir": "hyperparameter_tuning/pipeline_20260207_232106/",
+        "models": ["epoch153_mini69.pt.gz","epoch152_mini128.pt.gz"]
     },
 }
 

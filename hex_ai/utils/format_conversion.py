@@ -53,6 +53,18 @@ def split_trmph_moves(bare_moves: str) -> list[str]:
         i = j
     return moves
 
+def count_trmph_moves(trmph_text: str) -> int:
+    """
+    Count moves in a TRMPH string (with or without preamble).
+    Returns 0 for empty/None input. Raises ValueError for invalid format.
+    """
+    if not trmph_text:
+        return 0
+    bare_moves = strip_trmph_preamble(trmph_text)
+    if not bare_moves:
+        return 0
+    return len(split_trmph_moves(bare_moves))
+
 def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, int]:
     if len(move) < 2 or len(move) > 4:
         raise ValueError(f"Invalid trmph move: {move}")

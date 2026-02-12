@@ -155,6 +155,35 @@ h3 {
   transition: color 0.3s ease;
 }
 
+.heatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.heatmap-row:last-child {
+  margin-bottom: 0;
+}
+
+.heatmap-row label {
+  min-width: 120px;
+  font-weight: 500;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
+}
+
+.heatmap-status {
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+.heatmap-legend {
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
 select, input[type="number"], input[type="text"] {
   padding: 6px 8px;
   border: 1px solid var(--input-border);

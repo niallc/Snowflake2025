@@ -156,8 +156,17 @@ let state = {
   move_history: [], // Track move history for undo functionality
   redo_history: [], // Track undone moves for redo functionality
   constants: null, // Will be populated from backend
-  dark_mode: false // Dark mode state
+  dark_mode: false, // Dark mode state
+  heatmap_enabled: false,
+  heatmap_loading: false,
+  heatmap_error: null,
+  heatmap_scores: {},
+  heatmap_min_score: null,
+  heatmap_max_score: null,
+  heatmap_opacity: 0.62
 };
+
+let heatmapRequestToken = 0;
 
 // --- User Modification Tracking ---
 // Track which settings have been manually modified by the user
@@ -528,6 +537,27 @@ async function fetchState(trmph, model_id = 'best', temperature = 1.0) {
   return await resp.json();
 }
 
+async function fetchMoveHeatmap(trmph, model_id = 'best') {
+  const resp = await fetch('/api/move_heatmap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trmph, model_id }),
+  });
+  if (!resp.ok) {
+    let message = `API error (${resp.status})`;
+    try {
+      const err = await resp.json();
+      if (err && err.error) {
+        message = err.error;
+      }
+    } catch (_ignore) {
+      // Keep default message when body is not JSON.
+    }
+    throw new Error(message);
+  }
+  return await resp.json();
+}
+
 async function applyHumanMove(trmph, move, model_id = 'best', temperature = 1.0) {
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
@@ -591,6 +621,113 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
     });
     if (!resp.ok) throw new Error('API error');
     return await resp.json();
+  }
+}
+
+function clearHeatmapData() {
+  state.heatmap_scores = {};
+  state.heatmap_min_score = null;
+  state.heatmap_max_score = null;
+  state.heatmap_error = null;
+}
+
+function getHeatmapScoreForMove(moveTrmph) {
+  if (!state.heatmap_enabled) {
+    return null;
+  }
+  const value = state.heatmap_scores[moveTrmph];
+  return Number.isFinite(value) ? value : null;
+}
+
+function getHeatmapFillColor(score) {
+  if (!Number.isFinite(score)) {
+    return COLORS.EMPTY_HEX_COLOR;
+  }
+  if (window.HexHeatmap && typeof window.HexHeatmap.scoreToColor === 'function') {
+    return window.HexHeatmap.scoreToColor(score, {
+      alpha: state.heatmap_opacity,
+      darkMode: state.dark_mode,
+      fallback: COLORS.EMPTY_HEX_COLOR
+    });
+  }
+  return COLORS.EMPTY_HEX_COLOR;
+}
+
+function updateHeatmapControls() {
+  const enabled = document.getElementById('heatmap-enabled');
+  const status = document.getElementById('heatmap-status');
+  const opacity = document.getElementById('heatmap-opacity');
+  const opacityValue = document.getElementById('heatmap-opacity-value');
+
+  if (enabled) {
+    enabled.checked = state.heatmap_enabled;
+  }
+  if (opacity) {
+    opacity.value = state.heatmap_opacity.toFixed(2);
+  }
+  if (opacityValue) {
+    opacityValue.textContent = `${Math.round(state.heatmap_opacity * 100)}%`;
+  }
+  if (status) {
+    if (!state.heatmap_enabled) {
+      status.textContent = 'Off';
+    } else if (state.heatmap_loading) {
+      status.textContent = 'Loading...';
+    } else if (state.heatmap_error) {
+      status.textContent = `Error: ${state.heatmap_error}`;
+    } else if (
+      Number.isFinite(state.heatmap_min_score) &&
+      Number.isFinite(state.heatmap_max_score)
+    ) {
+      if (window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function') {
+        status.textContent = `${window.HexHeatmap.formatPercent(state.heatmap_min_score)} to ${window.HexHeatmap.formatPercent(state.heatmap_max_score)}`;
+      } else {
+        status.textContent = `${(state.heatmap_min_score * 100).toFixed(1)}% to ${(state.heatmap_max_score * 100).toFixed(1)}%`;
+      }
+    } else {
+      status.textContent = 'No legal moves';
+    }
+  }
+}
+
+async function refreshMoveHeatmap() {
+  if (!state.heatmap_enabled || state.winner) {
+    if (state.heatmap_loading || Object.keys(state.heatmap_scores).length > 0 || state.heatmap_error) {
+      state.heatmap_loading = false;
+      clearHeatmapData();
+      updateUI();
+    } else {
+      updateHeatmapControls();
+    }
+    return;
+  }
+
+  const requestToken = ++heatmapRequestToken;
+  state.heatmap_loading = true;
+  state.heatmap_error = null;
+  updateHeatmapControls();
+
+  try {
+    const { model_id } = getCurrentPlayerSettings();
+    const result = await fetchMoveHeatmap(state.trmph, model_id);
+    if (requestToken !== heatmapRequestToken) {
+      return;
+    }
+    state.heatmap_scores = result.scores || {};
+    state.heatmap_min_score = Number.isFinite(result.min_score) ? result.min_score : null;
+    state.heatmap_max_score = Number.isFinite(result.max_score) ? result.max_score : null;
+    state.heatmap_error = null;
+  } catch (err) {
+    if (requestToken !== heatmapRequestToken) {
+      return;
+    }
+    clearHeatmapData();
+    state.heatmap_error = err.message || 'Failed to load heatmap';
+  } finally {
+    if (requestToken === heatmapRequestToken) {
+      state.heatmap_loading = false;
+      updateUI();
+    }
   }
 }
 
@@ -670,8 +807,13 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     for (let col = 0; col < GAME_CONSTANTS.BOARD_SIZE; col++) {
       const { x, y } = hexCenter(row, col);
       const cell = board[row]?.[col] || GAME_CONSTANTS.PIECE_VALUES.EMPTY;
+      const moveTrmph = rowcolToTrmph(row, col);
       // ⭐ EMPTY HEX COLOR - uses COLORS.EMPTY_HEX_COLOR for empty hexagons
       let fill = COLORS.EMPTY_HEX_COLOR;
+      const heatmapScore = getHeatmapScoreForMove(moveTrmph);
+      if (cell === GAME_CONSTANTS.PIECE_VALUES.EMPTY && Number.isFinite(heatmapScore)) {
+        fill = getHeatmapFillColor(heatmapScore);
+      }
       if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_PIECE_COLOR;
       if (cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_PIECE_COLOR;
       
@@ -686,7 +828,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       
       if (winner === 'blue' && cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_WINNING_PIECE;
       if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_WINNING_PIECE;
-      const isLegal = legalMoves.includes(rowcolToTrmph(row, col));
+      const isLegal = legalMoves.includes(moveTrmph);
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
@@ -743,7 +885,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       }
       
       trmphLabel.setAttribute('fill', labelColor);
-      trmphLabel.textContent = rowcolToTrmph(row, col);
+      trmphLabel.textContent = moveTrmph;
       svg.appendChild(trmphLabel);
     }
   }
@@ -776,8 +918,15 @@ function makeHex(cx, cy, r, fill, highlight) {
     // console.log('Row:', row, 'Col:', col, 'Row type:', typeof row, 'Col type:', typeof col);
     if (!isNaN(row) && !isNaN(col)) {
       const trmph = rowcolToTrmph(row, col);
-      // console.log('TRMPH format:', trmph);
-      showTooltip(e, trmph);
+      const score = getHeatmapScoreForMove(trmph);
+      let tooltipText = trmph;
+      if (Number.isFinite(score)) {
+        const percent = window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function'
+          ? window.HexHeatmap.formatPercent(score)
+          : `${(score * 100).toFixed(1)}%`;
+        tooltipText = `${trmph} (${percent} win)`;
+      }
+      showTooltip(e, tooltipText);
     } else {
       console.log('Invalid row/col values - row:', row, 'col:', col);
     }
@@ -904,6 +1053,8 @@ function updateUI() {
   if (debugOutput) {
     debugOutput.style.display = state.verbose_level > 0 ? 'block' : 'none';
   }
+
+  updateHeatmapControls();
   
   // Keep all controls active - no need to disable them during auto-step or game over
 }
@@ -941,6 +1092,7 @@ async function onCellClick(e) {
     state.last_move = moveMade;
     state.last_move_player = currentPlayer;
     updateUI();
+    void refreshMoveHeatmap();
     
     // Step 2: If game is not over and computer is enabled, get the computer move
     if (!state.winner && state.computer_enabled) {
@@ -1011,6 +1163,7 @@ async function onCellClick(e) {
       }
         
         updateUI();
+        void refreshMoveHeatmap();
       } else {
         alert('Computer move failed: ' + computerResult.error);
       }
@@ -1078,6 +1231,7 @@ async function stepComputerMove() {
       }
       
       updateUI();
+      void refreshMoveHeatmap();
       
       // If auto-step is active and game isn't over, schedule next move
       if (state.auto_step_active && !state.winner) {
@@ -1226,6 +1380,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.last_move = null;
     state.last_move_player = null; // Initialize last_move_player
     updateUI();
+    void refreshMoveHeatmap();
   } catch (err) {
     document.getElementById('status-line').textContent = 'Failed to load board.';
   }
@@ -1235,9 +1390,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const redModel = document.getElementById('red-model');
   if (blueModel) blueModel.addEventListener('change', (e) => {
     state.blue_model_id = e.target.value;
+    if (state.player === 'blue') {
+      void refreshMoveHeatmap();
+    }
   });
   if (redModel) redModel.addEventListener('change', (e) => {
     state.red_model_id = e.target.value;
+    if (state.player === 'red') {
+      void refreshMoveHeatmap();
+    }
   });
 
 
@@ -1386,6 +1547,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.last_move = null;
     state.last_move_player = null; // Reset last_move_player
     updateUI();
+    void refreshMoveHeatmap();
   });
 
   // Copy TRMPH
@@ -1403,6 +1565,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.computer_enabled = !state.computer_enabled;
     updateUI();
   });
+
+  const heatmapEnabled = document.getElementById('heatmap-enabled');
+  if (heatmapEnabled) {
+    heatmapEnabled.addEventListener('change', (e) => {
+      state.heatmap_enabled = e.target.checked;
+      if (!state.heatmap_enabled) {
+        heatmapRequestToken += 1;
+        state.heatmap_loading = false;
+        clearHeatmapData();
+        updateUI();
+      } else {
+        void refreshMoveHeatmap();
+      }
+    });
+  }
+
+  const heatmapOpacity = document.getElementById('heatmap-opacity');
+  if (heatmapOpacity) {
+    heatmapOpacity.addEventListener('input', (e) => {
+      state.heatmap_opacity = parseFloat(e.target.value);
+      updateUI();
+    });
+  }
 
   // Dark mode toggle
   document.getElementById('dark-mode-toggle').addEventListener('click', toggleDarkMode);
@@ -1425,6 +1610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const previousState = state.move_history.pop();
       Object.assign(state, previousState);
       updateUI();
+      void refreshMoveHeatmap();
     }
   });
 
@@ -1446,6 +1632,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const nextState = state.redo_history.pop();
       Object.assign(state, nextState);
       updateUI();
+      void refreshMoveHeatmap();
     }
   });
 
@@ -2365,6 +2552,9 @@ async function applySelectedModel() {
     
     closeModelBrowser();
     updateUI();
+    if (state.heatmap_enabled) {
+      void refreshMoveHeatmap();
+    }
   } else {
     console.error('Model selection failed:', result.error);
     alert(`Error selecting model: ${result.error}`);
@@ -2439,6 +2629,7 @@ async function applyTrmphSequence() {
     
     // Update the UI
     updateUI();
+    void refreshMoveHeatmap();
     
     // Show success message
     const movesApplied = result.moves_applied || 0;

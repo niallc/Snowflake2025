@@ -35,6 +35,7 @@ from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.web.move_heatmap import build_next_move_value_heatmap
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
@@ -1306,6 +1307,45 @@ def api_state():
         "trmph": trmph,
     })
 
+
+@app.route("/api/move_heatmap", methods=["POST"])
+def api_move_heatmap():
+    """
+    Return value-head win-rate heatmap for every legal next move.
+
+    Scores are always from the *current player to move* perspective.
+    """
+    data = request.get_json()
+    is_valid, error_response = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=["model_id"]
+    )
+    if not is_valid:
+        return error_response
+
+    trmph = data.get("trmph")
+    model_id = data.get("model_id", "best")
+
+    try:
+        state = HexGameState.from_trmph(trmph)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Invalid TRMPH: {e}"}), 400
+
+    try:
+        model = get_model(model_id)
+        heatmap = build_next_move_value_heatmap(state, model)
+        response = {
+            "success": True,
+            "trmph": trmph,
+            "model_id": model_id,
+        }
+        response.update(heatmap.to_dict())
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"Error in api_move_heatmap: {e}")
+        return jsonify({"success": False, "error": f"Failed to compute move heatmap: {e}"}), 500
+
 @app.route("/api/apply_move", methods=["POST"])
 def api_apply_move():
     """Apply only a human move without making a computer move."""
@@ -1764,6 +1804,10 @@ def favicon():
 @app.route("/static/<path:path>")
 def serve_static(path):
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static"), path)
+
+@app.route("/shared/<path:path>")
+def serve_shared(path):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_shared"), path)
 
 @app.route("/")
 def serve_index():
