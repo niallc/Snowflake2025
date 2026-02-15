@@ -68,7 +68,7 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
-from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index, tensor_to_rowcol as index_to_move
+from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
@@ -846,6 +846,85 @@ class BaselineMCTS:
         
         self.exploration_trace.append(event)
 
+    @staticmethod
+    def _tensor_action_to_rowcol_with_size(tensor_action: int, board_size: int) -> Tuple[int, int]:
+        """Convert tensor action index to row/col using an explicit board size."""
+        action = int(tensor_action)
+        max_actions = int(board_size) * int(board_size)
+        if action < 0 or action >= max_actions:
+            raise ValueError(f"Tensor action out of range: {action} for board size {board_size}")
+        row = action // int(board_size)
+        col = action % int(board_size)
+        return row, col
+
+    @classmethod
+    def _tensor_action_to_trmph_with_size(cls, tensor_action: int, board_size: int) -> str:
+        """Convert tensor action index to TRMPH move string using explicit board size."""
+        row, col = cls._tensor_action_to_rowcol_with_size(tensor_action, board_size)
+        return f"{chr(ord('a') + col)}{row + 1}"
+
+    def _decorate_gumbel_score_rows_with_moves(
+        self, rows: List[Dict[str, Any]], board_size: int
+    ) -> List[Dict[str, Any]]:
+        """Attach TRMPH move labels to rows that contain tensor action indices."""
+        decorated_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            row_copy = dict(row)
+            action = row_copy.get("tensor_action", None)
+            if action is not None:
+                try:
+                    row_copy["move"] = self._tensor_action_to_trmph_with_size(int(action), board_size)
+                except Exception:
+                    row_copy["move"] = None
+            decorated_rows.append(row_copy)
+        return decorated_rows
+
+    def _record_gumbel_trace_event(self, event: Dict[str, Any], board_size: int) -> None:
+        """Record a Gumbel-specific detailed trace event with human-readable move labels."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        event_copy = dict(event)
+
+        # Decorate single-action fields
+        if event_copy.get("selected_action", None) is not None:
+            try:
+                event_copy["selected_move"] = self._tensor_action_to_trmph_with_size(
+                    int(event_copy["selected_action"]), board_size
+                )
+            except Exception:
+                event_copy["selected_move"] = None
+        if event_copy.get("tensor_action", None) is not None:
+            try:
+                event_copy["move"] = self._tensor_action_to_trmph_with_size(
+                    int(event_copy["tensor_action"]), board_size
+                )
+            except Exception:
+                event_copy["move"] = None
+
+        # Decorate action-list fields
+        for actions_key, moves_key in (
+            ("kept_actions", "kept_moves"),
+            ("dropped_actions", "dropped_moves"),
+        ):
+            if actions_key in event_copy and isinstance(event_copy[actions_key], list):
+                moves: List[str] = []
+                for action in event_copy[actions_key]:
+                    try:
+                        moves.append(self._tensor_action_to_trmph_with_size(int(action), board_size))
+                    except Exception:
+                        continue
+                event_copy[moves_key] = moves
+
+        # Decorate score row collections
+        for rows_key in ("candidate_rows", "selected_rows", "excluded_rows", "final_rank_rows"):
+            if rows_key in event_copy and isinstance(event_copy[rows_key], list):
+                event_copy[rows_key] = self._decorate_gumbel_score_rows_with_moves(
+                    event_copy[rows_key], board_size
+                )
+
+        self.exploration_trace.append(event_copy)
+
     # ---------- Public API ----------
     
     def run(self, root_state: HexGameState, verbose: int = 0) -> MCTSResult:
@@ -1098,7 +1177,6 @@ class BaselineMCTS:
         # Get full tensor policy logits from neural network evaluation
         # We need the full tensor (169 positions) with illegal actions masked as -inf
         board_size = int(root.state.get_board_tensor().shape[-1])
-        action_size = board_size * board_size
         
         # Get policy logits and legal mask using shared utility
         policy_logits_full, legal_mask = self._get_policy_logits_and_legal_mask(root.state, root.legal_indices)
@@ -1129,6 +1207,8 @@ class BaselineMCTS:
             selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
             selected_action = root.legal_indices.index(selected_tensor_action)
             self._gumbel_selected_action = selected_action
+            self._gumbel_selected_tensor_action = int(selected_tensor_action)
+            self._used_gumbel_root_selection = True
             if verbose >= 4:
                 print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
             return timing_tracker.get_final_stats()
@@ -1165,8 +1245,13 @@ class BaselineMCTS:
             print(f"  Logits range: [{np.min(logits_for_gumbel):.3f}, {np.max(logits_for_gumbel):.3f}]")
             print(f"  Top policy action: {int(np.argmax(logits_for_gumbel))}")
         
-        # Run batched Gumbel-AlphaZero selection with temperature
-        # print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
+        # Run batched Gumbel-AlphaZero selection with temperature.
+        # If detailed exploration is enabled, stream structured Gumbel events into the trace.
+        trace_event_cb = None
+        if self.detailed_exploration_enabled:
+            def trace_event_cb(event: Dict[str, Any]) -> None:
+                self._record_gumbel_trace_event(event, board_size)
+
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
@@ -1186,7 +1271,8 @@ class BaselineMCTS:
             candidate_min=self.cfg.gumbel_candidate_min,
             candidate_max=self.cfg.gumbel_candidate_max,
             use_gumbel_in_final_eval=self.cfg.gumbel_use_gumbel_in_final_eval,
-            eval_mode=False  # MCTS is not evaluation mode by default
+            eval_mode=False,  # MCTS is not evaluation mode by default
+            trace_event=trace_event_cb,
         )
         
         # Record Gumbel performance metrics
@@ -1223,63 +1309,13 @@ class BaselineMCTS:
         self._gumbel_selected_tensor_action = int(selected_tensor_action)
         self._used_gumbel_root_selection = True
 
-        # Compute and store the deterministic final ranking used by gumbel_utils.
-        # This explains why the selected move can differ from the top visit-count move.
+        # Best-effort debug fields from gumbel_utils (same formulas used by selection).
         try:
-            legal_actions = root.legal_indices
-            priors_full_no_noise = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
-            logits_no_noise = np.log(np.clip(priors_full_no_noise, 1e-12, 1.0))
-
-            def q_of_child_01(action: int) -> float:
-                legal_move_idx = root.legal_indices.index(action)
-                if int(root.N[legal_move_idx]) == 0:
-                    return 0.5
-                q_raw = float(root.Q[legal_move_idx])
-                return (q_raw + 1.0) / 2.0
-
-            def n_of_child(action: int) -> int:
-                legal_move_idx = root.legal_indices.index(action)
-                return int(root.N[legal_move_idx])
-
-            # v_pi in [0,1], matching gumbel_utils.completed_baseline_v_pi()
-            pi_unvisited = 0.0
-            num = 0.0
-            for a in legal_actions:
-                if n_of_child(a) > 0:
-                    num += float(priors_full_no_noise[a]) * q_of_child_01(a)
-                else:
-                    pi_unvisited += float(priors_full_no_noise[a])
-            denom = 1.0 - pi_unvisited
-            v_pi = 0.5 if denom <= 1e-12 else (num / denom)
-            self._gumbel_v_pi_01 = float(v_pi)
-
-            sigma = float(self.cfg.gumbel_c_scale)
-            scored: List[Dict[str, Any]] = []
-
-            for a in legal_actions:
-                legal_move_idx = root.legal_indices.index(a)
-                row, col = index_to_move(int(a), board_size)
-                move_trmph = f"{chr(ord('a') + col)}{row + 1}"
-                visits = int(root.N[legal_move_idx])
-                q_signed = float(root.Q[legal_move_idx]) if visits > 0 else 0.0
-                q_01 = q_of_child_01(a) if visits > 0 else float(v_pi)
-                adv = q_01 - float(v_pi)
-                score = float(logits_no_noise[a] + sigma * adv)
-                scored.append({
-                    "move": move_trmph,
-                    "tensor_action": int(a),
-                    "visits": visits,
-                    "prior": float(priors_full_no_noise[a]),
-                    "log_prior": float(logits_no_noise[a]),
-                    "q_ptm_signed": q_signed,
-                    "q_01": float(q_01),
-                    "adv_01": float(adv),
-                    "score": score,
-                })
-
-            scored.sort(key=lambda d: d["score"], reverse=True)
-            self._gumbel_final_rank_top5 = scored[:5]
-            self._gumbel_final_rank_top_move_trmph = scored[0]["move"] if scored else None
+            self._gumbel_v_pi_01 = gumbel_metrics.get("v_pi_01", None)
+            final_rows_raw = gumbel_metrics.get("final_rank_rows", []) or []
+            final_rows = self._decorate_gumbel_score_rows_with_moves(final_rows_raw, board_size)
+            self._gumbel_final_rank_top5 = final_rows[:5] if final_rows else None
+            self._gumbel_final_rank_top_move_trmph = final_rows[0]["move"] if final_rows else None
         except Exception:
             # Best-effort debug only: do not risk crashing inference due to debug formatting.
             self._gumbel_final_rank_top5 = None

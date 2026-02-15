@@ -1905,13 +1905,14 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
     if (g.gumbel_final_rank_top_move) output += `Top Final-Rank Move: ${g.gumbel_final_rank_top_move}\n`;
     if (g.gumbel_v_pi_01 !== null && g.gumbel_v_pi_01 !== undefined) output += `v_pi (0-1): ${Number(g.gumbel_v_pi_01).toFixed(4)}\n`;
     if (Array.isArray(g.gumbel_final_rank_top5) && g.gumbel_final_rank_top5.length > 0) {
-      output += 'Final-Rank Top 5 (log_prior + c_scale*(q - v_pi)):\n';
+      output += 'Final-Rank Top 5 Candidate Rows (log_prior + c_scale*(q - v_pi)):\n';
       g.gumbel_final_rank_top5.forEach((row) => {
         const score = (row.score !== null && row.score !== undefined) ? Number(row.score).toFixed(4) : 'N/A';
         const logPrior = (row.log_prior !== null && row.log_prior !== undefined) ? Number(row.log_prior).toFixed(4) : 'N/A';
         const adv = (row.adv_01 !== null && row.adv_01 !== undefined) ? Number(row.adv_01).toFixed(4) : 'N/A';
         const q01 = (row.q_01 !== null && row.q_01 !== undefined) ? Number(row.q_01).toFixed(4) : 'N/A';
-        output += `  ${row.move}: score=${score} (log_prior=${logPrior}, q01=${q01}, adv=${adv}, visits=${row.visits})\n`;
+        const qSource = row.q_source ? `, qsrc=${row.q_source}` : '';
+        output += `  ${row.move}: score=${score} (log_prior=${logPrior}, q01=${q01}, adv=${adv}, visits=${row.visits}${qSource})\n`;
       });
     }
     output += '\n';
@@ -2150,12 +2151,7 @@ function displayDebugInfo(debugInfo) {
   }
   
   debugContent.textContent = output;
-  
-  console.log('🚨🚨🚨 ABOUT TO CALL DISPLAY DETAILED EXPLORATION! 🚨🚨🚨');
-  console.log('🔍 About to call displayDetailedExploration with debugInfo:', debugInfo);
-  console.log('🔍 debugInfo type:', typeof debugInfo);
-  console.log('🔍 debugInfo keys:', debugInfo ? Object.keys(debugInfo) : 'null/undefined');
-  
+
   // Display detailed exploration if available
   displayDetailedExploration(debugInfo);
 }
@@ -2185,6 +2181,217 @@ function displayPolicyInfo(policyInfo) {
   }
   
   debugContent.textContent = output;
+}
+
+function formatFinite(value, digits = 4, fallback = 'n/a') {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return num.toFixed(digits);
+}
+
+function moveLabelFromRow(row) {
+  if (!row || typeof row !== 'object') return '?';
+  if (row.move) return String(row.move);
+  if (row.tensor_action !== undefined && row.tensor_action !== null) return `#${row.tensor_action}`;
+  return '?';
+}
+
+function formatTopMRows(rows, maxRows = 16) {
+  if (!Array.isArray(rows) || rows.length === 0) return '  (none)\n';
+  const limited = rows.slice(0, maxRows);
+  let output = '';
+  output += '  move   prior    logP      g      g+logP\n';
+  output += '  -----  -------  -------  -------  -------\n';
+  limited.forEach((row) => {
+    const move = moveLabelFromRow(row).padEnd(5);
+    const prior = formatFinite(row.prior, 4).padStart(7);
+    const logP = formatFinite(row.log_prior, 4).padStart(7);
+    const g = formatFinite(row.gumbel, 4).padStart(7);
+    const score = formatFinite(row.top_m_score, 4).padStart(7);
+    output += `  ${move}  ${prior}  ${logP}  ${g}  ${score}\n`;
+  });
+  if (rows.length > limited.length) {
+    output += `  ... ${rows.length - limited.length} more\n`;
+  }
+  return output;
+}
+
+function formatGumbelScoreRows(rows, options = {}) {
+  const maxRows = options.maxRows || 16;
+  const showGumbel = options.showGumbel !== false;
+
+  if (!Array.isArray(rows) || rows.length === 0) return '  (none)\n';
+  const limited = rows.slice(0, maxRows);
+
+  let output = '';
+  if (showGumbel) {
+    output += '  move   N    qsrc  prior    logP     q01      adv     c*adv      g      score\n';
+    output += '  -----  ---  ----  -------  -------  -------  -------  -------  -------  -------\n';
+  } else {
+    output += '  move   N    qsrc  prior    logP     q01      adv     c*adv    score\n';
+    output += '  -----  ---  ----  -------  -------  -------  -------  -------  -------\n';
+  }
+
+  limited.forEach((row) => {
+    const move = moveLabelFromRow(row).padEnd(5);
+    const visits = String(Number.isFinite(Number(row.visits)) ? Number(row.visits) : 0).padStart(3);
+    const qsrc = (row.q_source === 'v_pi_completion' ? 'vpi' : 'tree').padEnd(4);
+    const prior = formatFinite(row.prior, 4).padStart(7);
+    const logP = formatFinite(row.log_prior, 4).padStart(7);
+    const q01 = formatFinite(row.q_01, 4).padStart(7);
+    const adv = formatFinite(row.adv_01, 4).padStart(7);
+    const cAdv = formatFinite(row.value_term, 4).padStart(7);
+    const score = formatFinite(row.score, 4).padStart(7);
+
+    if (showGumbel) {
+      const gumbel = formatFinite(row.gumbel_term, 4).padStart(7);
+      output += `  ${move}  ${visits}  ${qsrc}  ${prior}  ${logP}  ${q01}  ${adv}  ${cAdv}  ${gumbel}  ${score}\n`;
+    } else {
+      output += `  ${move}  ${visits}  ${qsrc}  ${prior}  ${logP}  ${q01}  ${adv}  ${cAdv}  ${score}\n`;
+    }
+  });
+
+  if (rows.length > limited.length) {
+    output += `  ... ${rows.length - limited.length} more\n`;
+  }
+
+  return output;
+}
+
+function renderGumbelDetailedTrace(detailedExploration, trace) {
+  const gumbelEvents = trace.filter((step) => typeof step?.type === 'string' && step.type.startsWith('gumbel_'));
+  if (gumbelEvents.length === 0) return null;
+
+  let output = '';
+  output += '=== DETAILED GUMBEL ROOT TRACE ===\n';
+  output += `Simulation threshold: ${detailedExploration.simulation_threshold}\n`;
+  output += `Total simulations: ${detailedExploration.total_simulations}\n\n`;
+
+  const setup = gumbelEvents.find((step) => step.type === 'gumbel_root_setup');
+  if (setup) {
+    output += 'Scoring formulas used:\n';
+    output += `  Round ranking: ${setup.score_formula_round}\n`;
+    output += `  Final ranking: ${setup.score_formula_final}\n`;
+    output += `  v_pi=${formatFinite(setup.v_pi_01, 4)} | candidates=${setup.candidate_count}/${setup.legal_action_count} | rounds=${setup.rounds_R} | c_scale=${formatFinite(setup.c_scale, 3)}\n`;
+    output += '  qsrc=tree means visited child Q; qsrc=vpi means unvisited and q01 is completed to v_pi.\n\n';
+  }
+
+  gumbelEvents.forEach((step) => {
+    switch (step.type) {
+      case 'gumbel_root_setup':
+        break;
+
+      case 'gumbel_top_m_selection':
+        output += '=== TOP-M CANDIDATE DRAW (g + log_prior) ===\n';
+        output += `Selected candidates: ${step.candidate_count}\n`;
+        output += formatTopMRows(step.selected_rows, 20);
+        if (Array.isArray(step.excluded_rows) && step.excluded_rows.length > 0) {
+          output += 'Near-miss non-candidates:\n';
+          output += formatTopMRows(step.excluded_rows, 5);
+        }
+        output += '\n';
+        break;
+
+      case 'gumbel_round_start':
+        output += `=== ROUND ${step.round_index}/${step.rounds_total} BEFORE FORCED SIMS ===\n`;
+        output += `Arms: ${step.arms} | per_arm: ${step.per_arm} | sims used: ${step.sims_used_before} | sims left: ${step.sims_left_before}\n`;
+        output += formatGumbelScoreRows(step.candidate_rows, { maxRows: 24, showGumbel: true });
+        output += '\n';
+        break;
+
+      case 'gumbel_round_end':
+        output += `=== ROUND ${step.round_index}/${step.rounds_total} AFTER FORCED SIMS ===\n`;
+        output += `Sims used: ${step.sims_used_after} | sims left: ${step.sims_left_after}\n`;
+        if (step.reason) output += `Reason: ${step.reason}\n`;
+        output += formatGumbelScoreRows(step.candidate_rows, { maxRows: 24, showGumbel: true });
+        if (Array.isArray(step.kept_moves) && step.kept_moves.length > 0) {
+          output += `Kept (${step.keep_count}): ${step.kept_moves.join(', ')}\n`;
+        }
+        if (Array.isArray(step.dropped_moves) && step.dropped_moves.length > 0) {
+          output += `Dropped: ${step.dropped_moves.join(', ')}\n`;
+        }
+        output += '\n';
+        break;
+
+      case 'gumbel_final_selection':
+        output += '=== FINAL DETERMINISTIC RANKING (NO GUMBEL TERM) ===\n';
+        output += formatGumbelScoreRows(step.final_rank_rows, { maxRows: 24, showGumbel: false });
+        if (step.selected_move) {
+          output += `Selected move: ${step.selected_move}\n`;
+        }
+        if (Array.isArray(step.final_rank_rows) && step.final_rank_rows.length >= 2) {
+          const best = Number(step.final_rank_rows[0].score);
+          const second = Number(step.final_rank_rows[1].score);
+          if (Number.isFinite(best) && Number.isFinite(second)) {
+            output += `Top-2 margin: ${(best - second).toFixed(4)}\n`;
+          }
+        }
+        output += '\n';
+        break;
+
+      default:
+        break;
+    }
+  });
+
+  return output;
+}
+
+function renderLegacyDetailedTrace(detailedExploration, trace) {
+  let output = '';
+  output += '=== DETAILED MCTS EXPLORATION TRACE ===\n';
+  output += `Simulation threshold: ${detailedExploration.simulation_threshold}\n`;
+  output += `Total simulations: ${detailedExploration.total_simulations}\n\n`;
+
+  if (!Array.isArray(trace) || trace.length === 0) {
+    output += 'No exploration trace available.\n';
+    return output;
+  }
+
+  trace.forEach((step) => {
+    try {
+      switch (step.type) {
+        case 'descent_start':
+          output += `DESCENT #${step.sim} | root visits: ${step.root_visits} | gumbel_forced: ${step.gumbel_forced}\n`;
+          if (step.pv_hint) output += `PV: ${step.pv_hint.join(' -> ')}\n`;
+          break;
+        case 'forced_root_action':
+          output += `Forced root action: ${step.tensor_action} (legal: ${step.legal_at_root})\n`;
+          break;
+        case 'select_action':
+          output += `Select: depth=${step.depth} score=${formatFinite(step.score, 4)} (Q=${formatFinite(step.q, 4)}, U=${formatFinite(step.u, 4)}, P=${formatFinite(step.p, 4)}, N=${step.n})\n`;
+          break;
+        case 'node_realized':
+          output += `Created child ${step.move} @depth ${step.depth}\n`;
+          break;
+        case 'leaf_selected':
+          output += `Leaf @depth ${step.depth} (${step.leaf_reason}) T=${step.T} U=${step.U}\n`;
+          break;
+        case 'batch_flush':
+          output += `Batch flush: ${step.reason} (T=${step.T}, U=${step.U}, target=${step.distinct_target})\n`;
+          break;
+        case 'nn_eval_start':
+          output += `NN start: batch=${step.batch_size}, to_eval=${step.to_eval}, distinct=${step.distinct}\n`;
+          break;
+        case 'nn_eval_done':
+          output += `NN done: batch=${step.effective_batch_size}, time=${formatFinite(step.time_ms, 1)}ms\n`;
+          break;
+        case 'expand_node':
+          output += `Expanded node @depth ${step.depth} (children=${step.children_count})\n`;
+          break;
+        case 'backprop_update':
+          output += `Backprop: root_Q ${formatFinite(step.root_q_before, 4)} -> ${formatFinite(step.root_q_after, 4)}\n`;
+          break;
+        default:
+          output += `Unknown step type: ${step.type}\n`;
+      }
+      output += '\n';
+    } catch (error) {
+      output += `Error processing step: ${error.message}\n\n`;
+    }
+  });
+
+  return output;
 }
 
 function displayDetailedExploration(debugInfo) {
@@ -2231,138 +2438,14 @@ function displayDetailedExploration(debugInfo) {
     return;
   }
   
-  let output = '';
-  output += `=== DETAILED MCTS EXPLORATION TRACE ===\n`;
-  output += `Simulation threshold: ${detailedExploration.simulation_threshold}\n`;
-  output += `Total simulations: ${detailedExploration.total_simulations}\n\n`;
-  
-  if (detailedExploration.trace && detailedExploration.trace.length > 0) {
-    detailedExploration.trace.forEach((step, index) => {
-      try {
-        // Handle different types of steps
-        switch (step.type) {
-          case 'descent_start':
-            output += `=== DESCENT #${step.sim} — root visits: ${step.root_visits} — gumbel_forced: ${step.gumbel_forced} ===\n`;
-            if (step.pv_hint) {
-              output += `PV: ${step.pv_hint.join(' → ')}\n`;
-            }
-            break;
-            
-          case 'forced_root_action':
-            output += `🎲 Gumbel forced root action: ${step.tensor_action} (legal: ${step.legal_at_root})`;
-            if (step.note) {
-              output += ` [${step.note}]`;
-            }
-            output += '\n';
-            break;
-            
-          case 'select_action':
-            output += `PUCT: score = Q + (C × P × √N_total / (1 + N))\n`;
-            output += `→ Selected: Q=${step.q.toFixed(3)} U=${step.u.toFixed(3)} P=${step.p.toFixed(3)} N=${step.n} N_total=${step.n_total} ⇒ score=${step.score.toFixed(3)}`;
-            if (step.terminal_flag_for_child) {
-              output += ` (terminal-boosted)`;
-            }
-            if (step.note === "degenerate_argmax_p") {
-              output += ` [argmax(P) path]`;
-            }
-            output += '\n';
-            break;
-            
-          case 'node_realized':
-            output += `Created child ${step.move} @depth ${step.depth} (hash ${step.child_hash})\n`;
-            break;
-            
-          case 'leaf_selected':
-            output += `🌿 Leaf selected @depth ${step.depth} — ${step.leaf_reason}. Batch: T=${step.T}, U=${step.U} (target=${step.distinct_target})\n`;
-            break;
-            
-          case 'batch_flush':
-            output += `⚡ Batch flush: ${step.reason} (T=${step.T}, U=${step.U}, target=${step.distinct_target}, budget=${step.select_budget})\n`;
-            break;
-            
-          case 'nn_eval_start':
-            output += `🧠 NN eval start: batch=${step.batch_size}, to_eval=${step.to_eval}, distinct=${step.distinct}, cache_hits=${step.cache_hits_in_batch}\n`;
-            break;
-            
-          case 'nn_eval_done':
-            output += `🧠 NN eval done: eff=${step.effective_batch_size}, value_range=[${step.value_range[0].toFixed(3)}, ${step.value_range[1].toFixed(3)}], mean_entropy=${step.mean_policy_entropy.toFixed(3)}, time=${step.time_ms.toFixed(1)}ms\n`;
-            break;
-            
-          case 'expand_node':
-            output += `Expanded node @depth ${step.depth} (children=${step.children_count}, top3_prior_mass=${step.prior_mass_top3.toFixed(3)}, value_red=${step.value_signed_red_ref.toFixed(3)})\n`;
-            break;
-            
-          case 'backprop_update':
-            output += `⬆️ Backprop: path_len=${step.path_len}, root_Q: ${step.root_q_before.toFixed(3)} → ${step.root_q_after.toFixed(3)}\n`;
-            break;
-            
-          default:
-            output += `Unknown step type: ${step.type}\n`;
-        }
-        
-        output += '\n';
-      } catch (error) {
-        console.error('Error processing exploration step:', error, step);
-        output += `Error processing step: ${error.message}\n\n`;
-      }
-    });
-    
-    // Add algorithm summary
-    output += `=== ALGORITHM SUMMARY ===\n`;
-    output += `MCTS Algorithm Flow:\n`;
-    output += `1. Selection: Choose child nodes using PUCT formula\n`;
-    output += `2. Expansion: Create new child nodes for unexplored actions\n`;
-    output += `3. Simulation: Rollout to terminal state using policy network\n`;
-    output += `4. Backpropagation: Update node statistics (N, Q, W)\n\n`;
-    output += `Detailed Exploration Context:\n`;
-    output += `├─ Root Selection (Depth 0): Choosing which move to explore from current game state\n`;
-    output += `├─ Child Expansion (Depth 1+): Creating/visiting nodes deeper in the tree\n`;
-    output += `├─ PUCT Scoring: Q (value) + C×√(N_total)/√(N) (exploration) + P (prior)\n`;
-    output += `└─ Tree Growth: Each simulation can expand the tree to new depths\n\n`;
-    output += `What Each Step Shows:\n`;
-    output += `├─ Node Selection: Which node in the tree to explore next (using UCB1)\n`;
-    output += `├─ Action Selection: Which move to make from that node (using PUCT)\n`;
-    output += `├─ Tree Traversal: How the algorithm navigates the existing tree\n`;
-    output += `├─ Expansion: When and where new nodes are created\n`;
-    output += `└─ Simulation: The rollout process from unexpanded nodes\n\n`;
-    output += `Note: Depth 0 = Root node, Depth 1+ = Child nodes in the tree.\n`;
-    output += `Each step shows the algorithm's decision-making process.\n\n`;
-    
-    // Add exploration insights
-    output += `Exploration Insights:\n`;
-    output += `├─ PUCT Formula: Q + C×√(N_total)/√(N) + P\n`;
-    output += `├─ Q: Average value from backpropagation\n`;
-    output += `├─ C: Exploration constant (${mctsData?.algorithm_info?.parameters?.exploration_constant || 'unknown'})\n`;
-    output += `├─ N: Visit count for this action\n`;
-    output += `└─ P: Prior probability from neural network\n\n`;
-    output += `Understanding the Scores:\n`;
-    output += `├─ High PUCT Score: Move is promising (high Q-value, low visits, or high prior)\n`;
-    output += `├─ Low PUCT Score: Move is less promising or already well-explored\n`;
-    output += `├─ UCB1 (Node Selection): Balances exploration of different tree regions\n`;
-    output += `└─ PUCT (Action Selection): Balances exploitation of known good moves vs exploration of new ones\n\n`;
-    
-    // Add tree statistics if available
-    if (treeData) {
-      output += `Tree Statistics:\n`;
-      output += `├─ Total nodes: ${treeData.total_nodes || 'N/A'}\n`;
-      output += `├─ Max depth: ${treeData.max_depth || 'N/A'}\n`;
-      output += `├─ Total visits: ${treeData.total_visits || 'N/A'}\n`;
-      output += `└─ Neural inferences: ${treeData.inferences || 'N/A'}\n`;
-      
-      // Add visit distribution analysis
-      if (treeData.visit_counts && treeData.visit_counts.length > 0) {
-        const sortedVisits = [...treeData.visit_counts].sort((a, b) => b - a);
-        output += `\nVisit Distribution:\n`;
-        output += `├─ Most visited: ${sortedVisits[0] || 'N/A'} visits\n`;
-        output += `├─ Median visits: ${sortedVisits[Math.floor(sortedVisits.length/2)] || 'N/A'}\n`;
-        output += `└─ Least visited: ${sortedVisits[sortedVisits.length-1] || 'N/A'} visits\n`;
-      }
-    }
-  } else {
-    output += 'No exploration trace available.\n';
+  const trace = Array.isArray(detailedExploration.trace) ? detailedExploration.trace : [];
+  const gumbelOutput = renderGumbelDetailedTrace(detailedExploration, trace);
+  if (gumbelOutput) {
+    explorationContent.textContent = gumbelOutput;
+    return;
   }
-  
-  explorationContent.textContent = output;
+
+  explorationContent.textContent = renderLegacyDetailedTrace(detailedExploration, trace);
 }
 
 function saveStateForUndo() {

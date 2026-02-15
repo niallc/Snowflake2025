@@ -75,6 +75,100 @@ def sample_gumbel(shape: Tuple[int, ...], eps: float = 1e-20, rng: Optional[np.r
     return -np.log(-np.log(u))
 
 
+def compute_completed_baseline_v_pi(
+    pi: np.ndarray,
+    legal_actions: List[int],
+    q_of_child: Callable[[int], float],
+    n_of_child: Callable[[int], int],
+) -> float:
+    """
+    Compute completed baseline v_pi in [0,1].
+
+    Uses policy-weighted mean over visited children only, then normalizes by visited mass.
+    Falls back to 0.5 when no visited mass exists.
+    """
+    pi_unvisited = 0.0
+    num = 0.0
+    for action in legal_actions:
+        if n_of_child(action) > 0:
+            num += float(pi[action]) * float(q_of_child(action))
+        else:
+            pi_unvisited += float(pi[action])
+
+    denom = 1.0 - pi_unvisited
+    if denom <= 1e-12:
+        return 0.5
+    return num / denom
+
+
+def build_gumbel_score_rows(
+    *,
+    actions: List[int],
+    pi: np.ndarray,
+    logits: np.ndarray,
+    gumbel_noise: np.ndarray,
+    c_scale: float,
+    v_pi_01: float,
+    q_of_child: Callable[[int], float],
+    n_of_child: Callable[[int], int],
+    include_gumbel_term: bool,
+) -> List[Dict[str, Any]]:
+    """
+    Build sorted per-action score rows using the same terms as Gumbel root ranking.
+
+    score_without_gumbel = log_prior + c_scale * (q_01 - v_pi)
+    score_with_gumbel = score_without_gumbel + gumbel_noise
+    score = score_with_gumbel if include_gumbel_term else score_without_gumbel
+    """
+    rows: List[Dict[str, Any]] = []
+    sigma = float(c_scale)
+    baseline = float(v_pi_01)
+
+    for action in actions:
+        action_int = int(action)
+        visits = int(n_of_child(action_int))
+
+        if visits > 0:
+            q_01 = float(q_of_child(action_int))
+            q_source = "tree"
+        else:
+            q_01 = baseline
+            q_source = "v_pi_completion"
+
+        adv = q_01 - baseline
+        value_term = sigma * adv
+        log_prior = float(logits[action_int])
+        raw_gumbel = float(gumbel_noise[action_int])
+        gumbel_term = raw_gumbel if include_gumbel_term else 0.0
+
+        score_without_gumbel = log_prior + value_term
+        score_with_gumbel = score_without_gumbel + raw_gumbel
+        score = score_with_gumbel if include_gumbel_term else score_without_gumbel
+
+        rows.append(
+            {
+                "tensor_action": action_int,
+                "visits": visits,
+                "prior": float(pi[action_int]),
+                "log_prior": log_prior,
+                "gumbel": raw_gumbel,
+                "gumbel_term": gumbel_term,
+                "q_01": q_01,
+                "q_ptm_signed": (2.0 * q_01) - 1.0,
+                "q_source": q_source,
+                "v_pi_01": baseline,
+                "adv_01": adv,
+                "value_term": value_term,
+                "score_without_gumbel": score_without_gumbel,
+                "score_with_gumbel": score_with_gumbel,
+                "score": score,
+            }
+        )
+
+    rows.sort(key=lambda row: float(row["score"]), reverse=True)
+    return rows
+
+
 def gumbel_alpha_zero_root_batched(
     *,
     mcts,                    # your BaselineMCTS instance
@@ -99,6 +193,7 @@ def gumbel_alpha_zero_root_batched(
     # Gumbel ranking stabilization parameters
     use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,  # Remove Gumbel noise in final evaluation
     eval_mode: bool = False,  # Whether this is evaluation mode (affects Gumbel noise usage)
+    trace_event: Optional[Callable[[Dict[str, Any]], None]] = None,
 ):
     """
     Batched Gumbel-AlphaZero root selection that reuses existing MCTS batching infrastructure.
@@ -229,30 +324,6 @@ def gumbel_alpha_zero_root_batched(
         for a, p in zip(legal_actions, pi_legal):
             pi[a] = p
 
-    # Completion helpers
-    def completed_baseline_v_pi():
-        pi_unvisited = 0.0
-        num = 0.0
-        for a in legal_actions:
-            if n_of_child(a) > 0:
-                num += pi[a] * q_of_child(a)
-            else:
-                pi_unvisited += pi[a]
-        denom = 1.0 - pi_unvisited
-        if denom <= 1e-12:
-            # Degenerate (e.g., all unvisited). Fallback: 0.5 in [0,1] or use root value head if available.
-            return 0.5
-        return num / denom
-
-    # Cache v_pi once per root call
-    _v_pi_cache = [None]
-    def completed_q(a: int) -> float:
-        if n_of_child(a) > 0:
-            return q_of_child(a)
-        if _v_pi_cache[0] is None:
-            _v_pi_cache[0] = completed_baseline_v_pi()
-        return _v_pi_cache[0]
-    
     # Choose candidate set via Gumbel Top-m on (g + logits)
     if m is None:
         # Power-law candidate scaling: grows faster than logarithmic
@@ -307,26 +378,37 @@ def gumbel_alpha_zero_root_batched(
     nn_calls_per_move = 0
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
-    
-    # Precompute maxN_all once per root (across ALL legal children)
-    maxN_all = max(1, max(n_of_child(a) for a in legal_actions))
-    
-    # Compute v_pi once per root and cache it
-    v_pi = completed_baseline_v_pi()
 
-    def rank_key(a):
-        """Score function for action a: g[a] + logits[a] + σ(q̂[a] - v_pi)"""
-        # Use constant sigma (simplified approach)
-        sigma = c_scale
-        
-        # Use advantage form: (q_tilde - v_pi) instead of just q_tilde
-        q_tilde = completed_q(a)
-        advantage = q_tilde - v_pi
-        
-        # Optional: Remove Gumbel noise in final evaluation for deterministic results
-        g_eval = 0.0 if (eval_mode and not use_gumbel_in_final_eval) else g[a]
-        
-        return g_eval + logits[a] + sigma * advantage
+    # Compute v_pi once per root and use it consistently for all ranking/debug rows.
+    v_pi = compute_completed_baseline_v_pi(pi, legal_actions, q_of_child, n_of_child)
+    round_uses_gumbel = not (eval_mode and not use_gumbel_in_final_eval)
+
+    def emit_trace(event: Dict[str, Any]) -> None:
+        """Best-effort trace callback; must never affect search behavior."""
+        if trace_event is None:
+            return
+        try:
+            trace_event(event)
+        except Exception:
+            pass
+
+    def build_top_m_rows(actions: List[int]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for action in actions:
+            action_int = int(action)
+            log_prior = float(logits[action_int])
+            gumbel_val = float(g[action_int])
+            rows.append(
+                {
+                    "tensor_action": action_int,
+                    "prior": float(pi[action_int]),
+                    "log_prior": log_prior,
+                    "gumbel": gumbel_val,
+                    "top_m_score": log_prior + gumbel_val,
+                }
+            )
+        rows.sort(key=lambda row: row["top_m_score"], reverse=True)
+        return rows
     
     def per_arm_allocation(total_left, rounds_left, num_arms):
         """
@@ -353,27 +435,39 @@ def gumbel_alpha_zero_root_batched(
         # Return the minimum of theoretical allocation and budget constraint
         return max(1, min(theoretical_per_arm, max_per_arm))
     
-    def schedule_round(arms_list, sims_left, rounds_left):
-        """
-        REVERTED: Use per-arm equal allocation per round (restore behavior from 5760a837).
-        This removes early-round asymmetries that were introduced by the batch-fill strategy.
-        
-        Each surviving arm gets exactly per_arm targeted root simulations during this round.
-        Batching is handled internally by MCTS and does not affect per-arm counts.
-        """
-        # Calculate exactly per_arm sims per arm in this round
-        per_arm = per_arm_allocation(sims_left, rounds_left, len(arms_list))
-        
-        # Create exactly per_arm simulations for each arm
-        actions = [a for a in arms_list for _ in range(per_arm)]
-        return actions
-    
     # Guards for degenerate cases
     if not cand:
         raise RuntimeError("No candidates available for Gumbel selection")
-    if R <= 0:
-        # Single candidate case - just return it
-        return cand[0], {"nn_calls_per_move": 0, "total_leaves_evaluated": 0, "distinct_leaves_evaluated": 0, "candidates_m": m, "rounds_R": R, "avg_nn_batch_size": 0, "leaves_distinct_ratio": 0, "timing_breakdown": timing_data}
+
+    emit_trace(
+        {
+            "type": "gumbel_root_setup",
+            "total_sims": int(total_sims),
+            "legal_action_count": int(len(legal_actions)),
+            "candidate_count": int(len(cand)),
+            "rounds_R": int(R),
+            "c_visit": float(c_visit),
+            "c_scale": float(c_scale),
+            "temperature": float(temperature),
+            "v_pi_01": float(v_pi),
+            "round_uses_gumbel": bool(round_uses_gumbel),
+            "score_formula_round": "g + log_prior + c_scale*(q_01 - v_pi)",
+            "score_formula_final": "log_prior + c_scale*(q_01 - v_pi)",
+        }
+    )
+
+    top_m_rows = build_top_m_rows(legal_actions)
+    top_m_selected_set = {int(action) for action in cand}
+    top_m_selected_rows = [row for row in top_m_rows if row["tensor_action"] in top_m_selected_set]
+    top_m_excluded_rows = [row for row in top_m_rows if row["tensor_action"] not in top_m_selected_set][:5]
+    emit_trace(
+        {
+            "type": "gumbel_top_m_selection",
+            "candidate_count": int(len(top_m_selected_rows)),
+            "selected_rows": top_m_selected_rows,
+            "excluded_rows": top_m_excluded_rows,
+        }
+    )
     
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
@@ -388,8 +482,46 @@ def gumbel_alpha_zero_root_batched(
         # Compute this stage's per-arm allocation (equal budgeting)
         per_arm = per_arm_allocation(total_sims - sims_used, rounds_left, arms)
 
+        pre_round_rows = build_gumbel_score_rows(
+            actions=cand,
+            pi=pi,
+            logits=logits,
+            gumbel_noise=g,
+            c_scale=c_scale,
+            v_pi_01=v_pi,
+            q_of_child=q_of_child,
+            n_of_child=n_of_child,
+            include_gumbel_term=round_uses_gumbel,
+        )
+        emit_trace(
+            {
+                "type": "gumbel_round_start",
+                "round_index": int(r + 1),
+                "rounds_total": int(R),
+                "arms": int(arms),
+                "per_arm": int(per_arm),
+                "sims_used_before": int(sims_used),
+                "sims_left_before": int(total_sims - sims_used),
+                "candidate_rows": pre_round_rows,
+            }
+        )
+
         # NEW: if we cannot afford even 1 sim per arm, do not prune on stale evidence
         if per_arm == 0:
+            emit_trace(
+                {
+                    "type": "gumbel_round_end",
+                    "round_index": int(r + 1),
+                    "rounds_total": int(R),
+                    "sims_used_after": int(sims_used),
+                    "sims_left_after": int(total_sims - sims_used),
+                    "candidate_rows": pre_round_rows,
+                    "keep_count": int(len(cand)),
+                    "kept_actions": [int(a) for a in cand],
+                    "dropped_actions": [],
+                    "reason": "insufficient_budget",
+                }
+            )
             break  # exit SH loop; proceed to final ranking over 'cand' as-is
 
         # Create exactly per_arm simulations for each arm
@@ -412,13 +544,58 @@ def gumbel_alpha_zero_root_batched(
         if verbose >= 4:
             print(f"GUMBEL Round {r+1}: {arms} candidates, {per_arm} sims/arm, {len(actions_this_round)} total sims")
 
+        post_round_rows = build_gumbel_score_rows(
+            actions=cand,
+            pi=pi,
+            logits=logits,
+            gumbel_noise=g,
+            c_scale=c_scale,
+            v_pi_01=v_pi,
+            q_of_child=q_of_child,
+            n_of_child=n_of_child,
+            include_gumbel_term=round_uses_gumbel,
+        )
+
         if arms <= 1 or sims_used >= total_sims:
+            keep = len(post_round_rows)
+            kept_actions = [int(row["tensor_action"]) for row in post_round_rows[:keep]]
+            dropped_actions: List[int] = []
+            emit_trace(
+                {
+                    "type": "gumbel_round_end",
+                    "round_index": int(r + 1),
+                    "rounds_total": int(R),
+                    "sims_used_after": int(sims_used),
+                    "sims_left_after": int(total_sims - sims_used),
+                    "candidate_rows": post_round_rows,
+                    "keep_count": int(keep),
+                    "kept_actions": kept_actions,
+                    "dropped_actions": dropped_actions,
+                    "reason": "budget_exhausted_or_single_candidate",
+                }
+            )
+            cand = kept_actions
             break
 
-        # Halve after NEW evidence
-        cand.sort(key=rank_key, reverse=True)
+        # Halve after NEW evidence using the same score rows used for debug trace.
         keep = max(1, (arms + 1) // 2)
-        cand = cand[:keep]
+        ranked_actions = [int(row["tensor_action"]) for row in post_round_rows]
+        kept_actions = ranked_actions[:keep]
+        dropped_actions = ranked_actions[keep:]
+        emit_trace(
+            {
+                "type": "gumbel_round_end",
+                "round_index": int(r + 1),
+                "rounds_total": int(R),
+                "sims_used_after": int(sims_used),
+                "sims_left_after": int(total_sims - sims_used),
+                "candidate_rows": post_round_rows,
+                "keep_count": int(keep),
+                "kept_actions": kept_actions,
+                "dropped_actions": dropped_actions,
+            }
+        )
+        cand = kept_actions
     
     timing_data['mcts_execution_time'] = time.perf_counter() - mcts_execution_start
     timing_data['round_allocation_time'] = time.perf_counter() - round_start
@@ -429,17 +606,30 @@ def gumbel_alpha_zero_root_batched(
     # Final ranking timing
     ranking_start = time.perf_counter()
     
-    # Final pick - use deterministic ranking without Gumbel noise
-    if len(cand) > 1:
-        # Use constant sigma for final ranking
-        final_sigma = c_scale
+    # Final pick - deterministic ranking without Gumbel noise.
+    final_rank_rows = build_gumbel_score_rows(
+        actions=cand,
+        pi=pi,
+        logits=logits,
+        gumbel_noise=g,
+        c_scale=c_scale,
+        v_pi_01=v_pi,
+        q_of_child=q_of_child,
+        n_of_child=n_of_child,
+        include_gumbel_term=False,
+    )
+    if not final_rank_rows:
+        raise RuntimeError("Gumbel final ranking produced no candidates")
 
-        def final_rank_key(a: int) -> float:
-            # advantage with cached v_pi and completion for unvisited
-            adv = completed_q(a) - v_pi
-            return logits[a] + final_sigma * adv  # no gumbel in final ranking
-
-        cand.sort(key=final_rank_key, reverse=True)
+    cand = [int(row["tensor_action"]) for row in final_rank_rows]
+    selected_action = int(cand[0])
+    emit_trace(
+        {
+            "type": "gumbel_final_selection",
+            "selected_action": selected_action,
+            "final_rank_rows": final_rank_rows,
+        }
+    )
     
     # DEBUG: Compare final selection with top policy move
     # DISABLED: beta-based debug logging due to temperature scaling issues
@@ -465,10 +655,16 @@ def gumbel_alpha_zero_root_batched(
         "rounds_R": R,
         "avg_nn_batch_size": total_leaves_evaluated / max(1, nn_calls_per_move),
         "leaves_distinct_ratio": distinct_leaves_evaluated / max(1, total_leaves_evaluated),
-        "timing_breakdown": timing_data
+        "timing_breakdown": timing_data,
+        "v_pi_01": float(v_pi),
+        "round_uses_gumbel": bool(round_uses_gumbel),
+        "selected_action": selected_action,
+        "final_rank_rows": final_rank_rows,
+        "top_m_selected_rows": top_m_selected_rows,
+        "top_m_excluded_rows": top_m_excluded_rows,
     }
     
-    return cand[0], performance_metrics
+    return selected_action, performance_metrics
 
 
 # Configuration display utilities
@@ -564,5 +760,3 @@ def generate_gumbel_summary_from_mcts_config(mcts_config: Any) -> str:
         gumbel_sim_threshold=gumbel_sim_threshold,
         strategy_name="selfplay"
     )
-
-
