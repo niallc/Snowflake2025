@@ -925,6 +925,153 @@ class BaselineMCTS:
 
         self.exploration_trace.append(event_copy)
 
+    @staticmethod
+    def _player_to_color_label(player: Player) -> str:
+        """Convert Player enum to a simple lowercase color label."""
+        if player == Player.RED:
+            return "red"
+        if player == Player.BLUE:
+            return "blue"
+        return str(player)
+
+    @staticmethod
+    def _red_ref_signed_to_root_ref_signed(value_signed_red_ref: float, root_player: Player) -> float:
+        """Convert a red-reference signed value into root-player reference frame."""
+        return float(value_signed_red_ref if root_player == Player.RED else -value_signed_red_ref)
+
+    def _debug_value_summary_for_state(self, state: HexGameState, root_player: Player) -> Dict[str, Any]:
+        """
+        Get value-head summary for an arbitrary state.
+
+        Uses cache when available; otherwise performs a direct model eval without mutating cache.
+        """
+        cached = self._get_from_cache(board_key(state))
+        from_cache = cached is not None
+
+        if cached is not None:
+            _, value_signed_red_ref = cached
+        else:
+            enc = state.get_board_tensor().to(dtype=torch.float32)
+            batch = torch.stack([enc], dim=0)
+            _, value_cpu, _ = self.model.infer_timed(batch)
+            value_signed_red_ref = float(value_cpu[0].item())
+
+        value_signed_red_ref = float(value_signed_red_ref)
+        value_signed_root_ref = self._red_ref_signed_to_root_ref_signed(value_signed_red_ref, root_player)
+        value_signed_ptm_ref = float(red_ref_signed_to_ptm_ref_signed(value_signed_red_ref, state.current_player_enum))
+
+        return {
+            "red_ref_signed": value_signed_red_ref,
+            "root_ref_signed": value_signed_root_ref,
+            "root_win_prob": float(signed_to_prob(value_signed_root_ref)),
+            "ptm_ref_signed": value_signed_ptm_ref,
+            "ptm_win_prob": float(signed_to_prob(value_signed_ptm_ref)),
+            "to_play": self._player_to_color_label(state.current_player_enum),
+            "from_cache": bool(from_cache),
+        }
+
+    def _build_gumbel_action_dive_event(
+        self, root: MCTSNode, tensor_action: int, board_size: int, top_replies: int = 6
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Build a deep-dive debug event for one root action:
+        - Root child tree Q/N
+        - Value-head eval after root move
+        - Opponent reply diagnostics by visits and by prior
+        """
+        if tensor_action not in root.legal_indices:
+            return None
+
+        root_player = root.to_play
+        action = int(tensor_action)
+        child_idx = root.legal_indices.index(action)
+        move = self._tensor_action_to_trmph_with_size(action, board_size)
+        root_child_visits = int(root.N[child_idx])
+        root_child_q_ptm_signed = float(root.Q[child_idx]) if root_child_visits > 0 else 0.0
+        root_child_q_01 = float((root_child_q_ptm_signed + 1.0) / 2.0) if root_child_visits > 0 else 0.5
+
+        # Construct state after root move and evaluate value head.
+        move_row, move_col = root.legal_moves[child_idx]
+        state_after_root = root.state.make_move(move_row, move_col)
+        value_after_root = self._debug_value_summary_for_state(state_after_root, root_player)
+
+        event: Dict[str, Any] = {
+            "type": "gumbel_action_dive",
+            "tensor_action": action,
+            "move": move,
+            "root_player": self._player_to_color_label(root_player),
+            "opponent_to_play": self._player_to_color_label(state_after_root.current_player_enum),
+            "root_child_visits": root_child_visits,
+            "root_child_q_ptm_signed": root_child_q_ptm_signed,
+            "root_child_q_01": root_child_q_01,
+            "value_after_root": value_after_root,
+        }
+
+        child_node = root.children[child_idx]
+        if child_node is None:
+            event["note"] = "Child node was not realized during search; no opponent reply tree stats available."
+            event["reply_count_total"] = int(len(state_after_root.get_legal_moves()))
+            event["reply_count_visited"] = 0
+            event["top_replies_by_visits"] = []
+            event["top_replies_by_policy"] = []
+            return event
+
+        reply_count_total = len(child_node.legal_moves)
+        visited_indices = [i for i, n in enumerate(child_node.N) if int(n) > 0]
+        visited_indices.sort(key=lambda i: int(child_node.N[i]), reverse=True)
+        visited_top = visited_indices[:top_replies]
+
+        policy_top: List[int] = []
+        if child_node.is_expanded and len(child_node.P) == reply_count_total and reply_count_total > 0:
+            policy_top = list(np.argsort(child_node.P)[::-1][:top_replies].astype(int))
+
+        # Evaluate value head after replies for the union of indices shown in the report.
+        eval_indices = sorted(set(visited_top + policy_top))
+        value_after_reply_by_idx: Dict[int, Dict[str, Any]] = {}
+        for idx in eval_indices:
+            reply_row, reply_col = child_node.legal_moves[idx]
+            reply_state = child_node.state.make_move(reply_row, reply_col)
+            value_after_reply_by_idx[idx] = self._debug_value_summary_for_state(reply_state, root_player)
+
+        def build_reply_row(idx: int) -> Dict[str, Any]:
+            reply_row, reply_col = child_node.legal_moves[idx]
+            reply_move = f"{chr(ord('a') + reply_col)}{reply_row + 1}"
+            visits = int(child_node.N[idx])
+            prior = float(child_node.P[idx]) if child_node.is_expanded and len(child_node.P) == reply_count_total else None
+
+            if visits > 0:
+                q_opp_ptm_signed = float(child_node.Q[idx])  # Child node is opponent-to-play.
+                q_root_ref_signed = float(-q_opp_ptm_signed)  # Opponent perspective -> root perspective.
+                q_root_win_prob = float(signed_to_prob(q_root_ref_signed))
+                q_source = "tree"
+            else:
+                q_opp_ptm_signed = None
+                q_root_ref_signed = None
+                q_root_win_prob = None
+                q_source = "unvisited"
+
+            return {
+                "move": reply_move,
+                "visits": visits,
+                "prior": prior,
+                "q_source": q_source,
+                "q_opp_ptm_signed": q_opp_ptm_signed,
+                "q_root_ref_signed": q_root_ref_signed,
+                "q_root_win_prob": q_root_win_prob,
+                "value_after_reply": value_after_reply_by_idx.get(idx, None),
+            }
+
+        event["reply_count_total"] = int(reply_count_total)
+        event["reply_count_visited"] = int(len(visited_indices))
+        event["top_replies_by_visits"] = [build_reply_row(idx) for idx in visited_top]
+        event["top_replies_by_policy"] = [build_reply_row(idx) for idx in policy_top]
+        event["note"] = (
+            "Reply Q values are from opponent perspective at depth-1 child (q_opp_ptm_signed). "
+            "q_root_ref_signed flips sign to root perspective. "
+            "value_after_reply is direct value-head eval of the resulting position."
+        )
+        return event
+
     # ---------- Public API ----------
     
     def run(self, root_state: HexGameState, verbose: int = 0) -> MCTSResult:
@@ -1316,6 +1463,41 @@ class BaselineMCTS:
             final_rows = self._decorate_gumbel_score_rows_with_moves(final_rows_raw, board_size)
             self._gumbel_final_rank_top5 = final_rows[:5] if final_rows else None
             self._gumbel_final_rank_top_move_trmph = final_rows[0]["move"] if final_rows else None
+
+            # Add root-action deep-dive diagnostics to detailed trace so we can
+            # compare tree Q and direct value-head signals for finalists.
+            if self.detailed_exploration_enabled:
+                dive_actions: List[int] = []
+
+                # Prefer the final competing set before last prune (typically 2 actions).
+                for row in (gumbel_metrics.get("last_round_rows", []) or []):
+                    action = row.get("tensor_action", None)
+                    if action is None:
+                        continue
+                    action_int = int(action)
+                    if action_int not in dive_actions:
+                        dive_actions.append(action_int)
+
+                # Fallback to deterministic final rows.
+                if not dive_actions:
+                    for row in final_rows_raw:
+                        action = row.get("tensor_action", None)
+                        if action is None:
+                            continue
+                        action_int = int(action)
+                        if action_int not in dive_actions:
+                            dive_actions.append(action_int)
+
+                selected_action_int = int(selected_tensor_action)
+                if selected_action_int in dive_actions:
+                    dive_actions = [selected_action_int] + [a for a in dive_actions if a != selected_action_int]
+                else:
+                    dive_actions = [selected_action_int] + dive_actions
+
+                for action in dive_actions[:3]:
+                    dive_event = self._build_gumbel_action_dive_event(root, action, board_size, top_replies=6)
+                    if dive_event is not None:
+                        self.exploration_trace.append(dive_event)
         except Exception:
             # Best-effort debug only: do not risk crashing inference due to debug formatting.
             self._gumbel_final_rank_top5 = None

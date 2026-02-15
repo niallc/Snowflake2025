@@ -378,6 +378,7 @@ def gumbel_alpha_zero_root_batched(
     nn_calls_per_move = 0
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
+    last_round_rows: List[Dict[str, Any]] = []
 
     # Compute v_pi once per root and use it consistently for all ranking/debug rows.
     v_pi = compute_completed_baseline_v_pi(pi, legal_actions, q_of_child, n_of_child)
@@ -508,6 +509,7 @@ def gumbel_alpha_zero_root_batched(
 
         # NEW: if we cannot afford even 1 sim per arm, do not prune on stale evidence
         if per_arm == 0:
+            last_round_rows = pre_round_rows
             emit_trace(
                 {
                     "type": "gumbel_round_end",
@@ -555,6 +557,7 @@ def gumbel_alpha_zero_root_batched(
             n_of_child=n_of_child,
             include_gumbel_term=round_uses_gumbel,
         )
+        last_round_rows = post_round_rows
 
         if arms <= 1 or sims_used >= total_sims:
             keep = len(post_round_rows)
@@ -660,6 +663,7 @@ def gumbel_alpha_zero_root_batched(
         "round_uses_gumbel": bool(round_uses_gumbel),
         "selected_action": selected_action,
         "final_rank_rows": final_rank_rows,
+        "last_round_rows": last_round_rows,
         "top_m_selected_rows": top_m_selected_rows,
         "top_m_excluded_rows": top_m_excluded_rows,
     }

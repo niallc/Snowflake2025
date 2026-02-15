@@ -2258,6 +2258,48 @@ function formatGumbelScoreRows(rows, options = {}) {
   return output;
 }
 
+function formatProbAsPercent(prob, digits = 2) {
+  const num = Number(prob);
+  if (!Number.isFinite(num)) return 'n/a';
+  return `${(num * 100).toFixed(digits)}%`;
+}
+
+function formatValueSummaryInline(summary) {
+  if (!summary || typeof summary !== 'object') return 'n/a';
+  const rootWin = formatProbAsPercent(summary.root_win_prob, 2);
+  const rootSigned = formatFinite(summary.root_ref_signed, 4);
+  const redSigned = formatFinite(summary.red_ref_signed, 4);
+  const ptmWin = formatProbAsPercent(summary.ptm_win_prob, 2);
+  const toPlay = summary.to_play || 'n/a';
+  const cacheFlag = summary.from_cache ? 'cache' : 'fresh';
+  return `root_win=${rootWin}, root_signed=${rootSigned}, red_signed=${redSigned}, ptm_win=${ptmWin}, to_play=${toPlay}, src=${cacheFlag}`;
+}
+
+function formatActionDiveReplyRows(rows, maxRows = 6) {
+  if (!Array.isArray(rows) || rows.length === 0) return '  (none)\n';
+
+  const limited = rows.slice(0, maxRows);
+  let output = '';
+  output += '  move   N    prior    q_src   q_root(tree)  root_win(tree)  value_head(root_win)\n';
+  output += '  -----  ---  -------  ------  ------------  --------------  --------------------\n';
+
+  limited.forEach((row) => {
+    const move = String(row.move || '?').padEnd(5);
+    const visits = String(Number.isFinite(Number(row.visits)) ? Number(row.visits) : 0).padStart(3);
+    const prior = formatFinite(row.prior, 4).padStart(7);
+    const qSource = String(row.q_source || 'n/a').padEnd(6);
+    const qRootTree = formatFinite(row.q_root_ref_signed, 4).padStart(12);
+    const rootWinTree = formatProbAsPercent(row.q_root_win_prob, 2).padStart(14);
+    const valueHeadRootWin = formatProbAsPercent(row.value_after_reply?.root_win_prob, 2).padStart(20);
+    output += `  ${move}  ${visits}  ${prior}  ${qSource}  ${qRootTree}  ${rootWinTree}  ${valueHeadRootWin}\n`;
+  });
+
+  if (rows.length > limited.length) {
+    output += `  ... ${rows.length - limited.length} more\n`;
+  }
+  return output;
+}
+
 function renderGumbelDetailedTrace(detailedExploration, trace) {
   const gumbelEvents = trace.filter((step) => typeof step?.type === 'string' && step.type.startsWith('gumbel_'));
   if (gumbelEvents.length === 0) return null;
@@ -2326,6 +2368,21 @@ function renderGumbelDetailedTrace(detailedExploration, trace) {
             output += `Top-2 margin: ${(best - second).toFixed(4)}\n`;
           }
         }
+        output += '\n';
+        break;
+
+      case 'gumbel_action_dive':
+        output += `=== ACTION DEEP DIVE: ${step.move || `#${step.tensor_action}`} ===\n`;
+        output += `Root child stats: visits=${step.root_child_visits}, q_ptm=${formatFinite(step.root_child_q_ptm_signed, 4)}, q01=${formatFinite(step.root_child_q_01, 4)}\n`;
+        output += `Value after root move: ${formatValueSummaryInline(step.value_after_root)}\n`;
+        output += `Replies explored: visited=${step.reply_count_visited}/${step.reply_count_total}\n`;
+        if (step.note) output += `Note: ${step.note}\n`;
+
+        output += 'Top opponent replies by visits:\n';
+        output += formatActionDiveReplyRows(step.top_replies_by_visits, 6);
+
+        output += 'Top opponent replies by policy prior:\n';
+        output += formatActionDiveReplyRows(step.top_replies_by_policy, 6);
         output += '\n';
         break;
 
