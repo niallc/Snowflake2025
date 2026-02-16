@@ -220,7 +220,7 @@ class TerminalMoveDetector:
         
         return True
     
-    def detect_terminal_moves(self, node: MCTSNode, board_size: int) -> bool:
+    def detect_terminal_moves(self, node: MCTSNode) -> bool:
         """
         Detect terminal moves for a given node.
 
@@ -240,12 +240,9 @@ class TerminalMoveDetector:
         
         # Check each legal move
         for i, (row, col) in enumerate(node.legal_moves):
-            try:
-                new_state = node.state.make_move(row, col)
-                if new_state.game_over and new_state.winner == player_to_winner(node.to_play):
-                    node.terminal_moves[i] = True
-            except Exception:
-                pass
+            new_state = node.state.make_move(row, col)
+            if new_state.game_over and new_state.winner == player_to_winner(node.to_play):
+                node.terminal_moves[i] = True
         
         node._terminal_moves_detected = True
         return any(node.terminal_moves)
@@ -331,21 +328,20 @@ class AlgorithmTerminationChecker:
         self.cfg = cfg
         self.terminal_detector = terminal_detector
     
-    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]], root_is_expanded: bool = False) -> Optional[AlgorithmTerminationInfo]:
+    def should_terminate_early(self, root: MCTSNode, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]], root_is_expanded: bool = False) -> Optional[AlgorithmTerminationInfo]:
         """
         Check if we should terminate early. Returns None if we should continue with MCTS.
         Returns EarlyTerminationInfo if we should terminate.
         
         Args:
             root: The root node to check
-            board_size: Board size for terminal move detection
             verbose: Verbosity level
             eval_cache: Evaluation cache for neural network confidence
             root_is_expanded: Whether the root node has been expanded (affects confidence checking)
         """
         # 1. Check for terminal moves (highest priority) - works regardless of expansion
         if self.cfg.enable_terminal_move_detection:
-            if self.terminal_detector.detect_terminal_moves(root, board_size):
+            if self.terminal_detector.detect_terminal_moves(root):
                 terminal_move = self.terminal_detector.get_terminal_move(root)
                 if verbose >= 2:
                     print(f"🎮 MCTS: Found terminal move: {terminal_move}")
@@ -1180,33 +1176,25 @@ class BaselineMCTS:
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
         self.verbose = verbose
         
-        # Prepare root node
-        root = self._prepare_root_node(root_state, verbose)
-        
-        # Check for algorithm termination opportunities
+        # Prepare root node without NN expansion so terminal-move termination can short-circuit.
+        root = self._prepare_root_node(root_state, verbose, expand_root=False)
+
+        # Early terminal-move check before root expansion.
         termination_info = self._check_algorithm_termination(root, verbose)
         if termination_info:
-            # Handle algorithm termination
-            move = self._get_algorithm_termination_move(root, termination_info, verbose)
-            tree_data = self.get_tree_data(root)
-            win_probability = termination_info.win_prob
-            
-            # Attach metrics for algorithm termination cases too
-            stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
-            total_time = 0.0  # Algorithm termination has minimal time
-            stats["unique_evals_total"] = int(self._unique_evals_total)
-            stats["effective_sims_total"] = int(self._effective_sims_total)
-            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for algorithm termination
-            stats["effective_sims_per_sec"] = 0.0
-            
-            return MCTSResult(
-                move=move,
-                stats=stats,
-                tree_data=tree_data,
-                root_node=root,
-                algorithm_termination_info=termination_info,
-                win_probability=win_probability
-            )
+            return self._build_algorithm_termination_result(root, termination_info, verbose)
+
+        # Expand root only if needed for MCTS/confidence-based checks.
+        board_size = int(root_state.get_board_tensor().shape[-1])
+        if not root.is_terminal and not root.is_expanded:
+            self._expand_root_node(root, board_size)
+        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
+            self._apply_root_noise(root)
+
+        # Confidence-based termination check (requires expansion).
+        termination_info = self._check_algorithm_termination(root, verbose)
+        if termination_info:
+            return self._build_algorithm_termination_result(root, termination_info, verbose)
         
         # Run main simulation loop
         timing_stats = self._run_simulation_loop(root, verbose)
@@ -1294,18 +1282,18 @@ class BaselineMCTS:
         """Get tree traversal statistics."""
         return calculate_tree_statistics(root)
 
-    def _prepare_root_node(self, root_state: HexGameState, verbose: int) -> MCTSNode:
+    def _prepare_root_node(self, root_state: HexGameState, verbose: int, expand_root: bool = True) -> MCTSNode:
         """Prepare and initialize the root node for MCTS search."""
         board_tensor = root_state.get_board_tensor()
         board_size = int(board_tensor.shape[-1])
         root = MCTSNode(root_state, board_size)
         
         # Expand root if not terminal
-        if not root.is_terminal and not root.is_expanded:
+        if expand_root and not root.is_terminal and not root.is_expanded:
             self._expand_root_node(root, board_size)
         
         # Apply root noise if configured (every move for standard AlphaZero behavior)
-        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
+        if expand_root and self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
             self._apply_root_noise(root)
         
         return root
@@ -1336,14 +1324,39 @@ class BaselineMCTS:
 
     def _check_algorithm_termination(self, root: MCTSNode, verbose: int) -> Optional[AlgorithmTerminationInfo]:
         """Check if MCTS should terminate early."""
-        board_size = int(root.state.get_board_tensor().shape[-1])
-        
         # Single call with root_is_expanded flag - handles both terminal moves and confidence checking
         termination_info = self.algorithm_termination_checker.should_terminate_early(
-            root, board_size, verbose, self.eval_cache, root_is_expanded=root.is_expanded
+            root, verbose, self.eval_cache, root_is_expanded=root.is_expanded
         )
         
         return termination_info
+
+    def _build_algorithm_termination_result(
+        self,
+        root: MCTSNode,
+        termination_info: AlgorithmTerminationInfo,
+        verbose: int
+    ) -> MCTSResult:
+        """Build a complete MCTSResult for algorithm-termination exits."""
+        move = self._get_algorithm_termination_move(root, termination_info, verbose)
+        tree_data = self.get_tree_data(root)
+        win_probability = termination_info.win_prob
+
+        # Attach metrics for algorithm termination cases too.
+        stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
+        stats["unique_evals_total"] = int(self._unique_evals_total)
+        stats["effective_sims_total"] = int(self._effective_sims_total)
+        stats["unique_evals_per_sec"] = 0.0
+        stats["effective_sims_per_sec"] = 0.0
+
+        return MCTSResult(
+            move=move,
+            stats=stats,
+            tree_data=tree_data,
+            root_node=root,
+            algorithm_termination_info=termination_info,
+            win_probability=win_probability
+        )
 
     def _run_simulation_loop(self, root: MCTSNode, verbose: int) -> Dict[str, Any]:
         """Run the main MCTS simulation loop with batching."""
@@ -1425,6 +1438,8 @@ class BaselineMCTS:
             self._used_gumbel_root_selection = True
             if verbose >= 4:
                 print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
+            timing_tracker.end_timing("gumbel_algorithm")
+            timing_tracker.end_timing("gumbel_selection")
             return timing_tracker.get_final_stats()
         
         # Create helper functions for Q and N value access
@@ -1807,15 +1822,13 @@ class BaselineMCTS:
                 # Choose child
                 # First check for Gumbel-specific forced action
                 if node is root and forced_a_full is not None:
-                    # Map full action index -> local child idx
-                    # (legal_indices aligns with stats arrays)
-                    try:
-                        # Fast path: vectorized search
-                        li = np.asarray(node.legal_indices)
-                        loc_idx = int(np.where(li == forced_a_full)[0][0])
-                    except Exception:
-                        # Fallback if forced action is illegal: normal PUCT
-                        loc_idx = self._select_child_puct(node, node.depth)
+                    # Map full action index -> local child idx (legal_indices aligns with stats arrays).
+                    if forced_a_full not in node.legal_indices:
+                        raise ValueError(
+                            f"Gumbel forced illegal root action {forced_a_full}; "
+                            f"legal actions count={len(node.legal_indices)}"
+                        )
+                    loc_idx = node.legal_indices.index(forced_a_full)
                 else:
                     # Non-Gumbel code path with root reservation logic
                     if node is root and use_root_reservation:
@@ -2288,7 +2301,7 @@ class BaselineMCTS:
         
         # Detect terminal moves if enabled and appropriate
         if self.cfg.enable_terminal_move_detection:
-            self.terminal_detector.detect_terminal_moves(node, int(node.state.get_board_tensor().shape[-1]))
+            self.terminal_detector.detect_terminal_moves(node)
         
         # If configured, force-pick an immediate terminal win regardless of N_sum
         if (self.cfg.enable_terminal_move_detection 
@@ -2504,9 +2517,9 @@ def create_mcts_config(
     # Override with any additional kwargs
     config_params.update(kwargs)
     
-    # Add common parameters that are the same across all presets
-    # Only set defaults for parameters that weren't provided in kwargs
-    common_params = {
+    # Add common defaults across presets, but do not clobber explicit overrides.
+    default_params = {
+        "c_puct": DEFAULT_C_PUCT,
         "batch_cap": DEFAULT_BATCH_CAP,
         "dirichlet_alpha": DEFAULT_MCTS_DIRICHLET_ALPHA,
         "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
@@ -2537,23 +2550,23 @@ def create_mcts_config(
         "enable_low_distinct_ratio_flush": False,  # Disabled to maintain consistent batch sizes
     }
     
-    # Only set parameters if not already provided in kwargs
-    if "c_puct" not in config_params:
-        common_params["c_puct"] = DEFAULT_C_PUCT
-    if "dirichlet_alpha" not in config_params:
-        common_params["dirichlet_alpha"] = DEFAULT_MCTS_DIRICHLET_ALPHA
-    if "dirichlet_eps" not in config_params:
-        common_params["dirichlet_eps"] = DEFAULT_DIRICHLET_EPS
-    
-    config_params.update(common_params)
+    explicit_distinct_target = "distinct_target" in config_params
+    for key, value in default_params.items():
+        config_params.setdefault(key, value)
+
+    # Preserve explicit overrides, but keep default distinct_target compatible with custom batch_cap.
+    if not explicit_distinct_target:
+        config_params["distinct_target"] = min(int(config_params["distinct_target"]), int(config_params["batch_cap"]))
     
     return BaselineMCTSConfig(**config_params)
 
 
 
 
-def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
+def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: BaselineMCTSConfig, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
     """Run MCTS for one move and return (row,col), stats, tree_data, algorithm_termination_info."""
+    if cfg is None:
+        raise ValueError("cfg must be provided")
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
     return result.move, result.stats, result.tree_data, result.algorithm_termination_info
