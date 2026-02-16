@@ -1269,31 +1269,36 @@ class BaselineMCTS:
         """Run the main MCTS simulation loop with batching."""
         timing_tracker = MCTSTimingTracker()
         sims_remaining = self.cfg.sims
-        
-        # Check if we should use Gumbel-AlphaZero root selection
-        use_gumbel = (self.cfg.enable_gumbel_root_selection and 
-                     sims_remaining <= self.cfg.gumbel_sim_threshold and
-                     root.is_expanded and not root.is_terminal)
-        
-        # DEBUG: Print Gumbel decision
-        # print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
-        
-        if use_gumbel:
+
+        if self._should_use_gumbel_root_selection(root, sims_remaining):
             if verbose >= 5:
                 print(f"Using Gumbel-AlphaZero root selection for {sims_remaining} simulations")
             return self._run_gumbel_root_selection(root, sims_remaining, timing_tracker, verbose)
-        
-        # Standard MCTS simulation loop
+
+        self._run_standard_simulation_loop(root, sims_remaining, timing_tracker)
+        return timing_tracker.get_final_stats()
+
+    def _should_use_gumbel_root_selection(self, root: MCTSNode, sims_remaining: int) -> bool:
+        """Return whether search should route through Gumbel-AlphaZero root selection."""
+        return (
+            self.cfg.enable_gumbel_root_selection
+            and sims_remaining <= self.cfg.gumbel_sim_threshold
+            and root.is_expanded
+            and not root.is_terminal
+        )
+
+    def _run_standard_simulation_loop(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        timing_tracker: MCTSTimingTracker,
+    ) -> None:
+        """Execute the default batched select/eval/backprop loop."""
         while sims_remaining > 0:
-            # Select leaves for this batch
             leaves, paths = self._select_leaves_batch(root, sims_remaining, timing_tracker)
-            
-            # Process leaves (expand and backpropagate)
             batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker, root)
             sims_remaining -= batch_simulations
             self._effective_sims_total += batch_simulations
-        
-        return timing_tracker.get_final_stats()
 
     def _validate_run_inputs(self, root_state: HexGameState, verbose: int) -> None:
         """Validate top-level MCTS run arguments."""
@@ -2041,6 +2046,86 @@ class BaselineMCTS:
 
         return simulations_completed
 
+    def _leaf_requires_evaluation(self, leaf: MCTSNode) -> bool:
+        """Return whether a leaf still requires NN evaluation for expansion."""
+        return not leaf.is_terminal and not leaf.is_expanded
+
+    def _lookup_leaf_cache_timed(
+        self,
+        leaf: MCTSNode,
+        timing_tracker: MCTSTimingTracker
+    ) -> Optional[Tuple[np.ndarray, float]]:
+        """Lookup leaf evaluation in cache with timing instrumentation."""
+        timing_tracker.start_timing("cache_lookup")
+        cached = self._get_from_cache(leaf.state_hash)
+        timing_tracker.end_timing("cache_lookup")
+        return cached
+
+    def _record_nn_eval_start_if_needed(
+        self,
+        leaves: List[MCTSNode],
+        need_eval_idxs: List[int],
+        encodings: List[torch.Tensor]
+    ) -> None:
+        """Record NN evaluation start event for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        cache_hits_in_batch = 0
+        for leaf_idx in need_eval_idxs:
+            if leaves[leaf_idx].state_hash in self.eval_cache:
+                cache_hits_in_batch += 1
+
+        self._record_nn_eval_start(
+            len(leaves), len(need_eval_idxs), len(encodings), cache_hits_in_batch
+        )
+
+    def _record_nn_eval_done_if_needed(
+        self,
+        policy_cpu: torch.Tensor,
+        value_cpu: torch.Tensor,
+        tm: Dict[str, Any],
+        effective_batch_size: int
+    ) -> None:
+        """Record NN evaluation completion event for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        values = [float(v.item()) for v in value_cpu]
+        value_range = [min(values), max(values)]
+
+        mean_entropy = 0.0
+        if len(policy_cpu) > 0:
+            entropies = []
+            for pol in policy_cpu:
+                pol_np = pol.numpy()
+                pol_probs = softmax_np(pol_np)
+                entropy = -np.sum(pol_probs * np.log(pol_probs + 1e-8))
+                entropies.append(entropy)
+            mean_entropy = float(np.mean(entropies))
+
+        time_ms = tm.get("forward_ms", 0.0)
+        self._record_nn_eval_done(
+            effective_batch_size, value_range, mean_entropy, time_ms
+        )
+
+    def _cache_and_expand_evaluated_leaves(
+        self,
+        policy_cpu: torch.Tensor,
+        value_cpu: torch.Tensor,
+        need_eval_idxs: List[int],
+        leaves: List[MCTSNode],
+        board_size: int,
+        action_size: int
+    ) -> None:
+        """Write NN outputs to cache and expand corresponding leaves."""
+        for j, leaf_idx in enumerate(need_eval_idxs):
+            leaf = leaves[leaf_idx]
+            policy_np = policy_cpu[j].numpy()
+            value_signed = float(value_cpu[j].item())
+            self._put_in_cache(leaf.state_hash, policy_np, value_signed)
+            self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
+
     def _prepare_leaf_evaluations(
         self,
         leaves: List[MCTSNode],
@@ -2063,14 +2148,10 @@ class BaselineMCTS:
         seen_uncached: Set[int] = set()
 
         for i, leaf in enumerate(leaves):
-            # Skip leaves that don't need eval
-            if leaf.is_terminal or leaf.is_expanded:
+            if not self._leaf_requires_evaluation(leaf):
                 continue
 
-            # Cached?
-            timing_tracker.start_timing("cache_lookup")
-            cached = self._get_from_cache(leaf.state_hash)
-            timing_tracker.end_timing("cache_lookup")
+            cached = self._lookup_leaf_cache_timed(leaf, timing_tracker)
 
             if cached is not None:
                 self.cache_hits += 1
@@ -2078,15 +2159,12 @@ class BaselineMCTS:
                 cached_expansions.append((i, policy_np, value_signed))
                 continue
 
-            # Uncached → only encode the first occurrence of this state in the batch
             if leaf.state_hash in seen_uncached:
-                # Another copy will piggy-back on the first result via eval_cache.
                 continue
             seen_uncached.add(leaf.state_hash)
 
             self.cache_misses += 1
-            enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
-            encodings.append(enc)
+            encodings.append(leaf.state.get_board_tensor().to(dtype=torch.float32))
             need_eval_idxs.append(i)
 
         timing_tracker.end_timing("encode")
@@ -2098,19 +2176,9 @@ class BaselineMCTS:
         """Run neural network inference on a batch of leaves."""
         if not encodings:
             return
-        
-        # Record NN eval start for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Calculate cache hits for this batch
-            cache_hits_in_batch = 0
-            for leaf_idx in need_eval_idxs:
-                if leaves[leaf_idx].state_hash in self.eval_cache:
-                    cache_hits_in_batch += 1
-            
-            self._record_nn_eval_start(
-                len(leaves), len(need_eval_idxs), len(encodings), cache_hits_in_batch
-            )
-        
+
+        self._record_nn_eval_start_if_needed(leaves, need_eval_idxs, encodings)
+
         batch_tensor = torch.stack(encodings, dim=0)
         board_size = int(batch_tensor.shape[-1])
         action_size = board_size * board_size
@@ -2121,41 +2189,22 @@ class BaselineMCTS:
         # Record performance metrics
         self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
         timing_tracker.record_batch_metrics(tm)
-        
-        # Record NN eval done for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Calculate value range and policy entropy
-            values = [float(v.item()) for v in value_cpu]
-            value_range = [min(values), max(values)]
-            
-            # Calculate mean policy entropy
-            mean_entropy = 0.0
-            if len(policy_cpu) > 0:
-                entropies = []
-                for pol in policy_cpu:
-                    pol_np = pol.numpy()
-                    # Convert to probabilities and calculate entropy
-                    pol_probs = softmax_np(pol_np)
-                    entropy = -np.sum(pol_probs * np.log(pol_probs + 1e-8))
-                    entropies.append(entropy)
-                mean_entropy = float(np.mean(entropies))
-            
-            # Get inference time
-            time_ms = tm.get("forward_ms", 0.0)
-            
-            self._record_nn_eval_done(
-                len(need_eval_idxs), value_range, mean_entropy, time_ms
-            )
-        
-        # Cache results and expand nodes
-        for j, leaf_idx in enumerate(need_eval_idxs):
-            leaf = leaves[leaf_idx]
-            pol = policy_cpu[j].numpy()
-            val_signed = float(value_cpu[j].item())  # tanh-activated output in [-1,1] range
-            
-            # Cache CPU-native results
-            self._put_in_cache(leaf.state_hash, pol, val_signed)
-            self._expand_node_from_policy(leaf, pol, board_size, action_size)
+
+        self._record_nn_eval_done_if_needed(
+            policy_cpu=policy_cpu,
+            value_cpu=value_cpu,
+            tm=tm,
+            effective_batch_size=len(need_eval_idxs),
+        )
+
+        self._cache_and_expand_evaluated_leaves(
+            policy_cpu=policy_cpu,
+            value_cpu=value_cpu,
+            need_eval_idxs=need_eval_idxs,
+            leaves=leaves,
+            board_size=board_size,
+            action_size=action_size,
+        )
 
     def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
                             leaves: List[MCTSNode], timing_tracker: MCTSTimingTracker):
@@ -2181,42 +2230,47 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
-            # Increment simulation counter for detailed tracking
+            root_q_before = 0.0
             if self.detailed_exploration_enabled:
                 self.simulation_count += 1
-            
-            # Record backprop update for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root Q before backprop
-                root = path[0][0] if path else None
-                root_q_before = 0.0
-                if root and root.is_expanded and len(root.Q) > 0:
-                    root_q_before = float(np.max(root.Q))
-            
-            # Determine signed value for this leaf (always in Red's reference frame: +1 = Red win, -1 = Blue win)
-            if leaf.is_terminal:
-                v_red_signed = self._get_terminal_value(leaf)
-            else:
-                v_red_signed = self._get_neural_network_value(leaf)
-            
-            # Backpropagate Red's signed value along path (will be flipped to player-to-move reference frame during backprop)
+                root_q_before = self._capture_root_q_snapshot(path)
+
+            v_red_signed = self._leaf_value_signed_red_ref(leaf)
             self._backpropagate_path(path, v_red_signed, leaf.depth)
-            
-            # Record backprop update for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root Q after backprop
-                root_q_after = 0.0
-                if root and root.is_expanded and len(root.Q) > 0:
-                    root_q_after = float(np.max(root.Q))
-                
-                self._record_backprop_update(
-                    len(path), root_q_before, root_q_after
-                )
-            
+
+            self._record_backprop_update_if_needed(path, root_q_before)
             simulations_completed += 1
         
         timing_tracker.end_timing("backprop")
         return simulations_completed
+
+    def _leaf_value_signed_red_ref(self, leaf: MCTSNode) -> float:
+        """Return leaf value in Red's reference frame."""
+        if leaf.is_terminal:
+            return self._get_terminal_value(leaf)
+        return self._get_neural_network_value(leaf)
+
+    def _capture_root_q_snapshot(self, path: List[Tuple[MCTSNode, int]]) -> float:
+        """Capture root max-Q for detailed backprop traces."""
+        if not path:
+            return 0.0
+
+        root = path[0][0]
+        if root.is_expanded and len(root.Q) > 0:
+            return float(np.max(root.Q))
+        return 0.0
+
+    def _record_backprop_update_if_needed(
+        self,
+        path: List[Tuple[MCTSNode, int]],
+        root_q_before: float,
+    ) -> None:
+        """Record detailed backprop diagnostics when enabled."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        root_q_after = self._capture_root_q_snapshot(path)
+        self._record_backprop_update(len(path), root_q_before, root_q_after)
 
     def _get_terminal_value(self, leaf: MCTSNode) -> float:
         """Get signed value for a terminal leaf in Red's reference frame: +1 = Red win, -1 = Blue win."""
@@ -2277,52 +2331,73 @@ class BaselineMCTS:
         else:
             raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
 
-    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
-        """Compute the selected move from the root node."""
-        # Check if Gumbel selection was used and return the selected action
-        if getattr(self, "_used_gumbel_root_selection", False):
-            selected_action = self._gumbel_selected_action
-            if selected_action is None:
-                raise RuntimeError("Gumbel root selection marked as used, but no selected action was recorded.")
-            selected_move = root.legal_moves[selected_action]
-            if verbose >= 2:
-                print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
-            # For Gumbel selection, use policy probabilities (not temperature-scaled visit counts)
-            # since Gumbel doesn't use visit counts for selection
-            move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
-            return selected_move, move_probs
-        
-        # Check if a terminal move was found during pre-check
-        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
-            terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
-            if terminal_indices:
-                terminal_move = root.legal_moves[terminal_indices[0]]
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
-                # For terminal moves, create temperature-scaled probabilities from visit counts
-                move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
-                return terminal_move, move_probs
+    def _compute_move_from_gumbel_if_used(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Optional[Tuple[Tuple[int, int], Dict[str, float]]]:
+        """Return move/probs if Gumbel root selection already picked the move."""
+        if not getattr(self, "_used_gumbel_root_selection", False):
+            return None
 
-        # Use visit counts accumulated during run()
+        selected_action = self._gumbel_selected_action
+        if selected_action is None:
+            raise RuntimeError("Gumbel root selection marked as used, but no selected action was recorded.")
+
+        selected_move = root.legal_moves[selected_action]
+        if verbose >= 2:
+            print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
+
+        move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
+        return selected_move, move_probs
+
+    def _compute_move_from_terminal_detection_if_any(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Optional[Tuple[Tuple[int, int], Dict[str, float]]]:
+        """Return move/probs when a terminal root move has been pre-detected."""
+        if not self.cfg.enable_terminal_move_detection:
+            return None
+        if not any(root.terminal_moves):
+            return None
+
+        terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+        if not terminal_indices:
+            return None
+
+        terminal_move = root.legal_moves[terminal_indices[0]]
+        if verbose >= 2:
+            print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
+        move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
+        return terminal_move, move_probs
+
+    def _compute_move_from_visit_counts(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Tuple[Tuple[int, int], Dict[str, float]]:
+        """Select move from visit counts with configured temperature sampling."""
         counts = root.N.astype(np.float64)
         if counts.sum() <= 0:
             raise RuntimeError("No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
-        # Calculate temperature with decay using helper method
         move_count = len(root_state.move_history)
         temp = self._root_temperature(move_count)
-        
-        # Log effective temperature and top-k filtering if verbose
+
         if verbose >= 4:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
-        
-        # Create temperature-scaled probabilities from visit counts (for debugging/analysis)
+
         move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
-        
-        # Select move using the same logic as the utility function
         a_idx = select_move_index(counts, temp, self.cfg)
         return root.legal_moves[a_idx], move_probs
+
+    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
+        """Compute the selected move from the root node."""
+        gumbel_result = self._compute_move_from_gumbel_if_used(root, root_state, verbose)
+        if gumbel_result is not None:
+            return gumbel_result
+
+        terminal_result = self._compute_move_from_terminal_detection_if_any(root, root_state, verbose)
+        if terminal_result is not None:
+            return terminal_result
+
+        return self._compute_move_from_visit_counts(root, root_state, verbose)
 
 
     # ---------- Internal Implementation ----------
