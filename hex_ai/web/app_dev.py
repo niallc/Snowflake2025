@@ -25,10 +25,12 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
-    signed_to_prob,
 )
 from hex_ai.enums import Player, Piece
-from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
+from hex_ai.inference.mcts_utils import (
+    compute_win_probability_from_tree_data,
+    compute_best_child_win_probability_from_tree_data,
+)
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, FIXED_TREE_MAX_PRODUCT, FIXED_TREE_DEFAULT_WIDTH, FIXED_TREE_DEFAULT_TEMPERATURE
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
@@ -569,8 +571,8 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         
         # Get win probabilities using centralized utility
         root_win_prob = compute_win_probability_from_tree_data(tree_data)
-        best_child_signed_value = tree_data.get("v_ptm_ref_signed_best_child", 0.0)
-        best_child_win_prob = signed_to_prob(best_child_signed_value)
+        best_child_signed_value = tree_data["v_ptm_ref_signed_best_child"]
+        best_child_win_prob = compute_best_child_win_probability_from_tree_data(tree_data)
         
         # Handle algorithm termination win probability.
         # Contract: AlgorithmTerminationInfo exposes probability semantics in [0, 1].

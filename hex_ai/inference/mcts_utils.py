@@ -62,53 +62,87 @@ def _assert_matching_board_sizes(state_board_size: int, node_board_size: int) ->
             f"{state_board_size} vs {node_board_size}"
         )
 
-def compute_win_probability_from_tree_data(tree_data: dict) -> float:
-    """
-    Compute win probability for the current player based on tree data.
-    
-    Args:
-        tree_data: Dictionary containing MCTS tree analysis data
-        
-    Returns:
-        Win probability for current player (0.0 to 1.0)
-    """
+
+def _require_tree_data_signed_value(tree_data: dict, *, key: str) -> float:
+    """Require a signed tree-data field and normalize it to float in [-1, 1]."""
     if not isinstance(tree_data, dict):
         raise TypeError(f"tree_data must be dict, got {type(tree_data)}")
-    if "v_ptm_ref_signed_root" not in tree_data:
-        raise KeyError("tree_data missing required key 'v_ptm_ref_signed_root'")
+    if key not in tree_data:
+        raise KeyError(f"tree_data missing required key '{key}'")
 
-    v_ptm_ref_signed_root = tree_data["v_ptm_ref_signed_root"]
-    if isinstance(v_ptm_ref_signed_root, bool):
-        raise TypeError("tree_data['v_ptm_ref_signed_root'] must be numeric, got bool")
+    value = tree_data[key]
+    if isinstance(value, bool):
+        raise TypeError(f"tree_data['{key}'] must be numeric, got bool")
     try:
-        v_ptm_ref_signed_root = float(v_ptm_ref_signed_root)
+        value = float(value)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "tree_data['v_ptm_ref_signed_root'] must be numeric, "
-            f"got {type(tree_data['v_ptm_ref_signed_root'])}"
+            f"tree_data['{key}'] must be numeric, "
+            f"got {type(tree_data[key])}"
         ) from exc
-    if not math.isfinite(v_ptm_ref_signed_root):
+    if not math.isfinite(value):
         raise ValueError(
-            "tree_data['v_ptm_ref_signed_root'] must be finite, "
-            f"got {v_ptm_ref_signed_root}"
+            f"tree_data['{key}'] must be finite, "
+            f"got {value}"
         )
-    if not -1.0 <= v_ptm_ref_signed_root <= 1.0:
+    if not -1.0 <= value <= 1.0:
         raise ValueError(
-            "tree_data['v_ptm_ref_signed_root'] must be in [-1, 1], "
-            f"got {v_ptm_ref_signed_root}"
+            f"tree_data['{key}'] must be in [-1, 1], "
+            f"got {value}"
         )
-    
-    # Convert signed value to probability only at the edge (for external API)
-    # Root value is already in player-to-move reference frame from backpropagation
-    # +1 = current player wins, -1 = current player loses, 0 = neutral
+
+    return value
+
+
+def _signed_value_to_checked_probability(v_signed: float, *, source_key: str) -> float:
+    """Convert a validated signed value to probability and assert [0, 1] bounds."""
     from hex_ai.value_utils import signed_to_prob
-    p_ptm_prob_root = signed_to_prob(v_ptm_ref_signed_root)  # current player win probability
-    if not 0.0 <= p_ptm_prob_root <= 1.0:
+
+    p_prob = signed_to_prob(v_signed)
+    if not 0.0 <= p_prob <= 1.0:
         raise ValueError(
-            "Converted probability is outside [0, 1], "
-            f"got {p_ptm_prob_root} from signed value {v_ptm_ref_signed_root}"
+            f"Converted probability from tree_data['{source_key}'] is outside [0, 1], "
+            f"got {p_prob} from signed value {v_signed}"
         )
-    return p_ptm_prob_root
+    return p_prob
+
+
+def validate_required_win_probability_tree_data_fields(tree_data: dict) -> None:
+    """Fail fast if tree_data is missing required win-probability signed fields."""
+    _require_tree_data_signed_value(tree_data, key="v_ptm_ref_signed_root")
+    _require_tree_data_signed_value(tree_data, key="v_ptm_ref_signed_best_child")
+
+
+def compute_win_probability_from_tree_data(tree_data: dict) -> float:
+    """
+    Compute root win probability for the current player from required tree-data fields.
+
+    Required contract:
+        - tree_data["v_ptm_ref_signed_root"] exists
+        - value is numeric, finite, and in [-1, 1]
+    """
+    v_ptm_ref_signed_root = _require_tree_data_signed_value(
+        tree_data, key="v_ptm_ref_signed_root"
+    )
+    return _signed_value_to_checked_probability(
+        v_ptm_ref_signed_root, source_key="v_ptm_ref_signed_root"
+    )
+
+
+def compute_best_child_win_probability_from_tree_data(tree_data: dict) -> float:
+    """
+    Compute best-child win probability for the current player from required tree-data fields.
+
+    Required contract:
+        - tree_data["v_ptm_ref_signed_best_child"] exists
+        - value is numeric, finite, and in [-1, 1]
+    """
+    v_ptm_ref_signed_best_child = _require_tree_data_signed_value(
+        tree_data, key="v_ptm_ref_signed_best_child"
+    )
+    return _signed_value_to_checked_probability(
+        v_ptm_ref_signed_best_child, source_key="v_ptm_ref_signed_best_child"
+    )
 
 
 def extract_principal_variation_from_tree(root_node, max_length: int = 10) -> List[Tuple[int, int]]:
@@ -412,6 +446,9 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         "max_depth": max_depth,
         "principal_variation": principal_variation
     }
+
+    # Fail fast if required win-probability fields are missing or malformed.
+    validate_required_win_probability_tree_data_fields(result)
     
     # Add move probabilities if provided
     if move_probs is not None:

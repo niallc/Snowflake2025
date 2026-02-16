@@ -692,7 +692,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         """Build final result payload for a completed non-terminated MCTS search."""
         move, move_probs = self._compute_move(root, root_state, verbose)
         tree_data = self.get_tree_data(root, move_probs)
-        win_probability = self.get_win_probability(root, root_state)
+        win_probability = compute_win_probability_from_tree_data(tree_data)
 
         stats = self._get_stats_builder().create_final_stats(
             timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
