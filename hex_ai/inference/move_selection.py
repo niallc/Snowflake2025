@@ -27,7 +27,8 @@ from hex_ai.config import (
     DEFAULT_MCTS_DIRICHLET_EPS,
     DEFAULT_GUMBEL_C_VISIT,
     DEFAULT_GUMBEL_C_SCALE,
-    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
+    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
+    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
 
 @dataclass(frozen=True)
@@ -205,7 +206,8 @@ class MCTSStrategy(MoveSelectionStrategy):
         # Pass all parameters through create_mcts_config for consistency
         mcts_config = create_mcts_config("tournament",
             sims=config.mcts_sims,
-            confidence_termination_threshold=0.95,  # Conservative confidence termination for quality
+            # Keep tournament quality-oriented behavior while avoiding unnecessary slowdown.
+            confidence_termination_threshold=TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
             c_puct=config.mcts_c_puct,  # Pass the c_puct parameter from strategy config
             dirichlet_alpha=config.mcts_dirichlet_alpha,  # Pass the dirichlet_alpha parameter
             dirichlet_eps=config.mcts_dirichlet_eps,  # Pass the dirichlet_eps parameter

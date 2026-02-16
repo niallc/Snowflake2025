@@ -2300,6 +2300,33 @@ function formatActionDiveReplyRows(rows, maxRows = 6) {
   return output;
 }
 
+function formatPolicyStressSummary(stress) {
+  if (!stress || typeof stress !== 'object') return '  (no stress summary)\n';
+
+  const topCount = Number.isFinite(Number(stress.top_policy_count)) ? Number(stress.top_policy_count) : 0;
+  const visitedCount = Number.isFinite(Number(stress.top_policy_count_visited)) ? Number(stress.top_policy_count_visited) : 0;
+  const massVisited = formatFinite(stress.top_policy_prior_mass_visited, 4);
+  const massTotal = formatFinite(stress.top_policy_prior_mass, 4);
+  const massRatio = formatProbAsPercent(stress.top_policy_prior_mass_visited_ratio, 1);
+  const weighted = formatProbAsPercent(stress.weighted_value_head_root_win, 2);
+
+  let output = '';
+  output += `  Coverage (top-policy replies): visited=${visitedCount}/${topCount}, prior_mass=${massVisited}/${massTotal} (${massRatio})\n`;
+  output += `  Value-head weighted root win (top-policy set): ${weighted}\n`;
+
+  const worst = stress.worst_policy_reply;
+  if (worst && typeof worst === 'object') {
+    const move = worst.move || '?';
+    const visits = Number.isFinite(Number(worst.visits)) ? Number(worst.visits) : 0;
+    const prior = formatFinite(worst.prior, 4);
+    const rootWin = formatProbAsPercent(worst.root_win_prob, 2);
+    const visitedFlag = visits > 0 ? 'visited' : 'UNVISITED';
+    output += `  Worst top-policy reply by value-head: ${move} (${rootWin}, prior=${prior}, visits=${visits}, ${visitedFlag})\n`;
+  }
+
+  return output;
+}
+
 function renderGumbelDetailedTrace(detailedExploration, trace) {
   const gumbelEvents = trace.filter((step) => typeof step?.type === 'string' && step.type.startsWith('gumbel_'));
   if (gumbelEvents.length === 0) return null;
@@ -2377,6 +2404,8 @@ function renderGumbelDetailedTrace(detailedExploration, trace) {
         output += `Value after root move: ${formatValueSummaryInline(step.value_after_root)}\n`;
         output += `Replies explored: visited=${step.reply_count_visited}/${step.reply_count_total}\n`;
         if (step.note) output += `Note: ${step.note}\n`;
+        output += 'Stress check:\n';
+        output += formatPolicyStressSummary(step.policy_reply_stress);
 
         output += 'Top opponent replies by visits:\n';
         output += formatActionDiveReplyRows(step.top_replies_by_visits, 6);

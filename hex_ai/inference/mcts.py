@@ -1063,8 +1063,75 @@ class BaselineMCTS:
 
         event["reply_count_total"] = int(reply_count_total)
         event["reply_count_visited"] = int(len(visited_indices))
-        event["top_replies_by_visits"] = [build_reply_row(idx) for idx in visited_top]
-        event["top_replies_by_policy"] = [build_reply_row(idx) for idx in policy_top]
+        top_replies_by_visits = [build_reply_row(idx) for idx in visited_top]
+        top_replies_by_policy = [build_reply_row(idx) for idx in policy_top]
+        event["top_replies_by_visits"] = top_replies_by_visits
+        event["top_replies_by_policy"] = top_replies_by_policy
+
+        # Debug-only stress-check on the top policy replies:
+        # summarizes whether potentially dangerous unvisited responses exist.
+        policy_rows_for_stats: List[Dict[str, Any]] = []
+        for row in top_replies_by_policy:
+            prior_val = row.get("prior", None)
+            value_summary = row.get("value_after_reply", None)
+            root_win_prob = value_summary.get("root_win_prob", None) if isinstance(value_summary, dict) else None
+            if prior_val is None:
+                continue
+            try:
+                prior = float(prior_val)
+                if not np.isfinite(prior) or prior <= 0.0:
+                    continue
+            except Exception:
+                continue
+
+            if root_win_prob is not None:
+                try:
+                    root_win_prob = float(root_win_prob)
+                except Exception:
+                    root_win_prob = None
+
+            policy_rows_for_stats.append(
+                {
+                    "move": row.get("move", None),
+                    "visits": int(row.get("visits", 0)),
+                    "prior": prior,
+                    "root_win_prob": root_win_prob,
+                }
+            )
+
+        total_policy_mass = float(sum(item["prior"] for item in policy_rows_for_stats))
+        visited_policy_mass = float(sum(item["prior"] for item in policy_rows_for_stats if item["visits"] > 0))
+        policy_rows_with_value = [item for item in policy_rows_for_stats if item["root_win_prob"] is not None]
+
+        weighted_value_head_root_win = None
+        if policy_rows_with_value:
+            denom = float(sum(item["prior"] for item in policy_rows_with_value))
+            if denom > 1e-12:
+                weighted_value_head_root_win = float(
+                    sum(item["prior"] * float(item["root_win_prob"]) for item in policy_rows_with_value) / denom
+                )
+
+        worst_policy_reply = None
+        if policy_rows_with_value:
+            worst = min(policy_rows_with_value, key=lambda item: float(item["root_win_prob"]))
+            worst_policy_reply = {
+                "move": worst["move"],
+                "visits": int(worst["visits"]),
+                "prior": float(worst["prior"]),
+                "root_win_prob": float(worst["root_win_prob"]),
+            }
+
+        event["policy_reply_stress"] = {
+            "top_policy_count": int(len(policy_rows_for_stats)),
+            "top_policy_count_visited": int(sum(1 for item in policy_rows_for_stats if item["visits"] > 0)),
+            "top_policy_prior_mass": total_policy_mass,
+            "top_policy_prior_mass_visited": visited_policy_mass,
+            "top_policy_prior_mass_visited_ratio": (
+                float(visited_policy_mass / total_policy_mass) if total_policy_mass > 1e-12 else None
+            ),
+            "weighted_value_head_root_win": weighted_value_head_root_win,
+            "worst_policy_reply": worst_policy_reply,
+        }
         event["note"] = (
             "Reply Q values are from opponent perspective at depth-1 child (q_opp_ptm_signed). "
             "q_root_ref_signed flips sign to root perspective. "

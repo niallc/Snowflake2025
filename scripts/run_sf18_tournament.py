@@ -37,33 +37,23 @@ Examples:
 """
 
 import argparse
-import itertools
 import json
 import logging
 import os
-import random
 import sys
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
-import numpy as np
-
-from hex_ai.config import (
-    BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
-)
+from hex_ai.config import BOARD_SIZE, TRMPH_PREFIX
 from hex_ai.enums import Player, Winner
-from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
+from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
-from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
-from hex_ai.utils.format_conversion import (
-    rowcol_to_trmph, trmph_to_moves
-)
-from hex_ai.data_processing import parse_trmph_line_flexible
+from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.deterministic_tournament_utils import (
@@ -71,20 +61,15 @@ from hex_ai.utils.deterministic_tournament_utils import (
     save_opening_positions,
     setup_strategy_pair_files,
     create_play_config_for_pair,
-    GameDuplicateTracker,
-    play_strategy_pair_games,
-    report_strategy_pair_results
 )
 from hex_ai.utils.random_utils import set_deterministic_seeds
-from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
-    play_deterministic_game,
-    extract_openings_from_trmph_file,
+    OpeningPosition,
     find_trmph_files,
     generate_diverse_openings,
-    run_round_robin_tournament,
-    DeterministicTournamentResult
+    load_openings_from_file,
+    select_random_openings,
 )
 
 # Configure logging
@@ -99,38 +84,7 @@ DEFAULT_VERBOSE = 1
 DEFAULT_SF18_DIFFICULTY = 9
 DEFAULT_SF18_SERVER_URL = "http://localhost:8088"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
-TRMPH_FILE_PATTERN = "*.trmph"
 OUTPUT_DIR_PREFIX = "data/tournament_play/sf18_vs_sf25/sf18_tournament_"
-
-
-class OpeningPosition:
-    """Represents an opening position with moves and metadata."""
-    
-    def __init__(self, moves: List[Tuple[int, int]], source_game: str = "", 
-                 opening_length: int = DEFAULT_OPENING_LENGTH):
-        self.moves = moves
-        self.source_game = source_game
-        self.opening_length = opening_length
-    
-    def get_state(self, board_size: int = BOARD_SIZE) -> HexGameState:
-        """Create a game state from this opening position."""
-        # Initialize empty board
-        board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
-        state = HexGameState(board=board, _current_player=Player.BLUE)
-        
-        # Apply the opening moves
-        for row, col in self.moves:
-            state = apply_move_to_state(state, row, col)
-        
-        return state
-    
-    def get_trmph_string(self, board_size: int = BOARD_SIZE) -> str:
-        """Get TRMPH representation of the opening moves."""
-        trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in self.moves])
-        return f"{TRMPH_PREFIX}{trmph_moves}"
-    
-    def __str__(self) -> str:
-        return f"Opening({len(self.moves)} moves from {self.source_game})"
 
 
 class SF18TournamentResult:
@@ -289,93 +243,6 @@ class SF18TournamentResult:
                     print()
         
         print("="*60)
-
-
-def load_openings_from_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH) -> List[OpeningPosition]:
-    """
-    Load opening positions from a file.
-    
-    Expected format: One TRMPH string per line, optionally with winner indicator.
-    Examples:
-        #13,a1b2c3d4e5f6g7
-        #13,a1b2c3d4e5f6g7 b
-        #13,a1b2c3d4e5f6g7 r
-    
-    Args:
-        file_path: Path to file containing opening positions
-        opening_length: Number of moves per opening (will truncate if longer)
-    
-    Returns:
-        List of OpeningPosition objects
-    
-    Raises:
-        ValueError: If file format is invalid or moves are malformed
-    """
-    openings = []
-    
-    with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            # Parse TRMPH string
-            try:
-                # Extract moves (remove winner indicator if present)
-                if line.endswith(f' {TRMPH_BLUE_WIN}') or line.endswith(f' {TRMPH_RED_WIN}'):
-                    moves_str = line[:-2]
-                else:
-                    moves_str = line
-                
-                # Validate TRMPH format
-                if not moves_str.startswith(TRMPH_PREFIX):
-                    raise ValueError(f"Line {line_num}: Expected TRMPH format starting with '{TRMPH_PREFIX}'")
-                
-                # Parse moves using centralized utility
-                moves = trmph_to_moves(moves_str, BOARD_SIZE)
-                
-                # Truncate to opening length if necessary
-                if len(moves) >= opening_length:
-                    opening_moves = moves[:opening_length]
-                    source_game = f"{os.path.basename(file_path)}:line{line_num}"
-                    openings.append(OpeningPosition(opening_moves, source_game, opening_length))
-                else:
-                    logger.warning(f"Line {line_num} has only {len(moves)} moves, need {opening_length}")
-                
-            except Exception as e:
-                raise ValueError(f"Error parsing line {line_num} in {file_path}: {e}")
-    
-    if not openings:
-        raise ValueError(f"No valid openings found in {file_path}")
-    
-    return openings
-
-
-def select_random_openings(openings: List[OpeningPosition], num_openings: int, seed: Optional[int] = None) -> List[OpeningPosition]:
-    """
-    Randomly select a subset of unique openings from the available pool.
-    
-    Args:
-        openings: List of all available opening positions (assumed to be unique)
-        num_openings: Number of openings to select
-        seed: Optional random seed for reproducible selection
-    
-    Returns:
-        List of randomly selected unique OpeningPosition objects
-    """
-    if seed is not None:
-        random.seed(seed)
-    
-    if num_openings >= len(openings):
-        logger.info(f"Requested {num_openings} openings, returning all {len(openings)} available")
-        return openings.copy()
-    
-    # Randomly sample without replacement
-    selected_indices = random.sample(range(len(openings)), num_openings)
-    selected_openings = [openings[i] for i in selected_indices]
-    
-    logger.info(f"Randomly selected {len(selected_openings)} unique openings from pool of {len(openings)}")
-    return selected_openings
 
 
 def play_sf18_vs_sf25_game(

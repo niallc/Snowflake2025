@@ -50,56 +50,27 @@ Examples:
 """
 
 import argparse
-import glob
-import itertools
 import json
 import logging
 import os
-import random
 import sys
 import time
-from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
-import numpy as np
-
 from hex_ai.memory_profiler import start_profiling, stop_profiling
-from hex_ai.config import (
-    BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
-)
-from hex_ai.enums import Player
-from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
-from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
-from hex_ai.utils.gumbel_validation import validate_gumbel_configurations, print_gumbel_warnings, check_gumbel_configurations
-from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
-from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT, DEFAULT_GUMBEL_C_SCALE
-from hex_ai.utils.format_conversion import (
-    rowcol_to_trmph, trmph_to_moves
-)
-from hex_ai.data_processing import parse_trmph_line_flexible
-from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
-from hex_ai.utils.tournament_utils import parse_tournament_parameters, extract_model_name_from_label
-from hex_ai.utils.deterministic_tournament_utils import (
-    setup_tournament_output,
-    save_opening_positions,
-    setup_strategy_pair_files,
-    create_play_config_for_pair,
-    GameDuplicateTracker,
-    play_strategy_pair_games,
-    report_strategy_pair_results
-)
+from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
+from hex_ai.utils.gumbel_validation import check_gumbel_configurations
+from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
+from hex_ai.utils.tournament_logging import get_command_line
+from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.random_utils import set_deterministic_seeds
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
-from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
-    play_deterministic_game,
-    extract_openings_from_trmph_file,
     find_trmph_files,
     generate_diverse_openings,
-    run_round_robin_tournament,
-    DeterministicTournamentResult
+    load_openings_from_file,
+    select_random_openings,
 )
 from hex_ai.inference.two_stage_tournament import TwoStageTournament
 from hex_ai.inference.knockout_tournament import TournamentParticipant
@@ -142,162 +113,10 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_SEED = None  # Will be set to int(time.time()) if None
 DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
-TRMPH_FILE_PATTERN = "*.trmph"
-OUTPUT_DIR_PREFIX = "data/tournament_play/tournament_"
 
 # TODO: Consider adding configuration for:
 # Low priority: Timeout handling for long-running strategies
 # Low priority: Progress saving/resume functionality for interrupted tournaments
-
-
-# DeterministicTournamentResult moved to hex_ai.inference.game_execution
-
-
-class OpeningPosition:
-    """Represents an opening position with moves and metadata."""
-    
-    def __init__(self, moves: List[Tuple[int, int]], source_game: str = "", 
-                 opening_length: int = DEFAULT_OPENING_LENGTH):
-        self.moves = moves
-        self.source_game = source_game
-        self.opening_length = opening_length
-    
-    def get_state(self, board_size: int = BOARD_SIZE) -> HexGameState:
-        """Create a game state from this opening position."""
-        # Initialize empty board
-        board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
-        state = HexGameState(board=board, _current_player=Player.BLUE)
-        
-        # Apply the opening moves
-        for row, col in self.moves:
-            state = apply_move_to_state(state, row, col)
-        
-        return state
-    
-    def get_trmph_string(self, board_size: int = BOARD_SIZE) -> str:
-        """Get TRMPH representation of the opening moves."""
-        trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in self.moves])
-        return f"{TRMPH_PREFIX}{trmph_moves}"
-    
-    def __str__(self) -> str:
-        return f"Opening({len(self.moves)} moves from {self.source_game})"
-
-
-def get_move_config_for_strategy(strategy_config: StrategyConfig, global_temperature: float = DEFAULT_TEMPERATURE) -> MoveSelectionConfig:
-    """Create a MoveSelectionConfig for a strategy with specified temperature."""
-    config_dict = strategy_config.config.copy()
-    # Use strategy-specific temperature if available, otherwise use global temperature
-    temperature = strategy_config.temperature if strategy_config.temperature is not None else global_temperature
-    config_dict['temperature'] = temperature
-    return MoveSelectionConfig(**config_dict)
-
-
-# extract_openings_from_trmph_file function moved to hex_ai.inference.game_execution
-
-
-def load_openings_from_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH) -> List[OpeningPosition]:
-    """
-    Load opening positions from a file.
-    
-    Expected format: One TRMPH string per line, optionally with winner indicator.
-    Examples:
-        #13,a1b2c3d4e5f6g7
-        #13,a1b2c3d4e5f6g7 b
-        #13,a1b2c3d4e5f6g7 r
-    
-    Args:
-        file_path: Path to file containing opening positions
-        opening_length: Number of moves per opening (will truncate if longer)
-    
-    Returns:
-        List of OpeningPosition objects
-    
-    Raises:
-        ValueError: If file format is invalid or moves are malformed
-    """
-    openings = []
-    
-    with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            # Parse TRMPH string
-            try:
-                # Extract moves (remove winner indicator if present)
-                if line.endswith(f' {TRMPH_BLUE_WIN}') or line.endswith(f' {TRMPH_RED_WIN}'):
-                    moves_str = line[:-2]
-                else:
-                    moves_str = line
-                
-                # Validate TRMPH format
-                if not moves_str.startswith(TRMPH_PREFIX):
-                    raise ValueError(f"Line {line_num}: Expected TRMPH format starting with '{TRMPH_PREFIX}'")
-                
-                # Parse moves using centralized utility
-                moves = trmph_to_moves(moves_str, BOARD_SIZE)
-                
-                # Truncate to opening length if necessary
-                if len(moves) >= opening_length:
-                    opening_moves = moves[:opening_length]
-                    source_game = f"{os.path.basename(file_path)}:line{line_num}"
-                    openings.append(OpeningPosition(opening_moves, source_game, opening_length))
-                else:
-                    logger.warning(f"Line {line_num} has only {len(moves)} moves, need {opening_length}")
-                
-            except Exception as e:
-                raise ValueError(f"Error parsing line {line_num} in {file_path}: {e}")
-    
-    if not openings:
-        raise ValueError(f"No valid openings found in {file_path}")
-    
-    return openings
-
-
-# find_trmph_files function moved to hex_ai.inference.game_execution
-
-
-# generate_diverse_openings function moved to hex_ai.inference.game_execution
-
-
-def select_random_openings(openings: List[OpeningPosition], num_openings: int, seed: Optional[int] = None) -> List[OpeningPosition]:
-    """
-    Randomly select a subset of unique openings from the available pool.
-    
-    This function ensures that different tournament runs can use different
-    opening sets while maintaining deterministic gameplay within each run.
-    It also maintains the uniqueness property of the original code.
-    
-    Args:
-        openings: List of all available opening positions (assumed to be unique)
-        num_openings: Number of openings to select
-        seed: Optional random seed for reproducible selection
-    
-    Returns:
-        List of randomly selected unique OpeningPosition objects
-    """
-    if seed is not None:
-        random.seed(seed)
-    
-    if num_openings >= len(openings):
-        # If we need all or more openings than available, return all
-        logger.info(f"Requested {num_openings} openings, returning all {len(openings)} available")
-        return openings.copy()
-    
-    # Randomly sample without replacement - this maintains uniqueness
-    # since the input openings are already unique and we're sampling without replacement
-    selected_indices = random.sample(range(len(openings)), num_openings)
-    selected_openings = [openings[i] for i in selected_indices]
-    
-    logger.info(f"Randomly selected {len(selected_openings)} unique openings from pool of {len(openings)}")
-    return selected_openings
-
-
-# play_deterministic_game function moved to hex_ai.inference.game_execution
-
-
-# run_round_robin_tournament moved to hex_ai.inference.game_execution
 
 
 def parse_args():
@@ -338,7 +157,7 @@ Examples:
     parser.add_argument('--strategies', type=str,
                        help='Comma-separated list of strategies to compare (e.g., "mcts,policy"). Required for traditional tournaments, optional for knockout-only tournaments.')
     parser.add_argument('--num-openings', type=int, default=DEFAULT_NUM_OPENINGS,
-                       help=f'Number of opening positions to generate (default: {DEFAULT_NUM_OPENINGS})')
+                       help=f'Deprecated alias for --round-robin-games (default: {DEFAULT_NUM_OPENINGS})')
     parser.add_argument('--opening-length', type=int, default=DEFAULT_OPENING_LENGTH,
                        help=f'Number of moves per opening (default: {DEFAULT_OPENING_LENGTH})')
     parser.add_argument('--opening-file', type=str,
@@ -393,8 +212,8 @@ Examples:
                        help='Number of games per knockout match (default: 50)')
     parser.add_argument('--top-k', type=int, default=2,
                        help='Number of winners from knockout stage to advance (default: 2)')
-    parser.add_argument('--round-robin-games', type=int, default=100,
-                       help='Number of games per round-robin match (default: 100)')
+    parser.add_argument('--round-robin-games', type=int, default=DEFAULT_NUM_OPENINGS,
+                       help='Number of openings per round-robin pair (actual games are doubled via color swap, default: 100)')
     parser.add_argument('--run-desc', type=str,
                        help='Description of this tournament run (e.g., "Testing c_scale = 1.5") - will be included in output headers')
 
@@ -598,7 +417,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_candidate_power_rates=gumbel_candidate_power_rates,
             gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             gumbel_c_scales=gumbel_c_scales,
-            num_games=args.num_openings,  # Use num_openings as num_games for deterministic tournaments
+            # Keep strategy config metadata aligned with actual round-robin execution.
+            num_games=args.round_robin_games,
             board_size=13,
             pie_rule=False  # Deterministic tournaments don't use pie rule
         )
@@ -824,7 +644,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     print(f"  Knockout config: {knockout_config}")
     print(f"  Games per match: {args.games_per_match}")
     print(f"  Top K: {args.top_k}")
-    print(f"  Round-robin games: {args.round_robin_games}")
+    print(f"  Round-robin openings per pair: {args.round_robin_games}")
+    print(f"  Round-robin games per pair (with color swap): {args.round_robin_games * 2}")
     print(f"  Round-robin participants: {len(round_robin_participants)}")
     print()
     
@@ -900,6 +721,22 @@ def main():
     if args.seed is None:
         args.seed = int(time.time())
         print(f"Auto-generated seed: {args.seed}")
+
+    # Backward compatibility: --num-openings is an alias for --round-robin-games.
+    if args.num_openings != DEFAULT_NUM_OPENINGS:
+        if args.round_robin_games == DEFAULT_NUM_OPENINGS:
+            args.round_robin_games = args.num_openings
+            print(
+                f"INFO: Interpreting --num-openings={args.num_openings} as "
+                f"--round-robin-games={args.round_robin_games}."
+            )
+        elif args.round_robin_games != args.num_openings:
+            print(
+                "ERROR: --num-openings and --round-robin-games disagree. "
+                f"Got --num-openings={args.num_openings}, "
+                f"--round-robin-games={args.round_robin_games}."
+            )
+            sys.exit(1)
     
     # Set random seed for reproducible opening selection
     set_deterministic_seeds(args.seed)
@@ -943,11 +780,10 @@ def main():
         # Check for Gumbel algorithm issues and print warnings
         check_gumbel_configurations(args, strategy_configs)
     
-    # Determine how many games to play
+    # Determine how many openings to play per pair.
     # Always use --round-robin-games for the unified tournament system
-    # If knockout_dir is provided, --round-robin-games is used for the round-robin stage
-    # If knockout_dir is None, --round-robin-games is used for the entire tournament
-    games_to_play = args.round_robin_games
+    # (legacy name retained for CLI compatibility).
+    openings_to_play = args.round_robin_games
     
     # Generate or load opening positions (skip for knockout-only tournaments)
     if is_knockout_only_tournament(args):
@@ -971,9 +807,9 @@ def main():
             sys.exit(1)
         
         # Generate diverse openings (generate more than needed to allow for random selection)
-        # target_generation = max(games_to_play * 2, 500)  # Generate at least 2x what we need
+        # target_generation = max(openings_to_play * 2, 500)  # Generate at least 2x what we need
         # TODO: Figure out whether we need to generate more that we're planning to use for anything.
-        target_generation = games_to_play
+        target_generation = openings_to_play
         all_openings = generate_diverse_openings(
             trmph_files, 
             opening_length=args.opening_length,
@@ -987,8 +823,8 @@ def main():
             sys.exit(1)
         
         # Randomly select the desired number of openings from the available pool
-        print(f"Randomly selecting {games_to_play} openings from pool of {len(all_openings)}...")
-        openings = select_random_openings(all_openings, games_to_play, seed=args.seed)
+        print(f"Randomly selecting {openings_to_play} openings from pool of {len(all_openings)}...")
+        openings = select_random_openings(all_openings, openings_to_play, seed=args.seed)
     
     # Print configuration using unified logging
     # Extract strategy names and Gumbel parameters
@@ -1034,7 +870,7 @@ def main():
             script_type="tournament",
             models=model_paths,
             strategies=strategy_names,
-            num_games=games_to_play,  # Use the determined number of games
+            num_games=openings_to_play * 2,  # Each opening is played twice with swapped colors.
             strategy_config={},  # Strategy configs are handled individually
             temperatures=args.temperatures if args.temperatures else args.temperature,
             pie_rule=False,  # Deterministic tournaments don't use pie rule
@@ -1060,6 +896,7 @@ def main():
     # Print additional deterministic tournament specific info
     if not is_knockout_only_tournament(args):
         print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
+        print(f"  Games per strategy pair (from openings): {len(openings) * 2}")
         print()
     
     # Optional: memory profiling (RSS + tracemalloc heap).

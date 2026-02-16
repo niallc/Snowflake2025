@@ -236,7 +236,8 @@ class TwoStageTournament:
         if len(all_participants) < 2:
             raise ValueError(f"Round-robin stage requires at least 2 participants, got {len(all_participants)}")
         
-        logger.info(f"Round-robin stage with {len(all_participants)} participants")
+        num_participants = len(all_participants)
+        logger.info(f"Round-robin stage with {num_participants} participants")
         
         # Convert participants to strategy configs
         strategy_configs = []
@@ -246,6 +247,17 @@ class TwoStageTournament:
         
         # Generate opening positions for round-robin stage
         openings = self._generate_round_robin_openings()
+        openings_per_pair = len(openings)
+        games_per_pair = openings_per_pair * 2  # Each opening is played twice with swapped colors.
+        num_pairs = (num_participants * (num_participants - 1)) // 2
+        total_games_planned = num_pairs * games_per_pair
+        logger.info(
+            "Round-robin schedule: %d pairs, %d openings per pair, %d games per pair, %d total games",
+            num_pairs,
+            openings_per_pair,
+            games_per_pair,
+            total_games_planned,
+        )
         
         # Run the round-robin tournament using existing infrastructure
         tournament_result = run_round_robin_tournament(
