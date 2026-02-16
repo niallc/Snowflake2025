@@ -68,7 +68,7 @@ from hex_ai.utils.format_conversion import (
     rowcol_to_tensor_with_size as move_to_index,
     rowcol_to_trmph,
 )
-from hex_ai.utils.temperature import calculate_temperature_decay
+from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
 from hex_ai.utils.timing import MCTSTimingTracker
@@ -740,16 +740,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         Returns:
             Temperature value for this move
         """
-        return calculate_temperature_decay(
-            temperature_start=self.cfg.temperature_start,
-            temperature_end=self.cfg.temperature_end,
-            temperature_decay_type=self.cfg.temperature_decay_type,
-            temperature_decay_moves=self.cfg.temperature_decay_moves,
-            temperature_step_thresholds=self.cfg.temperature_step_thresholds,
-            temperature_step_values=self.cfg.temperature_step_values,
-            move_count=move_idx,
-            board_size=board_size,
-        )
+        return calculate_mcts_root_temperature(move_count=move_idx, cfg=self.cfg, board_size=board_size)
 
     def _get_policy_logits_and_legal_mask(self, root_state: HexGameState, legal_indices: List[int]) -> Tuple[np.ndarray, np.ndarray]:
         """

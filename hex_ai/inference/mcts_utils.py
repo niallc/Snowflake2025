@@ -10,7 +10,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Any, Optional
 
 from hex_ai.utils.format_conversion import rowcol_to_trmph
-from hex_ai.utils.temperature import calculate_temperature_decay
+from hex_ai.utils.temperature import calculate_mcts_root_temperature
 
 # =============================
 # MCTS Tree Analysis Utilities
@@ -193,7 +193,7 @@ def should_enable_detailed_exploration(num_simulations: int) -> bool:
         num_simulations: Number of simulations to be performed
         
     Returns:
-        True if detailed exploration should be enabled (≤10 simulations)
+        True if detailed exploration should be enabled (<= threshold simulations)
     """
     return num_simulations <= DETAILED_EXPLORATION_THRESHOLD
 
@@ -456,8 +456,9 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     """
     Calculate temperature-scaled probabilities from visit counts (for PUCT mode).
     
-    This is the same logic used in MCTS move selection, extracted
-    into a reusable utility for debugging and analysis purposes.
+    This shares the same root-temperature schedule as MCTS move selection.
+    For very low temperatures, this returns normalized visit counts for
+    reporting while move selection itself is deterministic.
     
     Args:
         root_node: MCTS root node containing visit counts
@@ -476,15 +477,15 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     if total_visits <= 0:
         raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
     
-    # Calculate temperature with decay
+    # Use the canonical non-Gumbel root temperature helper.
     move_count = len(root_state.move_history)
-    temp = _calculate_root_temperature(move_count, cfg, board_size)
+    temp = calculate_mcts_root_temperature(move_count=move_count, cfg=cfg, board_size=board_size)
     
     if temp <= cfg.temperature_deterministic_cutoff:
-        # Deterministic selection - use raw visit counts
+        # Deterministic selection path - expose normalized visit counts for reporting
         probs = counts / total_visits
     else:
-        # Apply temperature scaling using the same logic as move selection
+        # Apply the same top-k filtering and temperature transform used in move sampling
         try:
             # Apply top-k filtering if configured
             if cfg.visit_sampling_top_k > 0 and len(counts) > cfg.visit_sampling_top_k:
@@ -499,10 +500,10 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
             if np.isfinite(pi).all() and np.sum(pi) > 0:
                 probs = pi / np.sum(pi)
             else:
-                # Fall back to raw probabilities
+                # Fall back to raw probabilities for stable reporting output.
                 probs = counts / total_visits
         except (OverflowError, ValueError):
-            # Fall back to raw probabilities
+            # Fall back to raw probabilities for stable reporting output.
             probs = counts / total_visits
     
     return _convert_moves_to_trmph_dict(root_node.legal_moves, probs, board_size)
@@ -581,21 +582,3 @@ def select_move_index(counts: np.ndarray, temp: float, cfg) -> int:
             # Fall back to deterministic selection if temperature scaling fails
             print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
             return int(np.argmax(counts))
-
-
-def _calculate_root_temperature(move_count: int, cfg, board_size: int) -> float:
-    """
-    Calculate the root temperature based on move count and configuration.
-    
-    This helper mirrors runtime move selection temperature semantics exactly.
-    """
-    return calculate_temperature_decay(
-        temperature_start=cfg.temperature_start,
-        temperature_end=cfg.temperature_end,
-        temperature_decay_type=cfg.temperature_decay_type,
-        temperature_decay_moves=cfg.temperature_decay_moves,
-        temperature_step_thresholds=cfg.temperature_step_thresholds,
-        temperature_step_values=cfg.temperature_step_values,
-        move_count=move_count,
-        board_size=board_size,
-    )

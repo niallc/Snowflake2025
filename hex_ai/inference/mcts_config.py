@@ -26,6 +26,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
+from hex_ai.utils.temperature import SUPPORTED_TEMPERATURE_DECAY_TYPES
 
 
 # Local MCTS config defaults (distinct from broader app/model defaults in hex_ai.config).
@@ -137,6 +138,11 @@ class BaselineMCTSConfig:
             )
         if self.temperature_decay_moves <= 0:
             raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
+        if self.temperature_decay_type not in SUPPORTED_TEMPERATURE_DECAY_TYPES:
+            raise ValueError(
+                f"temperature_decay_type must be one of {SUPPORTED_TEMPERATURE_DECAY_TYPES}, "
+                f"got {self.temperature_decay_type}"
+            )
         if self.terminal_move_boost < 0:
             raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
         if self.terminal_detection_max_depth < 0:

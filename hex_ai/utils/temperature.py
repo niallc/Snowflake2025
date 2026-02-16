@@ -2,7 +2,7 @@
 Temperature utility functions for the hex_ai library.
 """
 
-from typing import Optional
+from typing import Optional, Protocol
 
 
 def _require_positive_board_size(board_size: Optional[int], *, required: bool) -> Optional[int]:
@@ -21,6 +21,28 @@ def _require_positive_board_size(board_size: Optional[int], *, required: bool) -
     if size <= 0:
         raise ValueError(f"board_size must be positive, got {board_size}")
     return size
+
+
+SUPPORTED_TEMPERATURE_DECAY_TYPES = ("linear", "exponential", "step", "game_progress")
+
+
+class MCTSTemperatureConfig(Protocol):
+    """Protocol for MCTS configs that supply temperature-decay parameters."""
+    temperature_start: float
+    temperature_end: float
+    temperature_decay_type: str
+    temperature_decay_moves: int
+    temperature_step_thresholds: list[int]
+    temperature_step_values: list[float]
+
+
+def _validate_temperature_decay_type(temperature_decay_type: str) -> None:
+    """Fail fast on unsupported temperature decay modes."""
+    if temperature_decay_type not in SUPPORTED_TEMPERATURE_DECAY_TYPES:
+        raise ValueError(
+            f"Unsupported temperature_decay_type '{temperature_decay_type}'. "
+            f"Expected one of {SUPPORTED_TEMPERATURE_DECAY_TYPES}"
+        )
 
 
 def calculate_temperature_decay(
@@ -51,6 +73,8 @@ def calculate_temperature_decay(
     Returns:
         Current temperature value
     """
+    _validate_temperature_decay_type(temperature_decay_type)
+
     # Determine the starting temperature
     # Use override if provided, otherwise use temperature_start
     if start_temp_override is not None:
@@ -91,7 +115,26 @@ def calculate_temperature_decay(
         estimated_total_moves = resolved_board_size * resolved_board_size
         progress = min(move_count / max(1, estimated_total_moves), 1.0)
         return start_temp + (temperature_end - start_temp) * progress
-    
-    else:
-        # Unknown decay type, return starting temperature
-        return start_temp
+
+    raise RuntimeError(
+        f"Unhandled temperature_decay_type '{temperature_decay_type}' "
+        "after validation; this indicates a logic bug."
+    )
+
+
+def calculate_mcts_root_temperature(move_count: int, cfg: MCTSTemperatureConfig, board_size: int) -> float:
+    """
+    Canonical non-Gumbel MCTS root temperature calculation.
+
+    This is shared by root move selection and visit-probability reporting.
+    """
+    return calculate_temperature_decay(
+        temperature_start=cfg.temperature_start,
+        temperature_end=cfg.temperature_end,
+        temperature_decay_type=cfg.temperature_decay_type,
+        temperature_decay_moves=cfg.temperature_decay_moves,
+        temperature_step_thresholds=cfg.temperature_step_thresholds,
+        temperature_step_values=cfg.temperature_step_values,
+        move_count=move_count,
+        board_size=board_size,
+    )
