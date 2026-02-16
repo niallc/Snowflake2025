@@ -15,7 +15,10 @@ from datetime import datetime
 
 from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.inference.model_config import get_model_path
-from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
+from hex_ai.selfplay.selfplay_engine import (
+    DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+    SelfPlayEngine,
+)
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
 from hex_ai.utils.tournament_logging import get_command_line
@@ -96,6 +99,7 @@ def main():
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
+        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
         temperature_end=args.temperature_end,
         no_batched_inference=args.no_batched_inference,
         output_dir=args.output_dir
@@ -145,6 +149,7 @@ def main():
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
+        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
         command_line=command_line,
         mcts_profile=args.mcts_profile,
         mcts_profile_every=args.mcts_profile_every,

@@ -47,6 +47,7 @@ class ScriptConfig:
     default_checkpoint_dir: Optional[str] = None
     temperature_end: Optional[float] = None
     no_batched_inference: Optional[bool] = None
+    confidence_termination_threshold: Optional[Union[float, List[float], Dict[str, float]]] = None
 
 
 class ConfigurationPrinter:
@@ -98,6 +99,17 @@ class ConfigurationPrinter:
         # Print pie rule information (tournaments only)
         if config.script_type != "selfplay":
             print(f"  Pie rule: {config.pie_rule}")
+
+        # Print confidence-based early termination threshold
+        if config.confidence_termination_threshold is not None:
+            if isinstance(config.confidence_termination_threshold, dict):
+                print("  Early termination threshold (per participant):")
+                for name, threshold in config.confidence_termination_threshold.items():
+                    print(f"    {name}: {threshold}")
+            elif isinstance(config.confidence_termination_threshold, list):
+                print(f"  Early termination thresholds: {config.confidence_termination_threshold}")
+            else:
+                print(f"  Early termination threshold: {config.confidence_termination_threshold}")
         
         # Print Gumbel configuration summary
         if include_gumbel:
@@ -395,5 +407,6 @@ def create_script_config_from_args(
         output_dir=getattr(args, 'output_dir', None),
         checkpoint_dirs=getattr(args, 'checkpoint_dirs', None),
         default_checkpoint_dir=getattr(args, 'default_checkpoint_dir', None),
+        confidence_termination_threshold=getattr(args, 'confidence_termination_threshold', None),
         **kwargs
     )

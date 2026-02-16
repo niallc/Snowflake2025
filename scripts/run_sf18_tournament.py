@@ -45,14 +45,19 @@ import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
-from hex_ai.config import BOARD_SIZE, TRMPH_PREFIX
+from hex_ai.config import (
+    BOARD_SIZE,
+    DEFAULT_BATCH_CAP,
+    DEFAULT_C_PUCT,
+    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
+    TRMPH_PREFIX,
+)
 from hex_ai.enums import Player, Winner
 from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
-from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
@@ -824,11 +829,33 @@ def main():
     print(f"SF25 Models: {len(strategy_configs)}")
     for config in strategy_configs:
         print(f"  - {config.name}")
+    print("SF25 Strategy configurations:")
+    for config in strategy_configs:
+        details = [
+            f"type={config.strategy_type}",
+            f"temperature={config.temperature}",
+        ]
+        if config.strategy_type == "mcts":
+            details.append(f"sims={config.config.get('mcts_sims')}")
+            details.append(f"c_puct={config.config.get('mcts_c_puct')}")
+            details.append(f"batch_size={config.config.get('batch_size')}")
+            details.append(f"gumbel={config.config.get('enable_gumbel_root_selection', False)}")
+            if config.config.get('enable_gumbel_root_selection', False):
+                if config.config.get('gumbel_sim_threshold') is not None:
+                    details.append(f"gumbel_sim_threshold={config.config.get('gumbel_sim_threshold')}")
+                if config.config.get('gumbel_candidate_power_scale') is not None:
+                    details.append(f"gumbel_power_scale={config.config.get('gumbel_candidate_power_scale')}")
+                if config.config.get('gumbel_candidate_power_rate') is not None:
+                    details.append(f"gumbel_power_rate={config.config.get('gumbel_candidate_power_rate')}")
+                if config.config.get('gumbel_candidate_power_offset') is not None:
+                    details.append(f"gumbel_power_offset={config.config.get('gumbel_candidate_power_offset')}")
+        print(f"  - {config.name}: {', '.join(details)}")
     print(f"SF18 Difficulty: {args.sf18_difficulty}")
     print(f"SF18 Server: {args.sf18_server_url}")
     print(f"Number of openings: {len(openings)}")
     print(f"Opening length: {args.opening_length}")
     print(f"Temperature: {args.temperature}")
+    print(f"Early termination threshold (MCTS): {TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD}")
     print(f"Random seed: {args.seed}")
     print("="*60)
     print()

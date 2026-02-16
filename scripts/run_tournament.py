@@ -58,7 +58,12 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 
 from hex_ai.memory_profiler import start_profiling, stop_profiling
-from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT, DEFAULT_GUMBEL_C_SCALE
+from hex_ai.config import (
+    DEFAULT_BATCH_CAP,
+    DEFAULT_C_PUCT,
+    DEFAULT_GUMBEL_C_SCALE,
+    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
+)
 from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
@@ -485,6 +490,52 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     return strategy_configs
 
 
+def print_round_robin_strategy_summary(strategy_configs: List[StrategyConfig]) -> None:
+    """Print key per-strategy settings for round-robin tournament participants."""
+    if not strategy_configs:
+        return
+
+    print("  Round-robin strategy configurations:")
+    for i, strategy in enumerate(strategy_configs, start=1):
+        if strategy.strategy_type != "mcts":
+            print(
+                f"    {i}. {strategy.name}: "
+                f"type={strategy.strategy_type}, "
+                f"temperature={strategy.temperature}"
+            )
+            continue
+
+        cfg = strategy.config
+        summary_parts = [
+            "type=mcts",
+            f"temperature={strategy.temperature}",
+            f"sims={cfg.get('mcts_sims')}",
+            f"c_puct={cfg.get('mcts_c_puct')}",
+            f"batch_size={cfg.get('batch_size')}",
+            f"gumbel={cfg.get('enable_gumbel_root_selection', False)}",
+        ]
+
+        if cfg.get("enable_gumbel_root_selection", False):
+            if cfg.get("gumbel_sim_threshold") is not None:
+                summary_parts.append(f"gumbel_sim_threshold={cfg.get('gumbel_sim_threshold')}")
+            if cfg.get("gumbel_c_scale") is not None:
+                summary_parts.append(f"gumbel_c_scale={cfg.get('gumbel_c_scale')}")
+            if cfg.get("gumbel_candidate_power_scale") is not None:
+                summary_parts.append(
+                    f"gumbel_power_scale={cfg.get('gumbel_candidate_power_scale')}"
+                )
+            if cfg.get("gumbel_candidate_power_rate") is not None:
+                summary_parts.append(
+                    f"gumbel_power_rate={cfg.get('gumbel_candidate_power_rate')}"
+                )
+            if cfg.get("gumbel_candidate_power_offset") is not None:
+                summary_parts.append(
+                    f"gumbel_power_offset={cfg.get('gumbel_candidate_power_offset')}"
+                )
+
+        print(f"    {i}. {strategy.name}: {', '.join(summary_parts)}")
+
+
 
 
 def run_two_stage_tournament(args, strategy_configs, model_paths, openings, command_line):
@@ -884,7 +935,8 @@ def main():
             gumbel_candidate_power_scale=gumbel_candidate_power_scale,
             gumbel_candidate_power_rate=gumbel_candidate_power_rate,
             gumbel_candidate_power_offset=gumbel_candidate_power_offset,
-            gumbel_m_candidates=gumbel_m_candidates
+            gumbel_m_candidates=gumbel_m_candidates,
+            confidence_termination_threshold=TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
         )
     else:
         # No script config needed for knockout-only tournaments
@@ -897,6 +949,7 @@ def main():
     if not is_knockout_only_tournament(args):
         print(f"  Number of openings: {len(openings)} (randomly selected from pool of {len(all_openings)})")
         print(f"  Games per strategy pair (from openings): {len(openings) * 2}")
+        print_round_robin_strategy_summary(strategy_configs)
         print()
     
     # Optional: memory profiling (RSS + tracemalloc heap).

@@ -22,6 +22,8 @@ from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.value_utils import validate_trmph_winner
 
+DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
+
 
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
@@ -31,6 +33,7 @@ class SelfPlayEngine:
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
+                 confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
                  command_line: str = None,
                  mcts_profile: bool = False,
                  mcts_profile_every: int = 10,
@@ -57,6 +60,7 @@ class SelfPlayEngine:
             mcts_sims: Number of MCTS simulations per move
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
+            confidence_termination_threshold: Early-termination confidence threshold
         """
         self.model_path = model_path
         self.batch_size = batch_size
@@ -71,6 +75,7 @@ class SelfPlayEngine:
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
+        self.confidence_termination_threshold = confidence_termination_threshold
         self.command_line = command_line
         self.mcts_profile = mcts_profile
         self.mcts_profile_every = mcts_profile_every
@@ -87,7 +92,8 @@ class SelfPlayEngine:
         # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
-            confidence_termination_threshold=0.85,  # Aggressive confidence termination for speed
+            # Aggressive confidence termination for speed.
+            confidence_termination_threshold=self.confidence_termination_threshold,
             cache_size=self.cache_size,  # Use same cache size as SimpleModelInference
             c_puct=self.c_puct,  # Use specified PUCT exploration constant
             enable_gumbel_root_selection=self.enable_gumbel  # Enable/disable Gumbel root selection
@@ -120,6 +126,7 @@ class SelfPlayEngine:
                 "MCTS simulations": mcts_sims,
                 "C_PUCT": c_puct,
                 "Gumbel root selection": enable_gumbel,
+                "Early termination threshold": confidence_termination_threshold,
                 "Temperature": temperature,
             }
             write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
@@ -135,6 +142,7 @@ class SelfPlayEngine:
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
             print(f"  C_PUCT: {c_puct}")
             print(f"  Gumbel root selection: {enable_gumbel}")
+            print(f"  Early termination threshold: {confidence_termination_threshold}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
