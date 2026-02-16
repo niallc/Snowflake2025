@@ -34,13 +34,42 @@ def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     Returns:
         Win probability for current player (0.0 to 1.0)
     """
-    v_ptm_ref_signed_root = tree_data.get("v_ptm_ref_signed_root", 0.0)
+    if not isinstance(tree_data, dict):
+        raise TypeError(f"tree_data must be dict, got {type(tree_data)}")
+    if "v_ptm_ref_signed_root" not in tree_data:
+        raise KeyError("tree_data missing required key 'v_ptm_ref_signed_root'")
+
+    v_ptm_ref_signed_root = tree_data["v_ptm_ref_signed_root"]
+    if isinstance(v_ptm_ref_signed_root, bool):
+        raise TypeError("tree_data['v_ptm_ref_signed_root'] must be numeric, got bool")
+    try:
+        v_ptm_ref_signed_root = float(v_ptm_ref_signed_root)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "tree_data['v_ptm_ref_signed_root'] must be numeric, "
+            f"got {type(tree_data['v_ptm_ref_signed_root'])}"
+        ) from exc
+    if not math.isfinite(v_ptm_ref_signed_root):
+        raise ValueError(
+            "tree_data['v_ptm_ref_signed_root'] must be finite, "
+            f"got {v_ptm_ref_signed_root}"
+        )
+    if not -1.0 <= v_ptm_ref_signed_root <= 1.0:
+        raise ValueError(
+            "tree_data['v_ptm_ref_signed_root'] must be in [-1, 1], "
+            f"got {v_ptm_ref_signed_root}"
+        )
     
     # Convert signed value to probability only at the edge (for external API)
     # Root value is already in player-to-move reference frame from backpropagation
     # +1 = current player wins, -1 = current player loses, 0 = neutral
     from hex_ai.value_utils import signed_to_prob
     p_ptm_prob_root = signed_to_prob(v_ptm_ref_signed_root)  # current player win probability
+    if not 0.0 <= p_ptm_prob_root <= 1.0:
+        raise ValueError(
+            "Converted probability is outside [0, 1], "
+            f"got {p_ptm_prob_root} from signed value {v_ptm_ref_signed_root}"
+        )
     return p_ptm_prob_root
 
 

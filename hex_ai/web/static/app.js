@@ -120,6 +120,7 @@ let state = {
   player: 'blue',
   legal_moves: [],
   winner: null,
+  win_probability: null,
   last_move: null,
   last_move_player: null, // Track which player made the last move
   blue_model_id: 'best',
@@ -2880,7 +2881,7 @@ async function applyTrmphSequence() {
     state.winner = result.winner;
     state.policy = result.policy;
     state.value = result.value_signed;
-    state.win_prob = result.win_prob;
+    state.win_probability = result.win_probability;
     
     // Update the TRMPH string display
     document.getElementById('trmph-string').value = state.trmph;

@@ -868,7 +868,7 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
     
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
+    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
     
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -884,7 +884,7 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
         "winner": winner_color,
         "policy": policy_dict,
         "value_signed": float(value_signed),
-        "win_prob": win_prob,
+        "win_probability": win_probability,
     }
     
     # Add any additional fields

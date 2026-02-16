@@ -299,7 +299,7 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
         try:
             current_player_enum = state.current_player_enum
             current_player_color = winner_to_color(current_player_enum)
-            win_prob = ValuePredictor.get_win_probability(value_signed, current_player_enum)
+            win_probability = ValuePredictor.get_win_probability(value_signed, current_player_enum)
         except Exception as e:
             # Log the error and provide fallback values
             app.logger.error(f"Error in app.py debug info generation: {e}")
@@ -311,7 +311,7 @@ def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
             "game_over": state.game_over,
             "legal_moves_count": len(state.get_legal_moves()),
             "value_signed": float(value_signed),
-            "win_probability": float(win_prob),
+            "win_probability": float(win_probability),
             "temperature": temperature,
             "model_move": model_move
         }
@@ -565,12 +565,10 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         best_child_signed_value = tree_data.get("v_ptm_ref_signed_best_child", 0.0)
         best_child_win_prob = signed_to_prob(best_child_signed_value)
         
-        # Handle algorithm termination win probability
-        if algorithm_termination_info and algorithm_termination_info.win_prob is not None:
-            if algorithm_termination_info.reason == "terminal_move":
-                algorithm_win_prob = 1.0  # Already correct
-            else:
-                algorithm_win_prob = signed_to_prob(algorithm_termination_info.win_prob)
+        # Handle algorithm termination win probability.
+        # Contract: AlgorithmTerminationInfo exposes probability semantics in [0, 1].
+        if algorithm_termination_info:
+            algorithm_win_prob = algorithm_termination_info.win_probability
         else:
             algorithm_win_prob = None
         
@@ -579,7 +577,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                         f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}")
         if algorithm_termination_info:
             app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
-                           f"original_win_prob={algorithm_termination_info.win_prob}, converted={algorithm_win_prob}")
+                           f"termination_win_probability={algorithm_win_prob}")
         
         # Get temperature-scaled MCTS probabilities from tree data (calculated by MCTS core)
         temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
@@ -1289,7 +1287,7 @@ def api_state():
     # Map policy to trmph moves
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
     # Win probability for current player - use enum directly
-    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
+    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1303,7 +1301,7 @@ def api_state():
         "winner": winner,
         "policy": policy_dict,
         "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_prob": win_prob,
+        "win_probability": win_probability,
         "trmph": trmph,
     })
 
@@ -1422,7 +1420,7 @@ def api_apply_move():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
+    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1438,7 +1436,7 @@ def api_apply_move():
         "model_move": None,  # No computer move made
         "policy": policy_dict,
         "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_prob": win_prob,
+        "win_probability": win_probability,
     })
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
@@ -1500,7 +1498,7 @@ def api_apply_trmph_sequence():
     # Apply temperature scaling to policy using centralized utility
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
     policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_prob = ValuePredictor.get_win_probability(value_signed, player_enum)
+    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
 
     # Consistent enum-based player representation
     player_enum_name = player_enum.name
@@ -1515,7 +1513,7 @@ def api_apply_trmph_sequence():
         "winner": winner_color,
         "policy": policy_dict,
         "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_prob": win_prob,
+        "win_probability": win_probability,
         "moves_applied": len(moves),
         "game_over": state.game_over,
     })

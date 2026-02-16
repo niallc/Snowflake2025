@@ -15,7 +15,7 @@ from collections import OrderedDict
 import numpy as np
 
 from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE
-from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed
+from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, signed_to_prob
 from hex_ai.inference.mcts_config import BaselineMCTSConfig
 
 if TYPE_CHECKING:
@@ -24,6 +24,40 @@ if TYPE_CHECKING:
 
 # Default terminal detection parameters
 DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
+TERMINAL_MOVE_WIN_PROBABILITY_TOLERANCE = 1e-6
+VALID_ALGORITHM_TERMINATION_REASONS = {"terminal_move", "neural_network_confidence"}
+
+
+def _validate_probability(value: float, field_name: str) -> float:
+    """Validate and normalize a probability to a finite float in [0, 1]."""
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be numeric, got bool")
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{field_name} must be numeric, got {type(value)}") from exc
+
+    if not np.isfinite(numeric_value):
+        raise ValueError(f"{field_name} must be finite, got {numeric_value}")
+    if not 0.0 <= numeric_value <= 1.0:
+        raise ValueError(f"{field_name} must be in [0, 1], got {numeric_value}")
+    return numeric_value
+
+
+def _validate_signed_value(value: float, field_name: str) -> float:
+    """Validate and normalize a signed value to a finite float in [-1, 1]."""
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be numeric, got bool")
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{field_name} must be numeric, got {type(value)}") from exc
+
+    if not np.isfinite(numeric_value):
+        raise ValueError(f"{field_name} must be finite, got {numeric_value}")
+    if not -1.0 <= numeric_value <= 1.0:
+        raise ValueError(f"{field_name} must be in [-1, 1], got {numeric_value}")
+    return numeric_value
 
 
 class TerminalMoveDetector:
@@ -79,11 +113,36 @@ class TerminalMoveDetector:
 
 @dataclass
 class AlgorithmTerminationInfo:
-    """Simple info about algorithm termination."""
+    """Simple info about algorithm termination with explicit probability semantics."""
 
     reason: str  # "terminal_move" or "neural_network_confidence"
     move: Optional[Tuple[int, int]]  # Move to play (None for NN confidence)
-    win_prob: float  # Win probability
+    win_probability: float  # Win probability in [0, 1] for the root player
+
+    def __post_init__(self) -> None:
+        if self.reason not in VALID_ALGORITHM_TERMINATION_REASONS:
+            raise ValueError(
+                f"Unknown algorithm termination reason: {self.reason}. "
+                f"Expected one of {sorted(VALID_ALGORITHM_TERMINATION_REASONS)}."
+            )
+        self.win_probability = _validate_probability(
+            self.win_probability,
+            "AlgorithmTerminationInfo.win_probability",
+        )
+        if self.reason == "terminal_move" and self.move is None:
+            raise ValueError("terminal_move termination requires a non-None move")
+        if self.reason == "terminal_move" and not np.isclose(
+            self.win_probability,
+            1.0,
+            atol=TERMINAL_MOVE_WIN_PROBABILITY_TOLERANCE,
+            rtol=0.0,
+        ):
+            raise ValueError(
+                "terminal_move termination requires win_probability ~= 1.0 "
+                f"(atol={TERMINAL_MOVE_WIN_PROBABILITY_TOLERANCE}), got {self.win_probability}"
+            )
+        if self.reason == "neural_network_confidence" and self.move is not None:
+            raise ValueError("neural_network_confidence termination requires move=None")
 
 
 @dataclass(frozen=True)
@@ -95,7 +154,20 @@ class MCTSResult:
     tree_data: Dict[str, Any]
     root_node: MCTSNode
     algorithm_termination_info: Optional[AlgorithmTerminationInfo]
-    win_probability: float
+    win_probability: float  # Probability in [0, 1] for the root player
+
+    def __post_init__(self) -> None:
+        validated_probability = _validate_probability(self.win_probability, "MCTSResult.win_probability")
+        object.__setattr__(self, "win_probability", validated_probability)
+
+        termination_info = self.algorithm_termination_info
+        if termination_info is not None and not np.isclose(
+            validated_probability, termination_info.win_probability, atol=1e-9, rtol=0.0
+        ):
+            raise ValueError(
+                "MCTSResult.win_probability must match "
+                "AlgorithmTerminationInfo.win_probability for termination results"
+            )
 
 
 class MCTSStatsBuilder:
@@ -168,7 +240,7 @@ class AlgorithmTerminationChecker:
                 return AlgorithmTerminationInfo(
                     reason="terminal_move",
                     move=terminal_move,
-                    win_prob=1.0,
+                    win_probability=1.0,
                 )
 
         if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
@@ -181,12 +253,16 @@ class AlgorithmTerminationChecker:
                             f"signed value: {signed_value:.3f})"
                         )
                     return None
+                win_probability = self._signed_value_to_probability(signed_value)
                 if verbose >= 2:
-                    print(f"🎮 MCTS: Confidence-based termination (signed value: {signed_value:.3f})")
+                    print(
+                        f"🎮 MCTS: Confidence-based termination "
+                        f"(signed value: {signed_value:.3f}, win probability: {win_probability:.3f})"
+                    )
                 return AlgorithmTerminationInfo(
                     reason="neural_network_confidence",
                     move=None,
-                    win_prob=signed_value,
+                    win_probability=win_probability,
                 )
 
         return None
@@ -214,3 +290,10 @@ class AlgorithmTerminationChecker:
             or signed_value <= -self.cfg.confidence_termination_threshold
         )
 
+    def _signed_value_to_probability(self, signed_value: float) -> float:
+        """Convert a signed PTM value in [-1, 1] to probability in [0, 1]."""
+        validated_signed = _validate_signed_value(signed_value, "confidence termination signed value")
+        return _validate_probability(
+            signed_to_prob(validated_signed),
+            "confidence termination win probability",
+        )

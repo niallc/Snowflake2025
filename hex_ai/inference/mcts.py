@@ -541,7 +541,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         """Build a complete MCTSResult for algorithm-termination exits."""
         move = self._get_algorithm_termination_move(root, termination_info, verbose)
         tree_data = self.get_tree_data(root)
-        win_probability = termination_info.win_prob
+        win_probability = termination_info.win_probability
 
         # Attach metrics for algorithm termination cases too.
         stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
@@ -1401,7 +1401,11 @@ class BaselineMCTS(MCTSGumbelMixin):
             best_move_idx = int(np.argmax(root.P))
             best_move = root.legal_moves[best_move_idx]
             if verbose >= 2:
-                print(f"🎮 MCTS: Using top policy move (confidence-based termination, win prob: {termination_info.win_prob:.3f}): {best_move}")
+                print(
+                    "🎮 MCTS: Using top policy move "
+                    f"(confidence-based termination, win probability: {termination_info.win_probability:.3f}): "
+                    f"{best_move}"
+                )
             return best_move
         else:
             raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
