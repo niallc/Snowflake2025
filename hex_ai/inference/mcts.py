@@ -41,7 +41,6 @@
 from __future__ import annotations
 
 import math
-import time
 import random
 import numpy as np
 import torch
@@ -58,7 +57,6 @@ from hex_ai.inference.mcts_utils import (
     calculate_tree_statistics,
     format_mcts_tree_data_for_api,
     should_enable_detailed_exploration,
-    create_exploration_step_info,
     add_detailed_exploration_to_tree_data,
     calculate_visit_count_probs,
     calculate_policy_probs,
@@ -70,12 +68,11 @@ from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
 from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index
 from hex_ai.utils.temperature import calculate_temperature_decay
-from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
+from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
 from hex_ai.config import (
     BOARD_SIZE as CFG_BOARD_SIZE, 
-    POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, 
     DEFAULT_BATCH_CAP, 
     DEFAULT_C_PUCT, 
     DEFAULT_GUMBEL_SIM_THRESHOLD,
@@ -91,12 +88,9 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
 )
-from hex_ai.value_utils import ValuePredictor, winner_to_color
+from hex_ai.value_utils import winner_to_color
 
 # ---- MCTS Constants ----
-# Temperature comparison threshold for move selection
-TEMPERATURE_COMPARISON_THRESHOLD = 0.02  # Use deterministic selection for very low temperatures
-
 # Principal variation extraction limit
 PRINCIPAL_VARIATION_MAX_LENGTH = 11
 
@@ -664,18 +658,6 @@ class BaselineMCTS:
         self.simulation_count = 0
         if self.detailed_exploration_enabled and hasattr(self, 'verbose') and self.verbose >= 2:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
-
-    def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: List[float],
-                                selected_action: int, depth: int, simulation_num: int, 
-                                path_to_node: List[str] = None) -> None:
-        """Record a single exploration step for detailed analysis."""
-        if not self.detailed_exploration_enabled:
-            return
-        
-        step_info = create_exploration_step_info(
-            node, action_idx, puct_scores, selected_action, depth, simulation_num, path_to_node
-        )
-        self.exploration_trace.append(step_info)
 
     def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
         """Record the start of a descent."""
@@ -1426,7 +1408,6 @@ class BaselineMCTS:
         # not use Dirichlet noise.
         priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
         
-        # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
         # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
         # print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
         if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
@@ -1467,7 +1448,7 @@ class BaselineMCTS:
         
         # DEBUG: Log Gumbel call parameters
         if tau <= 0.1 and verbose >= 5:
-            print(f"MCTS GUMBEL CALL DEBUG:")
+            print("MCTS GUMBEL CALL DEBUG:")
             print(f"  Temperature: {tau}")
             print(f"  Total sims: {total_sims}")
             print(f"  Legal actions: {len(legal_actions)}")
@@ -1476,10 +1457,11 @@ class BaselineMCTS:
         
         # Run batched Gumbel-AlphaZero selection with temperature.
         # If detailed exploration is enabled, stream structured Gumbel events into the trace.
-        trace_event_cb = None
-        if self.detailed_exploration_enabled:
-            def trace_event_cb(event: Dict[str, Any]) -> None:
-                self._record_gumbel_trace_event(event, board_size)
+        trace_event_cb = (
+            (lambda event: self._record_gumbel_trace_event(event, board_size))
+            if self.detailed_exploration_enabled
+            else None
+        )
 
         selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
             mcts=self,
@@ -2211,7 +2193,7 @@ class BaselineMCTS:
         # Use visit counts accumulated during run()
         counts = root.N.astype(np.float64)
         if counts.sum() <= 0:
-            raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
+            raise RuntimeError("No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
         # Calculate temperature with decay using helper method
         move_count = len(root_state.move_history)
@@ -2318,12 +2300,9 @@ class BaselineMCTS:
                 )
             return result
         
-        # Start timing PUCT calculation
-        t_puct_start = time.perf_counter()
-        
         N_sum_adjusted = 1.0 + np.sum(node.N, dtype=np.float64)
         if not safe_puct_denominator(N_sum_adjusted):
-            raise RuntimeError(f"N_sum is 0, which should never happen. Need to debug how this happens.")
+            raise RuntimeError("N_sum is 0, which should never happen. Need to debug how this happens.")
 
         # Record select action for detailed exploration (degenerate case)
         if self.detailed_exploration_enabled:
@@ -2367,15 +2346,6 @@ class BaselineMCTS:
             self._record_select_action(
                 current_depth, N_sum_adjusted, q, p, n, u, score_val, terminal_flag
             )
-        
-        # End timing PUCT calculation
-        t_puct_end = time.perf_counter()
-        puct_time_ms = (t_puct_end - t_puct_start) * 1000.0
-        
-        # Store timing info for later reporting
-        if not hasattr(self, '_puct_calc_times'):
-            self._puct_calc_times = []
-        self._puct_calc_times.append(puct_time_ms)
         
         return result
 
