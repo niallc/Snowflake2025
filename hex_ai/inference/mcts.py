@@ -2389,30 +2389,83 @@ class BaselineMCTS:
                 prior_mass_top3, value_signed_red_ref
             )
 
+    def _detect_terminal_moves_if_enabled(self, node: MCTSNode) -> None:
+        """Populate node terminal-move flags when terminal detection is enabled."""
+        if self.cfg.enable_terminal_move_detection:
+            self.terminal_detector.detect_terminal_moves(node)
+
+    def _forced_terminal_child_index(self, node: MCTSNode) -> Optional[int]:
+        """Return forced terminal child index when immediate-terminal preference is active."""
+        if not self.cfg.enable_terminal_move_detection:
+            return None
+        if not self.cfg.prefer_immediate_terminal:
+            return None
+        if not any(node.terminal_moves):
+            return None
+        terminal_idxs = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
+        return int(max(terminal_idxs, key=lambda i: float(node.P[i])))
+
+    def _compute_puct_u_values(self, node: MCTSNode, n_sum_adjusted: float) -> np.ndarray:
+        """Compute PUCT exploration term U with optional terminal-move boosting."""
+        u_values = self.cfg.c_puct * node.P * math.sqrt(n_sum_adjusted) / (1.0 + node.N)
+        if self.cfg.enable_terminal_move_detection:
+            for i, is_terminal in enumerate(node.terminal_moves):
+                if is_terminal:
+                    u_values[i] += self.cfg.terminal_move_boost
+        return u_values
+
+    def _apply_root_reservation_mask(self, scores: np.ndarray, used_root_actions: Optional[Set[int]]) -> np.ndarray:
+        """Mask already-reserved root actions so current batch explores distinct root choices."""
+        if used_root_actions is None or len(used_root_actions) == 0:
+            return scores
+        mask = np.zeros_like(scores, dtype=bool)
+        for action_idx in used_root_actions:
+            if 0 <= action_idx < len(scores):
+                mask[action_idx] = True
+        return np.where(mask, -np.inf, scores)
+
+    def _record_forced_terminal_selection_if_needed(self, current_depth: int) -> None:
+        """Record detailed trace event for forced terminal selection."""
+        if not self.detailed_exploration_enabled:
+            return
+        self._record_select_action(
+            current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+            terminal_flag_for_child=True, note="forced_terminal_win"
+        )
+
+    def _record_selected_puct_action_if_needed(
+        self,
+        node: MCTSNode,
+        selected_idx: int,
+        u_values: np.ndarray,
+        score_values: np.ndarray,
+        n_sum_adjusted: float,
+        current_depth: int
+    ) -> None:
+        """Record selected PUCT action details for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+        q = float(node.Q[selected_idx])
+        p = float(node.P[selected_idx])
+        n = int(node.N[selected_idx])
+        u = float(u_values[selected_idx])
+        score_val = float(score_values[selected_idx])
+        terminal_flag = bool(selected_idx < len(node.terminal_moves) and node.terminal_moves[selected_idx])
+        self._record_select_action(
+            current_depth, n_sum_adjusted, q, p, n, u, score_val, terminal_flag
+        )
+
     def _select_child_puct(self, node: MCTSNode, current_depth: int = 0, used_root_actions: Optional[Set[int]] = None) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
-        
-        # Detect terminal moves if enabled and appropriate
-        if self.cfg.enable_terminal_move_detection:
-            self.terminal_detector.detect_terminal_moves(node)
-        
-        # If configured, force-pick an immediate terminal win regardless of N_sum
-        if (self.cfg.enable_terminal_move_detection 
-            and self.cfg.prefer_immediate_terminal 
-            and any(node.terminal_moves)):
-            terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
-            best = max(terminal_idxs, key=lambda i: float(node.P[i]))  # tie-break by prior
-            result = int(best)
-            # Record select action for detailed exploration (forced terminal win)
-            if self.detailed_exploration_enabled:
-                self._record_select_action(
-                    current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                    terminal_flag_for_child=True, note="forced_terminal_win"
-                )
-            return result
-        
+
+        self._detect_terminal_moves_if_enabled(node)
+        forced_terminal_idx = self._forced_terminal_child_index(node)
+        if forced_terminal_idx is not None:
+            self._record_forced_terminal_selection_if_needed(current_depth)
+            return forced_terminal_idx
+
         N_sum_adjusted = 1.0 + np.sum(node.N, dtype=np.float64)
         if not safe_puct_denominator(N_sum_adjusted):
             raise RuntimeError("N_sum is 0, which should never happen. Need to debug how this happens.")
@@ -2423,43 +2476,12 @@ class BaselineMCTS:
                 current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
                 note="standard_puct_selection"
             )
-        
-        U = self.cfg.c_puct * node.P * math.sqrt(N_sum_adjusted) / (1.0 + node.N)
-        
-        # Apply terminal move detection modifications
-        if self.cfg.enable_terminal_move_detection:
-            for i, is_terminal in enumerate(node.terminal_moves):
-                if is_terminal:
-                    # Boost terminal moves
-                    U[i] += self.cfg.terminal_move_boost
-        
+
+        U = self._compute_puct_u_values(node, N_sum_adjusted)
         score = node.Q + U
-        
-        # Apply root reservation mechanism if provided
-        if used_root_actions is not None and len(used_root_actions) > 0:
-            # Set scores of already-chosen root actions to -inf
-            mask = np.zeros_like(score, dtype=bool)
-            for j in used_root_actions:
-                if j < len(score):  # safety check
-                    mask[j] = True
-            score = np.where(mask, -np.inf, score)
-        
+        score = self._apply_root_reservation_mask(score, used_root_actions)
         result = int(np.argmax(score))
-        
-        # Record select action for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Get the selected child's values
-            q = float(node.Q[result])
-            p = float(node.P[result])
-            n = int(node.N[result])
-            u = float(U[result])
-            score_val = float(score[result])
-            terminal_flag = node.terminal_moves[result] if hasattr(node, 'terminal_moves') and len(node.terminal_moves) > result else False
-            
-            self._record_select_action(
-                current_depth, N_sum_adjusted, q, p, n, u, score_val, terminal_flag
-            )
-        
+        self._record_selected_puct_action_if_needed(node, result, U, score, N_sum_adjusted, current_depth)
         return result
 
     def clear_cache(self) -> None:
