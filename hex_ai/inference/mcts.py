@@ -45,7 +45,7 @@ import random
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Tuple, Set
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
 
 # ---- Package imports ----
@@ -1389,83 +1389,100 @@ class BaselineMCTS:
             win_probability=win_probability
         )
 
-    def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int, 
-                                 timing_tracker: MCTSTimingTracker, verbose: int) -> Dict[str, Any]:
-        """
-        Run Gumbel-AlphaZero root selection for small simulation budgets.
-        
-        This method uses the batched Gumbel implementation that reuses the existing
-        MCTS batching infrastructure for maximum efficiency.
-        """
-        timing_tracker.start_timing("gumbel_selection")
-        
-        # Time the policy logits retrieval
+    def _load_gumbel_policy_inputs(
+        self,
+        root: MCTSNode,
+        timing_tracker: MCTSTimingTracker
+    ) -> Tuple[int, np.ndarray, np.ndarray]:
+        """Load policy logits and legal mask for Gumbel root selection."""
         timing_tracker.start_timing("gumbel_policy_retrieval")
-        
-        # Get full tensor policy logits from neural network evaluation
-        # We need the full tensor (169 positions) with illegal actions masked as -inf
         board_size = int(root.state.get_board_tensor().shape[-1])
-        
-        # Get policy logits and legal mask using shared utility
         policy_logits_full, legal_mask = self._get_policy_logits_and_legal_mask(root.state, root.legal_indices)
-        
         timing_tracker.end_timing("gumbel_policy_retrieval")
-        
-        # Time the Gumbel algorithm execution
-        timing_tracker.start_timing("gumbel_algorithm")
-        
-        # Compute shared values once using helper methods
+        return board_size, policy_logits_full, legal_mask
+
+    def _compute_gumbel_context(
+        self,
+        root: MCTSNode,
+        policy_logits_full: np.ndarray,
+        legal_mask: np.ndarray,
+    ) -> Tuple[int, float, np.ndarray]:
+        """Compute move index, root temperature, and legal priors for Gumbel root selection."""
         move_idx = len(root.state.move_history)
         tau = self._root_temperature(move_idx) if self.cfg.gumbel_temperature_enabled else 1.0
-        
-        # Get priors WITHOUT Dirichlet noise for Gumbel
-        # Gumbel has its own inherent randomness, so we don't add artificial Dirichlet noise
-        # From the Gumbel paper:
-        # In general, we use hyperparameters consistent with the newest MuZero experiments (Schrittwieser
-        # et al., 2021). MuZero’s pseudocode is available thanks to Schrittwieser et al. (2020). Gumbel
-        # MuZero does not need to set the Dirichlet noise hyperparameters, because Gumbel MuZero does
-        # not use Dirichlet noise.
         priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
-        
-        # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
-        # print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
-        if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
-            # Pick argmax over priors among legal actions
-            selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
-            selected_action = root.legal_indices.index(selected_tensor_action)
-            self._gumbel_selected_action = selected_action
-            self._gumbel_selected_tensor_action = int(selected_tensor_action)
-            self._used_gumbel_root_selection = True
-            if verbose >= 4:
-                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
-            timing_tracker.end_timing("gumbel_algorithm")
-            timing_tracker.end_timing("gumbel_selection")
-            return timing_tracker.get_final_stats()
-        
-        # Create helper functions for Q and N value access
+        return move_idx, tau, priors_full
+
+    def _set_gumbel_selected_action(self, selected_action: int, selected_tensor_action: int) -> None:
+        """Persist selected Gumbel root action in both local and tensor-index forms."""
+        self._gumbel_selected_action = int(selected_action)
+        self._gumbel_selected_tensor_action = int(selected_tensor_action)
+        self._used_gumbel_root_selection = True
+
+    def _maybe_finish_gumbel_deterministic_cutoff(
+        self,
+        root: MCTSNode,
+        legal_mask: np.ndarray,
+        priors_full: np.ndarray,
+        move_idx: int,
+        tau: float,
+        timing_tracker: MCTSTimingTracker,
+        verbose: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Handle deterministic-cutoff fast path for Gumbel root selection."""
+        if tau > self.cfg.gumbel_temperature_deterministic_cutoff:
+            return None
+
+        selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
+        selected_action = root.legal_indices.index(selected_tensor_action)
+        self._set_gumbel_selected_action(selected_action, selected_tensor_action)
+        if verbose >= 4:
+            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
+        timing_tracker.end_timing("gumbel_algorithm")
+        timing_tracker.end_timing("gumbel_selection")
+        return timing_tracker.get_final_stats()
+
+    def _build_gumbel_child_accessors(
+        self,
+        root: MCTSNode
+    ) -> Tuple[Callable[[int], float], Callable[[int], int]]:
+        """Build Q and N accessors expected by gumbel_alpha_zero_root_batched."""
+        action_to_legal_idx = {int(action): idx for idx, action in enumerate(root.legal_indices)}
+
         def q_of_child(action: int) -> float:
-            """Get normalized Q-value for child action (action is tensor index)."""
-            # Map tensor index to legal move index
-            legal_move_idx = root.legal_indices.index(action)
+            legal_move_idx = action_to_legal_idx[int(action)]
             if root.N[legal_move_idx] == 0:
-                return 0.5  # Neutral value for unvisited actions
-            # Normalize Q-value from [-1,1] to [0,1] range
+                return 0.5
             q_raw = root.Q[legal_move_idx]
             return (q_raw + 1.0) / 2.0
-        
+
         def n_of_child(action: int) -> int:
-            """Get visit count for child action (action is tensor index)."""
-            # Map tensor index to legal move index
-            legal_move_idx = root.legal_indices.index(action)
-            return root.N[legal_move_idx]
-        
-        # Get legal action indices (these are tensor indices, not legal move indices)
+            legal_move_idx = action_to_legal_idx[int(action)]
+            return int(root.N[legal_move_idx])
+
+        return q_of_child, n_of_child
+
+    def _build_gumbel_trace_callback(self, board_size: int) -> Optional[Callable[[Dict[str, Any]], None]]:
+        """Build optional trace callback for detailed Gumbel diagnostics."""
+        if not self.detailed_exploration_enabled:
+            return None
+        return lambda event: self._record_gumbel_trace_event(event, board_size)
+
+    def _run_batched_gumbel_algorithm(
+        self,
+        root: MCTSNode,
+        total_sims: int,
+        board_size: int,
+        tau: float,
+        priors_full: np.ndarray,
+        q_of_child: Callable[[int], float],
+        n_of_child: Callable[[int], int],
+        verbose: int,
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Run the batched Gumbel root-selection algorithm and return selection + metrics."""
         legal_actions = root.legal_indices.copy()
-        
-        # Pass log-priors and temperature to Gumbel
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
-        
-        # DEBUG: Log Gumbel call parameters
+
         if tau <= 0.1 and verbose >= 5:
             print("MCTS GUMBEL CALL DEBUG:")
             print(f"  Temperature: {tau}")
@@ -1473,16 +1490,9 @@ class BaselineMCTS:
             print(f"  Legal actions: {len(legal_actions)}")
             print(f"  Logits range: [{np.min(logits_for_gumbel):.3f}, {np.max(logits_for_gumbel):.3f}]")
             print(f"  Top policy action: {int(np.argmax(logits_for_gumbel))}")
-        
-        # Run batched Gumbel-AlphaZero selection with temperature.
-        # If detailed exploration is enabled, stream structured Gumbel events into the trace.
-        trace_event_cb = (
-            (lambda event: self._record_gumbel_trace_event(event, board_size))
-            if self.detailed_exploration_enabled
-            else None
-        )
 
-        selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
+        trace_event_cb = self._build_gumbel_trace_callback(board_size)
+        return gumbel_alpha_zero_root_batched(
             mcts=self,
             root=root,
             policy_logits=logits_for_gumbel,
@@ -1501,45 +1511,48 @@ class BaselineMCTS:
             candidate_min=self.cfg.gumbel_candidate_min,
             candidate_max=self.cfg.gumbel_candidate_max,
             use_gumbel_in_final_eval=self.cfg.gumbel_use_gumbel_in_final_eval,
-            eval_mode=False,  # MCTS is not evaluation mode by default
+            eval_mode=False,
             trace_event=trace_event_cb,
         )
-        
-        # Record Gumbel performance metrics
+
+    def _record_gumbel_metrics(self, gumbel_metrics: Dict[str, Any]) -> None:
+        """Record Gumbel performance metrics for inclusion in final stats."""
         self._gumbel_nn_calls_per_move = gumbel_metrics["nn_calls_per_move"]
         self._gumbel_total_leaves_evaluated = gumbel_metrics["total_leaves_evaluated"]
-        # For distinct leaves, we'll use the final MCTS metrics since individual batch stats don't include this
-        self._gumbel_distinct_leaves_evaluated = 0  # Will be updated later with final MCTS metrics
+        # For distinct leaves, we'll use final MCTS metrics since per-batch stats don't include this.
+        self._gumbel_distinct_leaves_evaluated = 0
         self._gumbel_candidates_m = gumbel_metrics["candidates_m"]
         self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
-        # Record detailed timing breakdown
         self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
-        
-        # Optional verbose logging
-        if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
-        
-        timing_tracker.end_timing("gumbel_algorithm")
-        
-        # Time the final conversion
+
+    def _finalize_gumbel_selection(
+        self,
+        root: MCTSNode,
+        selected_tensor_action: int,
+        timing_tracker: MCTSTimingTracker,
+        verbose: int
+    ) -> int:
+        """Finalize selected Gumbel action and close timing scopes."""
         timing_tracker.start_timing("gumbel_final_conversion")
-        
-        # Convert tensor index back to legal move index for MCTS
-        selected_action = root.legal_indices.index(selected_tensor_action)
-        
+        selected_action = root.legal_indices.index(int(selected_tensor_action))
         timing_tracker.end_timing("gumbel_final_conversion")
         timing_tracker.end_timing("gumbel_selection")
-        
+
         if verbose >= 2:
             print(f"Gumbel selection completed. Selected tensor action {selected_tensor_action} "
                   f"-> legal action {selected_action} ({root.legal_moves[selected_action]})")
-        
-        # Store the Gumbel-selected action for later use
-        self._gumbel_selected_action = selected_action
-        self._gumbel_selected_tensor_action = int(selected_tensor_action)
-        self._used_gumbel_root_selection = True
 
-        # Best-effort debug fields from gumbel_utils (same formulas used by selection).
+        self._set_gumbel_selected_action(selected_action, int(selected_tensor_action))
+        return selected_action
+
+    def _capture_gumbel_debug_fields(
+        self,
+        root: MCTSNode,
+        selected_tensor_action: int,
+        gumbel_metrics: Dict[str, Any],
+        board_size: int
+    ) -> None:
+        """Best-effort capture of extra Gumbel debug fields and deep-dive events."""
         try:
             self._gumbel_v_pi_01 = gumbel_metrics.get("v_pi_01", None)
             final_rows_raw = gumbel_metrics.get("final_rank_rows", []) or []
@@ -1547,12 +1560,9 @@ class BaselineMCTS:
             self._gumbel_final_rank_top5 = final_rows[:5] if final_rows else None
             self._gumbel_final_rank_top_move_trmph = final_rows[0]["move"] if final_rows else None
 
-            # Add root-action deep-dive diagnostics to detailed trace so we can
-            # compare tree Q and direct value-head signals for finalists.
             if self.detailed_exploration_enabled:
                 dive_actions: List[int] = []
 
-                # Prefer the final competing set before last prune (typically 2 actions).
                 for row in (gumbel_metrics.get("last_round_rows", []) or []):
                     action = row.get("tensor_action", None)
                     if action is None:
@@ -1561,7 +1571,6 @@ class BaselineMCTS:
                     if action_int not in dive_actions:
                         dive_actions.append(action_int)
 
-                # Fallback to deterministic final rows.
                 if not dive_actions:
                     for row in final_rows_raw:
                         action = row.get("tensor_action", None)
@@ -1586,7 +1595,46 @@ class BaselineMCTS:
             self._gumbel_final_rank_top5 = None
             self._gumbel_final_rank_top_move_trmph = None
             self._gumbel_v_pi_01 = None
+
+    def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int,
+                                 timing_tracker: MCTSTimingTracker, verbose: int) -> Dict[str, Any]:
+        """
+        Run Gumbel-AlphaZero root selection for small simulation budgets.
         
+        This method uses the batched Gumbel implementation that reuses the existing
+        MCTS batching infrastructure for maximum efficiency.
+        """
+        timing_tracker.start_timing("gumbel_selection")
+        board_size, policy_logits_full, legal_mask = self._load_gumbel_policy_inputs(root, timing_tracker)
+
+        timing_tracker.start_timing("gumbel_algorithm")
+        move_idx, tau, priors_full = self._compute_gumbel_context(root, policy_logits_full, legal_mask)
+
+        maybe_fast_stats = self._maybe_finish_gumbel_deterministic_cutoff(
+            root, legal_mask, priors_full, move_idx, tau, timing_tracker, verbose
+        )
+        if maybe_fast_stats is not None:
+            return maybe_fast_stats
+
+        q_of_child, n_of_child = self._build_gumbel_child_accessors(root)
+        selected_tensor_action, gumbel_metrics = self._run_batched_gumbel_algorithm(
+            root=root,
+            total_sims=total_sims,
+            board_size=board_size,
+            tau=tau,
+            priors_full=priors_full,
+            q_of_child=q_of_child,
+            n_of_child=n_of_child,
+            verbose=verbose,
+        )
+
+        self._record_gumbel_metrics(gumbel_metrics)
+        if verbose >= 4:
+            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
+        timing_tracker.end_timing("gumbel_algorithm")
+
+        self._finalize_gumbel_selection(root, selected_tensor_action, timing_tracker, verbose)
+        self._capture_gumbel_debug_fields(root, selected_tensor_action, gumbel_metrics, board_size)
         return timing_tracker.get_final_stats()
 
     def _root_temperature(self, move_idx: int) -> float:
