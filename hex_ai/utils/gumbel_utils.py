@@ -182,7 +182,7 @@ def gumbel_alpha_zero_root_batched(
     m: Optional[int] = None,
     c_visit: float = 50.0,
     c_scale: float = 1.0,
-    temperature: float = 1.0,  # Noise scale for Gumbel sampling (beta)
+    temperature: float = 1.0,  # Fixed contract for Gumbel root selection (must be 1.0)
     verbose: int = 0,        # Verbosity level for debug output
     rng=np.random,
     # Power-law candidate scaling parameters
@@ -213,7 +213,7 @@ def gumbel_alpha_zero_root_batched(
         m: Number of actions to consider via Top-m (None for auto)
         c_visit: Gumbel-AlphaZero parameter
         c_scale: Gumbel-AlphaZero parameter
-        temperature: Noise scale for Gumbel sampling (beta)
+        temperature: Fixed Gumbel temperature contract value (must be 1.0)
         verbose: Verbosity level for debug output
         rng: Random number generator (uses numpy.random if None)
         use_gumbel_in_final_eval: Whether to use Gumbel noise in final evaluation
@@ -248,31 +248,15 @@ def gumbel_alpha_zero_root_batched(
     
     if total_sims <= 0:
         raise ValueError(f"total_sims must be positive, got {total_sims}")
-    
-    if temperature < 0:
-        raise ValueError(f"temperature must be non-negative, got {temperature}")
-    
-    # NOTE: Temperature scaling with Gumbel root selection is currently broken.
-    # The game uses automatic temperature scaling throughout the game (decreasing from 1.0),
-    # but the Gumbel implementation doesn't handle this properly. Using beta (temperature)
-    # as noise scale causes later moves to have lower performance due to reduced randomness.
-    # For now, we disable temperature scaling in Gumbel to maintain consistent performance.
-    # TODO: Implement proper temperature handling for Gumbel root selection.
-    
-    # Interpret temperature as noise scale beta (no scaling of logits or value terms)
-    # beta = float(temperature)
-    # temp_tol = 0.15
-    # if beta <= 1.0 - temp_tol or beta >= 1.0 + temp_tol:
-    #     message = f"Adjusting randomness in Gumbel by adjusting temperature is not yet supported.\n"
-    #     message += f"For now, temperature must be between {1.0 - temp_tol} and {1.0 + temp_tol}, got {temperature}"
-    #     raise ValueError(message)
-    
-    # DEBUG: Log noise scaling effects
-    # DISABLED: beta-based debug logging due to temperature scaling issues
-    # if temperature <= 0.1 and verbose >= 5:  # Only log for low temperatures to avoid spam
-    #     print(f"GUMBEL NOISE SCALE DEBUG: beta={beta}")
-    #     print(f"  Original logits range: [{np.min(policy_logits):.3f}, {np.max(policy_logits):.3f}]")
-    #     print(f"  Noise scale: {beta}")
+
+    if not np.isfinite(temperature):
+        raise ValueError(f"temperature must be finite, got {temperature}")
+
+    if not math.isclose(float(temperature), 1.0, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError(
+            "Gumbel root temperature scaling is unsupported: "
+            f"temperature must be 1.0, got {temperature}."
+        )
     
     K = policy_logits.shape[0]
     
@@ -328,19 +312,11 @@ def gumbel_alpha_zero_root_batched(
     gumbel_start = time.perf_counter()
     
     # Use same Gumbel vector 'g' for both Top-m and final scoring (avoids double-counting bias)
-    # DISABLED: Scale Gumbel noise by beta (temperature as noise scale)
-    # NOTE: Temperature scaling disabled due to automatic game temperature scaling issues
-    
     # Sample Gumbel noise only for legal actions (optimization: skip illegal actions)
     g = np.zeros(K, dtype=np.float64)
     g_legal = sample_gumbel(len(legal_actions), rng=rng)
     for i, a in enumerate(legal_actions):
         g[a] = g_legal[i]
-    
-    # if beta <= 0.0:
-    #     g.fill(0.0)  # deterministic, but keep Top-m + halving pipeline
-    # else:
-    #     g *= beta  # DISABLED: causes performance issues with automatic temperature scaling
     
     timing_data['gumbel_sampling_time'] = time.perf_counter() - gumbel_start
     
@@ -621,18 +597,6 @@ def gumbel_alpha_zero_root_batched(
             "final_rank_rows": final_rank_rows,
         }
     )
-    
-    # DEBUG: Compare final selection with top policy move
-    # DISABLED: beta-based debug logging due to temperature scaling issues
-    # if beta <= 0.1 and verbose >= 5:
-    #     selected_action = cand[0]
-    #     top_policy_action = int(np.argmax(logits))
-    #     print(f"GUMBEL FINAL SELECTION DEBUG:")
-    #     print(f"  Selected action: {selected_action} (score: {rank_key(selected_action):.3f})")
-    #     print(f"  Top policy action: {top_policy_action} (score: {rank_key(top_policy_action):.3f})")
-    #     print(f"  Same as top policy: {selected_action == top_policy_action}")
-    #     if selected_action != top_policy_action:
-    #         print(f"  Difference in scores: {rank_key(selected_action) - rank_key(top_policy_action):.3f}")
     
     timing_data['ranking_time'] = time.perf_counter() - ranking_start
     timing_data['total_time'] = time.perf_counter() - total_start

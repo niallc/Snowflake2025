@@ -42,6 +42,8 @@ DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
 DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
 DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
 DEFAULT_VISIT_SAMPLING_TOP_K = 5
+DEFAULT_GUMBEL_ROOT_TEMPERATURE = 1.0
+DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF = -1.0
 
 
 @dataclass
@@ -53,7 +55,7 @@ class BaselineMCTSConfig:
     dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
     dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
     add_root_noise: bool = False
-    # Temperature scaling parameters (always used)
+    # Temperature scaling parameters used for visit-count move sampling.
     temperature_start: float = DEFAULT_TEMPERATURE_START
     temperature_end: float = DEFAULT_TEMPERATURE_END
     temperature_decay_type: str = DEFAULT_TEMPERATURE_DECAY_TYPE
@@ -100,10 +102,13 @@ class BaselineMCTSConfig:
     # Gumbel ranking stabilization parameters
     gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 
-    # Gumbel temperature control parameters
-    gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED
+    # Deterministic cutoff for visit-count sampling (non-Gumbel move selection path).
     temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF
-    gumbel_temperature_deterministic_cutoff: float = -1.0
+
+    # Legacy Gumbel temperature controls. These are intentionally fixed:
+    # Gumbel root selection currently runs with temperature=1.0 and no cutoff path.
+    gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED
+    gumbel_temperature_deterministic_cutoff: float = DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF
 
     # Batch flushing control parameters
     distinct_target: int = 32
@@ -187,6 +192,16 @@ class BaselineMCTSConfig:
 
         if self.temperature_deterministic_cutoff <= 0:
             raise ValueError(f"temperature_deterministic_cutoff must be positive, got {self.temperature_deterministic_cutoff}")
+        if not self.gumbel_temperature_enabled:
+            raise ValueError(
+                "gumbel_temperature_enabled=False is unsupported: "
+                f"Gumbel root selection uses fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE}."
+            )
+        if self.gumbel_temperature_deterministic_cutoff != DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF:
+            raise ValueError(
+                "gumbel_temperature_deterministic_cutoff is unsupported and must remain "
+                f"{DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF}."
+            )
 
         if self.temperature_decay_type == "step":
             if len(self.temperature_step_thresholds) != len(self.temperature_step_values):
@@ -278,7 +293,7 @@ def create_mcts_config(
         "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
         "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
         "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-        "gumbel_temperature_deterministic_cutoff": -1.0,
+        "gumbel_temperature_deterministic_cutoff": DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF,
         "distinct_target": 32,
         "enable_low_distinct_ratio_flush": False,
     }
@@ -291,4 +306,3 @@ def create_mcts_config(
         config_params["distinct_target"] = min(int(config_params["distinct_target"]), int(config_params["batch_cap"]))
 
     return BaselineMCTSConfig(**config_params)
-

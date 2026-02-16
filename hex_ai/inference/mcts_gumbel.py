@@ -13,6 +13,10 @@ import numpy as np
 import torch
 
 from hex_ai.enums import Player
+from hex_ai.inference.mcts_config import (
+    DEFAULT_GUMBEL_ROOT_TEMPERATURE,
+    DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF,
+)
 from hex_ai.utils.format_conversion import rowcol_to_trmph, tensor_to_trmph
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
 from hex_ai.utils.state_utils import board_key
@@ -314,46 +318,38 @@ class MCTSGumbelMixin:
         timing_tracker.end_timing("gumbel_policy_retrieval")
         return board_size, policy_logits_full, legal_mask
 
-    def _compute_gumbel_context(
+    def _compute_gumbel_priors(
         self,
-        root: MCTSNode,
         policy_logits_full: np.ndarray,
         legal_mask: np.ndarray,
-    ) -> Tuple[int, float, np.ndarray]:
-        """Compute move index, root temperature, and legal priors for Gumbel root selection."""
-        move_idx = len(root.state.move_history)
-        tau = self._root_temperature(move_idx) if self.cfg.gumbel_temperature_enabled else 1.0
-        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
-        return move_idx, tau, priors_full
+    ) -> np.ndarray:
+        """Compute legal priors for Gumbel root selection."""
+        return self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
+
+    def _validate_gumbel_temperature_contract(self) -> None:
+        """
+        Validate the fixed-temperature contract for Gumbel root selection.
+
+        Gumbel root selection currently does not support temperature scaling/cutoff
+        semantics. Config validation enforces this too, but we guard at runtime so
+        direct config mutation still fails fast.
+        """
+        if not self.cfg.gumbel_temperature_enabled:
+            raise ValueError(
+                "gumbel_temperature_enabled=False is unsupported: "
+                f"Gumbel root selection uses fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE}."
+            )
+        if self.cfg.gumbel_temperature_deterministic_cutoff != DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF:
+            raise ValueError(
+                "gumbel_temperature_deterministic_cutoff is unsupported and must remain "
+                f"{DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF}."
+            )
 
     def _set_gumbel_selected_action(self, selected_action: int, selected_tensor_action: int) -> None:
         """Persist selected Gumbel root action in both local and tensor-index forms."""
         self._gumbel_selected_action = int(selected_action)
         self._gumbel_selected_tensor_action = int(selected_tensor_action)
         self._used_gumbel_root_selection = True
-
-    def _maybe_finish_gumbel_deterministic_cutoff(
-        self,
-        root: MCTSNode,
-        legal_mask: np.ndarray,
-        priors_full: np.ndarray,
-        move_idx: int,
-        tau: float,
-        timing_tracker: MCTSTimingTracker,
-        verbose: int,
-    ) -> Optional[Dict[str, Any]]:
-        """Handle deterministic-cutoff fast path for Gumbel root selection."""
-        if tau > self.cfg.gumbel_temperature_deterministic_cutoff:
-            return None
-
-        selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
-        selected_action = root.legal_indices.index(selected_tensor_action)
-        self._set_gumbel_selected_action(selected_action, selected_tensor_action)
-        if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
-        timing_tracker.end_timing("gumbel_algorithm")
-        timing_tracker.end_timing("gumbel_selection")
-        return timing_tracker.get_final_stats()
 
     def _build_gumbel_child_accessors(
         self,
@@ -386,7 +382,6 @@ class MCTSGumbelMixin:
         root: MCTSNode,
         total_sims: int,
         board_size: int,
-        tau: float,
         priors_full: np.ndarray,
         q_of_child: Callable[[int], float],
         n_of_child: Callable[[int], int],
@@ -396,9 +391,9 @@ class MCTSGumbelMixin:
         legal_actions = root.legal_indices.copy()
         logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
 
-        if tau <= 0.1 and verbose >= 5:
+        if verbose >= 5:
             print("MCTS GUMBEL CALL DEBUG:")
-            print(f"  Temperature: {tau}")
+            print(f"  Temperature: {DEFAULT_GUMBEL_ROOT_TEMPERATURE}")
             print(f"  Total sims: {total_sims}")
             print(f"  Legal actions: {len(legal_actions)}")
             print(f"  Logits range: [{np.min(logits_for_gumbel):.3f}, {np.max(logits_for_gumbel):.3f}]")
@@ -416,7 +411,7 @@ class MCTSGumbelMixin:
             m=self.cfg.gumbel_m_candidates,
             c_visit=self.cfg.gumbel_c_visit,
             c_scale=self.cfg.gumbel_c_scale,
-            temperature=tau,
+            temperature=DEFAULT_GUMBEL_ROOT_TEMPERATURE,
             verbose=verbose,
             candidate_power_scale=self.cfg.gumbel_candidate_power_scale,
             candidate_power_rate=self.cfg.gumbel_candidate_power_rate,
@@ -517,24 +512,18 @@ class MCTSGumbelMixin:
         This method uses the batched Gumbel implementation that reuses the existing
         MCTS batching infrastructure for maximum efficiency.
         """
+        self._validate_gumbel_temperature_contract()
         timing_tracker.start_timing("gumbel_selection")
         board_size, policy_logits_full, legal_mask = self._load_gumbel_policy_inputs(root, timing_tracker)
 
         timing_tracker.start_timing("gumbel_algorithm")
-        move_idx, tau, priors_full = self._compute_gumbel_context(root, policy_logits_full, legal_mask)
-
-        maybe_fast_stats = self._maybe_finish_gumbel_deterministic_cutoff(
-            root, legal_mask, priors_full, move_idx, tau, timing_tracker, verbose
-        )
-        if maybe_fast_stats is not None:
-            return maybe_fast_stats
+        priors_full = self._compute_gumbel_priors(policy_logits_full, legal_mask)
 
         q_of_child, n_of_child = self._build_gumbel_child_accessors(root)
         selected_tensor_action, gumbel_metrics = self._run_batched_gumbel_algorithm(
             root=root,
             total_sims=total_sims,
             board_size=board_size,
-            tau=tau,
             priors_full=priors_full,
             q_of_child=q_of_child,
             n_of_child=n_of_child,
@@ -543,10 +532,9 @@ class MCTSGumbelMixin:
 
         self._record_gumbel_metrics(gumbel_metrics)
         if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
+            print(f"Gumbel root: fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE:.3f}")
         timing_tracker.end_timing("gumbel_algorithm")
 
         self._finalize_gumbel_selection(root, selected_tensor_action, timing_tracker, verbose)
         self._capture_gumbel_debug_fields(root, selected_tensor_action, gumbel_metrics, board_size)
         return timing_tracker.get_final_stats()
-

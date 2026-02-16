@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from hex_ai.inference.mcts import BaselineMCTS
+from hex_ai.inference.mcts_config import BaselineMCTSConfig
 from hex_ai.utils.legal_action_contracts import (
     assert_actions_subset_of_legal,
     assert_exact_legal_action_match,
@@ -223,6 +224,68 @@ def test_gumbel_alpha_zero_root_batched_preserves_valid_path_behavior():
     assert selected_action in root.legal_indices
     assert metrics["selected_action"] == selected_action
     assert mcts.calls == 2
+
+
+def test_gumbel_alpha_zero_root_batched_rejects_non_unit_temperature():
+    root = _StubRoot([0, 1, 2, 3])
+    mcts = _StubForcedRunner()
+    policy_logits = np.log(np.array([0.4, 0.3, 0.2, 0.1], dtype=np.float64))
+
+    def q_of_child(_: int) -> float:
+        return 0.5
+
+    def n_of_child(_: int) -> int:
+        return 0
+
+    with pytest.raises(ValueError, match="temperature must be 1.0"):
+        gumbel_alpha_zero_root_batched(
+            mcts=mcts,
+            root=root,
+            policy_logits=policy_logits,
+            total_sims=8,
+            legal_actions=[0, 1, 2, 3],
+            q_of_child=q_of_child,
+            n_of_child=n_of_child,
+            m=4,
+            temperature=0.75,
+            rng=np.random.RandomState(0),
+        )
+
+    assert mcts.calls == 0
+
+
+def test_baseline_mcts_config_rejects_unsupported_gumbel_temperature_controls():
+    with pytest.raises(ValueError, match="gumbel_temperature_enabled=False is unsupported"):
+        BaselineMCTSConfig(
+            sims=4,
+            batch_cap=64,
+            gumbel_temperature_enabled=False,
+        )
+
+    with pytest.raises(ValueError, match="gumbel_temperature_deterministic_cutoff is unsupported"):
+        BaselineMCTSConfig(
+            sims=4,
+            batch_cap=64,
+            gumbel_temperature_deterministic_cutoff=0.1,
+        )
+
+
+def test_validate_gumbel_temperature_contract_fails_fast_after_runtime_mutation():
+    mcts = object.__new__(BaselineMCTS)
+    mcts.cfg = SimpleNamespace(
+        gumbel_temperature_enabled=False,
+        gumbel_temperature_deterministic_cutoff=-1.0,
+    )
+
+    with pytest.raises(ValueError, match="gumbel_temperature_enabled=False is unsupported"):
+        BaselineMCTS._validate_gumbel_temperature_contract(mcts)
+
+    mcts.cfg = SimpleNamespace(
+        gumbel_temperature_enabled=True,
+        gumbel_temperature_deterministic_cutoff=0.1,
+    )
+    with pytest.raises(ValueError, match="gumbel_temperature_deterministic_cutoff is unsupported"):
+        BaselineMCTS._validate_gumbel_temperature_contract(mcts)
 
 
 def test_run_forced_root_actions_validates_before_processing_any_batch():

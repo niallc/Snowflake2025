@@ -695,7 +695,11 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _root_temperature(self, move_idx: int) -> float:
         """
-        Compute temperature for root node based on move index and configuration.
+        Compute root temperature for visit-count move selection.
+
+        This temperature is used when selecting from root visit counts in the
+        non-Gumbel path. Gumbel root selection is validated separately and uses
+        a fixed temperature contract.
         
         Args:
             move_idx: Current move index (0-based)
