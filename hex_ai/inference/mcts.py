@@ -1910,6 +1910,49 @@ class BaselineMCTS:
         pv_hint = self._build_root_pv_hint(root)
         self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
 
+    def _perform_leaf_selection_descent(
+        self,
+        root: MCTSNode,
+        board_size: int,
+        distinct_target: int,
+        use_root_reservation: bool,
+        used_root_actions: Set[int],
+        force_q: Deque[int],
+        leaves: List[MCTSNode],
+        paths: List[List[Tuple[MCTSNode, int]]],
+        distinct_hashes: Set[int],
+        timing_tracker: MCTSTimingTracker,
+    ) -> Optional[str]:
+        """
+        Execute a single root-to-leaf descent and collect one leaf when found.
+
+        Returns:
+            Flush reason when selection should end immediately, otherwise None.
+        """
+        node = root
+        path: List[Tuple[MCTSNode, int]] = []
+
+        # Pop forced root action for this descent when in Gumbel forced mode.
+        forced_a_full = force_q.popleft() if force_q else None
+        self._record_forced_root_action_if_needed(node, forced_a_full)
+
+        while True:
+            leaf_collected, flush_reason = self._try_collect_leaf(
+                node, path, leaves, paths, distinct_hashes, distinct_target
+            )
+            if leaf_collected:
+                return flush_reason
+
+            loc_idx = self._resolve_child_index_for_descent(
+                node, root, forced_a_full, use_root_reservation, used_root_actions
+            )
+            path.append((node, loc_idx))
+
+            if node is root and use_root_reservation:
+                used_root_actions.add(loc_idx)
+
+            node = self._realize_child_node_if_needed(node, loc_idx, board_size, timing_tracker)
+
 
     def _select_leaves_batch(
         self,
@@ -1954,40 +1997,25 @@ class BaselineMCTS:
 
         while len(leaves) < select_budget and descents < max_selection_descents:
             descents += 1
-
-            node = root
-            path: List[Tuple[MCTSNode, int]] = []
-                    
-            # Gumbel specific code path: Pop the forced action for THIS descent (if any)
-            forced_a_full = force_q.popleft() if force_q else None
-            self._record_forced_root_action_if_needed(node, forced_a_full)
-
-            while True:
-                leaf_collected, flush_reason = self._try_collect_leaf(
-                    node, path, leaves, paths, distinct_hashes, distinct_target
-                )
-                if leaf_collected:
-                    if flush_reason is not None:
-                        if self.detailed_exploration_enabled:
-                            T = len(leaves)
-                            U = len(distinct_hashes)
-                            self._record_batch_flush(flush_reason, T, U, distinct_target, select_budget)
-                        timing_tracker.end_timing("select")
-                        return leaves, paths
-                    break
-
-                # Choose child
-                loc_idx = self._resolve_child_index_for_descent(
-                    node, root, forced_a_full, use_root_reservation, used_root_actions
-                )
-
-                path.append((node, loc_idx))
-                
-                # Track root action usage for reservation mechanism
-                if node is root and use_root_reservation:
-                    used_root_actions.add(loc_idx)
-                
-                node = self._realize_child_node_if_needed(node, loc_idx, board_size, timing_tracker)
+            flush_reason = self._perform_leaf_selection_descent(
+                root=root,
+                board_size=board_size,
+                distinct_target=distinct_target,
+                use_root_reservation=use_root_reservation,
+                used_root_actions=used_root_actions,
+                force_q=force_q,
+                leaves=leaves,
+                paths=paths,
+                distinct_hashes=distinct_hashes,
+                timing_tracker=timing_tracker,
+            )
+            if flush_reason is not None:
+                if self.detailed_exploration_enabled:
+                    T = len(leaves)
+                    U = len(distinct_hashes)
+                    self._record_batch_flush(flush_reason, T, U, distinct_target, select_budget)
+                timing_tracker.end_timing("select")
+                return leaves, paths
 
             self._record_descent_start_if_needed(root, forced_root_actions)
             # Outer budget guard (kept from original)
