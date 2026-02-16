@@ -14,7 +14,6 @@ from collections import OrderedDict
 
 import numpy as np
 
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE
 from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, signed_to_prob
 from hex_ai.inference.mcts_config import BaselineMCTSConfig
 
@@ -66,13 +65,31 @@ class TerminalMoveDetector:
     def __init__(self, max_detection_depth: int = 3):
         self.max_detection_depth = max_detection_depth
 
+    @staticmethod
+    def _get_node_board_size(node: MCTSNode) -> int:
+        """Read board size from node-level runtime metadata and validate it."""
+        if not hasattr(node, "board_size"):
+            raise AttributeError("MCTSNode missing required board_size attribute")
+
+        board_size = getattr(node, "board_size")
+        if isinstance(board_size, bool):
+            raise TypeError("node.board_size must be an integer, got bool")
+        try:
+            board_size_int = int(board_size)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"node.board_size must be an integer, got {type(board_size)}") from exc
+        if board_size_int <= 0:
+            raise ValueError(f"node.board_size must be positive, got {board_size_int}")
+        return board_size_int
+
     def should_detect_terminal_moves(self, node: MCTSNode) -> bool:
         """Determine if terminal moves should be detected for this node."""
         if node.depth > self.max_detection_depth:
             return False
 
         # Impossible to win before BS*2-1 and still unlikely before about BS*3.
-        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 2
+        board_size = self._get_node_board_size(node)
+        min_move_count = board_size * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 2
         if len(node.state.move_history) < min_move_count:
             return False
 

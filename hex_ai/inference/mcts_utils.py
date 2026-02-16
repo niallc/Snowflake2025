@@ -7,10 +7,10 @@ separate from general value processing utilities.
 
 import math
 import numpy as np
-import torch
 from typing import List, Tuple, Dict, Any, Optional
 
 from hex_ai.utils.format_conversion import rowcol_to_trmph
+from hex_ai.utils.temperature import calculate_temperature_decay
 
 # =============================
 # MCTS Tree Analysis Utilities
@@ -20,9 +20,47 @@ from hex_ai.utils.format_conversion import rowcol_to_trmph
 DETAILED_EXPLORATION_THRESHOLD = 47
 
 
+def _validate_board_size_value(board_size, *, source: str) -> int:
+    """Validate board-size values used in runtime MCTS conversions/decisions."""
+    if isinstance(board_size, bool):
+        raise TypeError(f"{source} must be an integer, got bool")
+    try:
+        size = int(board_size)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{source} must be an integer, got {type(board_size)}") from exc
+    if size <= 0:
+        raise ValueError(f"{source} must be positive, got {size}")
+    return size
+
+
 def _get_board_size_from_state(state) -> int:
     """Infer board size from a game state tensor for explicit move conversion validation."""
-    return int(state.get_board_tensor().shape[-1])
+    if state is None:
+        raise ValueError("state cannot be None")
+    board_tensor = state.get_board_tensor()
+    if not hasattr(board_tensor, "shape") or len(board_tensor.shape) < 2:
+        raise ValueError(f"Invalid board tensor shape: {getattr(board_tensor, 'shape', None)}")
+    board_rows = _validate_board_size_value(board_tensor.shape[-2], source="state board tensor rows")
+    board_cols = _validate_board_size_value(board_tensor.shape[-1], source="state board tensor cols")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {board_rows}x{board_cols}")
+    return board_cols
+
+
+def _get_board_size_from_node(node) -> int:
+    """Read board size from node runtime metadata and validate it."""
+    if not hasattr(node, "board_size"):
+        raise AttributeError("MCTS node missing required board_size attribute")
+    return _validate_board_size_value(getattr(node, "board_size"), source="node.board_size")
+
+
+def _assert_matching_board_sizes(state_board_size: int, node_board_size: int) -> None:
+    """Fail fast when state-derived and node-derived board sizes disagree."""
+    if state_board_size != node_board_size:
+        raise ValueError(
+            "Board size mismatch between state and node: "
+            f"{state_board_size} vs {node_board_size}"
+        )
 
 def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     """
@@ -178,7 +216,8 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: List[float]
         Dictionary containing exploration step information
     """
     # Get move coordinates
-    board_size = _get_board_size_from_state(node.state)
+    board_size = _get_board_size_from_node(node)
+    _assert_matching_board_sizes(_get_board_size_from_state(node.state), board_size)
     move_coords = node.legal_moves[action_idx]
     # Convert numpy coordinates to Python tuples for JSON serialization
     move_coords_python = (int(move_coords[0]), int(move_coords[1]))
@@ -301,7 +340,8 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         }
 
     # Get visit counts and convert to TRMPH format
-    board_size = _get_board_size_from_state(root_node.state)
+    board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(_get_board_size_from_state(root_node.state), board_size)
     visit_counts = {}
     mcts_probabilities = {}
     total_visits = int(np.sum(root_node.N))
@@ -429,14 +469,16 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     """
     counts = root_node.N.astype(np.float64)
     total_visits = counts.sum()
-    board_size = int(root_state.get_board_tensor().shape[-1])
+    board_size = _get_board_size_from_state(root_state)
+    node_board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(board_size, node_board_size)
     
     if total_visits <= 0:
         raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
     
     # Calculate temperature with decay
     move_count = len(root_state.move_history)
-    temp = _calculate_root_temperature(move_count, cfg)
+    temp = _calculate_root_temperature(move_count, cfg, board_size)
     
     if temp <= cfg.temperature_deterministic_cutoff:
         # Deterministic selection - use raw visit counts
@@ -483,7 +525,9 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     """
     # Get policy logits and legal mask using the same shared utility as Gumbel
     policy_logits_full, legal_mask = mcts_instance._get_policy_logits_and_legal_mask(root_state, root_node.legal_indices)
-    board_size = int(root_state.get_board_tensor().shape[-1])
+    board_size = _get_board_size_from_state(root_state)
+    node_board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(board_size, node_board_size)
     
     # Convert to probabilities using the same method as Gumbel
     priors_full = mcts_instance._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
@@ -539,26 +583,19 @@ def select_move_index(counts: np.ndarray, temp: float, cfg) -> int:
             return int(np.argmax(counts))
 
 
-def _calculate_root_temperature(move_count: int, cfg) -> float:
+def _calculate_root_temperature(move_count: int, cfg, board_size: int) -> float:
     """
     Calculate the root temperature based on move count and configuration.
     
-    This is a helper function that encapsulates the temperature decay logic.
+    This helper mirrors runtime move selection temperature semantics exactly.
     """
-    if cfg.temperature_decay_type == 'exponential':
-        # Exponential decay: temp = start * (end/start)^(move_count/decay_moves)
-        if cfg.temperature_start <= 0 or cfg.temperature_end <= 0:
-            return cfg.temperature_start
-        decay_factor = cfg.temperature_end / cfg.temperature_start
-        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
-        return cfg.temperature_start * (decay_factor ** progress)
-    elif cfg.temperature_decay_type == 'step':
-        # Step decay: use thresholds and values
-        for threshold, value in zip(cfg.temperature_step_thresholds, cfg.temperature_step_values):
-            if move_count < threshold:
-                return value
-        return cfg.temperature_end
-    else:
-        # Linear decay or unknown type - fall back to linear
-        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
-        return cfg.temperature_start + (cfg.temperature_end - cfg.temperature_start) * progress
+    return calculate_temperature_decay(
+        temperature_start=cfg.temperature_start,
+        temperature_end=cfg.temperature_end,
+        temperature_decay_type=cfg.temperature_decay_type,
+        temperature_decay_moves=cfg.temperature_decay_moves,
+        temperature_step_thresholds=cfg.temperature_step_thresholds,
+        temperature_step_values=cfg.temperature_step_values,
+        move_count=move_count,
+        board_size=board_size,
+    )

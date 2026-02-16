@@ -148,22 +148,51 @@ def safe_puct_denominator(n_sum: float) -> bool:
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
 
+def board_size_from_state(state: HexGameState) -> int:
+    """Extract and validate board size from a game state tensor."""
+    if state is None:
+        raise ValueError("State cannot be None")
+    board_tensor = state.get_board_tensor()
+    if not hasattr(board_tensor, "shape") or len(board_tensor.shape) < 2:
+        raise ValueError(f"Invalid board tensor shape: {getattr(board_tensor, 'shape', None)}")
+
+    board_rows = int(board_tensor.shape[-2])
+    board_cols = int(board_tensor.shape[-1])
+    if board_rows <= 0 or board_cols <= 0:
+        raise ValueError(f"Board tensor dimensions must be positive, got {board_rows}x{board_cols}")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {board_rows}x{board_cols}")
+    return board_cols
+
+
 # ------------------ Data structures ------------------
 
 class MCTSNode:
     __slots__ = (
         "state", "to_play", "legal_moves", "legal_indices",
         "children", "N", "W", "Q", "P", "is_expanded",
+        "board_size",
         "state_hash", "is_terminal", "winner", "winner_str", "terminal_moves",
         "_terminal_moves_detected", "depth"
     )
     def __init__(self, state: HexGameState, board_size: int):
         if state is None:
             raise ValueError("State cannot be None")
+        if isinstance(board_size, bool):
+            raise TypeError("Board size must be an integer, got bool")
         if board_size <= 0:
             raise ValueError(f"Board size must be positive, got {board_size}")
+
+        state_board_size = board_size_from_state(state)
+        if int(board_size) != state_board_size:
+            raise ValueError(
+                "Board size mismatch between node argument and state tensor: "
+                f"{board_size} vs {state_board_size}"
+            )
+        board_size = state_board_size
         
         self.state: HexGameState = state
+        self.board_size: int = board_size
         self.to_play: Player = state.current_player_enum
         # Legal moves
         self.legal_moves: List[Tuple[int,int]] = state.get_legal_moves()
@@ -490,8 +519,7 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _prepare_root_node(self, root_state: HexGameState, verbose: int, expand_root: bool = True) -> MCTSNode:
         """Prepare and initialize the root node for MCTS search."""
-        board_tensor = root_state.get_board_tensor()
-        board_size = int(board_tensor.shape[-1])
+        board_size = board_size_from_state(root_state)
         root = MCTSNode(root_state, board_size)
         
         # Expand root if not terminal
@@ -635,7 +663,12 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _expand_root_for_search(self, root: MCTSNode, root_state: HexGameState) -> None:
         """Expand root (and apply root noise) for full search when needed."""
-        board_size = int(root_state.get_board_tensor().shape[-1])
+        board_size = board_size_from_state(root_state)
+        if board_size != root.board_size:
+            raise ValueError(
+                "Root board size mismatch between root node and root_state: "
+                f"{root.board_size} vs {board_size}"
+            )
         if not root.is_terminal and not root.is_expanded:
             self._expand_root_node(root, board_size)
         if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
@@ -693,7 +726,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             win_probability=win_probability
         )
 
-    def _root_temperature(self, move_idx: int) -> float:
+    def _root_temperature(self, move_idx: int, board_size: int) -> float:
         """
         Compute root temperature for visit-count move selection.
 
@@ -715,6 +748,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             temperature_step_thresholds=self.cfg.temperature_step_thresholds,
             temperature_step_values=self.cfg.temperature_step_values,
             move_count=move_idx,
+            board_size=board_size,
         )
 
     def _get_policy_logits_and_legal_mask(self, root_state: HexGameState, legal_indices: List[int]) -> Tuple[np.ndarray, np.ndarray]:
@@ -730,7 +764,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         Returns:
             Tuple of (policy_logits_full, legal_mask)
         """
-        board_size = int(root_state.get_board_tensor().shape[-1])
+        board_size = board_size_from_state(root_state)
         action_size = board_size * board_size
         
         # Create legal mask
@@ -791,7 +825,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         forced_root_actions: Optional[List[int]]
     ) -> Tuple[int, Deque[int], int, int, bool]:
         """Compute selection budget and batch targets for one leaf-selection pass."""
-        board_size = int(root.state.get_board_tensor().shape[-1])
+        board_size = root.board_size
         legal_count = len(root.legal_moves)
         root_total_N = int(np.sum(root.N))
 
@@ -902,7 +936,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         if not root.is_expanded or len(root.children) == 0:
             return None
 
-        board_size = int(root.state.get_board_tensor().shape[-1])
+        board_size = root.board_size
         pv_moves: List[str] = []
         current = root
         for _ in range(3):
@@ -1342,11 +1376,16 @@ class BaselineMCTS(MCTSGumbelMixin):
             return
         
         timing_tracker.start_timing("expand")
-        board_size = int(leaves[0].state.get_board_tensor().shape[-1])
+        board_size = leaves[0].board_size
         action_size = board_size * board_size
         
         for (leaf_idx, policy_np, _) in cached_expansions:
             leaf = leaves[leaf_idx]
+            if leaf.board_size != board_size:
+                raise ValueError(
+                    "Mixed board sizes detected in cached leaf expansion batch: "
+                    f"{leaf.board_size} vs {board_size}"
+                )
             if not leaf.is_expanded and not leaf.is_terminal:
                 self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
         
@@ -1510,7 +1549,13 @@ class BaselineMCTS(MCTSGumbelMixin):
             raise RuntimeError("No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
         move_count = len(root_state.move_history)
-        temp = self._root_temperature(move_count)
+        state_board_size = board_size_from_state(root_state)
+        if state_board_size != root.board_size:
+            raise ValueError(
+                "Root board size mismatch between root node and root_state during move selection: "
+                f"{root.board_size} vs {state_board_size}"
+            )
+        temp = self._root_temperature(move_count, root.board_size)
 
         if verbose >= 4:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
