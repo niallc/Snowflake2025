@@ -41,16 +41,14 @@
 from __future__ import annotations
 
 import math
-import random
 import numpy as np
 import torch
-from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
-from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
+from hex_ai.value_utils import red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
 from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
     extract_principal_variation_from_tree,
@@ -75,8 +73,14 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE
 from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
+from hex_ai.inference.mcts_support import (
+    AlgorithmTerminationInfo,
+    MCTSResult,
+    MCTSStatsBuilder,
+    TerminalMoveDetector,
+    AlgorithmTerminationChecker,
+)
 from hex_ai.value_utils import winner_to_color
 
 # ---- MCTS Constants ----
@@ -143,215 +147,6 @@ def safe_puct_denominator(n_sum: float) -> bool:
     """
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
-
-# Default terminal detection parameters
-DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
-
-# ------------------ Terminal Move Detector ------------------
-class TerminalMoveDetector:
-    """Centralized terminal move detection with consistent behavior."""
-    
-    def __init__(self, max_detection_depth: int = 3):
-        self.max_detection_depth = max_detection_depth
-    
-    def should_detect_terminal_moves(self, node: MCTSNode) -> bool:
-        """Determine if terminal moves should be detected for this node."""
-        # Only detect at shallow depths
-        if node.depth > self.max_detection_depth:
-            return False
-        
-        # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 2
-        if len(node.state.move_history) < min_move_count:
-            return False
-        
-        # Don't detect if already done
-        if node._terminal_moves_detected:
-            return False
-        
-        return True
-    
-    def detect_terminal_moves(self, node: MCTSNode) -> bool:
-        """
-        Detect terminal moves for a given node.
-
-        This method uses the underlying game logic to check, for each legal move,
-        whether it results in an immediate win for the current player. It provides
-        a definitive proof of a win, rather than relying on heuristics or neural
-        network evaluations.
-
-        Returns:
-            bool: True if any terminal (winning) moves are found, False otherwise.
-        """
-        if not self.should_detect_terminal_moves(node):
-            return False
-        
-        # Reset terminal moves
-        node.terminal_moves = [False] * len(node.legal_moves)
-        
-        # Check each legal move
-        for i, (row, col) in enumerate(node.legal_moves):
-            new_state = node.state.make_move(row, col)
-            if new_state.game_over and new_state.winner == player_to_winner(node.to_play):
-                node.terminal_moves[i] = True
-        
-        node._terminal_moves_detected = True
-        return any(node.terminal_moves)
-    
-    def get_terminal_move(self, node: MCTSNode) -> Optional[Tuple[int, int]]:
-        """Get the first terminal move if any exist."""
-        if not node._terminal_moves_detected:
-            return None
-        
-        for i, is_terminal in enumerate(node.terminal_moves):
-            if is_terminal:
-                return node.legal_moves[i]
-        return None
-
-# ------------------ Algorithm Termination Info ------------------
-@dataclass
-class AlgorithmTerminationInfo:
-    """Simple info about algorithm termination."""
-    reason: str  # "terminal_move" or "neural_network_confidence"
-    move: Optional[Tuple[int, int]]  # The move to play (None for NN confidence)
-    win_prob: float  # Win probability
-
-# ------------------ MCTS Result ------------------
-@dataclass(frozen=True)
-class MCTSResult:
-    """Complete result of an MCTS search."""
-    move: Tuple[int, int]  # The selected move
-    stats: Dict[str, Any]  # Performance statistics
-    tree_data: Dict[str, Any]  # Tree information for analysis
-    root_node: MCTSNode  # The search tree root (for advanced use cases)
-    algorithm_termination_info: Optional[AlgorithmTerminationInfo]  # Algorithm termination details
-    win_probability: float  # Win probability for current player
-
-# ------------------ Stats Builder ------------------
-class MCTSStatsBuilder:
-    """Centralized stats creation with consistent structure."""
-    
-    def __init__(self, cache_hits: int, cache_misses: int):
-        self.cache_hits = cache_hits
-        self.cache_misses = cache_misses
-    
-    def create_base_stats(self) -> Dict[str, Any]:
-        """Create base stats structure with all common fields."""
-        return {
-            "encode_ms": 0.0, "stack_ms": 0.0, "h2d_ms": 0.0, "forward_ms": 0.0,
-            "pure_forward_ms": 0.0, "sync_ms": 0.0, "d2h_ms": 0.0, "expand_ms": 0.0,
-            "backprop_ms": 0.0, "select_ms": 0.0, "cache_lookup_ms": 0.0, "state_creation_ms": 0.0,
-            "batch_count": 0, "batch_sizes": [], "forward_ms_list": [],
-            "select_times": [], "cache_hit_times": [], "cache_miss_times": [],
-            "median_forward_ms_ex_warm": 0.0, "p90_forward_ms_ex_warm": 0.0,
-            "median_select_ms": 0.0, "median_cache_hit_ms": 0.0, "median_cache_miss_ms": 0.0,
-            "cache_hits": self.cache_hits, "cache_misses": self.cache_misses,
-        }
-    
-    def create_algorithm_termination_stats(self, termination_info: Optional[AlgorithmTerminationInfo] = None) -> Dict[str, Any]:
-        """Create stats for algorithm termination cases."""
-        stats = self.create_base_stats()
-        stats.update({
-            "total_simulations": 0, "simulations_per_second": 0.0,
-            "algorithm_termination_occurred": True,
-            "algorithm_termination_reason": termination_info.reason if termination_info else "unknown"
-        })
-        return stats
-    
-    def create_final_stats(self, timing_stats: Dict[str, Any], total_simulations: int, 
-                          total_search_time: float) -> Dict[str, Any]:
-        """Create final stats for completed MCTS runs."""
-        stats = self.create_base_stats()
-        stats.update(timing_stats)
-        stats.update({
-            "total_simulations": total_simulations,
-            "simulations_per_second": total_simulations / total_search_time if total_search_time > 0 else 0.0,
-            "algorithm_termination_occurred": False,
-            "algorithm_termination_reason": "none"
-        })
-        return stats
-
-# ------------------ Algorithm Termination Checker ------------------
-class AlgorithmTerminationChecker:
-    """Centralized algorithm termination checking with simple priority order."""
-    
-    def __init__(self, cfg: BaselineMCTSConfig, terminal_detector: TerminalMoveDetector):
-        self.cfg = cfg
-        self.terminal_detector = terminal_detector
-    
-    def should_terminate_early(self, root: MCTSNode, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]], root_is_expanded: bool = False) -> Optional[AlgorithmTerminationInfo]:
-        """
-        Check if we should terminate early. Returns None if we should continue with MCTS.
-        Returns EarlyTerminationInfo if we should terminate.
-        
-        Args:
-            root: The root node to check
-            verbose: Verbosity level
-            eval_cache: Evaluation cache for neural network confidence
-            root_is_expanded: Whether the root node has been expanded (affects confidence checking)
-        """
-        # 1. Check for terminal moves (highest priority) - works regardless of expansion
-        if self.cfg.enable_terminal_move_detection:
-            if self.terminal_detector.detect_terminal_moves(root):
-                terminal_move = self.terminal_detector.get_terminal_move(root)
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Found terminal move: {terminal_move}")
-                return AlgorithmTerminationInfo(
-                    reason="terminal_move",
-                    move=terminal_move,
-                    win_prob=1.0  # Guaranteed win
-                )
-        
-        # 2. Check neural network confidence (requires root expansion)
-        if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
-            signed_value = self._get_root_signed_value(root, eval_cache)
-            if self._is_position_clearly_decided(signed_value):
-                # In self-play, we sometimes keep running MCTS even for clearly decided positions.
-                # This reduces drift by ensuring a small fraction of training targets remain
-                # MCTS-improved instead of pure-policy fallbacks.
-                if random.random() >= self.cfg.confidence_termination_probability:
-                    if verbose >= 3:
-                        print(
-                            f"🎮 MCTS: Confidence termination suppressed (prob={self.cfg.confidence_termination_probability:.3f}, "
-                            f"signed value: {signed_value:.3f})"
-                        )
-                    return None
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Confidence-based termination (signed value: {signed_value:.3f})")
-                return AlgorithmTerminationInfo(
-                    reason="neural_network_confidence",
-                    move=None,  # Will use top policy move
-                    win_prob=signed_value
-                )
-        
-        return None  # Continue with MCTS
-    
-    def _get_root_signed_value(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
-        """Get signed value for current player from neural network (edge conversion)."""
-        cached = eval_cache.get(root.state_hash)
-        if cached is None:
-            raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
-        _, value_signed = cached
-        
-        # Validate that the cached value is in the expected signed range
-        if not -1.1 <= value_signed <= 1.1:
-            raise ValueError(f"Neural network output {value_signed} is outside expected signed range [-1, 1]. "
-                           f"This suggests a mismatch between probability and signed value semantics.")
-        
-        # Convert signed value to player-to-move reference frame for confidence termination
-        # value_signed is the tanh-activated output in [-1,1] range in Red's reference frame
-        v_red_ref_signed = float(value_signed)
-        # Flip to player-to-move reference frame: if RED to move keep v_red_ref_signed, if BLUE to move flip to -v_red_ref_signed
-        v_ptm_ref_signed = red_ref_signed_to_ptm_ref_signed(v_red_ref_signed, root.to_play)
-        # Return signed value directly (no conversion to probability needed)
-        return v_ptm_ref_signed
-    
-    def _is_position_clearly_decided(self, signed_value: float) -> bool:
-        """Check if position is clearly won or lost using signed values."""
-        # signed_value is in [-1, 1] range in player-to-move reference frame
-        # Check if position is clearly won (> threshold) or clearly lost (< -threshold)
-        return (signed_value >= self.cfg.confidence_termination_threshold or 
-                signed_value <= -self.cfg.confidence_termination_threshold)
 
 # ------------------ Data structures ------------------
 
