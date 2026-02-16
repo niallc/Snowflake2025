@@ -70,6 +70,7 @@ from hex_ai.utils.format_conversion import (
 )
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
+from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.mcts_gumbel import MCTSGumbelMixin
@@ -836,12 +837,15 @@ class BaselineMCTS(MCTSGumbelMixin):
     ) -> int:
         """Select child index for one descent step, handling forced root actions and reservations."""
         if node is root and forced_a_full is not None:
-            if forced_a_full not in node.legal_indices:
-                raise ValueError(
-                    f"Gumbel forced illegal root action {forced_a_full}; "
-                    f"legal actions count={len(node.legal_indices)}"
-                )
-            return node.legal_indices.index(forced_a_full)
+            forced_action = assert_actions_subset_of_legal(
+                actions=[int(forced_a_full)],
+                legal_actions=node.legal_indices,
+                context="_resolve_child_index_for_descent",
+                contract_name="Forced-root legality contract",
+                actions_label="Forced action",
+                legal_label="Current root legal_indices",
+            )[0]
+            return node.legal_indices.index(forced_action)
 
         if node is root and use_root_reservation:
             return self._select_child_puct(node, node.depth, used_root_actions)
@@ -1085,11 +1089,28 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
         """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
+        normalized_actions = assert_actions_subset_of_legal(
+            actions=actions,
+            legal_actions=root.legal_indices,
+            context="run_forced_root_actions:entry",
+            contract_name="Forced-root legality contract",
+            actions_label="Forced actions",
+            legal_label="Current root legal_indices",
+        )
+
         timing_tracker = MCTSTimingTracker()
         i = 0
-        while i < len(actions):
-            j = min(i + self.cfg.batch_cap, len(actions))
-            sims_done = self._run_forced_root_batch(root, actions[i:j], timing_tracker)
+        while i < len(normalized_actions):
+            j = min(i + self.cfg.batch_cap, len(normalized_actions))
+            chunk_actions = assert_actions_subset_of_legal(
+                actions=normalized_actions[i:j],
+                legal_actions=root.legal_indices,
+                context=f"run_forced_root_actions:batch[{i}:{j}]",
+                contract_name="Forced-root legality contract",
+                actions_label="Forced action chunk",
+                legal_label="Current root legal_indices",
+            )
+            sims_done = self._run_forced_root_batch(root, chunk_actions, timing_tracker)
             self._effective_sims_total += sims_done
             i = j
         return timing_tracker.get_final_stats()

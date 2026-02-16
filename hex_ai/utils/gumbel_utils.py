@@ -22,6 +22,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_MAX,
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
 )
+from hex_ai.utils.legal_action_contracts import assert_exact_legal_action_match
 
 
 def calculate_power_law_candidates(
@@ -222,7 +223,7 @@ def gumbel_alpha_zero_root_batched(
         Tuple of (selected_action_index, performance_metrics_dict)
         
     Raises:
-        ValueError: If parameters are invalid
+        ValueError: If parameters are invalid or legality contracts are violated
         RuntimeError: If no legal actions available
     """
     
@@ -278,27 +279,15 @@ def gumbel_alpha_zero_root_batched(
     # Setup phase timing
     setup_start = time.perf_counter()
     
-    # Validate that legal_actions are actually legal at current root state
-    # This prevents Gumbel from selecting actions that became illegal due to state changes
-    current_legal_indices = set(root.legal_indices)
-    validated_legal_actions = [a for a in legal_actions if a in current_legal_indices]
-    
-    if len(validated_legal_actions) != len(legal_actions):
-        # Log the mismatch for debugging
-        illegal_actions = [a for a in legal_actions if a not in current_legal_indices]
-        
-        # If no actions remain valid, this is a critical error
-        if not validated_legal_actions:
-            raise RuntimeError(
-                f"Gumbel legal actions became illegal. "
-                f"Root state may have changed unexpectedly.\n"
-                f"Illegal actions: {illegal_actions}\n"
-                f"Validated legal actions (after filtering): {validated_legal_actions}\n"
-                f"Current legal indices at root: {sorted(current_legal_indices)}"
-            )
-        
-        # Update legal_actions to only include valid ones
-        legal_actions = validated_legal_actions
+    legal_actions = assert_exact_legal_action_match(
+        expected_actions=legal_actions,
+        observed_actions=root.legal_indices,
+        context="gumbel_alpha_zero_root_batched:entry",
+        contract_name="Gumbel legality contract",
+        expected_label="Provided legal_actions",
+        observed_label="Current root legal_indices",
+    )
+    expected_root_legal_actions = legal_actions.copy()
     
     # Create mask for illegal actions
     mask = np.full(K, -np.inf)
@@ -536,6 +525,15 @@ def gumbel_alpha_zero_root_batched(
             for a in cand:
                 assert counts[a] == per_arm
 
+        assert_exact_legal_action_match(
+            expected_actions=expected_root_legal_actions,
+            observed_actions=root.legal_indices,
+            context=f"gumbel_alpha_zero_root_batched:round_{r + 1}_pre_forced_actions",
+            contract_name="Gumbel legality contract",
+            expected_label="Expected root legal_actions snapshot",
+            observed_label="Current root legal_indices",
+        )
+
         # Run the forced actions
         stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
         nn_calls_per_move += stats.get("batch_count", 0)
@@ -608,6 +606,15 @@ def gumbel_alpha_zero_root_batched(
     
     # Final ranking timing
     ranking_start = time.perf_counter()
+
+    assert_exact_legal_action_match(
+        expected_actions=expected_root_legal_actions,
+        observed_actions=root.legal_indices,
+        context="gumbel_alpha_zero_root_batched:final_ranking",
+        contract_name="Gumbel legality contract",
+        expected_label="Expected root legal_actions snapshot",
+        observed_label="Current root legal_indices",
+    )
     
     # Final pick - deterministic ranking without Gumbel noise.
     final_rank_rows = build_gumbel_score_rows(
