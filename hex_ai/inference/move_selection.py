@@ -13,7 +13,8 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import select_policy_move
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
+from hex_ai.inference.mcts import BaselineMCTS
+from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.config import (
     DEFAULT_GUMBEL_SIM_THRESHOLD,
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,

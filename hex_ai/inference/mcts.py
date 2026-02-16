@@ -44,7 +44,7 @@ import math
 import random
 import numpy as np
 import torch
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
 
@@ -75,23 +75,8 @@ from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
 from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
-from hex_ai.config import (
-    BOARD_SIZE as CFG_BOARD_SIZE, 
-    DEFAULT_BATCH_CAP, 
-    DEFAULT_C_PUCT, 
-    DEFAULT_GUMBEL_SIM_THRESHOLD,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
-    DEFAULT_GUMBEL_CANDIDATE_MIN,
-    DEFAULT_GUMBEL_CANDIDATE_MAX,
-    DEFAULT_GUMBEL_C_VISIT,
-    DEFAULT_MCTS_DIRICHLET_ALPHA,
-    DEFAULT_GUMBEL_C_SCALE,
-    DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
-    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
-    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD
-)
+from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE
+from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.value_utils import winner_to_color
 
 # ---- MCTS Constants ----
@@ -100,18 +85,6 @@ PRINCIPAL_VARIATION_MAX_LENGTH = 11
 
 # PUCT calculation threshold for avoiding division by zero
 PUCT_CALCULATION_THRESHOLD = 1e-9
-
-# Default confidence-based termination threshold (distance from neutral for signed values)
-DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
-
-# Default terminal move boost factor
-DEFAULT_TERMINAL_MOVE_BOOST = 2.0
-
-
-# Default depth discount factor
-DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
-
-
 
 # ---- MCTS Invariant Wrappers ----
 def q_from_w_n(w: float, n: int) -> float:
@@ -171,28 +144,8 @@ def safe_puct_denominator(n_sum: float) -> bool:
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
 
-# Default cache size for LRU eviction
-DEFAULT_CACHE_SIZE = 100000  # 100k entries
-
-# Default Dirichlet noise parameters
-DEFAULT_DIRICHLET_EPS = 0.25
-
-# Default temperature parameters
-DEFAULT_TEMPERATURE_START = 1.0
-DEFAULT_TEMPERATURE_END = 0.1
-DEFAULT_TEMPERATURE_DECAY_TYPE = "exponential"
-DEFAULT_TEMPERATURE_DECAY_MOVES = 50
-
 # Default terminal detection parameters
-DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
 DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
-
-# Default Gumbel temperature control parameters
-DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
-DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
-
-# Default top-k filtering for visit count sampling
-DEFAULT_VISIT_SAMPLING_TOP_K = 5
 
 # ------------------ Terminal Move Detector ------------------
 class TerminalMoveDetector:
@@ -399,170 +352,6 @@ class AlgorithmTerminationChecker:
         # Check if position is clearly won (> threshold) or clearly lost (< -threshold)
         return (signed_value >= self.cfg.confidence_termination_threshold or 
                 signed_value <= -self.cfg.confidence_termination_threshold)
-
-# ------------------ Config ------------------
-@dataclass
-class BaselineMCTSConfig:
-    sims: int = 200
-    batch_cap: int = DEFAULT_BATCH_CAP
-    c_puct: float = DEFAULT_C_PUCT
-    cache_size: int = DEFAULT_CACHE_SIZE
-    dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
-    dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
-    add_root_noise: bool = False
-    # Temperature scaling parameters (always used)
-    temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
-    temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
-    temperature_decay_type: str = DEFAULT_TEMPERATURE_DECAY_TYPE  # "linear", "exponential", "step", "game_progress"
-    temperature_decay_moves: int = DEFAULT_TEMPERATURE_DECAY_MOVES  # Number of moves for decay (for linear/exponential)
-    temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
-    temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
-    # Terminal move detection parameters
-    enable_terminal_move_detection: bool = DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION  # Enable immediate terminal move detection
-    terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
-    
-    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
-    
-    # New terminal move handling
-    prefer_immediate_terminal: bool = True  # Force immediate terminal wins deterministically
-    terminal_win_score_bonus: float = 0.25  # Small score bonus for terminal moves (only used if prefer_immediate_terminal=False)
-    
-    # Adaptive batch selection for low simulation counts
-    adaptive_distinct_target: bool = False  # Make distinct_target adaptive at low sims
-    distinct_target_min: int = 8  # Minimum distinct target
-    distinct_target_max: int = 16  # Maximum distinct target
-    # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
-    # Randomness should be controlled externally
-
-    # Confidence-based termination parameters
-    enable_confidence_termination: bool = False
-    confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD  # Distance from neutral (0) for termination
-    confidence_termination_probability: float = 0.98 # Probability of early termination when threshold is exceeded
-    
-    # Depth-based discounting parameters
-    enable_depth_discounting: bool = True
-    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR
-    
-    # Top-k filtering for visit count sampling
-    visit_sampling_top_k: int = DEFAULT_VISIT_SAMPLING_TOP_K  # Only consider top-k most visited moves for sampling
-    
-    # Gumbel-AlphaZero root selection parameters
-    enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
-    gumbel_c_visit: float = DEFAULT_GUMBEL_C_VISIT  # Gumbel-AlphaZero c_visit parameter
-    gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
-    gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
-    
-    # Gumbel candidate scaling parameters (power-law scaling)
-    gumbel_candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE  # Scale factor for power-law candidate scaling
-    gumbel_candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE  # Rate (exponent) for power-law candidate scaling
-    gumbel_candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET  # Offset for power-law candidate scaling
-    gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
-    gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
-    # Gumbel ranking stabilization parameters
-    gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
-    # NOTE: Gumbel now validates legal actions and crashes on illegal forced actions instead of falling back to PUCT
-    # This exposes desync bugs between the action list and root state rather than masking them
-    
-    # Gumbel temperature control parameters
-    gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
-    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
-    gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
-    
-    # Batch flushing control parameters
-    # DESIGN: Fixed values for consistent performance across simulation counts
-    # The original dynamic logic caused performance drops at higher simulation counts
-    # due to inconsistent batch flushing behavior as the tree became more explored.
-    distinct_target: int = 32  # Target number of distinct leaves before flushing batch (fixed for consistency)
-    enable_low_distinct_ratio_flush: bool = False  # Disabled by default to prevent performance drops
-
-    # This makes actual terminal wins (immediate wins) even more attractive than
-    # neural network evaluations, encouraging the algorithm to find and prefer them.
-    
-    def __post_init__(self):
-        """Validate configuration parameters after initialization."""
-        if self.sims <= 0:
-            raise ValueError(f"sims must be positive, got {self.sims}")
-        if self.batch_cap <= 0:
-            raise ValueError(f"batch_cap must be positive, got {self.batch_cap}")
-        if self.c_puct <= 0:
-            raise ValueError(f"c_puct must be positive, got {self.c_puct}")
-        if self.cache_size <= 0:
-            raise ValueError(f"cache_size must be positive, got {self.cache_size}")
-        if self.dirichlet_alpha <= 0:
-            raise ValueError(f"dirichlet_alpha must be positive, got {self.dirichlet_alpha}")
-        if not 0 <= self.dirichlet_eps <= 1:
-            raise ValueError(f"dirichlet_eps must be between 0 and 1, got {self.dirichlet_eps}")
-        if self.temperature_start <= 0:
-            raise ValueError(f"temperature_start must be positive, got {self.temperature_start}")
-        if self.temperature_end <= 0:
-            raise ValueError(f"temperature_end must be positive, got {self.temperature_end}")
-        if self.temperature_start < self.temperature_end:
-            raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
-        if self.temperature_decay_moves <= 0:
-            raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
-        if self.terminal_move_boost < 0:
-            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
-        if self.terminal_detection_max_depth < 0:
-            raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
-        if not 0 <= self.confidence_termination_threshold <= 1:
-            raise ValueError(f"confidence_termination_threshold must be between 0 and 1 (represents distance from neutral), got {self.confidence_termination_threshold}")
-        if not 0 <= self.confidence_termination_probability <= 0.98:
-            raise ValueError(
-                "confidence_termination_probability must be between 0 and 1 "
-                f"(probability of early termination when threshold is exceeded), got {self.confidence_termination_probability}"
-            )
-        if not 0 < self.depth_discount_factor <= 1:
-            raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
-        
-        # Validate batch flushing parameters
-        if self.distinct_target <= 0:
-            raise ValueError(f"distinct_target must be positive, got {self.distinct_target}")
-        if self.distinct_target > self.batch_cap:
-            raise ValueError(f"distinct_target ({self.distinct_target}) cannot exceed batch_cap ({self.batch_cap})")
-        
-        # Validate new adaptive batch parameters
-        if self.distinct_target_min <= 0:
-            raise ValueError(f"distinct_target_min must be positive, got {self.distinct_target_min}")
-        if self.distinct_target_max <= 0:
-            raise ValueError(f"distinct_target_max must be positive, got {self.distinct_target_max}")
-        if self.distinct_target_min > self.distinct_target_max:
-            raise ValueError(f"distinct_target_min ({self.distinct_target_min}) cannot exceed distinct_target_max ({self.distinct_target_max})")
-
-        # Validate Gumbel-AlphaZero parameters
-        if self.gumbel_sim_threshold <= 0:
-            raise ValueError(f"gumbel_sim_threshold must be positive, got {self.gumbel_sim_threshold}")
-        if self.gumbel_c_visit <= 0:
-            raise ValueError(f"gumbel_c_visit must be positive, got {self.gumbel_c_visit}")
-        if self.gumbel_c_scale <= 0:
-            raise ValueError(f"gumbel_c_scale must be positive, got {self.gumbel_c_scale}")
-        if self.gumbel_m_candidates is not None and self.gumbel_m_candidates <= 0:
-            raise ValueError(f"gumbel_m_candidates must be positive, got {self.gumbel_m_candidates}")
-        
-        # Validate Gumbel candidate scaling parameters
-        if self.gumbel_candidate_power_scale <= 0.0:
-            raise ValueError(f"gumbel_candidate_power_scale must be > 0.0, got {self.gumbel_candidate_power_scale}")
-        if self.gumbel_candidate_power_rate <= 0.0:
-            raise ValueError(f"gumbel_candidate_power_rate must be > 0.0, got {self.gumbel_candidate_power_rate}")
-        if self.gumbel_candidate_min <= 0:
-            raise ValueError(f"gumbel_candidate_min must be positive, got {self.gumbel_candidate_min}")
-        if self.gumbel_candidate_max <= 0:
-            raise ValueError(f"gumbel_candidate_max must be positive, got {self.gumbel_candidate_max}")
-        if self.gumbel_candidate_min > self.gumbel_candidate_max:
-            raise ValueError(f"gumbel_candidate_min ({self.gumbel_candidate_min}) cannot exceed gumbel_candidate_max ({self.gumbel_candidate_max})")
-        
-        # Validate Gumbel temperature control parameters
-        if self.temperature_deterministic_cutoff <= 0:
-            raise ValueError(f"temperature_deterministic_cutoff must be positive, got {self.temperature_deterministic_cutoff}")
-        
-        # Validate temperature step parameters if using step decay
-        if self.temperature_decay_type == "step":
-            if len(self.temperature_step_thresholds) != len(self.temperature_step_values):
-                raise ValueError("temperature_step_thresholds and temperature_step_values must have the same length")
-            if not all(t >= 0 for t in self.temperature_step_thresholds):
-                raise ValueError("All temperature_step_thresholds must be non-negative")
-            if not all(0 < v <= 1 for v in self.temperature_step_values):
-                raise ValueError("All temperature_step_values must be between 0 and 1")
 
 # ------------------ Data structures ------------------
 
@@ -2641,123 +2430,6 @@ class BaselineMCTS:
             "cache_hit_rate": self.cache_hits / max(1, self.cache_hits + self.cache_misses),
             "cache_utilization": len(self.eval_cache) / self.cfg.cache_size
         }
-
-
-def create_mcts_config(
-    config_type: str = "tournament",
-    sims: Optional[int] = None,
-    confidence_termination_threshold: Optional[float] = None,
-    confidence_termination_probability: Optional[float] = None,
-    cache_size: Optional[int] = None,
-    **kwargs
-) -> BaselineMCTSConfig:
-    """
-    Create an MCTS configuration with preset defaults for different use cases.
-    
-    Args:
-        config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
-        sims: Number of simulations (overrides preset default)
-        confidence_termination_threshold: Distance from neutral for confidence termination (overrides preset default)
-        confidence_termination_probability: Probability of early termination when threshold is exceeded (overrides preset default)
-        cache_size: Cache size for MCTS evaluation cache (overrides preset default)
-        **kwargs: Additional parameters to override in the configuration
-        
-    Returns:
-        BaselineMCTSConfig with appropriate settings for the specified use case
-    """
-    # Define preset configurations
-    presets = {
-        "tournament": {
-            "sims": 200,
-            "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
-            "confidence_termination_probability": 0.95,
-            "temperature_start": 1.0,
-            "temperature_end": 1.0,  # Fixed: No temperature decay in tournaments
-            "add_root_noise": True,
-        },
-        "selfplay": {
-            "sims": 500,
-            "confidence_termination_threshold": 0.85,
-            # Only early-terminate most of the time in self-play to keep a small fraction
-            # of high-confidence positions as MCTS-improved targets.
-            "confidence_termination_probability": 0.95,
-            "temperature_start": 0.5,
-            "temperature_end": 0.01,
-            "add_root_noise": True,  # Enable for exploration in self-play
-        },
-        "fast_selfplay": {
-            "sims": 200,
-            "confidence_termination_threshold": 0.8,
-            "temperature_start": 0.5,
-            "temperature_end": 0.01,
-            "add_root_noise": True,
-        }
-    }
-    
-    if config_type not in presets:
-        raise ValueError(f"Unknown config_type: {config_type}. Must be one of {list(presets.keys())}")
-    
-    # Start with preset configuration
-    config_params = presets[config_type].copy()
-    
-    # Override with provided parameters
-    if sims is not None:
-        config_params["sims"] = sims
-    if confidence_termination_threshold is not None:
-        config_params["confidence_termination_threshold"] = confidence_termination_threshold
-    if confidence_termination_probability is not None:
-        config_params["confidence_termination_probability"] = confidence_termination_probability
-    if cache_size is not None:
-        config_params["cache_size"] = cache_size
-    
-    # Override with any additional kwargs
-    config_params.update(kwargs)
-    
-    # Add common defaults across presets, but do not clobber explicit overrides.
-    default_params = {
-        "c_puct": DEFAULT_C_PUCT,
-        "batch_cap": DEFAULT_BATCH_CAP,
-        "dirichlet_alpha": DEFAULT_MCTS_DIRICHLET_ALPHA,
-        "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
-        "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
-        "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
-        # Terminal move detection (always enabled)
-        "enable_terminal_move_detection": DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
-        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
-        "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
-        # New terminal move handling
-        "prefer_immediate_terminal": True,
-        "terminal_win_score_bonus": 0.25,
-        # Adaptive batch selection
-        "adaptive_distinct_target": False,
-        "distinct_target_min": 8,
-        "distinct_target_max": 16,
-        # Confidence-based termination (always enabled)
-        "enable_confidence_termination": True,
-        # Depth-based discounting to encourage shorter wins
-        "enable_depth_discounting": True,
-        "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
-        # Gumbel temperature control (always enabled)
-        "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
-        "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-        "gumbel_temperature_deterministic_cutoff": -1.0,  # Disable cutoff for Gumbel
-        # Batch flushing control (fixed for consistent performance)
-        "distinct_target": 32,  # Fixed distinct target for consistent batch behavior
-        "enable_low_distinct_ratio_flush": False,  # Disabled to maintain consistent batch sizes
-    }
-    
-    explicit_distinct_target = "distinct_target" in config_params
-    for key, value in default_params.items():
-        config_params.setdefault(key, value)
-
-    # Preserve explicit overrides, but keep default distinct_target compatible with custom batch_cap.
-    if not explicit_distinct_target:
-        config_params["distinct_target"] = min(int(config_params["distinct_target"]), int(config_params["batch_cap"]))
-    
-    return BaselineMCTSConfig(**config_params)
-
-
-
 
 def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: BaselineMCTSConfig, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
     """Run MCTS for one move and return (row,col), stats, tree_data, algorithm_termination_info."""
