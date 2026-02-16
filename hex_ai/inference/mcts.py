@@ -624,6 +624,18 @@ class BaselineMCTS(MCTSGumbelMixin):
         while sims_remaining > 0:
             leaves, paths = self._select_leaves_batch(root, sims_remaining, timing_tracker)
             batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker, root)
+            if batch_simulations <= 0:
+                raise ValueError(
+                    "Zero-progress standard simulation batch in _run_standard_simulation_loop. "
+                    f"sims_remaining={sims_remaining}, batch_simulations={batch_simulations}, "
+                    f"selected_leaves={len(leaves)}, selected_paths={len(paths)}"
+                )
+            if batch_simulations > sims_remaining:
+                raise ValueError(
+                    "Over-progress standard simulation batch in _run_standard_simulation_loop. "
+                    f"sims_remaining={sims_remaining}, batch_simulations={batch_simulations}, "
+                    f"selected_leaves={len(leaves)}, selected_paths={len(paths)}"
+                )
             sims_remaining -= batch_simulations
             self._effective_sims_total += batch_simulations
 
