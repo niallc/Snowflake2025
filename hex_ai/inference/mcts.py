@@ -45,7 +45,7 @@ import random
 import numpy as np
 import torch
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
 
 # ---- Package imports ----
@@ -1676,6 +1676,125 @@ class BaselineMCTS:
         
         return probs
 
+    def _compute_leaf_batch_targets(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        forced_root_actions: Optional[List[int]]
+    ) -> Tuple[int, Deque[int], int, int, bool]:
+        """Compute selection budget and batch targets for one leaf-selection pass."""
+        board_size = int(root.state.get_board_tensor().shape[-1])
+        legal_count = len(root.legal_moves)
+        root_total_N = int(np.sum(root.N))
+
+        # Early-phase smaller batches (until a few backprops happen).
+        warmup_cap = 16
+        is_early = root_total_N < 64
+        general_select_budget = min(self.cfg.batch_cap, sims_remaining)
+        effective_select_budget = min(general_select_budget, warmup_cap) if is_early else general_select_budget
+
+        # Never try to collect more distinct leaves than legal root moves or sims left.
+        effective_distinct_target = min(
+            int(self.cfg.distinct_target),
+            effective_select_budget,
+            legal_count,
+            max(1, sims_remaining)
+        )
+
+        if forced_root_actions is not None:
+            force_q: Deque[int] = deque(forced_root_actions)
+            select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
+        else:
+            force_q = deque()
+            select_budget = int(effective_select_budget)
+
+        if self.cfg.adaptive_distinct_target:
+            # Encourage earlier backprops at low sims; keep batches tidy.
+            guess = max(1, sims_remaining // 8)
+            distinct_target = int(max(self.cfg.distinct_target_min,
+                                      min(self.cfg.distinct_target_max, guess)))
+        else:
+            distinct_target = max(1, int(effective_distinct_target))
+
+        use_root_reservation = (root_total_N < 64)
+        return board_size, force_q, select_budget, distinct_target, use_root_reservation
+
+    def _should_flush_selected_batch(self, total_leaves: int, distinct_count: int, distinct_target: int) -> Optional[str]:
+        """Return flush reason when a batch should be processed immediately."""
+        if distinct_count >= distinct_target:
+            return "distinct_target_reached"
+        if self.cfg.enable_low_distinct_ratio_flush and total_leaves >= 16 and distinct_count / max(1, total_leaves) < 0.5:
+            return "low_distinct_ratio"
+        return None
+
+    def _resolve_child_index_for_descent(
+        self,
+        node: MCTSNode,
+        root: MCTSNode,
+        forced_a_full: Optional[int],
+        use_root_reservation: bool,
+        used_root_actions: Set[int],
+    ) -> int:
+        """Select child index for one descent step, handling forced root actions and reservations."""
+        if node is root and forced_a_full is not None:
+            if forced_a_full not in node.legal_indices:
+                raise ValueError(
+                    f"Gumbel forced illegal root action {forced_a_full}; "
+                    f"legal actions count={len(node.legal_indices)}"
+                )
+            return node.legal_indices.index(forced_a_full)
+
+        if node is root and use_root_reservation:
+            return self._select_child_puct(node, node.depth, used_root_actions)
+        return self._select_child_puct(node, node.depth)
+
+    def _realize_child_node_if_needed(
+        self,
+        node: MCTSNode,
+        loc_idx: int,
+        board_size: int,
+        timing_tracker: MCTSTimingTracker,
+    ) -> MCTSNode:
+        """Create and attach child node if it does not exist yet."""
+        child = node.children[loc_idx]
+        if child is not None:
+            return child
+
+        timing_tracker.start_timing("state_creation")
+        (r, c) = node.legal_moves[loc_idx]
+        timing_tracker.start_timing("make_move")
+        child_state = node.state.make_move(r, c)
+        timing_tracker.end_timing("make_move")
+        child = MCTSNode(child_state, board_size)
+        child.depth = node.depth + 1
+        timing_tracker.end_timing("state_creation")
+        node.children[loc_idx] = child
+
+        if self.detailed_exploration_enabled:
+            move_str = f"{chr(ord('a') + c)}{r + 1}"
+            self._record_node_realized(child.depth, move_str, child.state_hash)
+        return child
+
+    def _build_root_pv_hint(self, root: MCTSNode) -> Optional[List[str]]:
+        """Build a short principal-variation hint for detailed exploration traces."""
+        if not root.is_expanded or len(root.children) == 0:
+            return None
+
+        pv_moves: List[str] = []
+        current = root
+        for _ in range(3):
+            if not current.is_expanded or len(current.children) == 0:
+                break
+            best_child_idx = int(np.argmax(current.N))
+            if best_child_idx >= len(current.legal_moves):
+                break
+            r, c = current.legal_moves[best_child_idx]
+            pv_moves.append(f"{chr(ord('a') + c)}{r + 1}")
+            current = current.children[best_child_idx]
+            if current is None:
+                break
+        return pv_moves if pv_moves else None
+
 
     def _select_leaves_batch(
         self,
@@ -1703,53 +1822,15 @@ class BaselineMCTS:
         leaves: List[MCTSNode] = []
         paths: List[List[Tuple[MCTSNode, int]]] = []
 
-        board_size = int(root.state.get_board_tensor().shape[-1])
-
-        # Handle early exploration at the root:
-        legal_count = len(root.legal_moves)
-        root_total_N = int(np.sum(root.N))
-
-        # 1) Early-phase smaller batches (until a few backprops happen)
-        warmup_cap = 16                      # conservative early cap
-        is_early = root_total_N < 64         # ~ first few backprops at root
-        general_select_budget = min(self.cfg.batch_cap, sims_remaining)
-        effective_select_budget = min(general_select_budget, warmup_cap) if is_early else general_select_budget
-        # 2) Never try to collect more distinct leaves than there are legal root moves or sims left
-        effective_distinct_target = min(
-            int(self.cfg.distinct_target),
-            effective_select_budget,
-            legal_count,
-            max(1, sims_remaining)
+        board_size, force_q, select_budget, distinct_target, use_root_reservation = self._compute_leaf_batch_targets(
+            root, sims_remaining, forced_root_actions
         )
-
-        # If caller supplies forced actions (likely as part of Gumbel), we must collect exactly that many leaves for this batch
-        if forced_root_actions is not None:
-            force_q = deque(forced_root_actions)
-            select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
-        else:
-            # Non-Gumbel code path
-            force_q = deque()
-            # select_budget = min(self.cfg.batch_cap, sims_remaining)
-            select_budget = int(effective_select_budget)
-
-        # Use adaptive distinct target for low simulation counts
-        if self.cfg.adaptive_distinct_target:
-            # Encourage earlier backprops at low sims; keep batches tidy.
-            # Example heuristic: ~1/8th of remaining sims, clamped to [min, max].
-            guess = max(1, sims_remaining // 8)
-            distinct_target = int(max(self.cfg.distinct_target_min,
-                                      min(self.cfg.distinct_target_max, guess)))
-        else:
-            # distinct_target = int(self.cfg.distinct_target)
-            # distinct_target = max(1, min(distinct_target, select_budget))  # <- clamp
-            distinct_target = max(1, int(effective_distinct_target))
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
 
         # Root-only batch-local "reservation" for early phase
         # This prevents overexploration of top policy moves before any backpropagations occur
-        use_root_reservation = (root_total_N < 64)  # only early phase
         used_root_actions: Set[int] = set()  # tracks root actions used in this batch
 
         # Cheap guardrail on selection work
@@ -1798,44 +1879,21 @@ class BaselineMCTS:
                             len(leaves), len(distinct_hashes), distinct_target
                         )
 
-                    # Batch flushing logic: determine when to call the neural network
-                    # U = number of distinct (uncached) leaves that need NN evaluation
-                    # T = total number of leaves collected so far
                     U = len(distinct_hashes)
                     T = len(leaves)
-                    
-                    # Primary flush condition: enough distinct leaves for efficient NN batch
-                    if U >= distinct_target:
+
+                    flush_reason = self._should_flush_selected_batch(T, U, distinct_target)
+                    if flush_reason is not None:
                         if self.detailed_exploration_enabled:
-                            self._record_batch_flush("distinct_target_reached", T, U, distinct_target, select_budget)
-                        timing_tracker.end_timing("select")
-                        return leaves, paths
-                    
-                    # Secondary flush condition: low distinct ratio (disabled by default)
-                    # This was causing performance drops at higher simulation counts
-                    if self.cfg.enable_low_distinct_ratio_flush and T >= 16 and U / max(1, T) < 0.5:
-                        if self.detailed_exploration_enabled:
-                            self._record_batch_flush("low_distinct_ratio", T, U, distinct_target, select_budget)
+                            self._record_batch_flush(flush_reason, T, U, distinct_target, select_budget)
                         timing_tracker.end_timing("select")
                         return leaves, paths
                     break
 
                 # Choose child
-                # First check for Gumbel-specific forced action
-                if node is root and forced_a_full is not None:
-                    # Map full action index -> local child idx (legal_indices aligns with stats arrays).
-                    if forced_a_full not in node.legal_indices:
-                        raise ValueError(
-                            f"Gumbel forced illegal root action {forced_a_full}; "
-                            f"legal actions count={len(node.legal_indices)}"
-                        )
-                    loc_idx = node.legal_indices.index(forced_a_full)
-                else:
-                    # Non-Gumbel code path with root reservation logic
-                    if node is root and use_root_reservation:
-                        loc_idx = self._select_child_puct(node, node.depth, used_root_actions)
-                    else:
-                        loc_idx = self._select_child_puct(node, node.depth)
+                loc_idx = self._resolve_child_index_for_descent(
+                    node, root, forced_a_full, use_root_reservation, used_root_actions
+                )
 
                 path.append((node, loc_idx))
                 
@@ -1843,26 +1901,7 @@ class BaselineMCTS:
                 if node is root and use_root_reservation:
                     used_root_actions.add(loc_idx)
                 
-                child = node.children[loc_idx]
-
-                if child is None:
-                    timing_tracker.start_timing("state_creation")
-                    (r, c) = node.legal_moves[loc_idx]
-                    timing_tracker.start_timing("make_move")
-                    child_state = node.state.make_move(r, c)
-                    timing_tracker.end_timing("make_move")
-                    child = MCTSNode(child_state, board_size)
-                    child.depth = node.depth + 1
-                    timing_tracker.end_timing("state_creation")
-                    node.children[loc_idx] = child
-                    
-                    # Record node realization for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        r, c = node.legal_moves[loc_idx]
-                        move_str = f"{chr(97 + c)}{r + 1}"
-                        self._record_node_realized(child.depth, move_str, child.state_hash)
-
-                node = child
+                node = self._realize_child_node_if_needed(node, loc_idx, board_size, timing_tracker)
 
             # Record descent start for detailed exploration
             if self.detailed_exploration_enabled:
@@ -1870,25 +1909,7 @@ class BaselineMCTS:
                 root_visits = int(np.sum(root.N)) if root.N is not None else 0
                 # Check if Gumbel is forcing actions
                 gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
-                # Get PV hint (first 2-3 moves)
-                pv_hint = None
-                if root.is_expanded and len(root.children) > 0:
-                    pv_moves = []
-                    current = root
-                    for _ in range(3):  # Get up to 3 moves
-                        if current.is_expanded and len(current.children) > 0:
-                            best_child_idx = int(np.argmax(current.N))
-                            if best_child_idx < len(current.legal_moves):
-                                r, c = current.legal_moves[best_child_idx]
-                                # TODO: Investigate why we have this literal '97' (should we use move_to_index?)
-                                pv_moves.append(f"{chr(97 + c)}{r + 1}")
-                                current = current.children[best_child_idx]
-                                if current is None:
-                                    break
-                        else:
-                            break
-                    if pv_moves:
-                        pv_hint = pv_moves
+                pv_hint = self._build_root_pv_hint(root)
                 
                 self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
                 # Outer budget guard (kept from original)
