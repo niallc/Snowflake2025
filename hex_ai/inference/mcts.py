@@ -1126,7 +1126,9 @@ class BaselineMCTS(MCTSGumbelMixin):
                 root_legal_action_to_local_idx=root_legal_action_to_local_idx,
                 root_legal_set=root_legal_set,
             )
-            if flush_reason is not None:
+            # Forced-root execution must honor explicit action budgets exactly.
+            # Do not early-flush on distinct-target heuristics in that mode.
+            if flush_reason is not None and forced_root_actions is None:
                 if self.detailed_exploration_enabled:
                     T = len(leaves)
                     U = len(distinct_hashes)
@@ -1148,10 +1150,26 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _run_forced_root_batch(self, root: MCTSNode, actions: List[int], timing_tracker: MCTSTimingTracker) -> int:
         """Run exactly len(actions) simulations, forcing each root action once, using the batched pipeline."""
+        expected_simulations = len(actions)
+        if expected_simulations == 0:
+            return 0
+
         leaves, paths = self._select_leaves_batch(root, sims_remaining=len(actions),
                                                   timing_tracker=timing_tracker,
                                                   forced_root_actions=actions)
-        return self._process_leaves_batch(leaves, paths, timing_tracker, root)
+        if len(leaves) != expected_simulations:
+            raise ValueError(
+                "Forced-root simulation contract violated at _run_forced_root_batch. "
+                f"Requested {expected_simulations} forced actions but selected {len(leaves)} leaves."
+            )
+
+        simulations_completed = self._process_leaves_batch(leaves, paths, timing_tracker, root)
+        if simulations_completed != expected_simulations:
+            raise ValueError(
+                "Forced-root simulation contract violated at _run_forced_root_batch. "
+                f"Requested {expected_simulations} forced actions but completed {simulations_completed} simulations."
+            )
+        return simulations_completed
 
     def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
         """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
@@ -1166,12 +1184,31 @@ class BaselineMCTS(MCTSGumbelMixin):
 
         timing_tracker = MCTSTimingTracker()
         i = 0
+        simulations_completed_total = 0
         while i < len(normalized_actions):
             j = min(i + self.cfg.batch_cap, len(normalized_actions))
-            sims_done = self._run_forced_root_batch(root, normalized_actions[i:j], timing_tracker)
+            batch_actions = normalized_actions[i:j]
+            sims_done = self._run_forced_root_batch(root, batch_actions, timing_tracker)
+            expected_batch = len(batch_actions)
+            if sims_done != expected_batch:
+                raise ValueError(
+                    "Forced-root simulation contract violated at run_forced_root_actions. "
+                    f"Requested {expected_batch} actions in batch [{i}:{j}] but completed {sims_done} simulations."
+                )
             self._effective_sims_total += sims_done
+            simulations_completed_total += sims_done
             i = j
-        return timing_tracker.get_final_stats()
+        expected_total = len(normalized_actions)
+        if simulations_completed_total != expected_total:
+            raise ValueError(
+                "Forced-root simulation contract violated at run_forced_root_actions. "
+                f"Requested {expected_total} total actions but completed {simulations_completed_total} simulations."
+            )
+
+        timing_stats = timing_tracker.get_final_stats()
+        timing_stats["simulations_completed"] = int(simulations_completed_total)
+        timing_stats["simulations_requested"] = int(expected_total)
+        return timing_stats
 
     def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
                             timing_tracker: MCTSTimingTracker, root: MCTSNode) -> int:

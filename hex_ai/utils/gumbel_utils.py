@@ -511,8 +511,20 @@ def gumbel_alpha_zero_root_batched(
         # Run the forced actions
         stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
         nn_calls_per_move += stats.get("batch_count", 0)
-        total_leaves_evaluated += len(actions_this_round)
-        sims_used += len(actions_this_round)
+        if "simulations_completed" not in stats:
+            raise ValueError(
+                "Forced-root simulation contract violated in gumbel_alpha_zero_root_batched. "
+                "run_forced_root_actions must report simulations_completed."
+            )
+        simulations_completed = int(stats["simulations_completed"])
+        requested_simulations = len(actions_this_round)
+        if simulations_completed != requested_simulations:
+            raise ValueError(
+                "Forced-root simulation contract violated in gumbel_alpha_zero_root_batched. "
+                f"Requested {requested_simulations} forced simulations but completed {simulations_completed}."
+            )
+        total_leaves_evaluated += simulations_completed
+        sims_used += simulations_completed
 
         # Log per_arm and len(cand) per round at verbose>=4
         if verbose >= 4:
