@@ -1795,6 +1795,68 @@ class BaselineMCTS:
                 break
         return pv_moves if pv_moves else None
 
+    def _record_forced_root_action_if_needed(self, root: MCTSNode, forced_a_full: Optional[int]) -> None:
+        """Record forced-root selection diagnostics for detailed exploration traces."""
+        if not self.detailed_exploration_enabled or forced_a_full is None:
+            return
+        legal_at_root = forced_a_full in root.legal_indices
+        self._record_forced_root_action(self.simulation_count, forced_a_full, legal_at_root)
+
+    def _try_collect_leaf(
+        self,
+        node: MCTSNode,
+        path: List[Tuple[MCTSNode, int]],
+        leaves: List[MCTSNode],
+        paths: List[List[Tuple[MCTSNode, int]]],
+        distinct_hashes: Set[int],
+        distinct_target: int,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Try to collect `node` as a leaf.
+
+        Returns:
+            Tuple of (leaf_was_collected, flush_reason_if_any).
+        """
+        if node.is_terminal:
+            leaves.append(node)
+            paths.append(path.copy())
+            if self.detailed_exploration_enabled:
+                self._record_leaf_selected(
+                    node.depth, node.state_hash, "terminal",
+                    len(leaves), len(distinct_hashes), distinct_target
+                )
+            return True, None
+
+        if not node.is_expanded:
+            leaves.append(node)
+            paths.append(path)
+            if node.state_hash not in self.eval_cache and not node.is_terminal:
+                distinct_hashes.add(node.state_hash)
+
+            if self.detailed_exploration_enabled:
+                self._record_leaf_selected(
+                    node.depth, node.state_hash, "unexpanded",
+                    len(leaves), len(distinct_hashes), distinct_target
+                )
+
+            flush_reason = self._should_flush_selected_batch(len(leaves), len(distinct_hashes), distinct_target)
+            return True, flush_reason
+
+        return False, None
+
+    def _record_descent_start_if_needed(
+        self,
+        root: MCTSNode,
+        forced_root_actions: Optional[List[int]]
+    ) -> None:
+        """Record per-descent summary diagnostics when detailed exploration is enabled."""
+        if not self.detailed_exploration_enabled:
+            return
+        root_visits = int(np.sum(root.N)) if root.N is not None else 0
+        gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
+        pv_hint = self._build_root_pv_hint(root)
+        self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
+
 
     def _select_leaves_batch(
         self,
@@ -1845,46 +1907,17 @@ class BaselineMCTS:
                     
             # Gumbel specific code path: Pop the forced action for THIS descent (if any)
             forced_a_full = force_q.popleft() if force_q else None
-            
-            # Record forced root action for detailed exploration
-            if self.detailed_exploration_enabled and forced_a_full is not None:
-                legal_at_root = forced_a_full in node.legal_indices
-                self._record_forced_root_action(self.simulation_count, forced_a_full, legal_at_root)
+            self._record_forced_root_action_if_needed(node, forced_a_full)
 
             while True:
-                if node.is_terminal:
-                    leaves.append(node)
-                    paths.append(path.copy())
-                    
-                    # Record leaf selection for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        self._record_leaf_selected(
-                            node.depth, node.state_hash, "terminal", 
-                            len(leaves), len(distinct_hashes), distinct_target
-                        )
-                    
-                    break
-                if not node.is_expanded:
-                    leaves.append(node)
-                    paths.append(path)
-
-                    # Only count toward distinct if this state actually needs eval
-                    if node.state_hash not in self.eval_cache and not node.is_terminal:
-                        distinct_hashes.add(node.state_hash)
-
-                    # Record leaf selection for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        self._record_leaf_selected(
-                            node.depth, node.state_hash, "unexpanded", 
-                            len(leaves), len(distinct_hashes), distinct_target
-                        )
-
-                    U = len(distinct_hashes)
-                    T = len(leaves)
-
-                    flush_reason = self._should_flush_selected_batch(T, U, distinct_target)
+                leaf_collected, flush_reason = self._try_collect_leaf(
+                    node, path, leaves, paths, distinct_hashes, distinct_target
+                )
+                if leaf_collected:
                     if flush_reason is not None:
                         if self.detailed_exploration_enabled:
+                            T = len(leaves)
+                            U = len(distinct_hashes)
                             self._record_batch_flush(flush_reason, T, U, distinct_target, select_budget)
                         timing_tracker.end_timing("select")
                         return leaves, paths
@@ -1903,18 +1936,10 @@ class BaselineMCTS:
                 
                 node = self._realize_child_node_if_needed(node, loc_idx, board_size, timing_tracker)
 
-            # Record descent start for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root visit count
-                root_visits = int(np.sum(root.N)) if root.N is not None else 0
-                # Check if Gumbel is forcing actions
-                gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
-                pv_hint = self._build_root_pv_hint(root)
-                
-                self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
-                # Outer budget guard (kept from original)
-                if len(leaves) >= select_budget:
-                    break
+            self._record_descent_start_if_needed(root, forced_root_actions)
+            # Outer budget guard (kept from original)
+            if len(leaves) >= select_budget:
+                break
 
         # Record budget_full batch flush for detailed exploration
         if self.detailed_exploration_enabled:
