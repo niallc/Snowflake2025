@@ -241,10 +241,14 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _enable_detailed_exploration_if_needed(self, num_simulations: int) -> None:
         """Enable detailed exploration tracking if simulation count is below threshold."""
-        self.detailed_exploration_enabled = should_enable_detailed_exploration(num_simulations)
+        verbose_level = int(getattr(self, "verbose", 0))
+        self.detailed_exploration_enabled = (
+            should_enable_detailed_exploration(num_simulations)
+            and verbose_level >= 2
+        )
         self.exploration_trace = []
         self.simulation_count = 0
-        if self.detailed_exploration_enabled and hasattr(self, 'verbose') and self.verbose >= 2:
+        if self.detailed_exploration_enabled and verbose_level >= 2:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
 
     def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
@@ -607,6 +611,7 @@ class BaselineMCTS(MCTSGumbelMixin):
     def _reset_run_state(self, verbose: int) -> None:
         """Reset per-run state (especially Gumbel diagnostics) before search."""
         # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
+        self.verbose = int(verbose)
         self._used_gumbel_root_selection = False
         self._gumbel_selected_action = None
         self._gumbel_selected_tensor_action = None
@@ -620,7 +625,6 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_rounds_R = 0
         self._gumbel_timing_breakdown = {}
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
-        self.verbose = verbose
 
     def _termination_result_if_any(self, root: MCTSNode, verbose: int) -> Optional[MCTSResult]:
         """Run algorithm-termination checks and build a result if search should stop."""
@@ -834,17 +838,28 @@ class BaselineMCTS(MCTSGumbelMixin):
         forced_a_full: Optional[int],
         use_root_reservation: bool,
         used_root_actions: Set[int],
+        root_legal_action_to_local_idx: Optional[Dict[int, int]] = None,
+        root_legal_set: Optional[Set[int]] = None,
     ) -> int:
         """Select child index for one descent step, handling forced root actions and reservations."""
         if node is root and forced_a_full is not None:
-            forced_action = assert_actions_subset_of_legal(
-                actions=[int(forced_a_full)],
-                legal_actions=node.legal_indices,
-                context="_resolve_child_index_for_descent",
-                contract_name="Forced-root legality contract",
-                actions_label="Forced action",
-                legal_label="Current root legal_indices",
-            )[0]
+            forced_action = int(forced_a_full)
+            if root_legal_action_to_local_idx is not None and root_legal_set is not None:
+                if forced_action not in root_legal_set:
+                    raise ValueError(
+                        "Forced-root legality contract violated at _resolve_child_index_for_descent. "
+                        f"Illegal forced action {forced_action}. "
+                        f"Current root legal_indices ({len(node.legal_indices)}): {node.legal_indices}"
+                    )
+                return root_legal_action_to_local_idx[forced_action]
+
+            # Safety fallback for non-forced paths that do not precompute root lookup tables.
+            if forced_action not in node.legal_indices:
+                raise ValueError(
+                    "Forced-root legality contract violated at _resolve_child_index_for_descent. "
+                    f"Illegal forced action {forced_action}. "
+                    f"Current root legal_indices ({len(node.legal_indices)}): {node.legal_indices}"
+                )
             return node.legal_indices.index(forced_action)
 
         if node is root and use_root_reservation:
@@ -973,6 +988,8 @@ class BaselineMCTS(MCTSGumbelMixin):
         paths: List[List[Tuple[MCTSNode, int]]],
         distinct_hashes: Set[int],
         timing_tracker: MCTSTimingTracker,
+        root_legal_action_to_local_idx: Optional[Dict[int, int]],
+        root_legal_set: Optional[Set[int]],
     ) -> Optional[str]:
         """
         Execute a single root-to-leaf descent and collect one leaf when found.
@@ -995,7 +1012,13 @@ class BaselineMCTS(MCTSGumbelMixin):
                 return flush_reason
 
             loc_idx = self._resolve_child_index_for_descent(
-                node, root, forced_a_full, use_root_reservation, used_root_actions
+                node,
+                root,
+                forced_a_full,
+                use_root_reservation,
+                used_root_actions,
+                root_legal_action_to_local_idx,
+                root_legal_set,
             )
             path.append((node, loc_idx))
 
@@ -1041,6 +1064,18 @@ class BaselineMCTS(MCTSGumbelMixin):
         # Root-only batch-local "reservation" for early phase
         # This prevents overexploration of top policy moves before any backpropagations occur
         used_root_actions: Set[int] = set()  # tracks root actions used in this batch
+        root_legal_action_to_local_idx: Optional[Dict[int, int]] = None
+        root_legal_set: Optional[Set[int]] = None
+        if forced_root_actions is not None:
+            root_legal_set = set(root.legal_indices)
+            if len(root_legal_set) != len(root.legal_indices):
+                raise ValueError(
+                    "Forced-root legality contract violated at _select_leaves_batch. "
+                    f"Duplicate entries in root legal_indices ({len(root.legal_indices)}): {root.legal_indices}"
+                )
+            root_legal_action_to_local_idx = {
+                int(action): idx for idx, action in enumerate(root.legal_indices)
+            }
 
         # Cheap guardrail on selection work
         max_selection_descents = max(select_budget * 4, 64)  # 4x is a good default
@@ -1059,6 +1094,8 @@ class BaselineMCTS(MCTSGumbelMixin):
                 paths=paths,
                 distinct_hashes=distinct_hashes,
                 timing_tracker=timing_tracker,
+                root_legal_action_to_local_idx=root_legal_action_to_local_idx,
+                root_legal_set=root_legal_set,
             )
             if flush_reason is not None:
                 if self.detailed_exploration_enabled:
@@ -1102,15 +1139,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         i = 0
         while i < len(normalized_actions):
             j = min(i + self.cfg.batch_cap, len(normalized_actions))
-            chunk_actions = assert_actions_subset_of_legal(
-                actions=normalized_actions[i:j],
-                legal_actions=root.legal_indices,
-                context=f"run_forced_root_actions:batch[{i}:{j}]",
-                contract_name="Forced-root legality contract",
-                actions_label="Forced action chunk",
-                legal_label="Current root legal_indices",
-            )
-            sims_done = self._run_forced_root_batch(root, chunk_actions, timing_tracker)
+            sims_done = self._run_forced_root_batch(root, normalized_actions[i:j], timing_tracker)
             self._effective_sims_total += sims_done
             i = j
         return timing_tracker.get_final_stats()

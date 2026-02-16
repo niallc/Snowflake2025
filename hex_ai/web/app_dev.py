@@ -379,8 +379,9 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                    orchestration_overrides=None):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
+        mcts_verbose = int(verbose)
         app.logger.info(f"=== MCTS MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
+        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={mcts_verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
         state = HexGameState.from_trmph(trmph)
@@ -455,7 +456,13 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         mcts_start_time = time.time()
         app.logger.info("About to call run_mcts_move...")
         try:
-            move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
+            move, stats, tree_data, algorithm_termination_info = run_mcts_move(
+                engine,
+                model_wrapper,
+                state,
+                mcts_config,
+                verbose=mcts_verbose,
+            )
             app.logger.info("run_mcts_move completed successfully")
         except Exception as e:
             app.logger.error(f"run_mcts_move failed with exception: {e}")
@@ -1628,6 +1635,10 @@ def api_mcts_move():
     temperature = data.get("temperature", 1.0)
     temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
     verbose = data.get("verbose", 0)
+    try:
+        verbose = int(verbose)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": f"Invalid verbose value: {verbose}"}), 400
     enable_gumbel = data.get("enable_gumbel", True)
     gumbel_max_sims = data.get("gumbel_max_sims", 500)
     

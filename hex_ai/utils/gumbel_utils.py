@@ -287,7 +287,6 @@ def gumbel_alpha_zero_root_batched(
         expected_label="Provided legal_actions",
         observed_label="Current root legal_indices",
     )
-    expected_root_legal_actions = legal_actions.copy()
     
     # Create mask for illegal actions
     mask = np.full(K, -np.inf)
@@ -525,15 +524,6 @@ def gumbel_alpha_zero_root_batched(
             for a in cand:
                 assert counts[a] == per_arm
 
-        assert_exact_legal_action_match(
-            expected_actions=expected_root_legal_actions,
-            observed_actions=root.legal_indices,
-            context=f"gumbel_alpha_zero_root_batched:round_{r + 1}_pre_forced_actions",
-            contract_name="Gumbel legality contract",
-            expected_label="Expected root legal_actions snapshot",
-            observed_label="Current root legal_indices",
-        )
-
         # Run the forced actions
         stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
         nn_calls_per_move += stats.get("batch_count", 0)
@@ -607,15 +597,6 @@ def gumbel_alpha_zero_root_batched(
     # Final ranking timing
     ranking_start = time.perf_counter()
 
-    assert_exact_legal_action_match(
-        expected_actions=expected_root_legal_actions,
-        observed_actions=root.legal_indices,
-        context="gumbel_alpha_zero_root_batched:final_ranking",
-        contract_name="Gumbel legality contract",
-        expected_label="Expected root legal_actions snapshot",
-        observed_label="Current root legal_indices",
-    )
-    
     # Final pick - deterministic ranking without Gumbel noise.
     final_rank_rows = build_gumbel_score_rows(
         actions=cand,
