@@ -19,6 +19,11 @@ from hex_ai.utils.format_conversion import rowcol_to_trmph
 # Threshold for detailed exploration tracking (when simulations <= this value)
 DETAILED_EXPLORATION_THRESHOLD = 47
 
+
+def _get_board_size_from_state(state) -> int:
+    """Infer board size from a game state tensor for explicit move conversion validation."""
+    return int(state.get_board_tensor().shape[-1])
+
 def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     """
     Compute win probability for the current player based on tree data.
@@ -144,17 +149,18 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: List[float]
         Dictionary containing exploration step information
     """
     # Get move coordinates
+    board_size = _get_board_size_from_state(node.state)
     move_coords = node.legal_moves[action_idx]
     # Convert numpy coordinates to Python tuples for JSON serialization
     move_coords_python = (int(move_coords[0]), int(move_coords[1]))
-    move_str = f"{chr(97 + move_coords[1])}{move_coords[0] + 1}"
+    move_str = rowcol_to_trmph(int(move_coords[0]), int(move_coords[1]), board_size)
     
     # Get top PUCT scores for this node
     top_scores = []
     for i, score in enumerate(puct_scores):
         if i < len(node.legal_moves):
             move = node.legal_moves[i]
-            move_name = f"{chr(97 + move[1])}{move[0] + 1}"
+            move_name = rowcol_to_trmph(int(move[0]), int(move[1]), board_size)
             
             # Ensure all numeric values are finite for JSON serialization
             safe_score = float(score) if math.isfinite(float(score)) else 0.0
@@ -178,7 +184,7 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: List[float]
         'depth': int(depth),
         'node_hash': int(node.state_hash),  # Convert to Python int
         'to_play': int(node.to_play.value),  # Convert to Python int
-        'legal_moves': [f"{chr(97 + int(m[1]))}{int(m[0]) + 1}" for m in node.legal_moves],
+        'legal_moves': [rowcol_to_trmph(int(m[0]), int(m[1]), board_size) for m in node.legal_moves],
         'top_puct_scores': top_scores[:5],  # Top 5 scores
         'selected_action': int(action_idx),
         'selected_move': move_str,
@@ -266,6 +272,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         }
 
     # Get visit counts and convert to TRMPH format
+    board_size = _get_board_size_from_state(root_node.state)
     visit_counts = {}
     mcts_probabilities = {}
     total_visits = int(np.sum(root_node.N))
@@ -274,7 +281,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
     if total_visits == 0 and hasattr(root_node, 'terminal_moves') and any(root_node.terminal_moves):
         # This is a terminal move shortcut case - provide meaningful data
         for i, (row, col) in enumerate(root_node.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
             if root_node.terminal_moves[i]:
                 # Terminal move gets 100% probability and 1 visit
                 visit_counts[move_trmph] = 1
@@ -287,7 +294,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
     else:
         # Normal MCTS case - use actual visit counts
         for i, (row, col) in enumerate(root_node.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
             visits = int(root_node.N[i])
             visit_counts[move_trmph] = visits
             
@@ -350,7 +357,8 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
 
 def _convert_moves_to_trmph_dict(
     legal_moves: List[Tuple[int, int]], 
-    values: np.ndarray
+    values: np.ndarray,
+    board_size: int,
 ) -> Dict[str, float]:
     """
     Core utility to convert move data to TRMPH format dictionary.
@@ -362,9 +370,15 @@ def _convert_moves_to_trmph_dict(
     Returns:
         Dictionary mapping TRMPH move strings to values
     """
+    if len(legal_moves) != len(values):
+        raise ValueError(
+            f"Length mismatch for move/value conversion: "
+            f"{len(legal_moves)} legal moves vs {len(values)} values"
+        )
+
     result = {}
     for i, (row, col) in enumerate(legal_moves):
-        move_trmph = rowcol_to_trmph(row, col)
+        move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
         result[move_trmph] = float(values[i])
     
     return result
@@ -386,6 +400,7 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     """
     counts = root_node.N.astype(np.float64)
     total_visits = counts.sum()
+    board_size = int(root_state.get_board_tensor().shape[-1])
     
     if total_visits <= 0:
         raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
@@ -419,7 +434,7 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
             # Fall back to raw probabilities
             probs = counts / total_visits
     
-    return _convert_moves_to_trmph_dict(root_node.legal_moves, probs)
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, probs, board_size)
 
 def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[str, float]:
     """
@@ -439,6 +454,7 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     """
     # Get policy logits and legal mask using the same shared utility as Gumbel
     policy_logits_full, legal_mask = mcts_instance._get_policy_logits_and_legal_mask(root_state, root_node.legal_indices)
+    board_size = int(root_state.get_board_tensor().shape[-1])
     
     # Convert to probabilities using the same method as Gumbel
     priors_full = mcts_instance._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
@@ -446,7 +462,7 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     # Extract probabilities for legal moves only
     legal_probs = np.array([priors_full[tensor_idx] for tensor_idx in root_node.legal_indices])
     
-    return _convert_moves_to_trmph_dict(root_node.legal_moves, legal_probs)
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, legal_probs, board_size)
 
 
 

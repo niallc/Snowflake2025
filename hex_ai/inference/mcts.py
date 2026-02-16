@@ -66,7 +66,11 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
-from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index
+from hex_ai.utils.format_conversion import (
+    rowcol_to_tensor_with_size as move_to_index,
+    rowcol_to_trmph,
+    tensor_to_trmph,
+)
 from hex_ai.utils.temperature import calculate_temperature_decay
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.timing import MCTSTimingTracker
@@ -824,23 +828,6 @@ class BaselineMCTS:
         
         self.exploration_trace.append(event)
 
-    @staticmethod
-    def _tensor_action_to_rowcol_with_size(tensor_action: int, board_size: int) -> Tuple[int, int]:
-        """Convert tensor action index to row/col using an explicit board size."""
-        action = int(tensor_action)
-        max_actions = int(board_size) * int(board_size)
-        if action < 0 or action >= max_actions:
-            raise ValueError(f"Tensor action out of range: {action} for board size {board_size}")
-        row = action // int(board_size)
-        col = action % int(board_size)
-        return row, col
-
-    @classmethod
-    def _tensor_action_to_trmph_with_size(cls, tensor_action: int, board_size: int) -> str:
-        """Convert tensor action index to TRMPH move string using explicit board size."""
-        row, col = cls._tensor_action_to_rowcol_with_size(tensor_action, board_size)
-        return f"{chr(ord('a') + col)}{row + 1}"
-
     def _decorate_gumbel_score_rows_with_moves(
         self, rows: List[Dict[str, Any]], board_size: int
     ) -> List[Dict[str, Any]]:
@@ -851,7 +838,7 @@ class BaselineMCTS:
             action = row_copy.get("tensor_action", None)
             if action is not None:
                 try:
-                    row_copy["move"] = self._tensor_action_to_trmph_with_size(int(action), board_size)
+                    row_copy["move"] = tensor_to_trmph(int(action), board_size)
                 except Exception:
                     row_copy["move"] = None
             decorated_rows.append(row_copy)
@@ -867,14 +854,14 @@ class BaselineMCTS:
         # Decorate single-action fields
         if event_copy.get("selected_action", None) is not None:
             try:
-                event_copy["selected_move"] = self._tensor_action_to_trmph_with_size(
+                event_copy["selected_move"] = tensor_to_trmph(
                     int(event_copy["selected_action"]), board_size
                 )
             except Exception:
                 event_copy["selected_move"] = None
         if event_copy.get("tensor_action", None) is not None:
             try:
-                event_copy["move"] = self._tensor_action_to_trmph_with_size(
+                event_copy["move"] = tensor_to_trmph(
                     int(event_copy["tensor_action"]), board_size
                 )
             except Exception:
@@ -889,7 +876,7 @@ class BaselineMCTS:
                 moves: List[str] = []
                 for action in event_copy[actions_key]:
                     try:
-                        moves.append(self._tensor_action_to_trmph_with_size(int(action), board_size))
+                        moves.append(tensor_to_trmph(int(action), board_size))
                     except Exception:
                         continue
                 event_copy[moves_key] = moves
@@ -963,7 +950,7 @@ class BaselineMCTS:
         root_player = root.to_play
         action = int(tensor_action)
         child_idx = root.legal_indices.index(action)
-        move = self._tensor_action_to_trmph_with_size(action, board_size)
+        move = tensor_to_trmph(action, board_size)
         root_child_visits = int(root.N[child_idx])
         root_child_q_ptm_signed = float(root.Q[child_idx]) if root_child_visits > 0 else 0.0
         root_child_q_01 = float((root_child_q_ptm_signed + 1.0) / 2.0) if root_child_visits > 0 else 0.5
@@ -1013,7 +1000,7 @@ class BaselineMCTS:
 
         def build_reply_row(idx: int) -> Dict[str, Any]:
             reply_row, reply_col = child_node.legal_moves[idx]
-            reply_move = f"{chr(ord('a') + reply_col)}{reply_row + 1}"
+            reply_move = rowcol_to_trmph(reply_row, reply_col, board_size)
             visits = int(child_node.N[idx])
             prior = float(child_node.P[idx]) if child_node.is_expanded and len(child_node.P) == reply_count_total else None
 
@@ -1824,7 +1811,7 @@ class BaselineMCTS:
         node.children[loc_idx] = child
 
         if self.detailed_exploration_enabled:
-            move_str = f"{chr(ord('a') + c)}{r + 1}"
+            move_str = rowcol_to_trmph(r, c, board_size)
             self._record_node_realized(child.depth, move_str, child.state_hash)
         return child
 
@@ -1833,6 +1820,7 @@ class BaselineMCTS:
         if not root.is_expanded or len(root.children) == 0:
             return None
 
+        board_size = int(root.state.get_board_tensor().shape[-1])
         pv_moves: List[str] = []
         current = root
         for _ in range(3):
@@ -1842,7 +1830,7 @@ class BaselineMCTS:
             if best_child_idx >= len(current.legal_moves):
                 break
             r, c = current.legal_moves[best_child_idx]
-            pv_moves.append(f"{chr(ord('a') + c)}{r + 1}")
+            pv_moves.append(rowcol_to_trmph(r, c, board_size))
             current = current.children[best_child_idx]
             if current is None:
                 break
