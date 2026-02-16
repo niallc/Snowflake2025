@@ -1132,99 +1132,24 @@ class BaselineMCTS:
             ValueError: If root_state is None or invalid
             RuntimeError: If the game state is terminal
         """
-        if root_state is None:
-            raise ValueError("root_state cannot be None")
-        if root_state.game_over:
-            raise RuntimeError("Cannot run MCTS on a terminal game state")
-        if verbose < 0:
-            raise ValueError(f"verbose must be non-negative, got {verbose}")
+        self._validate_run_inputs(root_state, verbose)
+        self._reset_run_state(verbose)
 
-        # Reset per-run Gumbel state to avoid leaking selections/stats across runs.
-        # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
-        self._used_gumbel_root_selection = False
-        self._gumbel_selected_action = None
-        self._gumbel_selected_tensor_action = None
-        self._gumbel_final_rank_top_move_trmph = None
-        self._gumbel_final_rank_top5 = None
-        self._gumbel_v_pi_01 = None
-        self._gumbel_nn_calls_per_move = 0
-        self._gumbel_total_leaves_evaluated = 0
-        self._gumbel_distinct_leaves_evaluated = 0
-        self._gumbel_candidates_m = 0
-        self._gumbel_rounds_R = 0
-        self._gumbel_timing_breakdown = {}
-        
-        # Enable detailed exploration tracking if needed
-        self._enable_detailed_exploration_if_needed(self.cfg.sims)
-        self.verbose = verbose
-        
-        # Prepare root node without NN expansion so terminal-move termination can short-circuit.
         root = self._prepare_root_node(root_state, verbose, expand_root=False)
 
-        # Early terminal-move check before root expansion.
-        termination_info = self._check_algorithm_termination(root, verbose)
-        if termination_info:
-            return self._build_algorithm_termination_result(root, termination_info, verbose)
+        maybe_terminated = self._termination_result_if_any(root, verbose)
+        if maybe_terminated is not None:
+            return maybe_terminated
 
-        # Expand root only if needed for MCTS/confidence-based checks.
-        board_size = int(root_state.get_board_tensor().shape[-1])
-        if not root.is_terminal and not root.is_expanded:
-            self._expand_root_node(root, board_size)
-        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
-            self._apply_root_noise(root)
+        self._expand_root_for_search(root, root_state)
 
-        # Confidence-based termination check (requires expansion).
-        termination_info = self._check_algorithm_termination(root, verbose)
-        if termination_info:
-            return self._build_algorithm_termination_result(root, termination_info, verbose)
-        
-        # Run main simulation loop
+        maybe_terminated = self._termination_result_if_any(root, verbose)
+        if maybe_terminated is not None:
+            return maybe_terminated
+
         timing_stats = self._run_simulation_loop(root, verbose)
-        # Attach metrics (don't rely on TimingTracker internals)
-        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
-        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
-        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
-        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
-        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
-        
-        # Compute results directly
-        move, move_probs = self._compute_move(root, root_state, verbose)
-        tree_data = self.get_tree_data(root, move_probs)
-        win_probability = self.get_win_probability(root, root_state)
-        
-        # Create base stats
-        stats = self._get_stats_builder().create_final_stats(
-            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
-        )
-        
-        # Add Gumbel-specific performance metrics if available
-        if getattr(self, "_used_gumbel_root_selection", False):
-            # Use actual MCTS metrics for distinct leaves evaluation
-            actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
-            stats.update({
-                "gumbel_nn_calls_per_move": self._gumbel_nn_calls_per_move,
-                "gumbel_total_leaves_evaluated": self._gumbel_total_leaves_evaluated,
-                "gumbel_distinct_leaves_evaluated": actual_distinct_leaves,
-                "gumbel_candidates_m": self._gumbel_candidates_m,
-                "gumbel_rounds_R": self._gumbel_rounds_R,
-                "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
-                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
-                "gumbel_timing_breakdown": getattr(self, '_gumbel_timing_breakdown', {}),
-                # Debug/inspection fields (small and safe to serialize)
-                "gumbel_selected_tensor_action": self._gumbel_selected_tensor_action,
-                "gumbel_final_rank_top_move": self._gumbel_final_rank_top_move_trmph,
-                "gumbel_v_pi_01": self._gumbel_v_pi_01,
-                "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
-            })
-        
-        return MCTSResult(
-            move=move,
-            stats=stats,
-            tree_data=tree_data,
-            root_node=root,
-            algorithm_termination_info=None,
-            win_probability=win_probability
-        )
+        self._annotate_search_timing_stats(timing_stats)
+        return self._build_completed_search_result(root, root_state, timing_stats, verbose)
 
     # ---------- Data Access (Getters) ----------
     
@@ -1369,6 +1294,100 @@ class BaselineMCTS:
             self._effective_sims_total += batch_simulations
         
         return timing_tracker.get_final_stats()
+
+    def _validate_run_inputs(self, root_state: HexGameState, verbose: int) -> None:
+        """Validate top-level MCTS run arguments."""
+        if root_state is None:
+            raise ValueError("root_state cannot be None")
+        if root_state.game_over:
+            raise RuntimeError("Cannot run MCTS on a terminal game state")
+        if verbose < 0:
+            raise ValueError(f"verbose must be non-negative, got {verbose}")
+
+    def _reset_run_state(self, verbose: int) -> None:
+        """Reset per-run state (especially Gumbel diagnostics) before search."""
+        # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
+        self._used_gumbel_root_selection = False
+        self._gumbel_selected_action = None
+        self._gumbel_selected_tensor_action = None
+        self._gumbel_final_rank_top_move_trmph = None
+        self._gumbel_final_rank_top5 = None
+        self._gumbel_v_pi_01 = None
+        self._gumbel_nn_calls_per_move = 0
+        self._gumbel_total_leaves_evaluated = 0
+        self._gumbel_distinct_leaves_evaluated = 0
+        self._gumbel_candidates_m = 0
+        self._gumbel_rounds_R = 0
+        self._gumbel_timing_breakdown = {}
+        self._enable_detailed_exploration_if_needed(self.cfg.sims)
+        self.verbose = verbose
+
+    def _termination_result_if_any(self, root: MCTSNode, verbose: int) -> Optional[MCTSResult]:
+        """Run algorithm-termination checks and build a result if search should stop."""
+        termination_info = self._check_algorithm_termination(root, verbose)
+        if termination_info is None:
+            return None
+        return self._build_algorithm_termination_result(root, termination_info, verbose)
+
+    def _expand_root_for_search(self, root: MCTSNode, root_state: HexGameState) -> None:
+        """Expand root (and apply root noise) for full search when needed."""
+        board_size = int(root_state.get_board_tensor().shape[-1])
+        if not root.is_terminal and not root.is_expanded:
+            self._expand_root_node(root, board_size)
+        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
+            self._apply_root_noise(root)
+
+    def _annotate_search_timing_stats(self, timing_stats: Dict[str, Any]) -> None:
+        """Attach aggregate search metrics derived from timing data."""
+        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
+        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
+        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
+        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
+        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
+
+    def _build_completed_search_result(
+        self,
+        root: MCTSNode,
+        root_state: HexGameState,
+        timing_stats: Dict[str, Any],
+        verbose: int
+    ) -> MCTSResult:
+        """Build final result payload for a completed non-terminated MCTS search."""
+        move, move_probs = self._compute_move(root, root_state, verbose)
+        tree_data = self.get_tree_data(root, move_probs)
+        win_probability = self.get_win_probability(root, root_state)
+
+        stats = self._get_stats_builder().create_final_stats(
+            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
+        )
+
+        if getattr(self, "_used_gumbel_root_selection", False):
+            # Use actual MCTS metrics for distinct leaves evaluation.
+            actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
+            stats.update({
+                "gumbel_nn_calls_per_move": self._gumbel_nn_calls_per_move,
+                "gumbel_total_leaves_evaluated": self._gumbel_total_leaves_evaluated,
+                "gumbel_distinct_leaves_evaluated": actual_distinct_leaves,
+                "gumbel_candidates_m": self._gumbel_candidates_m,
+                "gumbel_rounds_R": self._gumbel_rounds_R,
+                "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
+                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
+                "gumbel_timing_breakdown": getattr(self, "_gumbel_timing_breakdown", {}),
+                # Debug/inspection fields (small and safe to serialize).
+                "gumbel_selected_tensor_action": self._gumbel_selected_tensor_action,
+                "gumbel_final_rank_top_move": self._gumbel_final_rank_top_move_trmph,
+                "gumbel_v_pi_01": self._gumbel_v_pi_01,
+                "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
+            })
+
+        return MCTSResult(
+            move=move,
+            stats=stats,
+            tree_data=tree_data,
+            root_node=root,
+            algorithm_termination_info=None,
+            win_probability=win_probability
+        )
 
     def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int, 
                                  timing_tracker: MCTSTimingTracker, verbose: int) -> Dict[str, Any]:
