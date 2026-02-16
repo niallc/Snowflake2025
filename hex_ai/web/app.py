@@ -10,9 +10,10 @@ from pathlib import Path
 import re
 import string
 import uuid
+import numpy as np
 
 import hex_ai.utils.format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph, make_empty_hex_state
+from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
@@ -121,6 +122,128 @@ if ANALYTICS_ENABLED and not analytics_logger.handlers:
 MIN_ELO = 1
 MAX_ELO = 2350
 DEFAULT_ELO = 900
+
+# Native virtual-board support: play on top-left KxK while model still uses BOARD_SIZE.
+MIN_DISPLAY_BOARD_SIZE = 2
+DEFAULT_DISPLAY_BOARD_SIZE = BOARD_SIZE
+DISPLAY_BOARD_SIZE_OPTIONS = list(range(BOARD_SIZE, MIN_DISPLAY_BOARD_SIZE - 1, -1))
+
+# Derived from legacy_code/FileConversion.py and existing rules.html guidance.
+# Values are bare TRMPH move strings (no "#13," prefix).
+VIRTUAL_BOARD_PREFILL_MOVES = {
+    13: "",
+    12: "a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12",
+    11: "a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11",
+    10: "a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10",
+    9: "a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9",
+    8: "a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8",
+    7: "a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7",
+    6: "a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6",
+    5: "a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5",
+    4: "a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4",
+    3: "a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3",
+    2: "a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2",
+}
+
+_DISPLAY_MASK_CACHE = {}
+
+def validate_display_board_size(value) -> int:
+    """Validate and normalize requested display-board size."""
+    if value is None:
+        return DEFAULT_DISPLAY_BOARD_SIZE
+
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("display_board_size must be an integer")
+
+    if not (MIN_DISPLAY_BOARD_SIZE <= size <= BOARD_SIZE):
+        raise ValueError(
+            f"display_board_size must be between {MIN_DISPLAY_BOARD_SIZE} and {BOARD_SIZE}"
+        )
+    return size
+
+def get_virtual_prefill_moves(display_board_size: int) -> str:
+    """Get prefill move sequence that makes KxK play equivalent on BOARD_SIZE board."""
+    try:
+        return VIRTUAL_BOARD_PREFILL_MOVES[display_board_size]
+    except KeyError as e:
+        raise ValueError(f"Unsupported display_board_size: {display_board_size}") from e
+
+def _strip_virtual_prefill_prefix_if_present(bare_moves: str, display_board_size: int) -> str:
+    """
+    Strip the known virtual-board prefill prefix if present.
+
+    This allows old copy-paste workflows to continue working.
+    """
+    prefill = get_virtual_prefill_moves(display_board_size)
+    if prefill and bare_moves.startswith(prefill):
+        return bare_moves[len(prefill):]
+    return bare_moves
+
+def validate_moves_within_display_board(bare_moves: str, display_board_size: int, field_name: str) -> None:
+    """Ensure all moves are inside the top-left display board."""
+    if not bare_moves:
+        return
+
+    try:
+        moves = fc.split_trmph_moves(bare_moves)
+    except ValueError as e:
+        raise ValueError(f"Invalid {field_name} sequence: {e}") from e
+
+    max_moves = display_board_size * display_board_size
+    if len(moves) > max_moves:
+        raise ValueError(
+            f"{field_name} has too many moves for {display_board_size}x{display_board_size} "
+            f"(maximum {max_moves})"
+        )
+
+    for move in moves:
+        row, col = fc.trmph_move_to_rowcol(move, board_size=BOARD_SIZE)
+        if row >= display_board_size or col >= display_board_size:
+            raise ValueError(
+                f"Move '{move}' is outside top-left {display_board_size}x{display_board_size} display board"
+            )
+
+def normalize_user_trmph_for_display(trmph_text: str, display_board_size: int, field_name: str = "trmph") -> str:
+    """
+    Normalize a TRMPH string into user-move-only bare moves for the chosen display size.
+
+    Returns bare moves without preamble and without virtual-board prefill.
+    """
+    bare_moves = fc.strip_trmph_preamble((trmph_text or "").strip())
+    bare_moves = _strip_virtual_prefill_prefix_if_present(bare_moves, display_board_size)
+    validate_moves_within_display_board(bare_moves, display_board_size, field_name)
+    return bare_moves
+
+def compose_full_trmph_from_user_trmph(user_bare_moves: str, display_board_size: int) -> str:
+    """Compose full BOARD_SIZE TRMPH by prepending the configured virtual-board prefill."""
+    prefill = get_virtual_prefill_moves(display_board_size)
+    return f"#{BOARD_SIZE},{prefill}{user_bare_moves}"
+
+def state_to_user_trmph(state: HexGameState, display_board_size: int) -> str:
+    """Convert full state TRMPH into user-visible move sequence (without prefill)."""
+    bare_moves = fc.strip_trmph_preamble(state.to_trmph())
+    prefill = get_virtual_prefill_moves(display_board_size)
+    if prefill and bare_moves.startswith(prefill):
+        return bare_moves[len(prefill):]
+    return bare_moves
+
+def get_display_legal_move_mask(display_board_size: int) -> np.ndarray:
+    """Return cached legal-move mask for top-left display board."""
+    cached = _DISPLAY_MASK_CACHE.get(display_board_size)
+    if cached is not None:
+        return cached
+
+    mask = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+    mask[:display_board_size, :display_board_size] = True
+    _DISPLAY_MASK_CACHE[display_board_size] = mask
+    return mask
+
+def apply_display_mask_to_state(state: HexGameState, display_board_size: int) -> HexGameState:
+    """Apply top-left display-board legal mask to a game state."""
+    state.set_legal_move_mask(get_display_legal_move_mask(display_board_size))
+    return state
 
 # =============================================================================
 # FLASK APP CONFIGURATION
@@ -401,39 +524,68 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
         return False, f"Unexpected fields: {list(unexpected)}", None
     
     validated_data = {}
-    
+
+    display_board_size = DEFAULT_DISPLAY_BOARD_SIZE
+    if "display_board_size" in all_allowed:
+        try:
+            display_board_size = validate_display_board_size(
+                data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+            )
+            validated_data["display_board_size"] = display_board_size
+        except ValueError as e:
+            app.logger.warning(f"Validation failed for display_board_size: {e}")
+            return False, f"Invalid display_board_size: {e}", None
+
     # Process all allowed fields present in data
     for field in all_allowed:
-        if field in data:
-            if field in ['trmph', 'move', 'trmph_sequence']:
-                # Normalize input first (handle LittleGolem format, swap, etc.)
-                try:
-                    normalized_input = fc.normalize_game_input(data[field])
-                    data[field] = normalized_input
+        if field not in data or field == "display_board_size":
+            continue
+
+        if field in ['trmph', 'move', 'trmph_sequence']:
+            # Normalize input first (handle LittleGolem format, swap, etc.)
+            try:
+                normalized_input = fc.normalize_game_input(data[field])
+            except ValueError as e:
+                app.logger.warning(f"Normalization failed for {field}: {e}")
+                return False, f"Invalid format for {field}: {str(e)}", None
+            except Exception as e:
+                app.logger.error(f"Input normalization failed for {field}: {e}")
+                return False, f"Normalization error for {field}: {str(e)}", None
+
+            # Validate TRMPH syntax first.
+            is_valid, error_msg = validate_trmph_input(normalized_input)
+            if not is_valid:
+                return False, f"Invalid {field} [DEBUG-CHECK]: {error_msg}", None
+
+            # Enforce display-board geometry constraints.
+            try:
+                if field in {"trmph", "trmph_sequence"}:
+                    validated_data[field] = normalize_user_trmph_for_display(
+                        normalized_input, display_board_size, field_name=field
+                    )
+                else:
+                    row, col = fc.trmph_move_to_rowcol(normalized_input, board_size=BOARD_SIZE)
+                    if row >= display_board_size or col >= display_board_size:
+                        return (
+                            False,
+                            f"Move '{normalized_input}' is outside top-left "
+                            f"{display_board_size}x{display_board_size} display board",
+                            None,
+                        )
                     validated_data[field] = normalized_input
-                except ValueError as e:
-                    # Strict validation failed for malformed input
-                    app.logger.warning(f"Normalization failed for {field}: {e}")
-                    return False, f"Invalid format for {field}: {str(e)}", None
-                except Exception as e:
-                    # DEBUG: Return unexpected errors to user to diagnose the issue
-                    app.logger.error(f"Input normalization failed for {field}: {e}")
-                    return False, f"Normalization error for {field}: {str(e)}", None
-                
-                # These are TRMPH fields that need special validation
-                is_valid, error_msg = validate_trmph_input(data[field])
-                if not is_valid:
-                    return False, f"Invalid {field} [DEBUG-CHECK]: {error_msg}", None
-            elif field == 'elo_rating':
-                # ELO rating needs special validation
-                try:
-                    validated_data[field] = validate_elo_rating(data[field])
-                except ValueError as e:
-                    app.logger.warning(f"Validation failed for {field}: {e}")
-                    return False, f"Invalid {field}: {e}", None
-            else:
-                # Other fields just copy over
-                validated_data[field] = data[field]
+            except ValueError as e:
+                app.logger.warning(f"Display-board validation failed for {field}: {e}")
+                return False, f"Invalid {field}: {e}", None
+        elif field == 'elo_rating':
+            # ELO rating needs special validation
+            try:
+                validated_data[field] = validate_elo_rating(data[field])
+            except ValueError as e:
+                app.logger.warning(f"Validation failed for {field}: {e}")
+                return False, f"Invalid {field}: {e}", None
+        else:
+            # Other fields just copy over
+            validated_data[field] = data[field]
 
     # Check required fields are present
     if required_fields:
@@ -808,12 +960,13 @@ def get_difficulty_parameters(elo_rating):
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def create_game_state_from_trmph(trmph, context=""):
+def create_game_state_from_trmph(trmph, display_board_size=DEFAULT_DISPLAY_BOARD_SIZE, context=""):
     """
-    Create a game state from TRMPH string, handling empty TRMPH case.
+    Create a masked game state for the selected display-board size.
     
     Args:
-        trmph (str): TRMPH string (can be empty for initial state)
+        trmph (str): User-visible TRMPH string (without virtual-board prefill)
+        display_board_size (int): Top-left playable board size
         context (str): Context for logging (e.g., "for MCTS move")
         
     Returns:
@@ -822,16 +975,30 @@ def create_game_state_from_trmph(trmph, context=""):
     Raises:
         Exception: If TRMPH is invalid
     """
-    if not trmph or trmph.strip() == "":
-        state = make_empty_hex_state()
-        app.logger.info(f"Created initial game state {context}")
-    else:
-        state = HexGameState.from_trmph(trmph)
-        app.logger.info(f"Loaded game state from TRMPH {context}: {trmph[:50]}...")
-    
+    display_board_size = validate_display_board_size(display_board_size)
+    user_bare_moves = normalize_user_trmph_for_display(
+        trmph, display_board_size, field_name="trmph"
+    )
+    full_trmph = compose_full_trmph_from_user_trmph(user_bare_moves, display_board_size)
+
+    state = HexGameState.from_trmph(full_trmph)
+    state = apply_display_mask_to_state(state, display_board_size)
+    app.logger.info(
+        "Loaded masked game state %s: display=%sx%s, user_moves=%s",
+        context,
+        display_board_size,
+        display_board_size,
+        len(fc.split_trmph_moves(user_bare_moves)) if user_bare_moves else 0,
+    )
     return state
 
-def build_game_response(state, elo_rating, trmph_for_inference=None, additional_fields=None):
+def build_game_response(
+    state,
+    elo_rating,
+    display_board_size=DEFAULT_DISPLAY_BOARD_SIZE,
+    trmph_for_inference=None,
+    additional_fields=None,
+):
     """
     Build a standardized game response with board, player info, and model predictions.
     
@@ -885,6 +1052,8 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
         "policy": policy_dict,
         "value_signed": float(value_signed),
         "win_probability": win_probability,
+        "display_board_size": display_board_size,
+        "network_board_size": BOARD_SIZE,
     }
     
     # Add any additional fields
@@ -896,7 +1065,13 @@ def build_game_response(state, elo_rating, trmph_for_inference=None, additional_
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
-def build_move_response(state, move_made=None, success=True, error=None):
+def build_move_response(
+    state,
+    display_board_size=DEFAULT_DISPLAY_BOARD_SIZE,
+    move_made=None,
+    success=True,
+    error=None,
+):
     """
     Build a standardized move response with game state information.
     
@@ -911,13 +1086,15 @@ def build_move_response(state, move_made=None, success=True, error=None):
     """
     response = {
         "success": success,
-        "new_trmph": state.to_trmph(),
+        "new_trmph": state_to_user_trmph(state, display_board_size),
         "board": state.board.tolist(),
         "player": winner_to_color(state.current_player_enum),
         "legal_moves": moves_to_trmph(state.get_legal_moves()),
         "winner": winner_to_color(state.winner) if state.winner is not None else None,
         "move_made": move_made,
-        "game_over": state.game_over
+        "game_over": state.game_over,
+        "display_board_size": display_board_size,
+        "network_board_size": BOARD_SIZE,
     }
     
     if error:
@@ -925,11 +1102,13 @@ def build_move_response(state, move_made=None, success=True, error=None):
         
     return response
 
-def _check_game_over_early_return(state, trmph):
+def _check_game_over_early_return(state, display_board_size):
     """Check if game is over and return early response if so."""
     if state.game_over:
         app.logger.info("Game is over, returning current state")
-        result = build_move_response(state, move_made=None)
+        result = build_move_response(
+            state, display_board_size=display_board_size, move_made=None
+        )
         return result
     return None
 
@@ -1015,7 +1194,7 @@ def _execute_mcts_search(state, model_id, mcts_config):
     
     return move
 
-def _apply_move_and_build_response(state, move):
+def _apply_move_and_build_response(state, move, display_board_size):
     """Apply the selected move and build the response."""
     selected_move_trmph = fc.rowcol_to_trmph(*move)
     app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
@@ -1025,7 +1204,11 @@ def _apply_move_and_build_response(state, move):
     state = apply_move_to_state_trmph(state, selected_move_trmph)
     app.logger.info(f"Move applied. New state game_over: {state.game_over}")
     
-    return build_move_response(state, move_made=selected_move_trmph)
+    return build_move_response(
+        state,
+        display_board_size=display_board_size,
+        move_made=selected_move_trmph
+    )
 
 def _prepare_mcts_parameters(num_simulations, exploration_constant, temperature, temperature_end, enable_gumbel, gumbel_max_sims):
     """Prepare and validate MCTS parameters."""
@@ -1038,7 +1221,7 @@ def _prepare_mcts_parameters(num_simulations, exploration_constant, temperature,
         "gumbel_max_sims": gumbel_max_sims
     }
 
-def _execute_mcts_move_workflow(state, model_id, mcts_params):
+def _execute_mcts_move_workflow(state, model_id, mcts_params, display_board_size):
     """Execute the core MCTS move workflow."""
     # Load model
     model, model_error = _load_model_safely(model_id)
@@ -1052,10 +1235,11 @@ def _execute_mcts_move_workflow(state, model_id, mcts_params):
     move = _execute_mcts_search(state, model_id, mcts_config)
     
     # Apply move and build response
-    return _apply_move_and_build_response(state, move)
+    return _apply_move_and_build_response(state, move, display_board_size)
 
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
-                   temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
+                   temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims,
+                   display_board_size=DEFAULT_DISPLAY_BOARD_SIZE):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         app.logger.info(f"=== MCTS MOVE START ===")
@@ -1063,11 +1247,15 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.info(f"Input TRMPH: '{trmph}'")
         
         # Create game state from TRMPH (validation already done by calling API endpoint)
-        state = create_game_state_from_trmph(trmph, "for MCTS move")
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for MCTS move"
+        )
         app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
         
         # Check if game is over (early return)
-        early_result = _check_game_over_early_return(state, trmph)
+        early_result = _check_game_over_early_return(state, display_board_size)
         if early_result:
             return early_result
         
@@ -1087,7 +1275,9 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         # app.logger.info(f"Gumbel max sims: {mcts_params['gumbel_max_sims']}")
         
         # Execute MCTS workflow
-        result = _execute_mcts_move_workflow(state, model_id, mcts_params)
+        result = _execute_mcts_move_workflow(
+            state, model_id, mcts_params, display_board_size
+        )
         
         # Add configuration to result for frontend verification
         result['mcts_config'] = {
@@ -1139,6 +1329,9 @@ def api_constants():
             "BLUE": TRMPH_BLUE_WIN,
             "RED": TRMPH_RED_WIN
         },
+        "DISPLAY_BOARD_SIZE_OPTIONS": DISPLAY_BOARD_SIZE_OPTIONS,
+        "DEFAULT_DISPLAY_BOARD_SIZE": DEFAULT_DISPLAY_BOARD_SIZE,
+        "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
         "DIFFICULTY_LEVELS": get_difficulty_levels(),
         "ELO_CONFIG": {
             "MIN_ELO": MIN_ELO,
@@ -1157,7 +1350,7 @@ def api_state():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size']
     )
     
     if not is_valid:
@@ -1166,21 +1359,30 @@ def api_state():
     
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)  # Default to configured default difficulty
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     
-    app.logger.info(f"api_state called with trmph='{trmph}', elo_rating={elo_rating}")
+    app.logger.info(
+        "api_state called with trmph='%s', elo_rating=%s, display_board_size=%s",
+        trmph,
+        elo_rating,
+        display_board_size,
+    )
     
     # Create game state from TRMPH (validation already done by validate_api_input)
-    state = create_game_state_from_trmph(trmph)
-
-    # For empty TRMPH, we need to use the state's TRMPH representation
-    if not trmph or trmph.strip() == "":
-        trmph_for_inference = state.to_trmph()
-        app.logger.info(f"Using state TRMPH for inference: {trmph_for_inference[:50]}...")
-    else:
-        trmph_for_inference = trmph
+    state = create_game_state_from_trmph(
+        trmph,
+        display_board_size=display_board_size
+    )
+    trmph_for_inference = state.to_trmph()
     
     # Build response using helper function
-    response = build_game_response(state, elo_rating, trmph_for_inference, {"trmph": trmph})
+    response = build_game_response(
+        state,
+        elo_rating,
+        display_board_size=display_board_size,
+        trmph_for_inference=trmph_for_inference,
+        additional_fields={"trmph": trmph},
+    )
 
     trmph_stats = _build_trmph_stats(trmph)
     seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
@@ -1188,6 +1390,7 @@ def api_state():
         "state",
         status=200,
         elo_rating=elo_rating,
+        display_board_size=display_board_size,
         **trmph_stats,
         **seq_info
     )
@@ -1210,6 +1413,7 @@ def api_move_heatmap():
         optional_fields=[
             "trmph",
             "elo_rating",
+            "display_board_size",
             "model_id",
             "score_type",
             "selection_mode",
@@ -1223,6 +1427,7 @@ def api_move_heatmap():
 
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     model_id = validated_data.get("model_id")
     score_type = validated_data.get("score_type", "policy_value")
     selection_mode = validated_data.get("selection_mode", "all_legal")
@@ -1247,7 +1452,11 @@ def api_move_heatmap():
         if policy_temperature <= 0:
             return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
 
-        state = create_game_state_from_trmph(trmph, "for move heatmap")
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for move heatmap"
+        )
         if model_id is None:
             model_id = get_difficulty_parameters(elo_rating)["model"]
 
@@ -1262,9 +1471,11 @@ def api_move_heatmap():
 
         response = {
             "success": True,
-            "trmph": state.to_trmph(),
+            "trmph": trmph,
             "model_id": model_id,
             "score_type": score_type,
+            "display_board_size": display_board_size,
+            "network_board_size": BOARD_SIZE,
         }
         response.update(heatmap.to_dict())
 
@@ -1280,6 +1491,7 @@ def api_move_heatmap():
             top_k=top_k,
             selected_move_count=response["selected_move_count"],
             legal_move_count=response["legal_move_count"],
+            display_board_size=display_board_size,
             **trmph_stats,
             **seq_info
         )
@@ -1295,6 +1507,7 @@ def api_move_heatmap():
             reason="exception",
             elo_rating=elo_rating,
             model_id=model_id,
+            display_board_size=display_board_size,
             **trmph_stats,
             **seq_info
         )
@@ -1310,7 +1523,7 @@ def api_apply_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=['move'],  # Move is required
-        optional_fields=['trmph', 'elo_rating']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size']
     )
     
     if not is_valid:
@@ -1320,11 +1533,22 @@ def api_apply_move():
     trmph = validated_data.get("trmph", "")
     move = validated_data.get("move")
     elo_rating = validated_data.get("elo_rating", 1000)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     
-    app.logger.info(f"api_apply_move called with trmph='{trmph}', move='{move}', elo_rating={elo_rating}")
+    app.logger.info(
+        "api_apply_move called with trmph='%s', move='%s', elo_rating=%s, display_board_size=%s",
+        trmph,
+        move,
+        elo_rating,
+        display_board_size,
+    )
     
     # Create game state from TRMPH (validation already done by validate_api_input)
-    state = create_game_state_from_trmph(trmph, "for move")
+    state = create_game_state_from_trmph(
+        trmph,
+        display_board_size=display_board_size,
+        context="for move"
+    )
     
     try:
         state = apply_move_to_state_trmph(state, move)
@@ -1332,7 +1556,7 @@ def api_apply_move():
         # Silently ignore invalid moves (e.g., clicking on already filled hex)
         app.logger.debug(f"Invalid move ignored: {e}")
         # Return current state without error - user will learn not to click filled hexes
-        response = build_game_response(state, elo_rating, trmph, {
+        response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
             "new_trmph": trmph,
             "model_move": None  # No computer move made
         })
@@ -1344,16 +1568,17 @@ def api_apply_move():
             move=move,
             move_valid=False,
             elo_rating=elo_rating,
+            display_board_size=display_board_size,
             moves_requested=1,
             **trmph_stats,
             **seq_info
         )
         return jsonify(response)
 
-    new_trmph = state.to_trmph()
+    new_trmph = state_to_user_trmph(state, display_board_size)
     
     # Build response using helper function
-    response = build_game_response(state, elo_rating, new_trmph, {
+    response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
         "new_trmph": new_trmph,
         "model_move": None  # No computer move made
     })
@@ -1365,6 +1590,7 @@ def api_apply_move():
         move=move,
         move_valid=True,
         elo_rating=elo_rating,
+        display_board_size=display_board_size,
         moves_requested=1,
         new_trmph_len=len(fc.strip_trmph_preamble((new_trmph or "").strip())),
         new_trmph_moves=_safe_count_trmph_moves(new_trmph),
@@ -1385,7 +1611,7 @@ def api_policy_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size']
     )
     
     if not is_valid:
@@ -1394,12 +1620,22 @@ def api_policy_move():
     
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     
-    app.logger.info(f"Parsed parameters: trmph='{trmph}', elo_rating={elo_rating}")
+    app.logger.info(
+        "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
+        trmph,
+        elo_rating,
+        display_board_size,
+    )
     
     try:
         # Create game state from TRMPH (validation already done by validate_api_input)
-        state = create_game_state_from_trmph(trmph, "for policy move")
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for policy move"
+        )
         
         # Get difficulty parameters
         difficulty_params = get_difficulty_parameters(elo_rating)
@@ -1433,6 +1669,7 @@ def api_policy_move():
                 model_id=model_id,
                 temperature=temperature,
                 num_simulations=difficulty_params["num_simulations"],
+                display_board_size=display_board_size,
                 **trmph_stats,
                 **seq_info
             )
@@ -1442,7 +1679,11 @@ def api_policy_move():
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
         new_state = apply_move_to_state_trmph(state, move_trmph)
         
-        result = build_move_response(new_state, move_made=move_trmph)
+        result = build_move_response(
+            new_state,
+            display_board_size=display_board_size,
+            move_made=move_trmph
+        )
         
         # Add configuration to result for frontend verification
         result['mcts_config'] = {
@@ -1474,6 +1715,7 @@ def api_policy_move():
             enable_gumbel=difficulty_params["enable_gumbel"],
             gumbel_max_sims=difficulty_params.get("gumbel_max_sims", 0),
             move_made=move_trmph,
+            display_board_size=display_board_size,
             moves_requested=1,
             **trmph_stats,
             **seq_info
@@ -1491,6 +1733,7 @@ def api_policy_move():
             success=False,
             reason="exception",
             elo_rating=elo_rating,
+            display_board_size=display_board_size,
             **trmph_stats,
             **seq_info
         )
@@ -1508,7 +1751,7 @@ def api_mcts_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size']
     )
     
     if not is_valid:
@@ -1517,8 +1760,14 @@ def api_mcts_move():
     
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     
-    app.logger.info(f"Parsed parameters: trmph='{trmph}', elo_rating={elo_rating}")
+    app.logger.info(
+        "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
+        trmph,
+        elo_rating,
+        display_board_size,
+    )
     
     # Get difficulty parameters
     difficulty_params = get_difficulty_parameters(elo_rating)
@@ -1537,7 +1786,8 @@ def api_mcts_move():
         difficulty_params["temperature_end"],
         0,  # verbose
         difficulty_params["enable_gumbel"],
-        difficulty_params["gumbel_max_sims"]
+        difficulty_params["gumbel_max_sims"],
+        display_board_size=display_board_size,
     )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
@@ -1565,6 +1815,7 @@ def api_mcts_move():
         enable_gumbel=difficulty_params["enable_gumbel"],
         gumbel_max_sims=difficulty_params["gumbel_max_sims"],
         move_made=result.get("move_made"),
+        display_board_size=display_board_size,
         moves_requested=1,
         **trmph_stats,
         **seq_info
@@ -1582,7 +1833,7 @@ def api_apply_trmph_sequence():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=['trmph_sequence'],  # Sequence is required
-        optional_fields=['trmph', 'elo_rating']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size']
     )
     
     if not is_valid:
@@ -1592,12 +1843,23 @@ def api_apply_trmph_sequence():
     trmph = validated_data.get("trmph", "")
     trmph_sequence = validated_data.get("trmph_sequence", "")
     elo_rating = validated_data.get("elo_rating", 1000)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     
-    app.logger.info(f"api_apply_trmph_sequence called with trmph='{trmph}', sequence='{trmph_sequence}', elo_rating={elo_rating}")
+    app.logger.info(
+        "api_apply_trmph_sequence called with trmph='%s', sequence='%s', elo_rating=%s, display_board_size=%s",
+        trmph,
+        trmph_sequence,
+        elo_rating,
+        display_board_size,
+    )
     
     try:
         # Create game state from TRMPH (validation already done by validate_api_input)
-        state = create_game_state_from_trmph(trmph, "for TRMPH sequence")
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for TRMPH sequence"
+        )
         
         # Apply the TRMPH sequence
         moves_applied = 0
@@ -1627,15 +1889,16 @@ def api_apply_trmph_sequence():
                     success=False,
                     reason="invalid_sequence",
                     elo_rating=elo_rating,
+                    display_board_size=display_board_size,
                     **trmph_stats,
                     **seq_info
                 )
                 return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
         
-        new_trmph = state.to_trmph()
+        new_trmph = state_to_user_trmph(state, display_board_size)
         
         # Build response using helper function
-        response = build_game_response(state, elo_rating, new_trmph, {
+        response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
             "new_trmph": new_trmph,
             "moves_applied": moves_applied
         })
@@ -1646,6 +1909,7 @@ def api_apply_trmph_sequence():
             status=200,
             success=True,
             elo_rating=elo_rating,
+            display_board_size=display_board_size,
             moves_requested=_safe_count_trmph_moves(trmph_sequence),
             moves_applied=moves_applied,
             **trmph_stats,
@@ -1663,6 +1927,7 @@ def api_apply_trmph_sequence():
             success=False,
             reason="exception",
             elo_rating=elo_rating,
+            display_board_size=display_board_size,
             **trmph_stats,
             **seq_info
         )

@@ -240,11 +240,13 @@ class HexGameState:
     # Efficient connectivity tracking
     red_dsu: ArrayDSU = field(init=False, repr=False)
     blue_dsu: ArrayDSU = field(init=False, repr=False)
+    _legal_move_mask: Optional[np.ndarray] = field(default=None, repr=False)
 
     def __init__(self, _current_player: Player, board: Optional[np.ndarray] = None,
                  move_history: Optional[List[Tuple[int, int]]] = None,
                  game_over: bool = False, winner: Optional[WinnerEnum] = None,
-                 *, skip_initial_connectivity: bool = False):
+                 *, skip_initial_connectivity: bool = False,
+                 legal_move_mask: Optional[np.ndarray] = None):
         # Initialize board
         self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
         # Initialize current player with compatibility for legacy int
@@ -256,6 +258,7 @@ class HexGameState:
         self.game_over = game_over
         # Winner internal storage uses Enum only
         self._winner = winner
+        self._legal_move_mask = self._normalize_legal_move_mask(legal_move_mask)
         self._undo_stack = []
         
         # Initialize DSUs for connectivity tracking
@@ -308,10 +311,34 @@ class HexGameState:
         """Preferred: expose winner as Winner enum (or None if game not over)."""
         return self._winner
 
+    @staticmethod
+    def _normalize_legal_move_mask(legal_move_mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Validate and normalize an optional legal-move mask."""
+        if legal_move_mask is None:
+            return None
+        mask = np.asarray(legal_move_mask, dtype=bool)
+        expected_shape = (BOARD_SIZE, BOARD_SIZE)
+        if mask.shape != expected_shape:
+            raise ValueError(
+                f"Legal move mask must have shape {expected_shape}, got {mask.shape}"
+            )
+        return mask
+
+    @property
+    def legal_move_mask(self) -> Optional[np.ndarray]:
+        """Return the current legal-move mask, or None if unrestricted."""
+        return self._legal_move_mask
+
+    def set_legal_move_mask(self, legal_move_mask: Optional[np.ndarray]) -> None:
+        """Set an optional legal-move mask for this state."""
+        self._legal_move_mask = self._normalize_legal_move_mask(legal_move_mask)
+
     def is_valid_move(self, row: int, col: int) -> bool:
         if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
             return False
         if self.game_over:
+            return False
+        if self._legal_move_mask is not None and not self._legal_move_mask[row, col]:
             return False
         return is_empty(self.board, row, col)
 
@@ -400,7 +427,8 @@ class HexGameState:
             _current_player=self._current_player,
             move_history=self.move_history.copy(),
             game_over=self.game_over,
-            winner=self.winner
+            winner=self.winner,
+            legal_move_mask=self._legal_move_mask
         )
         # Copy DSUs for connectivity tracking
         new_state.red_dsu = self.red_dsu.copy()
@@ -485,7 +513,8 @@ class HexGameState:
             move_history=self.move_history.copy(),
             game_over=self.game_over,
             winner=self._winner,
-            skip_initial_connectivity=True  # Skip the expensive rebuild
+            skip_initial_connectivity=True,  # Skip the expensive rebuild
+            legal_move_mask=self._legal_move_mask
         )
         # Copy DSUs from parent state
         new_state.red_dsu = self.red_dsu.copy()
@@ -505,7 +534,8 @@ class HexGameState:
             move_history=new_move_history,
             game_over=False,
             winner=None,
-            skip_initial_connectivity=True  # Skip the expensive rebuild
+            skip_initial_connectivity=True,  # Skip the expensive rebuild
+            legal_move_mask=self._legal_move_mask
         )
         
         # Copy DSUs from parent state

@@ -5,6 +5,8 @@
 class HexGame {
     constructor() {
         this.boardSize = null;  // Must be set from backend - fail fast if not
+        this.displayBoardSize = null; // Top-left KxK region exposed to the user
+        this.displayBoardSizeOptions = [];
         this.currentTRMPH = "";
         this.gameHistory = [];
         this.redoHistory = []; // Track undone moves for redo functionality
@@ -46,7 +48,23 @@ class HexGame {
             'j7', 'j8', 'j9', 'k10', 'k11', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'l2', 'l3',
             'l4', 'l5', 'l6', 'l7', 'l8', 'l9', 'l10', 'l11'];
 
+        this.virtualBoardPrefillMoves = {
+            13: '',
+            12: 'a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12',
+            11: 'a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11',
+            10: 'a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10',
+            9: 'a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9',
+            8: 'a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8',
+            7: 'a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7',
+            6: 'a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6',
+            5: 'a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5',
+            4: 'a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4',
+            3: 'a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3',
+            2: 'a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2'
+        };
+
         this.initializeElements();
+        this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
         this.setupEventListeners();
         this.loadGameConstants();
         this.initializeDarkMode();
@@ -66,6 +84,7 @@ class HexGame {
         this.redoBtn = document.getElementById('redo-btn');
         this.computerMoveBtn = document.getElementById('computer-move-btn');
         this.difficultyPreset = document.getElementById('difficulty-preset');
+        this.boardSizeSelect = document.getElementById('board-size-select');
         this.eloSlider = document.getElementById('elo-slider');
         this.eloDisplay = document.getElementById('elo-display');
         this.blueComputerCheck = document.getElementById('blue-computer');
@@ -102,6 +121,21 @@ class HexGame {
         this.updateDifficultyPreset();
     }
 
+    initializeBoardSizeDropdown() {
+        if (!this.boardSizeSelect) {
+            return;
+        }
+        if (!Array.isArray(this.displayBoardSizeOptions) || this.displayBoardSizeOptions.length === 0) {
+            throw new Error('Display board size options not loaded from backend');
+        }
+
+        const optionsHtml = this.displayBoardSizeOptions
+            .map((size) => `<option value="${size}">${size}x${size}</option>`)
+            .join('');
+        this.boardSizeSelect.innerHTML = optionsHtml;
+        this.boardSizeSelect.value = String(this.validateBoardSize());
+    }
+
     setupEventListeners() {
         this.resetBtn.addEventListener('click', () => this.resetGame());
         this.undoBtn.addEventListener('click', () => this.undoMove());
@@ -115,6 +149,22 @@ class HexGame {
             this.eloSlider.value = this.currentElo;
             this.eloDisplay.textContent = this.currentElo;
         });
+
+        if (this.boardSizeSelect) {
+            this.boardSizeSelect.addEventListener('change', async (e) => {
+                const selected = parseInt(e.target.value, 10);
+                if (!Number.isFinite(selected) || selected === this.displayBoardSize) {
+                    return;
+                }
+                this.displayBoardSize = selected;
+                localStorage.setItem('hex_ai_display_board_size', String(selected));
+                this.configureHeatmapTopKBounds();
+                this.clearHeatmapData();
+                this.updateHeatmapControls();
+                this.updateInstructionTextForBoardMode();
+                await this.resetGame();
+            });
+        }
 
         this.eloSlider.addEventListener('input', (e) => {
             this.currentElo = parseInt(e.target.value);
@@ -171,7 +221,7 @@ class HexGame {
             this.heatmapTopKInput.addEventListener('input', (e) => {
                 const parsed = parseInt(e.target.value, 10);
                 if (Number.isFinite(parsed)) {
-                    const boardSize = this.boardSize || 13;
+                    const boardSize = this.validateBoardSize();
                     const maxMoves = boardSize * boardSize;
                     this.heatmapTopK = Math.max(1, Math.min(maxMoves, parsed));
                 }
@@ -411,6 +461,28 @@ class HexGame {
         }
     }
 
+    configureHeatmapTopKBounds() {
+        const boardSize = this.validateBoardSize();
+        const maxMoves = boardSize * boardSize;
+        this.heatmapTopK = Math.max(1, Math.min(this.heatmapTopK, maxMoves));
+        if (this.heatmapTopKInput) {
+            this.heatmapTopKInput.max = String(maxMoves);
+            this.heatmapTopKInput.value = String(this.heatmapTopK);
+        }
+    }
+
+    updateInstructionTextForBoardMode() {
+        if (!this.instructionText) {
+            return;
+        }
+        if (this.validateBoardSize() === this.boardSize) {
+            this.instructionText.textContent = this.defaultInstructionText;
+        } else {
+            const size = this.validateBoardSize();
+            this.instructionText.textContent = `Virtual ${size}x${size} mode: only the top-left ${size}x${size} area is playable.`;
+        }
+    }
+
     async fetchMoveHeatmap() {
         const response = await fetch('/api/move_heatmap', {
             method: 'POST',
@@ -418,6 +490,7 @@ class HexGame {
             body: JSON.stringify({
                 trmph: this.currentTRMPH,
                 elo_rating: this.validateEloRating(),
+                display_board_size: this.validateBoardSize(),
                 score_type: this.heatmapScoreType,
                 selection_mode: this.heatmapScope,
                 top_k: this.heatmapTopK,
@@ -511,10 +584,10 @@ class HexGame {
     }
 
     validateBoardSize() {
-        if (this.boardSize === null) {
-            throw new Error('Board size not initialized from backend - this indicates a configuration error');
+        if (this.displayBoardSize === null) {
+            throw new Error('Display board size not initialized from backend - this indicates a configuration error');
         }
-        return this.boardSize;
+        return this.displayBoardSize;
     }
 
     async loadGameConstants() {
@@ -525,6 +598,21 @@ class HexGame {
             this.pieceValues = data.PIECE_VALUES;
             this.playerValues = data.PLAYER_VALUES;
             this.winnerValues = data.WINNER_VALUES;
+            this.displayBoardSizeOptions = Array.isArray(data.DISPLAY_BOARD_SIZE_OPTIONS) && data.DISPLAY_BOARD_SIZE_OPTIONS.length > 0
+                ? data.DISPLAY_BOARD_SIZE_OPTIONS.map(v => parseInt(v, 10)).filter(Number.isFinite)
+                : [this.boardSize];
+
+            const backendDefaultDisplaySize = Number.isFinite(parseInt(data.DEFAULT_DISPLAY_BOARD_SIZE, 10))
+                ? parseInt(data.DEFAULT_DISPLAY_BOARD_SIZE, 10)
+                : this.boardSize;
+            const savedDisplaySize = parseInt(localStorage.getItem('hex_ai_display_board_size'), 10);
+            const validSizes = new Set(this.displayBoardSizeOptions);
+            this.displayBoardSize = validSizes.has(savedDisplaySize)
+                ? savedDisplaySize
+                : backendDefaultDisplaySize;
+            if (!validSizes.has(this.displayBoardSize)) {
+                this.displayBoardSize = this.boardSize;
+            }
 
             // Load difficulty levels from backend
             this.difficultyLevels = data.DIFFICULTY_LEVELS;
@@ -533,12 +621,7 @@ class HexGame {
             this.minElo = data.ELO_CONFIG.MIN_ELO;
             this.maxElo = data.ELO_CONFIG.MAX_ELO;
             this.currentElo = data.ELO_CONFIG.DEFAULT_ELO;
-            const maxMoves = this.boardSize * this.boardSize;
-            this.heatmapTopK = Math.min(this.heatmapTopK, maxMoves);
-            if (this.heatmapTopKInput) {
-                this.heatmapTopKInput.max = String(maxMoves);
-                this.heatmapTopKInput.value = String(this.heatmapTopK);
-            }
+            this.configureHeatmapTopKBounds();
 
             // Update slider and display with backend values
             this.eloSlider.min = this.minElo;
@@ -548,6 +631,8 @@ class HexGame {
 
             // Initialize difficulty dropdown now that we have the data
             this.initializeDifficultyDropdown();
+            this.initializeBoardSizeDropdown();
+            this.updateInstructionTextForBoardMode();
 
             this.initializeBoard();
             // Initial load - allow computer auto-move
@@ -647,7 +732,8 @@ class HexGame {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
-                    elo_rating: this.validateEloRating()
+                    elo_rating: this.validateEloRating(),
+                    display_board_size: this.validateBoardSize()
                 })
             });
 
@@ -715,7 +801,8 @@ class HexGame {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
-                    elo_rating: this.validateEloRating()
+                    elo_rating: this.validateEloRating(),
+                    display_board_size: this.validateBoardSize()
                 })
             });
 
@@ -866,6 +953,9 @@ class HexGame {
     }
 
     shouldShadeHex(row, col) {
+        if (this.validateBoardSize() !== this.boardSize) {
+            return false;
+        }
         // Convert row/col to TRMPH format and check if it's in the purple hex list
         const trmph = this.rowColToTRMPH(row, col);
         return this.PURPLE_HEXES.includes(trmph);
@@ -1164,7 +1254,8 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     move: move,
-                    elo_rating: this.validateEloRating()
+                    elo_rating: this.validateEloRating(),
+                    display_board_size: this.validateBoardSize()
                 })
             });
 
@@ -1397,6 +1488,15 @@ class HexGame {
         return cleaned;
     }
 
+    stripVirtualPrefillIfPresent(cleanedMoves) {
+        const displaySize = this.validateBoardSize();
+        const prefill = this.virtualBoardPrefillMoves[displaySize] || '';
+        if (prefill && cleanedMoves.startsWith(prefill)) {
+            return cleanedMoves.substring(prefill.length);
+        }
+        return cleanedMoves;
+    }
+
     validateTrmphInput(input) {
         // Enhanced TRMPH validation with detailed error messages
         if (!input || typeof input !== 'string') {
@@ -1411,11 +1511,16 @@ class HexGame {
         // Clean the input for validation purposes (remove numbers, swap, etc.)
         // We validate the *intent* (the moves), not the exact formatting
         const cleaned = this.cleanInput(trimmed);
+        const cleanedForDisplayBoard = this.stripVirtualPrefillIfPresent(cleaned);
+
+        if (!cleanedForDisplayBoard) {
+            return { valid: true, error: null };
+        }
 
         // Check move count by parsing the TRMPH string properly
         // This handles moves of varying length (a1, b13, m12, etc.)
         try {
-            const moves = this.parseTrmphMoves(cleaned);
+            const moves = this.parseTrmphMoves(cleanedForDisplayBoard);
             const boardSize = this.validateBoardSize();
             const maxMoves = boardSize * boardSize; // Complete game moves
             if (moves.length > maxMoves) {
@@ -1441,7 +1546,7 @@ class HexGame {
         // Note: We use case-insensitive flag 'i' here to allow "A1" to pass validation
         // The backend will normalize it to lowercase
         const trmphRegex = new RegExp(`^([a-${lastLetter}]${numberPattern})+$`, 'i');
-        if (!trmphRegex.test(cleaned)) {
+        if (!trmphRegex.test(cleanedForDisplayBoard)) {
             return {
                 valid: false,
                 error: `[Frontend: Regex] Invalid format. Only letters a-${lastLetter} followed by numbers 1-${lastNumber} are allowed (e.g., a1b2c3)`
@@ -1480,7 +1585,8 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     trmph_sequence: input,
-                    elo_rating: this.validateEloRating()
+                    elo_rating: this.validateEloRating(),
+                    display_board_size: this.validateBoardSize()
                 })
             });
 
