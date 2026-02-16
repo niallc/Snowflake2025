@@ -263,14 +263,18 @@ def gumbel_alpha_zero_root_batched(
     # Setup phase timing
     setup_start = time.perf_counter()
     
-    legal_actions = assert_exact_legal_action_match(
-        expected_actions=legal_actions,
-        observed_actions=root.legal_indices,
-        context="gumbel_alpha_zero_root_batched:entry",
-        contract_name="Gumbel legality contract",
-        expected_label="Provided legal_actions",
-        observed_label="Current root legal_indices",
-    )
+    def assert_root_legality(context: str) -> None:
+        assert_exact_legal_action_match(
+            expected_actions=legal_actions,
+            observed_actions=root.legal_indices,
+            context=context,
+            contract_name="Gumbel legality contract",
+            expected_label="Provided legal_actions",
+            observed_label="Current root legal_indices",
+        )
+
+    assert_root_legality("gumbel_alpha_zero_root_batched:entry")
+    legal_actions = [int(action) for action in legal_actions]
     
     # Create mask for illegal actions
     mask = np.full(K, -np.inf)
@@ -489,6 +493,10 @@ def gumbel_alpha_zero_root_batched(
                 }
             )
             break  # exit SH loop; proceed to final ranking over 'cand' as-is
+
+        assert_root_legality(
+            f"gumbel_alpha_zero_root_batched:round_{r + 1}_pre_forced_actions"
+        )
 
         # Create exactly per_arm simulations for each arm
         actions_this_round = [a for a in cand for _ in range(per_arm)]
