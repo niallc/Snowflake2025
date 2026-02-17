@@ -644,7 +644,7 @@ class HexGame {
             this.instructionText.textContent = this.defaultInstructionText;
         } else {
             const size = this.validateBoardSize();
-            this.instructionText.textContent = `Virtual ${size}x${size} mode: only the top-left ${size}x${size} area is playable.`;
+            this.instructionText.textContent = `Changed board size to ${size}`;
         }
     }
 
