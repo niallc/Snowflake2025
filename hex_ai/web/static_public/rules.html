@@ -12,17 +12,17 @@
       padding: 20px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
-    
+
     .rules-header {
       text-align: center;
       margin-bottom: 30px;
     }
-    
+
     .rules-header h1 {
       color: #333;
       margin-bottom: 10px;
     }
-    
+
     .back-button {
       display: inline-block;
       background: #007bff;
@@ -33,11 +33,11 @@
       margin-bottom: 20px;
       transition: background-color 0.3s;
     }
-    
+
     .back-button:hover {
       background: #0056b3;
     }
-    
+
     .rules-section {
       background: #f8f9fa;
       padding: 20px;
@@ -45,34 +45,35 @@
       border-radius: 8px;
       border-left: 4px solid #007bff;
     }
-    
+
     .rules-section h2 {
       color: #333;
       margin-top: 0;
       margin-bottom: 15px;
     }
-    
+
     .rules-section h3 {
       color: #555;
       margin-top: 20px;
       margin-bottom: 10px;
     }
-    
+
     .rules-section p {
       line-height: 1.6;
       color: #666;
       margin-bottom: 10px;
     }
-    
-    .rules-section ul {
+
+    .rules-section ul,
+    .rules-section ol {
       padding-left: 20px;
     }
-    
+
     .rules-section li {
       margin-bottom: 8px;
       line-height: 1.5;
     }
-    
+
     .highlight {
       background: #fff3cd;
       padding: 15px;
@@ -80,15 +81,17 @@
       border-left: 4px solid #ffc107;
       margin: 15px 0;
     }
-    
-    .game-board-demo {
-      text-align: center;
-      margin: 20px 0;
-      padding: 20px;
-      background: #e9ecef;
-      border-radius: 8px;
+
+    .new-player {
+      border-left-color: #20a35a;
+      background: #f4fff8;
     }
-    
+
+    .new-player .highlight {
+      background: #e8f8ee;
+      border-left-color: #20a35a;
+    }
+
     .controls-demo {
       display: flex;
       gap: 10px;
@@ -96,7 +99,7 @@
       flex-wrap: wrap;
       margin: 15px 0;
     }
-    
+
     .control-button {
       background: #6c757d;
       color: white;
@@ -105,37 +108,9 @@
       border-radius: 4px;
       font-size: 14px;
     }
-    
+
     .control-button.primary {
       background: #007bff;
-    }
-    
-    .board-sequence {
-      background: #f8f9fa;
-      border: 1px solid #dee2e6;
-      border-radius: 5px;
-      padding: 15px;
-      margin: 10px 0;
-      font-family: 'Courier New', monospace;
-      font-size: 14px;
-      word-break: break-all;
-      cursor: pointer;
-      transition: background-color 0.3s;
-    }
-    
-    .board-sequence:hover {
-      background: #e9ecef;
-    }
-    
-    .board-sequence.copied {
-      background: #d4edda;
-      border-color: #c3e6cb;
-    }
-    
-    .copy-instructions {
-      font-size: 12px;
-      color: #6c757d;
-      margin-top: 5px;
     }
   </style>
 </head>
@@ -144,268 +119,109 @@
     <div class="rules-header">
       <a href="/" class="back-button">← Back to Game</a>
       <h1>Snowflake 25 - How to Play</h1>
-      <p>Learn the rules of Hex and how to use this AI-powered game interface</p>
+      <p>Hex rules plus a quick guide to the current game features</p>
+    </div>
+
+    <div class="rules-section new-player">
+      <h2>🆕 New Player? Start Here</h2>
+      <div class="highlight">
+        <strong>Recommended first setup:</strong> choose a smaller <strong>Play Area</strong> (6×6 to 8×8), keep <strong>Pie Rule</strong> enabled, and start around <strong>ELO 500-1000</strong>.
+      </div>
+      <ol>
+        <li>Open <strong>Board Size</strong> and set <strong>Play Area</strong> to 6×6, 7×7, or 8×8.</li>
+        <li>Use <strong>Difficulty</strong> preset or slider to tune strength up/down.</li>
+        <li>If you want move guidance, enable <strong>Board Heatmap</strong>.</li>
+      </ol>
+      <p>Smaller boards make games faster and tactical ideas easier to spot, so they are usually the best way to learn.</p>
     </div>
 
     <div class="rules-section">
       <h2>🎯 Object of the Game</h2>
-      <p>Hex is a strategic board game where two players compete to connect opposite sides of a hexagonal board.</p>
+      <p>Hex is a strategy game where both players try to connect opposite sides of the board.</p>
       <ul>
-        <li><strong>Blue player</strong> (you): Connect the top and bottom edges</li>
-        <li><strong>Red player</strong> (AI): Connect the left and right edges</li>
-        <li>First player to create an unbroken chain wins!</li>
+        <li><strong>Blue</strong> connects top to bottom.</li>
+        <li><strong>Red</strong> connects left to right.</li>
+        <li>First player to form an unbroken chain wins.</li>
       </ul>
     </div>
 
     <div class="rules-section">
       <h2>📋 Basic Rules</h2>
       <h3>1. Taking Turns</h3>
-      <p>Players alternate placing pieces on the hexagonal board. Blue always goes first.</p>
-      
-      <h3>2. Placing Pieces</h3>
-      <p>Click on any empty hexagon to place your piece. Once placed, pieces cannot be moved or removed.</p>
-      
+      <p>Players alternate placing one stone at a time. Blue always moves first.</p>
+
+      <h3>2. Placing Stones</h3>
+      <p>Click or tap an empty hex to place your stone. Stones cannot be moved or removed.</p>
+
       <h3>3. Winning</h3>
-      <p>You win by creating a continuous path of your pieces from one edge to the opposite edge:</p>
-      <ul>
-        <li><strong>Blue wins:</strong> Connect top edge to bottom edge</li>
-        <li><strong>Red wins:</strong> Connect left edge to right edge</li>
-      </ul>
-      
+      <p>Build a continuous path between your target sides before your opponent does.</p>
+
       <div class="highlight">
-        <strong>💡 Pro Tip:</strong> In Hex, there are no ties! One player will always win due to the nature of the board geometry.
+        <strong>💡 Hex has no draws:</strong> one side always has a winning connection.
+      </div>
+    </div>
+
+    <div class="rules-section">
+      <h2>🎲 Board Size (Play Area)</h2>
+      <p>Use <strong>Board Size → Play Area</strong> to choose the active board from 13×13 down to 2×2.</p>
+      <ul>
+        <li><strong>Smaller boards:</strong> faster games, clearer tactics, easier for beginners.</li>
+        <li><strong>Larger boards:</strong> deeper strategy and longer planning.</li>
+        <li>Changing board size starts a fresh game using the selected play area.</li>
+      </ul>
+      <div class="highlight">
+        <strong>No legacy setup needed:</strong> you can switch board size directly from the UI.
       </div>
     </div>
 
     <div class="rules-section" id="pie-rule">
       <h2>🥧 Pie Rule (Swap)</h2>
-      <p>The pie rule is a balancing rule used after the first move.</p>
+      <p>The pie rule balances first-move advantage.</p>
       <ul>
-        <li>Blue makes the first move.</li>
-        <li>Red then chooses either to continue as Red, or to <strong>swap</strong> and take over Blue.</li>
-        <li>In Snowflake 25, when pie rule is enabled, the AI can make this swap choice probabilistically on move 1.</li>
+        <li>Blue places the first stone.</li>
+        <li>Red can continue as Red or swap sides with Blue.</li>
+        <li>When enabled in Snowflake 25, the AI can make this swap decision on move 1.</li>
       </ul>
-      <p>If a swap happens, no extra stone is placed. Control/color assignment changes and play continues from the same board position.</p>
+      <p>If a swap happens, no new stone is placed. Only side assignment changes.</p>
     </div>
 
     <div class="rules-section">
-      <h2>🎮 How to Use This Interface</h2>
-      
-      <h3>Making Moves</h3>
-      <p>Simply click on any empty hexagon to place your piece. The game will automatically switch to the AI's turn.</p>
-      
-      <h3>Game Controls</h3>
+      <h2>🎮 Main Controls</h2>
       <div class="controls-demo">
         <button class="control-button">Undo</button>
         <button class="control-button">Redo</button>
         <button class="control-button primary">Computer Move</button>
         <button class="control-button">New Game</button>
-        <button class="control-button">Save Game</button>
+        <button class="control-button">Rules</button>
       </div>
-      
       <ul>
-        <li><strong>Undo:</strong> Take back your last move</li>
-        <li><strong>Redo:</strong> Restore a move you undid</li>
-        <li><strong>Computer Move:</strong> Force the AI to make a move (useful when AI is disabled)</li>
-        <li><strong>New Game:</strong> Start a fresh game</li>
-        <li><strong>Save Game:</strong> Save the current game sequence</li>
-      </ul>
-      
-      <h3>Difficulty Settings</h3>
-      <p>Adjust the AI difficulty using the settings panel:</p>
-      <ul>
-        <li><strong>Novice (ELO 500):</strong> Very random play, makes many mistakes</li>
-        <li><strong>Medium (ELO 1000):</strong> Reasonable play with some mistakes</li>
-        <li><strong>Hard (ELO 1500):</strong> Good play, probably tough to beat</li>
-        <li><strong>Expert (ELO 2100):</strong> Strong play</li>
-        <li><strong>Ultra Difficult (ELO 2350):</strong> Maximum difficulty with advanced AI (highest available)</li>
-      </ul>
-      
-      <h3>Player Settings</h3>
-      <p>Choose who controls each color:</p>
-      <ul>
-        <li><strong>Blue (Computer):</strong> AI plays as blue</li>
-        <li><strong>Red (Computer):</strong> AI plays as red</li>
-        <li>You can have both, one, or neither controlled by the AI</li>
+        <li><strong>Undo / Redo:</strong> Step backward and forward through moves.</li>
+        <li><strong>Computer Move:</strong> Ask the AI to play the current turn.</li>
+        <li><strong>New Game:</strong> Reset the board with current settings.</li>
+        <li><strong>Rules:</strong> Open this guide page.</li>
+        <li><strong>Dark toggle:</strong> Switch between light and dark themes.</li>
       </ul>
     </div>
 
     <div class="rules-section">
-      <h2>🔧 Other Features</h2>
-      
+      <h2>✨ New Features</h2>
+
+      <h3>Difficulty Slider + Presets</h3>
+      <p>Set AI strength with a preset label or a custom ELO value. Higher ELO means stronger play.</p>
+
+      <h3>Board Heatmap</h3>
+      <p>Enable the heatmap to visualize move quality for the current player. You can inspect top-K candidates or all legal moves.</p>
+
+      <h3>Player Toggles</h3>
+      <p>Choose whether Blue and/or Red are controlled by the computer. This supports human vs AI, AI vs AI, or local analysis.</p>
+
       <h3>Game Sequence (TRMPH)</h3>
-      <p>The game uses a special notation called TRMPH to record moves:</p>
-      <ul>
-        <li>Each move is recorded as a letter-number combination (e.g., "a1", "b2")</li>
-        <li>You can copy the current game sequence</li>
-        <li>You can apply a sequence of moves to jump to a specific position</li>
-      </ul>
-      
-    </div>
-
-    <div class="rules-section">
-      <h2>🎲 Playing on Smaller Boards</h2>
-      <p>While the default game uses a 13×13 board, you can also play on smaller boards for quicker games or different strategic challenges.</p>
-      
-      <h3>How to Use Smaller Boards</h3>
-      <p>Use the <strong>Board Size</strong> setting in the main UI to pick the play area (top-left K×K).</p>
-      <p>For compatibility, you can still use the legacy TRMPH setup sequences below in the "Apply TRMPH Sequence" field:</p>
-      
-      <div class="highlight">
-        <strong>💡 How it works:</strong> These sequences create a "virtual" smaller board by filling in the outer edges of the 13×13 board, leaving only the desired smaller area playable.
-      </div>
-      
-      <h3>Available Board Sizes</h3>
-      
-      <h4>12×12 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>11×11 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>10×10 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>9×9 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>8×8 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>7×7 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>6×6 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>5×5 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>4×4 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>3×3 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h4>2×2 Board</h4>
-      <div class="board-sequence" onclick="copyToClipboard(this)" title="Click to copy">
-        a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2
-        <div class="copy-instructions">Click to copy this sequence</div>
-      </div>
-      
-      <h3>Instructions</h3>
-      <ol>
-        <li>Copy one of the sequences above by clicking on it</li>
-        <li>Go back to the main game interface</li>
-        <li>Click on "Apply TRMPH Sequence" button</li>
-        <li>Paste the sequence into the text field</li>
-        <li>Click "Apply" to start the smaller board game</li>
-      </ol>
-      
-      <div class="highlight">
-        <strong>🎯 Pro Tip:</strong> Smaller boards are great for learning the game, quick matches, or when you want to focus on specific tactical patterns. The 6×6 and 7×7 boards are particularly good for beginners!
-      </div>
+      <p>Copy the current move sequence or paste one to jump to a position directly.</p>
     </div>
 
     <div style="text-align: center; margin-top: 30px;">
       <a href="/" class="back-button">← Back to Game</a>
     </div>
   </div>
-  
-  <script>
-    function copyToClipboard(element) {
-      // Get the text content (excluding the copy instructions div)
-      const textToCopy = element.querySelector('div.copy-instructions') ? 
-        element.textContent.replace(element.querySelector('div.copy-instructions').textContent, '').trim() :
-        element.textContent.trim();
-      
-      console.log('Attempting to copy:', textToCopy); // Debug log
-      
-      // Try modern clipboard API first
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(textToCopy).then(function() {
-          console.log('Successfully copied to clipboard');
-          showCopyFeedback(element);
-        }).catch(function(err) {
-          console.error('Clipboard API failed:', err);
-          fallbackCopy(textToCopy, element);
-        });
-      } else {
-        // Fallback for older browsers
-        fallbackCopy(textToCopy, element);
-      }
-    }
-    
-    function fallbackCopy(text, element) {
-      // Create a temporary textarea element
-      const textArea = document.createElement('textarea');
-      textArea.value = text;
-      textArea.style.position = 'fixed';
-      textArea.style.left = '-999999px';
-      textArea.style.top = '-999999px';
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      
-      try {
-        const successful = document.execCommand('copy');
-        if (successful) {
-          console.log('Fallback copy successful');
-          showCopyFeedback(element);
-        } else {
-          console.error('Fallback copy failed');
-          alert('Copy failed. Please manually select and copy the text.');
-        }
-      } catch (err) {
-        console.error('Fallback copy error:', err);
-        alert('Copy failed. Please manually select and copy the text.');
-      }
-      
-      document.body.removeChild(textArea);
-    }
-    
-    function showCopyFeedback(element) {
-      // Visual feedback
-      element.classList.add('copied');
-      const originalText = element.innerHTML;
-      element.innerHTML = '✓ Copied!';
-      
-      // Reset after 2 seconds
-      setTimeout(function() {
-        element.classList.remove('copied');
-        element.innerHTML = originalText;
-      }, 2000);
-    }
-  </script>
 </body>
 </html>

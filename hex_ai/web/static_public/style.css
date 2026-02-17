@@ -147,7 +147,6 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.4;
 }
 
 .pie-rule-player {
@@ -227,6 +226,10 @@ h1 {
   opacity: 1;
 }
 
+#pie-rule-badge.pie-rule-visible {
+  opacity: 0.4;
+}
+
 [data-theme="dark"] #pie-rule-badge {
   background: rgba(35, 35, 35, 0.9);
   border-color: rgba(255, 255, 255, 0.2);
@@ -240,6 +243,28 @@ h1 {
 [data-theme="dark"] .pie-rule-player {
   background: rgba(35, 35, 35, 0.9);
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Narrow/mobile: hide pie image and anchor player tag lower-left */
+@media (max-width: 820px) {
+  #pie-rule-badge {
+    display: none !important;
+  }
+
+  .pie-rule-player {
+    left: 10px;
+    bottom: 10px;
+    min-width: 86px;
+    padding: 5px 8px;
+  }
+
+  .pie-rule-player-title {
+    font-size: 0.72rem;
+  }
+
+  .pie-rule-player-color {
+    font-size: 0.96rem;
+  }
 }
 
 .swap-flash-overlay {
