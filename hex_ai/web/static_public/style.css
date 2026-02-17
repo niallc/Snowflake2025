@@ -137,29 +137,38 @@ h1 {
 #pie-rule-badge {
   left: 10px;
   bottom: 10px;
-  font-size: 1.35rem;
+  font-size: 4rem;
   line-height: 1;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 999px;
-  width: 34px;
-  height: 34px;
+  width: 102px;
+  height: 102px;
   display: flex;
   align-items: center;
   justify-content: center;
+  opacity: 0.4;
 }
 
 #pie-rule-label {
   top: 10px;
   right: 10px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid #d23af7;
   border-radius: 999px;
-  padding: 5px 10px;
-  font-size: 0.78rem;
-  font-weight: 600;
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  color: var(--text-primary);
+  text-decoration: none;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(210, 58, 247, 0.22);
+}
+
+#pie-rule-label:hover {
+  text-decoration: underline;
 }
 
 .pie-rule-hidden {
@@ -177,7 +186,45 @@ h1 {
 
 [data-theme="dark"] #pie-rule-label {
   background: rgba(35, 35, 35, 0.9);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: #f06dff;
+}
+
+.swap-flash-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: clamp(2.2rem, 10vw, 5.2rem);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffffff;
+  opacity: 0;
+  text-shadow:
+    0 2px 5px rgba(0, 0, 0, 0.45),
+    0 0 22px rgba(210, 58, 247, 0.85);
+}
+
+.swap-flash-overlay.swap-flash-active {
+  animation: swap-flash-fade 1.5s ease-out forwards;
+}
+
+@keyframes swap-flash-fade {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  16% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.02);
+  }
 }
 
 /* Removed redundant landscape fallback - handled by main landscape media query */

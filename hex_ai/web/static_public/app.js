@@ -111,6 +111,7 @@ class HexGame {
         this.pieRuleStatus = document.getElementById('pie-rule-status');
         this.pieRuleBadge = document.getElementById('pie-rule-badge');
         this.pieRuleLabel = document.getElementById('pie-rule-label');
+        this.swapFlash = document.getElementById('swap-flash');
     }
 
     initializeDifficultyDropdown() {
@@ -500,7 +501,9 @@ class HexGame {
         if (this.pieRuleLabel) {
             this.pieRuleLabel.classList.toggle('pie-rule-hidden', !shouldShowOverlay);
             this.pieRuleLabel.classList.toggle('pie-rule-visible', shouldShowOverlay);
-            this.pieRuleLabel.textContent = this.pieRuleCanSwap ? 'Pie rule: swap window' : 'Pie rule enabled';
+            this.pieRuleLabel.textContent = this.pieRuleCanSwap
+                ? 'Pie rule: swap window (rules)'
+                : 'Pie rule enabled (rules)';
         }
     }
 
@@ -526,6 +529,7 @@ class HexGame {
         if (this.pieRuleAction === 'swapped' && data.pie_rule_swap_computer_colors) {
             this.swapComputerColorAssignments();
             if (announceSwap) {
+                this.showSwapFlash();
                 this.showSuccess('Pie rule: computer swapped colors. Your turn.');
             }
         }
@@ -535,6 +539,15 @@ class HexGame {
 
     getPieRuleRequestEnabled() {
         return this.pieRuleEnabled && this.pieRuleArmed;
+    }
+
+    showSwapFlash() {
+        if (!this.swapFlash) {
+            return;
+        }
+        this.swapFlash.classList.remove('swap-flash-active');
+        void this.swapFlash.offsetWidth;
+        this.swapFlash.classList.add('swap-flash-active');
     }
 
     swapComputerColorAssignments() {
