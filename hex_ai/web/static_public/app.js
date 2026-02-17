@@ -30,6 +30,10 @@ class HexGame {
         this.heatmapScoreType = 'policy_value';
         this.heatmapPolicyTemperature = 1.0;
         this.heatmapRequestToken = 0;
+        this.pieRuleEnabled = true;
+        this.pieRuleCanSwap = false;
+        this.pieRuleAction = 'none';
+        this.pieRuleArmed = true;
 
         // Track previous board state for efficient updates
         this.previousBoard = null;
@@ -69,6 +73,7 @@ class HexGame {
         this.loadGameConstants();
         this.initializeDarkMode();
         this.updateHeatmapControls();
+        this.updatePieRuleUi();
     }
 
     // =============================================================================
@@ -102,6 +107,10 @@ class HexGame {
         this.heatmapScopeSelect = document.getElementById('heatmap-scope');
         this.heatmapTopKInput = document.getElementById('heatmap-top-k');
         this.heatmapRefreshBtn = document.getElementById('heatmap-refresh');
+        this.pieRuleEnabledCheck = document.getElementById('pie-rule-enabled');
+        this.pieRuleStatus = document.getElementById('pie-rule-status');
+        this.pieRuleBadge = document.getElementById('pie-rule-badge');
+        this.pieRuleLabel = document.getElementById('pie-rule-label');
     }
 
     initializeDifficultyDropdown() {
@@ -179,6 +188,15 @@ class HexGame {
         this.redComputerCheck.addEventListener('change', (e) => {
             this.redComputer = e.target.checked;
         });
+
+        if (this.pieRuleEnabledCheck) {
+            this.pieRuleEnabledCheck.addEventListener('change', async (e) => {
+                this.pieRuleEnabled = e.target.checked;
+                localStorage.setItem('hex_ai_pie_rule_enabled', String(this.pieRuleEnabled));
+                this.updatePieRuleUi();
+                await this.loadGameStateWithoutAutoMove();
+            });
+        }
 
         this.darkModeToggle.addEventListener('click', () => this.toggleDarkMode());
 
@@ -461,6 +479,77 @@ class HexGame {
         }
     }
 
+    updatePieRuleUi() {
+        if (this.pieRuleEnabledCheck) {
+            this.pieRuleEnabledCheck.checked = this.pieRuleEnabled;
+        }
+        if (this.pieRuleStatus) {
+            if (!this.pieRuleEnabled) {
+                this.pieRuleStatus.textContent = 'Disabled';
+            } else if (this.pieRuleCanSwap) {
+                this.pieRuleStatus.textContent = 'Swap window';
+            } else {
+                this.pieRuleStatus.textContent = 'Enabled';
+            }
+        }
+        const shouldShowOverlay = this.pieRuleEnabled;
+        if (this.pieRuleBadge) {
+            this.pieRuleBadge.classList.toggle('pie-rule-hidden', !shouldShowOverlay);
+            this.pieRuleBadge.classList.toggle('pie-rule-visible', shouldShowOverlay);
+        }
+        if (this.pieRuleLabel) {
+            this.pieRuleLabel.classList.toggle('pie-rule-hidden', !shouldShowOverlay);
+            this.pieRuleLabel.classList.toggle('pie-rule-visible', shouldShowOverlay);
+            this.pieRuleLabel.textContent = this.pieRuleCanSwap ? 'Pie rule: swap window' : 'Pie rule enabled';
+        }
+    }
+
+    applyPieRuleStateFromResponse(data, announceSwap = false) {
+        if (!data || typeof data !== 'object') {
+            return;
+        }
+
+        this.pieRuleCanSwap = Boolean(data.pie_rule_can_swap);
+        this.pieRuleAction = typeof data.pie_rule_action === 'string' ? data.pie_rule_action : 'none';
+
+        if (this.pieRuleAction === 'swapped' || this.pieRuleAction === 'declined') {
+            this.pieRuleArmed = false;
+        } else if (this.pieRuleCanSwap) {
+            this.pieRuleArmed = true;
+        } else if (
+            (typeof data.new_trmph === 'string' && data.new_trmph.length === 0) ||
+            (typeof data.trmph === 'string' && data.trmph.length === 0)
+        ) {
+            this.pieRuleArmed = true;
+        }
+
+        if (this.pieRuleAction === 'swapped' && data.pie_rule_swap_computer_colors) {
+            this.swapComputerColorAssignments();
+            if (announceSwap) {
+                this.showSuccess('Pie rule: computer swapped colors. Your turn.');
+            }
+        }
+
+        this.updatePieRuleUi();
+    }
+
+    getPieRuleRequestEnabled() {
+        return this.pieRuleEnabled && this.pieRuleArmed;
+    }
+
+    swapComputerColorAssignments() {
+        const oldBlueComputer = this.blueComputer;
+        this.blueComputer = this.redComputer;
+        this.redComputer = oldBlueComputer;
+
+        if (this.blueComputerCheck) {
+            this.blueComputerCheck.checked = this.blueComputer;
+        }
+        if (this.redComputerCheck) {
+            this.redComputerCheck.checked = this.redComputer;
+        }
+    }
+
     configureHeatmapTopKBounds() {
         const boardSize = this.validateBoardSize();
         const maxMoves = boardSize * boardSize;
@@ -623,6 +712,17 @@ class HexGame {
             this.currentElo = data.ELO_CONFIG.DEFAULT_ELO;
             this.configureHeatmapTopKBounds();
 
+            const backendPieDefault = typeof data.DEFAULT_PIE_RULE_ENABLED === 'boolean'
+                ? data.DEFAULT_PIE_RULE_ENABLED
+                : true;
+            const savedPieRule = localStorage.getItem('hex_ai_pie_rule_enabled');
+            if (savedPieRule === 'true' || savedPieRule === 'false') {
+                this.pieRuleEnabled = savedPieRule === 'true';
+            } else {
+                this.pieRuleEnabled = backendPieDefault;
+            }
+            this.updatePieRuleUi();
+
             // Update slider and display with backend values
             this.eloSlider.min = this.minElo;
             this.eloSlider.max = this.maxElo;
@@ -666,6 +766,7 @@ class HexGame {
             this.currentTRMPH = "";
             this.gameHistory = [];
             this.moveCount = 0;
+            this.pieRuleArmed = true;
             this.isInitialLoad = false; // Mark that this is no longer initial load
             this.previousBoard = null; // Clear board cache
             this.hexElements.clear(); // Clear hex cache
@@ -733,13 +834,16 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: this.validateBoardSize()
+                    display_board_size: this.validateBoardSize(),
+                    pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
 
             const data = await response.json();
 
             if (data.success) {
+                this.applyPieRuleStateFromResponse(data, true);
+
                 // Log the MCTS configuration that was actually used
                 if (data.mcts_config) {
                     console.log('=== COMPUTER MOVE CONFIGURATION ===');
@@ -755,12 +859,16 @@ class HexGame {
                 }
 
                 this.currentTRMPH = data.new_trmph;
-                this.gameHistory.push(this.currentTRMPH);
-                this.moveCount++;
+                const moveWasPlayed = Boolean(data.move_made);
+                if (moveWasPlayed) {
+                    this.gameHistory.push(this.currentTRMPH);
+                    this.moveCount++;
+
+                    // Clear redo history when new moves are made
+                    this.redoHistory = [];
+                }
                 this.legalMoves = data.legal_moves || [];
 
-                // Clear redo history when new moves are made
-                this.redoHistory = [];
                 await this.renderBoardWithHeatmap(data.board);
                 this.updateTrmphDisplay();
                 this.updateButtonStates();
@@ -768,6 +876,8 @@ class HexGame {
                 // Auto-move for computer players
                 if (data.winner) {
                     this.showGameOver(data.winner);
+                } else if (data.pie_rule_action === 'swapped') {
+                    // Hand control back to the user after swap.
                 } else if (this.shouldMakeComputerMove(data.player)) {
                     this.scheduleAutoMove();
                 }
@@ -802,7 +912,8 @@ class HexGame {
                 body: JSON.stringify({
                     trmph: this.currentTRMPH,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: this.validateBoardSize()
+                    display_board_size: this.validateBoardSize(),
+                    pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
 
@@ -827,6 +938,8 @@ class HexGame {
                 this.showError(data.error);
                 return;
             }
+
+            this.applyPieRuleStateFromResponse(data, false);
 
             // Store legal moves for move validation
             this.legalMoves = data.legal_moves || [];
@@ -1255,7 +1368,8 @@ class HexGame {
                     trmph: this.currentTRMPH,
                     move: move,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: this.validateBoardSize()
+                    display_board_size: this.validateBoardSize(),
+                    pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
 
@@ -1265,6 +1379,8 @@ class HexGame {
                 this.showError(data.error);
                 return;
             }
+
+            this.applyPieRuleStateFromResponse(data, false);
 
             this.currentTRMPH = data.new_trmph;
             this.gameHistory.push(this.currentTRMPH);
@@ -1586,7 +1702,8 @@ class HexGame {
                     trmph: this.currentTRMPH,
                     trmph_sequence: input,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: this.validateBoardSize()
+                    display_board_size: this.validateBoardSize(),
+                    pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
 
@@ -1596,6 +1713,8 @@ class HexGame {
                 this.showTrmphError(data.error);
                 return;
             }
+
+            this.applyPieRuleStateFromResponse(data, false);
 
             this.currentTRMPH = data.new_trmph;
             this.gameHistory.push(this.currentTRMPH);

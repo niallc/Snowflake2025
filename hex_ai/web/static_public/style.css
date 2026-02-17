@@ -114,6 +114,7 @@ h1 {
   display: flex;
   justify-content: center;
   align-items: center;
+  position: relative;
   margin-bottom: 15px;
   width: 100%;
   height: auto;
@@ -124,6 +125,59 @@ h1 {
   min-width: 250px;
   overflow: hidden;
   transform-origin: center;
+}
+
+.pie-rule-overlay {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+#pie-rule-badge {
+  left: 10px;
+  bottom: 10px;
+  font-size: 1.35rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#pie-rule-label {
+  top: 10px;
+  right: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pie-rule-hidden {
+  opacity: 0;
+}
+
+.pie-rule-visible {
+  opacity: 1;
+}
+
+[data-theme="dark"] #pie-rule-badge {
+  background: rgba(35, 35, 35, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="dark"] #pie-rule-label {
+  background: rgba(35, 35, 35, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 /* Removed redundant landscape fallback - handled by main landscape media query */

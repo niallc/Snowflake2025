@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import string
 import uuid
+import random
+import threading
 import numpy as np
 
 import hex_ai.utils.format_conversion as fc
@@ -244,6 +246,250 @@ def apply_display_mask_to_state(state: HexGameState, display_board_size: int) ->
     """Apply top-left display-board legal mask to a game state."""
     state.set_legal_move_mask(get_display_legal_move_mask(display_board_size))
     return state
+
+# =============================================================================
+# PIE RULE CONFIGURATION
+# =============================================================================
+
+DEFAULT_PIE_RULE_ENABLED = True
+PIE_RULE_SWAP_ALPHA = 4.0
+PIE_RULE_FORCE_NO_SWAP_AT = 0.01
+PIE_RULE_FORCE_SWAP_AT = 0.99
+
+_PIE_RULE_OPENING_CACHE = {}
+_PIE_RULE_OPENING_CACHE_LOCK = threading.Lock()
+
+
+def _extract_model_epoch_mini(model_path: str):
+    """Extract epoch/mini identifiers from checkpoint filename when present."""
+    match = re.search(r"epoch(\d+)_mini(\d+)", os.path.basename(model_path))
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _build_pie_rule_model_identity(model_id: str):
+    """Build stable cache identity for a model ID."""
+    if not is_valid_model_id(model_id):
+        raise ValueError(f"Unknown model_id for pie rule cache: {model_id}")
+    model_path = get_model_path_with_fallback(model_id)
+    normalized_path = get_normalized_path(model_path)
+    try:
+        model_mtime_ns = os.stat(normalized_path).st_mtime_ns
+    except OSError:
+        model_mtime_ns = None
+    epoch, mini = _extract_model_epoch_mini(normalized_path)
+    identity_key = f"{normalized_path}|mtime_ns={model_mtime_ns}"
+    return {
+        "model_id": model_id,
+        "model_path": normalized_path,
+        "model_mtime_ns": model_mtime_ns,
+        "epoch": epoch,
+        "mini": mini,
+        "identity_key": identity_key,
+    }
+
+
+def _compute_pie_rule_opening_scores(model_id: str, display_board_size: int):
+    """Compute Blue win probability for every legal first move on the display board."""
+    state = create_game_state_from_trmph(
+        "",
+        display_board_size=display_board_size,
+        context="for pie-rule opening cache",
+    )
+    model = get_model(model_id)
+    heatmap = build_policy_value_heatmap(
+        state=state,
+        model=model,
+        selection_mode="all_legal",
+        top_k=None,
+        policy_temperature=1.0,
+    )
+    return heatmap.scores
+
+
+def _get_pie_rule_opening_scores(model_id: str, display_board_size: int):
+    """
+    Get cached opening first-move scores, computing once per model identity and board size.
+
+    Cache is process-local (in-memory) for MVP.
+    """
+    model_identity = _build_pie_rule_model_identity(model_id)
+    cache_key = (
+        f"{model_identity['identity_key']}|display_board_size={display_board_size}"
+    )
+
+    with _PIE_RULE_OPENING_CACHE_LOCK:
+        cached = _PIE_RULE_OPENING_CACHE.get(cache_key)
+    if cached is not None:
+        cache_meta = dict(cached)
+        cache_meta["cache_hit"] = True
+        return cached["scores"], cache_meta
+
+    scores = _compute_pie_rule_opening_scores(model_id, display_board_size)
+    new_entry = {
+        "scores": scores,
+        "model_id": model_identity["model_id"],
+        "model_path": model_identity["model_path"],
+        "model_mtime_ns": model_identity["model_mtime_ns"],
+        "epoch": model_identity["epoch"],
+        "mini": model_identity["mini"],
+        "computed_at_unix": time.time(),
+    }
+
+    with _PIE_RULE_OPENING_CACHE_LOCK:
+        existing = _PIE_RULE_OPENING_CACHE.get(cache_key)
+        if existing is None:
+            _PIE_RULE_OPENING_CACHE[cache_key] = new_entry
+            cache_meta = dict(new_entry)
+            cache_meta["cache_hit"] = False
+            return scores, cache_meta
+
+    # Another thread won the race and filled cache while we were computing.
+    cache_meta = dict(existing)
+    cache_meta["cache_hit"] = True
+    return existing["scores"], cache_meta
+
+
+def _pie_rule_swap_probability_from_opening_prob(opening_win_prob: float) -> float:
+    """
+    Convert opening move Blue win probability to swap probability.
+
+    Formula:
+      p_swap = p^alpha / (p^alpha + (1-p)^alpha)
+    where p is Blue win probability after the opening move.
+    """
+    p = max(0.0, min(1.0, float(opening_win_prob)))
+    if p <= PIE_RULE_FORCE_NO_SWAP_AT:
+        return 0.0
+    if p >= PIE_RULE_FORCE_SWAP_AT:
+        return 1.0
+
+    p_alpha = p ** PIE_RULE_SWAP_ALPHA
+    q_alpha = (1.0 - p) ** PIE_RULE_SWAP_ALPHA
+    denom = p_alpha + q_alpha
+    if denom <= 0:
+        return 0.5
+    return p_alpha / denom
+
+
+def _get_first_user_move_from_trmph(trmph: str):
+    """Return first user-visible move from a user TRMPH string, or None."""
+    bare = fc.strip_trmph_preamble((trmph or "").strip())
+    if not bare:
+        return None
+    try:
+        moves = fc.split_trmph_moves(bare)
+    except ValueError:
+        return None
+    if not moves:
+        return None
+    return moves[0]
+
+
+def _is_pie_rule_swap_window(state: HexGameState, trmph: str, pie_rule_enabled: bool) -> bool:
+    """Check whether pie-rule swap decision should be evaluated for this position."""
+    if not pie_rule_enabled:
+        return False
+    if state.game_over:
+        return False
+    move_count = _safe_count_trmph_moves(trmph)
+    if move_count != 1:
+        return False
+    # With virtual-board prefill, one visible move still maps to Red to move.
+    if state.current_player_enum != Player.RED:
+        return False
+    return True
+
+
+def evaluate_pie_rule_swap_decision(
+    trmph: str,
+    display_board_size: int,
+    model_id: str,
+    pie_rule_enabled: bool,
+    state: HexGameState = None,
+):
+    """Evaluate probabilistic pie-rule swap decision for the first visible move."""
+    if state is None:
+        move_count = _safe_count_trmph_moves(trmph)
+        if move_count != 1:
+            return None
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for pie-rule decision",
+        )
+
+    if not _is_pie_rule_swap_window(state, trmph, pie_rule_enabled):
+        return None
+
+    first_move = _get_first_user_move_from_trmph(trmph)
+    if not first_move:
+        return None
+
+    scores, cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
+    opening_win_prob = scores.get(first_move)
+    if opening_win_prob is None:
+        app.logger.warning(
+            "Pie-rule decision: first move %s missing in opening-score cache for model=%s display=%s",
+            first_move,
+            model_id,
+            display_board_size,
+        )
+        return None
+
+    swap_probability = _pie_rule_swap_probability_from_opening_prob(opening_win_prob)
+    swap_roll = random.random()
+    should_swap = swap_roll < swap_probability
+
+    return {
+        "first_move": first_move,
+        "opening_win_probability": float(opening_win_prob),
+        "swap_probability": float(swap_probability),
+        "swap_roll": float(swap_roll),
+        "should_swap": bool(should_swap),
+        "model_id": model_id,
+        "cache_hit": bool(cache_meta.get("cache_hit", False)),
+        "cache_model_path": cache_meta.get("model_path"),
+        "cache_model_epoch": cache_meta.get("epoch"),
+        "cache_model_mini": cache_meta.get("mini"),
+    }
+
+
+def build_pie_rule_response_fields(
+    trmph: str,
+    state: HexGameState,
+    pie_rule_enabled: bool,
+    pie_decision: dict = None,
+    pie_rule_action: str = "none",
+):
+    """Build consistent pie-rule status fields for API responses."""
+    response = {
+        "pie_rule_enabled": bool(pie_rule_enabled),
+        "pie_rule_action": pie_rule_action,
+    }
+
+    if pie_decision is None:
+        response["pie_rule_can_swap"] = _is_pie_rule_swap_window(
+            state, trmph, pie_rule_enabled
+        )
+        return response
+
+    response.update(
+        {
+            # Decision has already been made for this response payload.
+            "pie_rule_can_swap": False,
+            "pie_rule_first_move": pie_decision["first_move"],
+            "pie_rule_opening_win_probability": pie_decision["opening_win_probability"],
+            "pie_rule_swap_probability": pie_decision["swap_probability"],
+            "pie_rule_model_id": pie_decision["model_id"],
+            "pie_rule_cache_hit": pie_decision["cache_hit"],
+            "pie_rule_cache_model_epoch": pie_decision["cache_model_epoch"],
+            "pie_rule_cache_model_mini": pie_decision["cache_model_mini"],
+        }
+    )
+    return response
+
 
 # =============================================================================
 # FLASK APP CONFIGURATION
@@ -583,6 +829,13 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
             except ValueError as e:
                 app.logger.warning(f"Validation failed for {field}: {e}")
                 return False, f"Invalid {field}: {e}", None
+        elif field == 'pie_rule_enabled':
+            # Pie-rule toggle accepts booleans and common string/int forms.
+            try:
+                validated_data[field] = validate_boolean_flag(data[field], field)
+            except ValueError as e:
+                app.logger.warning(f"Validation failed for {field}: {e}")
+                return False, f"Invalid {field}: {e}", None
         else:
             # Other fields just copy over
             validated_data[field] = data[field]
@@ -622,6 +875,23 @@ def validate_elo_rating(value):
         raise ValueError(f"ELO rating must be between {MIN_ELO} and {MAX_ELO}")
     
     return elo_int
+
+
+def validate_boolean_flag(value, field_name):
+    """Validate and normalize a boolean feature flag from JSON input."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(
+        f"{field_name} must be a boolean (or one of true/false, 1/0)"
+    )
 
 def sanitize_exception_message(exception):
     """
@@ -1071,6 +1341,7 @@ def build_move_response(
     move_made=None,
     success=True,
     error=None,
+    additional_fields=None,
 ):
     """
     Build a standardized move response with game state information.
@@ -1099,6 +1370,9 @@ def build_move_response(
     
     if error:
         response["error"] = error
+
+    if additional_fields:
+        response.update(additional_fields)
         
     return response
 
@@ -1332,6 +1606,7 @@ def api_constants():
         "DISPLAY_BOARD_SIZE_OPTIONS": DISPLAY_BOARD_SIZE_OPTIONS,
         "DEFAULT_DISPLAY_BOARD_SIZE": DEFAULT_DISPLAY_BOARD_SIZE,
         "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
+        "DEFAULT_PIE_RULE_ENABLED": DEFAULT_PIE_RULE_ENABLED,
         "DIFFICULTY_LEVELS": get_difficulty_levels(),
         "ELO_CONFIG": {
             "MIN_ELO": MIN_ELO,
@@ -1350,7 +1625,7 @@ def api_state():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
     )
     
     if not is_valid:
@@ -1360,6 +1635,7 @@ def api_state():
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)  # Default to configured default difficulty
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(
         "api_state called with trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -1381,7 +1657,14 @@ def api_state():
         elo_rating,
         display_board_size=display_board_size,
         trmph_for_inference=trmph_for_inference,
-        additional_fields={"trmph": trmph},
+        additional_fields={
+            "trmph": trmph,
+            **build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+            ),
+        },
     )
 
     trmph_stats = _build_trmph_stats(trmph)
@@ -1391,6 +1674,7 @@ def api_state():
         status=200,
         elo_rating=elo_rating,
         display_board_size=display_board_size,
+        pie_rule_enabled=pie_rule_enabled,
         **trmph_stats,
         **seq_info
     )
@@ -1523,7 +1807,7 @@ def api_apply_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=['move'],  # Move is required
-        optional_fields=['trmph', 'elo_rating', 'display_board_size']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
     )
     
     if not is_valid:
@@ -1534,6 +1818,7 @@ def api_apply_move():
     move = validated_data.get("move")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(
         "api_apply_move called with trmph='%s', move='%s', elo_rating=%s, display_board_size=%s",
@@ -1558,7 +1843,12 @@ def api_apply_move():
         # Return current state without error - user will learn not to click filled hexes
         response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
             "new_trmph": trmph,
-            "model_move": None  # No computer move made
+            "model_move": None,  # No computer move made
+            **build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+            ),
         })
         trmph_stats = _build_trmph_stats(trmph)
         seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
@@ -1569,6 +1859,7 @@ def api_apply_move():
             move_valid=False,
             elo_rating=elo_rating,
             display_board_size=display_board_size,
+            pie_rule_enabled=pie_rule_enabled,
             moves_requested=1,
             **trmph_stats,
             **seq_info
@@ -1580,7 +1871,12 @@ def api_apply_move():
     # Build response using helper function
     response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
         "new_trmph": new_trmph,
-        "model_move": None  # No computer move made
+        "model_move": None,  # No computer move made
+        **build_pie_rule_response_fields(
+            trmph=new_trmph,
+            state=state,
+            pie_rule_enabled=pie_rule_enabled,
+        ),
     })
     trmph_stats = _build_trmph_stats(trmph)
     seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
@@ -1591,6 +1887,7 @@ def api_apply_move():
         move_valid=True,
         elo_rating=elo_rating,
         display_board_size=display_board_size,
+        pie_rule_enabled=pie_rule_enabled,
         moves_requested=1,
         new_trmph_len=len(fc.strip_trmph_preamble((new_trmph or "").strip())),
         new_trmph_moves=_safe_count_trmph_moves(new_trmph),
@@ -1611,7 +1908,7 @@ def api_policy_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
     )
     
     if not is_valid:
@@ -1621,6 +1918,7 @@ def api_policy_move():
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -1641,6 +1939,13 @@ def api_policy_move():
         difficulty_params = get_difficulty_parameters(elo_rating)
         temperature = difficulty_params["temperature"]
         model_id = difficulty_params["model"]
+        pie_decision = evaluate_pie_rule_swap_decision(
+            trmph=trmph,
+            display_board_size=display_board_size,
+            model_id=model_id,
+            pie_rule_enabled=pie_rule_enabled,
+            state=state,
+        )
         
         # Log the policy configuration being used
         app.logger.info(f"=== POLICY CONFIGURATION ===")
@@ -1651,6 +1956,69 @@ def api_policy_move():
         app.logger.info(f"Simulations: {difficulty_params['num_simulations']}")
         app.logger.info(f"Exploration constant: {difficulty_params['exploration_constant']}")
         app.logger.info(f"Enable Gumbel: {difficulty_params['enable_gumbel']}")
+
+        if pie_decision and pie_decision["should_swap"]:
+            app.logger.info(
+                "Pie-rule swap selected for first move %s (opening_p=%.4f, swap_p=%.4f, roll=%.4f)",
+                pie_decision["first_move"],
+                pie_decision["opening_win_probability"],
+                pie_decision["swap_probability"],
+                pie_decision["swap_roll"],
+            )
+            result = build_move_response(
+                state,
+                display_board_size=display_board_size,
+                move_made=None,
+                additional_fields={
+                    "pie_rule_swap_computer_colors": True,
+                    **build_pie_rule_response_fields(
+                        trmph=trmph,
+                        state=state,
+                        pie_rule_enabled=pie_rule_enabled,
+                        pie_decision=pie_decision,
+                        pie_rule_action="swapped",
+                    ),
+                },
+            )
+            result["mcts_config"] = {
+                "model": model_id,
+                "num_simulations": difficulty_params["num_simulations"],
+                "exploration_constant": difficulty_params["exploration_constant"],
+                "temperature": temperature,
+                "temperature_end": temperature,
+                "enable_gumbel": difficulty_params["enable_gumbel"],
+                "gumbel_max_sims": difficulty_params.get("gumbel_max_sims", 0),
+                "algorithm": difficulty_params["algorithm"],
+            }
+
+            trmph_stats = _build_trmph_stats(trmph)
+            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+            log_usage_event(
+                "policy_move",
+                status=200,
+                success=True,
+                reason="pie_rule_swap",
+                elo_rating=elo_rating,
+                algorithm=difficulty_params["algorithm"],
+                model_id=model_id,
+                temperature=temperature,
+                num_simulations=difficulty_params["num_simulations"],
+                exploration_constant=difficulty_params["exploration_constant"],
+                enable_gumbel=difficulty_params["enable_gumbel"],
+                gumbel_max_sims=difficulty_params.get("gumbel_max_sims", 0),
+                move_made=None,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_rule_action="swapped",
+                pie_rule_first_move=pie_decision["first_move"],
+                pie_rule_opening_win_probability=pie_decision["opening_win_probability"],
+                pie_rule_swap_probability=pie_decision["swap_probability"],
+                pie_rule_cache_hit=pie_decision["cache_hit"],
+                display_board_size=display_board_size,
+                moves_requested=0,
+                **trmph_stats,
+                **seq_info
+            )
+            return jsonify(result)
         
         # Get model and make policy move
         model = get_model(model_id)
@@ -1670,6 +2038,7 @@ def api_policy_move():
                 temperature=temperature,
                 num_simulations=difficulty_params["num_simulations"],
                 display_board_size=display_board_size,
+                pie_rule_enabled=pie_rule_enabled,
                 **trmph_stats,
                 **seq_info
             )
@@ -1682,7 +2051,14 @@ def api_policy_move():
         result = build_move_response(
             new_state,
             display_board_size=display_board_size,
-            move_made=move_trmph
+            move_made=move_trmph,
+            additional_fields=build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_decision=pie_decision,
+                pie_rule_action="declined" if pie_decision else "none",
+            ),
         )
         
         # Add configuration to result for frontend verification
@@ -1716,6 +2092,8 @@ def api_policy_move():
             gumbel_max_sims=difficulty_params.get("gumbel_max_sims", 0),
             move_made=move_trmph,
             display_board_size=display_board_size,
+            pie_rule_enabled=pie_rule_enabled,
+            pie_rule_action="declined" if pie_decision else "none",
             moves_requested=1,
             **trmph_stats,
             **seq_info
@@ -1734,6 +2112,7 @@ def api_policy_move():
             reason="exception",
             elo_rating=elo_rating,
             display_board_size=display_board_size,
+            pie_rule_enabled=pie_rule_enabled,
             **trmph_stats,
             **seq_info
         )
@@ -1751,7 +2130,7 @@ def api_mcts_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
     )
     
     if not is_valid:
@@ -1761,6 +2140,7 @@ def api_mcts_move():
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -1771,6 +2151,83 @@ def api_mcts_move():
     
     # Get difficulty parameters
     difficulty_params = get_difficulty_parameters(elo_rating)
+    pie_decision = None
+
+    if difficulty_params["algorithm"] != "policy":
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for mcts move",
+        )
+        pie_decision = evaluate_pie_rule_swap_decision(
+            trmph=trmph,
+            display_board_size=display_board_size,
+            model_id=difficulty_params["model"],
+            pie_rule_enabled=pie_rule_enabled,
+            state=state,
+        )
+        if pie_decision and pie_decision["should_swap"]:
+            app.logger.info(
+                "Pie-rule swap selected (MCTS) for first move %s (opening_p=%.4f, swap_p=%.4f, roll=%.4f)",
+                pie_decision["first_move"],
+                pie_decision["opening_win_probability"],
+                pie_decision["swap_probability"],
+                pie_decision["swap_roll"],
+            )
+            result = build_move_response(
+                state,
+                display_board_size=display_board_size,
+                move_made=None,
+                additional_fields={
+                    "pie_rule_swap_computer_colors": True,
+                    **build_pie_rule_response_fields(
+                        trmph=trmph,
+                        state=state,
+                        pie_rule_enabled=pie_rule_enabled,
+                        pie_decision=pie_decision,
+                        pie_rule_action="swapped",
+                    ),
+                },
+            )
+            result["mcts_config"] = {
+                "model": difficulty_params["model"],
+                "num_simulations": difficulty_params["num_simulations"],
+                "exploration_constant": difficulty_params["exploration_constant"],
+                "temperature": difficulty_params["temperature"],
+                "temperature_end": difficulty_params["temperature_end"],
+                "enable_gumbel": difficulty_params["enable_gumbel"],
+                "gumbel_max_sims": difficulty_params["gumbel_max_sims"],
+                "algorithm": difficulty_params["algorithm"],
+            }
+            trmph_stats = _build_trmph_stats(trmph)
+            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
+            log_usage_event(
+                "mcts_move",
+                status=200,
+                success=True,
+                reason="pie_rule_swap",
+                elo_rating=elo_rating,
+                algorithm=difficulty_params["algorithm"],
+                model_id=difficulty_params["model"],
+                temperature=difficulty_params["temperature"],
+                temperature_end=difficulty_params["temperature_end"],
+                num_simulations=difficulty_params["num_simulations"],
+                exploration_constant=difficulty_params["exploration_constant"],
+                enable_gumbel=difficulty_params["enable_gumbel"],
+                gumbel_max_sims=difficulty_params["gumbel_max_sims"],
+                move_made=None,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_rule_action="swapped",
+                pie_rule_first_move=pie_decision["first_move"],
+                pie_rule_opening_win_probability=pie_decision["opening_win_probability"],
+                pie_rule_swap_probability=pie_decision["swap_probability"],
+                pie_rule_cache_hit=pie_decision["cache_hit"],
+                display_board_size=display_board_size,
+                moves_requested=0,
+                **trmph_stats,
+                **seq_info
+            )
+            return jsonify(result)
     
     if difficulty_params["algorithm"] == "policy":
         # Use policy move for lower difficulties
@@ -1789,6 +2246,17 @@ def api_mcts_move():
         difficulty_params["gumbel_max_sims"],
         display_board_size=display_board_size,
     )
+
+    if result.get("success"):
+        result.update(
+            build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_decision=pie_decision,
+                pie_rule_action="declined" if pie_decision else "none",
+            )
+        )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
@@ -1816,6 +2284,8 @@ def api_mcts_move():
         gumbel_max_sims=difficulty_params["gumbel_max_sims"],
         move_made=result.get("move_made"),
         display_board_size=display_board_size,
+        pie_rule_enabled=pie_rule_enabled,
+        pie_rule_action=result.get("pie_rule_action"),
         moves_requested=1,
         **trmph_stats,
         **seq_info
@@ -1833,7 +2303,7 @@ def api_apply_trmph_sequence():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=['trmph_sequence'],  # Sequence is required
-        optional_fields=['trmph', 'elo_rating', 'display_board_size']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
     )
     
     if not is_valid:
@@ -1844,6 +2314,7 @@ def api_apply_trmph_sequence():
     trmph_sequence = validated_data.get("trmph_sequence", "")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(
         "api_apply_trmph_sequence called with trmph='%s', sequence='%s', elo_rating=%s, display_board_size=%s",
@@ -1900,7 +2371,12 @@ def api_apply_trmph_sequence():
         # Build response using helper function
         response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
             "new_trmph": new_trmph,
-            "moves_applied": moves_applied
+            "moves_applied": moves_applied,
+            **build_pie_rule_response_fields(
+                trmph=new_trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+            ),
         })
         trmph_stats = _build_trmph_stats(trmph)
         seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
@@ -1910,6 +2386,7 @@ def api_apply_trmph_sequence():
             success=True,
             elo_rating=elo_rating,
             display_board_size=display_board_size,
+            pie_rule_enabled=pie_rule_enabled,
             moves_requested=_safe_count_trmph_moves(trmph_sequence),
             moves_applied=moves_applied,
             **trmph_stats,
@@ -1928,6 +2405,7 @@ def api_apply_trmph_sequence():
             reason="exception",
             elo_rating=elo_rating,
             display_board_size=display_board_size,
+            pie_rule_enabled=pie_rule_enabled,
             **trmph_stats,
             **seq_info
         )
