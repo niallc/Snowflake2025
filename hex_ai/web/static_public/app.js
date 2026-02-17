@@ -186,10 +186,12 @@ class HexGame {
 
         this.blueComputerCheck.addEventListener('change', (e) => {
             this.blueComputer = e.target.checked;
+            this.updatePieRuleUi();
         });
 
         this.redComputerCheck.addEventListener('change', (e) => {
             this.redComputer = e.target.checked;
+            this.updatePieRuleUi();
         });
 
         if (this.pieRuleEnabledCheck) {
@@ -501,8 +503,8 @@ class HexGame {
             this.pieRuleBadge.classList.toggle('pie-rule-visible', shouldShowOverlay);
         }
         if (this.pieRulePlayer) {
-            this.pieRulePlayer.classList.toggle('pie-rule-hidden', !shouldShowOverlay);
-            this.pieRulePlayer.classList.toggle('pie-rule-visible', shouldShowOverlay);
+            this.pieRulePlayer.classList.remove('pie-rule-hidden');
+            this.pieRulePlayer.classList.add('pie-rule-visible');
         }
         if (this.pieRuleLabel) {
             this.pieRuleLabel.classList.toggle('pie-rule-hidden', !shouldShowOverlay);
@@ -512,8 +514,8 @@ class HexGame {
         }
 
         if (this.pieRulePlayerColor) {
-            const computerColor = this.getSingleComputerColor();
-            if (computerColor === 'blue') {
+            const playerColor = this.getHumanPlayerColor();
+            if (playerColor === 'blue') {
                 this.pieRulePlayerColor.textContent = 'Blue';
                 this.pieRulePlayerColor.classList.remove('pie-rule-player-red');
                 this.pieRulePlayerColor.classList.add('pie-rule-player-blue');
@@ -540,11 +542,22 @@ class HexGame {
         return moveCount === 0 && this.pieRuleArmed;
     }
 
-    getSingleComputerColor() {
-        if (this.blueComputer && !this.redComputer) {
+    getHumanPlayerColor() {
+        if (!this.blueComputer && this.redComputer) {
             return 'blue';
         }
-        return 'red';
+        if (this.blueComputer && !this.redComputer) {
+            return 'red';
+        }
+        let moveCount = 0;
+        if (this.currentTRMPH && this.currentTRMPH.trim().length > 0) {
+            try {
+                moveCount = this.parseTrmphMoves(this.currentTRMPH).length;
+            } catch (_error) {
+                moveCount = 0;
+            }
+        }
+        return moveCount % 2 === 0 ? 'blue' : 'red';
     }
 
     applyPieRuleStateFromResponse(data, announceSwap = false) {
@@ -1510,6 +1523,7 @@ class HexGame {
 
     updateTrmphDisplay() {
         this.trmphDisplay.value = this.currentTRMPH;
+        this.updatePieRuleUi();
     }
 
 
