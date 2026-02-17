@@ -259,6 +259,26 @@ h1 {
     display: none !important;
   }
 
+  #pie-rule-label {
+    top: 8px;
+    right: 8px;
+    max-width: 100px;
+    padding: 4px 8px 5px;
+    border-width: 2px;
+    box-shadow: 0 1px 6px rgba(210, 58, 247, 0.16);
+  }
+
+  .pie-rule-link-main {
+    font-size: 0.66rem;
+    line-height: 1.02;
+    letter-spacing: 0.01em;
+  }
+
+  .pie-rule-link-sub {
+    font-size: 0.62rem;
+    margin-top: 0;
+  }
+
   .pie-rule-player {
     left: 10px;
     bottom: 10px;
