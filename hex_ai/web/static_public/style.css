@@ -183,6 +183,14 @@ h1 {
   color: #29a7ff;
 }
 
+.pie-rule-player-both {
+  color: #d94bff;
+}
+
+.pie-rule-player-none {
+  color: #5f6772;
+}
+
 #pie-rule-label {
   top: 8px;
   right: 12px;

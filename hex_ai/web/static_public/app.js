@@ -514,16 +514,15 @@ class HexGame {
         }
 
         if (this.pieRulePlayerColor) {
-            const playerColor = this.getHumanPlayerColor();
-            if (playerColor === 'blue') {
-                this.pieRulePlayerColor.textContent = 'Blue';
-                this.pieRulePlayerColor.classList.remove('pie-rule-player-red');
-                this.pieRulePlayerColor.classList.add('pie-rule-player-blue');
-            } else {
-                this.pieRulePlayerColor.textContent = 'Red';
-                this.pieRulePlayerColor.classList.remove('pie-rule-player-blue');
-                this.pieRulePlayerColor.classList.add('pie-rule-player-red');
-            }
+            const display = this.getHumanPlayerDisplayState();
+            this.pieRulePlayerColor.textContent = display.label;
+            this.pieRulePlayerColor.classList.remove(
+                'pie-rule-player-red',
+                'pie-rule-player-blue',
+                'pie-rule-player-both',
+                'pie-rule-player-none'
+            );
+            this.pieRulePlayerColor.classList.add(display.className);
         }
     }
 
@@ -542,13 +541,21 @@ class HexGame {
         return moveCount === 0 && this.pieRuleArmed;
     }
 
-    getHumanPlayerColor() {
+    getHumanPlayerDisplayState() {
+        if (!this.blueComputer && !this.redComputer) {
+            return { label: 'Both', className: 'pie-rule-player-both' };
+        }
+        if (this.blueComputer && this.redComputer) {
+            return { label: 'None', className: 'pie-rule-player-none' };
+        }
+
         if (!this.blueComputer && this.redComputer) {
-            return 'blue';
+            return { label: 'Blue', className: 'pie-rule-player-blue' };
         }
         if (this.blueComputer && !this.redComputer) {
-            return 'red';
+            return { label: 'Red', className: 'pie-rule-player-red' };
         }
+
         let moveCount = 0;
         if (this.currentTRMPH && this.currentTRMPH.trim().length > 0) {
             try {
@@ -557,7 +564,9 @@ class HexGame {
                 moveCount = 0;
             }
         }
-        return moveCount % 2 === 0 ? 'blue' : 'red';
+        return moveCount % 2 === 0
+            ? { label: 'Blue', className: 'pie-rule-player-blue' }
+            : { label: 'Red', className: 'pie-rule-player-red' };
     }
 
     applyPieRuleStateFromResponse(data, announceSwap = false) {
