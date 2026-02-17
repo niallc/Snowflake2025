@@ -668,6 +668,7 @@ function getHeatmapFillColor(score) {
     return window.HexHeatmap.scoreToColor(score, {
       alpha: state.heatmap_opacity,
       darkMode: state.dark_mode,
+      baseColor: COLORS.EMPTY_HEX_COLOR,
       fallback: COLORS.EMPTY_HEX_COLOR
     });
   }

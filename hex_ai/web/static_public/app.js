@@ -434,6 +434,7 @@ class HexGame {
             return window.HexHeatmap.scoreToColor(score, {
                 alpha: this.heatmapOpacity,
                 darkMode: this.darkMode,
+                baseColor: fallback,
                 fallback
             });
         }
