@@ -123,7 +123,7 @@ if ANALYTICS_ENABLED and not analytics_logger.handlers:
 # Difficulty configuration constants
 MIN_ELO = 1
 MAX_ELO = 2350
-DEFAULT_ELO = 900
+DEFAULT_ELO = 500
 
 # Native virtual-board support: play on top-left KxK while model still uses BOARD_SIZE.
 MIN_DISPLAY_BOARD_SIZE = 2
