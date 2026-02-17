@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import time
+import warnings
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
@@ -43,6 +44,14 @@ from hex_ai.utils.deterministic_tournament_utils import (
 from hex_ai.memory_profiler import get_profiler
 
 logger = logging.getLogger(__name__)
+
+# PyTorch can emit this warning from internal legacy distributed symbols even
+# when project code does not call torch.distributed.reduce_op directly.
+warnings.filterwarnings(
+    "ignore",
+    message=r"`torch\.distributed\.reduce_op` is deprecated, please use `torch\.distributed\.ReduceOp` instead",
+    category=FutureWarning,
+)
 
 # Constants
 DEFAULT_OPENING_LENGTH = 5
