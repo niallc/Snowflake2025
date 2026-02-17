@@ -238,6 +238,15 @@ small {
   /* 🎨 BOARD CONTAINER - Controls the area around the game board (side panels) */
 }
 
+#board-container svg polygon.heatmap-scored {
+  stroke: #6c778f;
+  stroke-width: 2.5;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored {
+  stroke: #aab8d1;
+}
+
 #controls {
   display: flex;
   justify-content: center;

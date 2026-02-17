@@ -352,9 +352,14 @@ h1 {
 }
 
 #board-container svg polygon.clickable:hover {
-  fill-opacity: 0.8;
+  filter: brightness(0.96) saturate(1.08);
   stroke-width: 3;
   stroke: #333;
+}
+
+#board-container svg polygon.heatmap-scored {
+  stroke: #6c778f;
+  stroke-width: 2;
 }
 
 /* Dark mode hover effects */
@@ -364,9 +369,13 @@ h1 {
 }
 
 [data-theme="dark"] #board-container svg polygon.clickable:hover {
-  fill-opacity: 0.8;
+  filter: brightness(1.12) saturate(1.06);
   stroke-width: 3;
   stroke: #ccc; /* Light gray for dark mode */
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored {
+  stroke: #aab8d1;
 }
 
 /* Purple shading for central hexes on empty board */

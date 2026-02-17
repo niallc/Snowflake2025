@@ -73,14 +73,14 @@
 
     const palette = options.darkMode
       ? {
-          low: '#ff5a4f',
-          mid: '#5d5d5d',
-          high: '#4cd27c',
+          low: '#d79a45',
+          mid: '#77809a',
+          high: '#57c98b',
         }
       : {
-          low: '#e34b4b',
-          mid: '#f3e8c8',
-          high: '#35b56a',
+          low: '#c9832d',
+          mid: '#9ea7c2',
+          high: '#2f9f68',
         };
 
     const normalized = clamp(score, 0.0, 1.0);

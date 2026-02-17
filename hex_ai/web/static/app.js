@@ -859,7 +859,8 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       // ⭐ EMPTY HEX COLOR - uses COLORS.EMPTY_HEX_COLOR for empty hexagons
       let fill = COLORS.EMPTY_HEX_COLOR;
       const heatmapScore = getHeatmapScoreForMove(moveTrmph);
-      if (cell === GAME_CONSTANTS.PIECE_VALUES.EMPTY && Number.isFinite(heatmapScore)) {
+      const isScoredHeatmapCell = cell === GAME_CONSTANTS.PIECE_VALUES.EMPTY && Number.isFinite(heatmapScore);
+      if (isScoredHeatmapCell) {
         fill = getHeatmapFillColor(heatmapScore);
       }
       if (cell === GAME_CONSTANTS.PIECE_VALUES.BLUE) fill = COLORS.BLUE_PIECE_COLOR;
@@ -878,6 +879,9 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       if (winner === 'red' && cell === GAME_CONSTANTS.PIECE_VALUES.RED) fill = COLORS.RED_WINNING_PIECE;
       const isLegal = legalMoves.includes(moveTrmph);
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
+      if (isScoredHeatmapCell) {
+        hex.classList.add('heatmap-scored');
+      }
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
       if (isLegal && !state.auto_step_active) {

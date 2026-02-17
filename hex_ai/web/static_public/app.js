@@ -1107,11 +1107,15 @@ class HexGame {
     updateHex(row, col, newValue) {
         const key = `${row},${col}`;
         let hexElement = this.hexElements.get(key);
+        const isScoredHeatmapCell = this.isHeatmapScoredCell(newValue, row, col);
 
         if (!hexElement) {
             // Create new hex if it doesn't exist (shouldn't happen in normal flow)
             const { x, y } = this.hexCenter(row, col, 18);
             hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue, row, col), false);
+            if (isScoredHeatmapCell) {
+                hexElement.classList.add('heatmap-scored');
+            }
             hexElement.setAttribute('data-row', row);
             hexElement.setAttribute('data-col', col);
             this.svg.appendChild(hexElement);
@@ -1121,6 +1125,7 @@ class HexGame {
             const newColor = this.getHexColor(newValue, row, col);
             hexElement.style.transition = 'none'; // Disable transition for instant update
             hexElement.setAttribute('fill', newColor);
+            hexElement.classList.toggle('heatmap-scored', isScoredHeatmapCell);
 
             // Re-enable transitions after a brief delay for hover effects
             setTimeout(() => {
@@ -1142,6 +1147,14 @@ class HexGame {
             }
         }
         return colors.EMPTY_HEX_GRAY; // Empty hex color
+    }
+
+    isHeatmapScoredCell(cellValue, row, col) {
+        if (cellValue !== this.pieceValues.EMPTY) {
+            return false;
+        }
+        const score = this.getHeatmapScoreForMove(row, col);
+        return Number.isFinite(score);
     }
 
     shouldShadeHex(row, col) {
@@ -1285,6 +1298,9 @@ class HexGame {
                 const isLegal = this.isLegalMove(row, col);
                 const shouldShade = !this.heatmapEnabled && isEmpty && this.shouldShadeHex(row, col);
                 const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal, shouldShade);
+                if (this.isHeatmapScoredCell(cell, row, col)) {
+                    hex.classList.add('heatmap-scored');
+                }
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
 
