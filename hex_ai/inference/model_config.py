@@ -289,7 +289,7 @@ SIMPLE_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, SIMPLE_MODEL_DIR, SIMPLE_
 # Beginner model configuration (intended for sf18_shuffled-only training runs)
 # TODO: Update BEGINNER_MODEL_DIR/FILE to the sf18-only checkpoint once trained.
 BEGINNER_MODEL_DIR = "hyperparameter_tuning/sf18_2026_retrain_beginner_models"
-BEGINNER_MODEL_FILE = "epoch1_mini1.pt.gz"
+BEGINNER_MODEL_FILE = "epoch1_mini3.pt.gz"
 BEGINNER_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, BEGINNER_MODEL_DIR, BEGINNER_MODEL_FILE)
 # Legacy models (for historical comparison)
 LEGACY_MODELS = {}
