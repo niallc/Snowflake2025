@@ -1145,6 +1145,10 @@ def api_state():
     model_id = validated_data.get("model_id", "best")
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
+    try:
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     
     try:
         state = create_game_state_from_trmph(trmph, context="for state endpoint")
@@ -1243,6 +1247,10 @@ def api_apply_move():
     model_id = validated_data.get("model_id", "best")
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
+    try:
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     
     try:
         state = create_game_state_from_trmph(trmph, context="for apply_move")
@@ -1292,6 +1300,10 @@ def api_apply_trmph_sequence():
     model_id = validated_data.get("model_id", "best")
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
+    try:
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     if not trmph_sequence.strip():
         return jsonify({"error": "No TRMPH sequence provided"}), 400
@@ -1396,6 +1408,10 @@ def api_policy_move():
     model_id = validated_data.get("model_id", "best")
     temperature = validated_data.get("temperature", 0.15)  # Default policy temperature
     verbose = validated_data.get("verbose", 0)
+    try:
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
     
