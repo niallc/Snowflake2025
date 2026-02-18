@@ -11,7 +11,6 @@ from hex_ai.inference.game_engine import apply_move_to_state_trmph
 
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
-    winner_to_color, 
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_policy_move,
@@ -1328,18 +1327,50 @@ def api_apply_trmph_sequence():
     return jsonify(response)
 
 
-def _validate_request_with_inline_heatmap(data, required_fields, optional_fields):
-    """Shared validation path for move endpoints that support inline heatmap options."""
-    validated_data, inline_heatmap_options, error_msg = validate_request_with_inline_heatmap(
+def _validate_engine_request(
+    data,
+    *,
+    required_fields,
+    optional_fields,
+    supports_inline_heatmap=False,
+):
+    """Validate engine endpoint payloads with one shared code path."""
+    if supports_inline_heatmap:
+        validated_data, inline_heatmap_options, error_msg = validate_request_with_inline_heatmap(
+            data,
+            required_fields=required_fields,
+            optional_fields=optional_fields,
+            validate_api_input_fn=validate_api_input,
+        )
+        if error_msg:
+            return None, None, (jsonify({"success": False, "error": error_msg}), 400)
+        return validated_data, inline_heatmap_options, None
+
+    is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=required_fields,
         optional_fields=optional_fields,
-        validate_api_input_fn=validate_api_input,
     )
-    if error_msg:
-        return None, None, (jsonify({"success": False, "error": error_msg}), 400)
+    if not is_valid:
+        return None, {"enabled": False}, (jsonify({"success": False, "error": error_msg}), 400)
 
-    return validated_data, inline_heatmap_options, None
+    return validated_data, {"enabled": False}, None
+
+
+def _validate_fixed_tree_search_widths(search_widths):
+    """Validate fixed-tree search widths and product constraint."""
+    if not search_widths:
+        raise ValueError("search_widths parameter is required")
+
+    try:
+        product = np.prod(search_widths)
+    except Exception as exc:
+        raise ValueError(f"Invalid search_widths: {exc}") from exc
+
+    if product > FIXED_TREE_MAX_PRODUCT:
+        raise ValueError(
+            f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}"
+        )
 
 
 
@@ -1351,10 +1382,11 @@ def api_policy_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    validated_data, inline_heatmap_options, error_response = _validate_request_with_inline_heatmap(
+    validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph"],
         optional_fields=["model_id", "temperature", "verbose"],
+        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1397,21 +1429,19 @@ def api_policy_move():
         # Sort by probability for debug output
         sorted_policy = sorted(policy_dict.items(), key=lambda x: x[1], reverse=True)
         
-        result = {
-            "success": True,
-            "new_trmph": new_trmph,
-            "board": new_state.board.tolist(),
-            "player": winner_to_color(new_state.current_player_enum),
-            "legal_moves": [fc.rowcol_to_trmph(r, c) for r, c in new_state.get_legal_moves()],
-            "winner": winner_to_color(new_state.winner) if new_state.winner is not None else None,
-            "move_made": move_trmph,
-            "policy_info": {
-                "selected_move": move_trmph,
-                "selected_probability": policy_dict.get(move_trmph, 0.0),
-                "top_moves": sorted_policy[:5],  # Top 5 moves for debug
-                "temperature": temperature
-            }
-        }
+        result = build_engine_move_response(
+            new_state,
+            new_trmph=new_trmph,
+            move_made=move_trmph,
+            additional_fields={
+                "policy_info": {
+                    "selected_move": move_trmph,
+                    "selected_probability": policy_dict.get(move_trmph, 0.0),
+                    "top_moves": sorted_policy[:5],  # Top 5 moves for debug
+                    "temperature": temperature,
+                },
+            },
+        )
         
         if verbose >= 1:
             result["debug_info"] = {
@@ -1453,7 +1483,7 @@ def api_mcts_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    validated_data, inline_heatmap_options, error_response = _validate_request_with_inline_heatmap(
+    validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph"],
         optional_fields=[
@@ -1466,6 +1496,7 @@ def api_mcts_move():
             "enable_gumbel",
             "gumbel_max_sims",
         ],
+        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1537,13 +1568,14 @@ def api_fixed_tree_move():
     app.logger.info(f"=== FIXED TREE API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    is_valid, error_msg, validated_data = validate_api_input(
+    validated_data, _, error_response = _validate_engine_request(
         data,
         required_fields=["trmph", "search_widths"],
         optional_fields=["model_id", "temperature", "verbose"],
+        supports_inline_heatmap=False,
     )
-    if not is_valid:
-        return jsonify({"error": error_msg}), 400
+    if error_response:
+        return error_response
 
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
@@ -1557,27 +1589,11 @@ def api_fixed_tree_move():
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
     
-    # Validate search_widths: product must be ≤ FIXED_TREE_MAX_PRODUCT
-    if not search_widths:
-        return jsonify({
-            "success": False,
-            "error": "search_widths parameter is required"
-        }), 400
-        
     try:
-        product = np.prod(search_widths)
-        if product > FIXED_TREE_MAX_PRODUCT:
-            app.logger.error(f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}")
-            return jsonify({
-                "success": False, 
-                "error": f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}"
-            }), 400
-    except Exception as e:
+        _validate_fixed_tree_search_widths(search_widths)
+    except ValueError as e:
         app.logger.error(f"Error validating search_widths: {e}")
-        return jsonify({
-            "success": False,
-            "error": f"Invalid search_widths: {e}"
-        }), 400
+        return jsonify({"success": False, "error": str(e)}), 400
     
     result = make_fixed_tree_move(
         trmph,
