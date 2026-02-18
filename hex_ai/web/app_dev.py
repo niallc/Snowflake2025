@@ -1,32 +1,25 @@
 from flask import Flask, request, jsonify, send_from_directory
 import os
-import torch
 import numpy as np
 from flask_cors import CORS
 import logging
-from typing import Tuple
 from datetime import datetime
 import time # Added for time.time()
 
 import re
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
-from hex_ai.inference.simple_model_inference import SimpleModelInference
 
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
-from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config, FixedTreeSearchConfig
-from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.inference.mcts import run_mcts_move, create_mcts_config
+from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
-    Winner, 
     winner_to_color, 
-    temperature_scaled_softmax, 
     ValuePredictor,
     policy_logits_to_probs,
     get_legal_policy_probs,
-    select_top_k_moves,
     select_policy_move,
 )
-from hex_ai.enums import Player, Piece
+from hex_ai.enums import Piece
 from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
     compute_best_child_win_probability_from_tree_data,
@@ -34,7 +27,7 @@ from hex_ai.inference.mcts_utils import (
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, FIXED_TREE_MAX_PRODUCT, FIXED_TREE_DEFAULT_WIDTH, FIXED_TREE_DEFAULT_TEMPERATURE
 from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
-from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path
+from hex_ai.inference.model_config import get_model_path, get_all_model_info, is_valid_model_id
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.web.move_heatmap import build_policy_value_heatmap
@@ -231,7 +224,6 @@ def get_model(model_id="best"):
 
 def register_dynamic_model(model_id: str, model_path: str):
     """Register a dynamically selected model."""
-    global DYNAMIC_MODELS
     DYNAMIC_MODELS[model_id] = model_path
     app.logger.info(f"Registered dynamic model {model_id} -> {model_path}")
 
@@ -285,105 +277,13 @@ def clear_model_wrapper_cache():
     app.logger.info("Model cache cleared")
     return 0  # Return 0 since we don't track individual cache sizes anymore
 
-def generate_debug_info(state, model, policy_logits, value_signed, policy_probs,
-                         temperature, verbose, model_move=None, model_id=None):
-    """Generate comprehensive debug information based on verbose level."""
-    debug_info = {}
-    
-    # Add algorithm identification
-    debug_info["algorithm_info"] = {
-        "algorithm": "Policy-Only",
-        "early_termination": False,
-        "early_termination_reason": "none",
-        "parameters": {
-            "temperature": temperature
-        }
-    }
-    
-    # Level 1: Basic policy and value analysis
-    if verbose >= 1:
-        # Add defensive programming to catch any issues
-        try:
-            current_player_enum = state.current_player_enum
-            current_player_color = winner_to_color(current_player_enum)
-            win_probability = ValuePredictor.get_win_probability(value_signed, current_player_enum)
-        except Exception as e:
-            # Log the error and provide fallback values
-            app.logger.error(f"Error in app.py debug info generation: {e}")
-            raise RuntimeError(f"Error in app.py debug info generation: {e}")
-        
-        debug_info["basic"] = {
-            "current_player": current_player_color,
-            "current_player_raw": state.current_player,  # Add raw value for debugging
-            "game_over": state.game_over,
-            "legal_moves_count": len(state.get_legal_moves()),
-            "value_signed": float(value_signed),
-            "win_probability": float(win_probability),
-            "temperature": temperature,
-            "model_move": model_move
-        }
-        
-        # Add model information
-        if model_id:
-            debug_info["model_info"] = {
-                "model_id": model_id,
-                "model_type": type(model).__name__,
-                "model_path": DYNAMIC_MODELS.get(model_id, get_model_path(model_id))
-            }
-        
-        # Use existing utilities to get policy analysis
-        legal_moves = state.get_legal_moves()
-        
-        # Get post-temperature scaling moves using existing utility
-        move_probs = []
-        for row, col in legal_moves:
-            move_trmph = fc.rowcol_to_trmph(row, col)
-            prob = float(policy_probs[row * state.board.shape[0] + col])
-            move_probs.append({"move": move_trmph, "row": row, "col": col, "probability": prob})
-        
-        # Sort by probability descending
-        move_probs.sort(key=lambda x: x["probability"], reverse=True)
-        
-        # Get pre-temperature scaling moves using existing utility
-        raw_move_probs = []
-        raw_policy_logits = policy_logits.flatten()
-        for row, col in legal_moves:
-            move_trmph = fc.rowcol_to_trmph(row, col)
-            raw_prob = float(raw_policy_logits[row * state.board.shape[0] + col])
-            raw_move_probs.append({"move": move_trmph, "row": row, "col": col, "raw_logit": raw_prob})
-        
-        # Sort raw probabilities by logit value descending
-        raw_move_probs.sort(key=lambda x: x["raw_logit"], reverse=True)
-        
-        debug_info["policy_analysis"] = {
-            "top_moves": move_probs[:10],  # Top 10 moves (post-temperature)
-            "raw_top_moves": raw_move_probs[:10],  # Top 10 moves (pre-temperature)
-            "total_legal_moves": len(legal_moves)
-        }
-    
-    # TODO: Understand the value of the below conditionals with pass statements.
-    # Level 2: Detailed analysis
-    if verbose >= 2:
-        # No tree search analysis needed since we only use MCTS
-        pass
-    
-    # Level 3: Full analysis
-    if verbose >= 3:
-        # No policy-value comparison needed since we only use MCTS
-        pass
-    
-    return debug_info
-
-
-
 # --- Utility: Convert (row, col) moves to trmph moves ---
 def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
-                   temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims,
-                   orchestration_overrides=None):
+                   temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         mcts_verbose = int(verbose)
@@ -477,10 +377,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             app.logger.error(f"Traceback: {traceback.format_exc()}")
             raise
         mcts_search_time = time.time() - mcts_start_time
-        
-        # Time the rest of the processing
-        post_mcts_start = time.time()
-        
+
         # Log detailed timing breakdown
         app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
         app.logger.debug(f"MCTS search completed in {mcts_search_time:.3f}s")
@@ -889,10 +786,7 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             app.logger.error(f"Traceback: {traceback.format_exc()}")
             raise
         search_time = time.time() - search_start_time
-        
-        # Time the rest of the processing
-        post_search_start = time.time()
-        
+
         # Log detailed timing breakdown
         app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
         app.logger.debug(f"Fixed tree search completed in {search_time:.3f}s")
@@ -1397,7 +1291,7 @@ def api_apply_move():
 
     trmph = data.get("trmph")
     move = data.get("move")
-    model_id = data.get("model_id", "model1")
+    model_id = data.get("model_id", "best")
     temperature = data.get("temperature", 1.0)  # Default temperature
     verbose = data.get("verbose", 0)  # Get verbose level
     
@@ -1464,7 +1358,7 @@ def api_apply_trmph_sequence():
 
     trmph = data.get("trmph")
     trmph_sequence = data.get("trmph_sequence", "")
-    model_id = data.get("model_id", "model1")
+    model_id = data.get("model_id", "best")
     temperature = data.get("temperature", 1.0)
     verbose = data.get("verbose", 0)
     
@@ -1569,7 +1463,7 @@ def api_policy_move():
         return error_response
 
     trmph = validated_data.get("trmph")
-    model_id = validated_data.get("model_id", "model1")
+    model_id = validated_data.get("model_id", "best")
     temperature = validated_data.get("temperature", 0.15)  # Default policy temperature
     verbose = validated_data.get("verbose", 0)
     
@@ -1680,7 +1574,7 @@ def api_mcts_move():
         return error_response
 
     trmph = validated_data.get("trmph")
-    model_id = validated_data.get("model_id", "model1")
+    model_id = validated_data.get("model_id", "best")
     num_simulations = validated_data.get("num_simulations", 200)
     exploration_constant = validated_data.get("exploration_constant", 2.8)
     temperature = validated_data.get("temperature", 1.0)
@@ -1695,9 +1589,6 @@ def api_mcts_move():
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     
-    # Optional orchestration overrides from request (legacy - not used)
-    orchestration = None
-    
     result = make_mcts_move(
         trmph,
         model_id,
@@ -1706,7 +1597,6 @@ def api_mcts_move():
         temperature,
         temperature_end,
         verbose,
-        orchestration_overrides=orchestration,
         enable_gumbel=enable_gumbel,
         gumbel_max_sims=gumbel_max_sims
     )
@@ -1753,7 +1643,7 @@ def api_fixed_tree_move():
         return error_response
 
     trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")
+    model_id = data.get("model_id", "best")
     search_widths = data.get("search_widths")  # Required parameter
     temperature = data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
     verbose = data.get("verbose", 0)
@@ -1822,7 +1712,7 @@ def api_save_game():
 
     trmph = data.get("trmph")
     winner = data.get("winner")  # "blue", "red", or None if game not finished
-    model_id = data.get("model_id", "model1")
+    model_id = data.get("model_id", "best")
     mcts_params = data.get("mcts_params", {})
     
     if not trmph:
