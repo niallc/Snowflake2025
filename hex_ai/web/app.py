@@ -37,6 +37,7 @@ from hex_ai.web.inline_move_heatmap import (
 )
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
+    build_engine_error_payload,
     build_engine_move_response,
     build_game_state_response,
 )
@@ -66,6 +67,10 @@ ANALYTICS_ENABLED = os.getenv("SF25_ANALYTICS_ENABLED", "1").lower() not in ("0"
 ANALYTICS_LOG_PATH = os.getenv("SF25_ANALYTICS_LOG_PATH", str(DEFAULT_ANALYTICS_LOG_PATH))
 ANALYTICS_SALT = os.getenv("SF25_ANALYTICS_SALT", "")
 ANALYTICS_HASH_IP = os.getenv("SF25_ANALYTICS_HASH_IP", "1").lower() not in ("0", "false", "no")
+ANALYTICS_INCLUDE_IP = os.getenv("SF25_ANALYTICS_INCLUDE_IP", "0").lower() not in ("0", "false", "no")
+ANALYTICS_REQUIRE_CONSENT = os.getenv("SF25_ANALYTICS_REQUIRE_CONSENT", "1").lower() not in ("0", "false", "no")
+ANALYTICS_CONSENT_COOKIE_NAME = os.getenv("SF25_ANALYTICS_CONSENT_COOKIE_NAME", "sf25_cookie_consent")
+ANALYTICS_CONSENT_ACCEPT_VALUE = os.getenv("SF25_ANALYTICS_CONSENT_ACCEPT_VALUE", "accepted")
 ANALYTICS_COOKIE_NAME = os.getenv("SF25_ANALYTICS_COOKIE_NAME", "sf25_cid")
 ANALYTICS_COOKIE_DAYS = int(os.getenv("SF25_ANALYTICS_COOKIE_DAYS", "365"))
 ANALYTICS_SEQUENCE_TTL_SECONDS = int(os.getenv("SF25_ANALYTICS_SEQUENCE_TTL_SECONDS", "3600"))
@@ -122,7 +127,7 @@ if ANALYTICS_ENABLED and not analytics_logger.handlers:
         analytics_logger.setLevel(logging.INFO)
         analytics_logger.addHandler(handler)
         analytics_logger.propagate = False
-        if not ANALYTICS_SALT:
+        if ANALYTICS_INCLUDE_IP and ANALYTICS_HASH_IP and not ANALYTICS_SALT:
             app.logger.warning("SF25_ANALYTICS_SALT not set; IP hashes are less private.")
         app.logger.info(f"Web analytics enabled (monthly files): {ANALYTICS_LOG_PATH}")
     except Exception as e:
@@ -682,14 +687,18 @@ def _prune_none_values(payload):
 def log_usage_event(event, **fields):
     if not ANALYTICS_ENABLED:
         return
+    if not getattr(g, "analytics_enabled_for_request", False):
+        return
     try:
         status = fields.pop("status", None)
         duration_ms = fields.pop("duration_ms", None)
         if duration_ms is None and hasattr(g, "analytics_start"):
             duration_ms = int((time.time() - g.analytics_start) * 1000)
 
-        client_ip = _get_client_ip()
-        ip_value = _hash_identifier(client_ip) if ANALYTICS_HASH_IP else client_ip
+        client_ip = _get_client_ip() if ANALYTICS_INCLUDE_IP else None
+        ip_value = None
+        if ANALYTICS_INCLUDE_IP:
+            ip_value = _hash_identifier(client_ip) if ANALYTICS_HASH_IP else client_ip
         user_agent = request.headers.get("User-Agent", "")
         ua_hash = _hash_identifier(user_agent) if user_agent else None
 
@@ -702,8 +711,8 @@ def log_usage_event(event, **fields):
             "status": status,
             "duration_ms": duration_ms,
             "client_id": getattr(g, "analytics_client_id", None),
-            "ip_hash": ip_value if ANALYTICS_HASH_IP else None,
-            "ip": ip_value if not ANALYTICS_HASH_IP else None,
+            "ip_hash": ip_value if (ANALYTICS_INCLUDE_IP and ANALYTICS_HASH_IP) else None,
+            "ip": ip_value if (ANALYTICS_INCLUDE_IP and not ANALYTICS_HASH_IP) else None,
             "ua_hash": ua_hash,
         }
         payload.update(fields)
@@ -716,6 +725,13 @@ def log_usage_event(event, **fields):
 def _analytics_before_request():
     if not ANALYTICS_ENABLED:
         return
+    if ANALYTICS_REQUIRE_CONSENT:
+        consent_value = request.cookies.get(ANALYTICS_CONSENT_COOKIE_NAME)
+        if consent_value != ANALYTICS_CONSENT_ACCEPT_VALUE:
+            g.analytics_enabled_for_request = False
+            return
+
+    g.analytics_enabled_for_request = True
     g.analytics_start = time.time()
     client_id = request.cookies.get(ANALYTICS_COOKIE_NAME)
     if not client_id:
@@ -728,6 +744,8 @@ def _analytics_before_request():
 @app.after_request
 def _analytics_after_request(response):
     if not ANALYTICS_ENABLED:
+        return response
+    if not getattr(g, "analytics_enabled_for_request", False):
         return response
     if getattr(g, "analytics_set_cookie", False):
         max_age = ANALYTICS_COOKIE_DAYS * 24 * 3600
@@ -1356,7 +1374,10 @@ def _execute_mcts_move_workflow(state, model_id, mcts_params, display_board_size
     # Load model
     model, model_error = _load_model_safely(model_id)
     if model_error:
-        return {"success": False, "error": model_error}
+        return build_engine_error_payload(
+            model_error,
+            reason="model_load_failed",
+        )
     
     # Create MCTS configuration
     mcts_config = _create_mcts_configuration(**mcts_params)
@@ -1393,7 +1414,15 @@ def _validate_interactive_move_request(data):
     )
     if error_msg:
         app.logger.warning(f"Invalid input rejected: {error_msg}")
-        return None, (jsonify({"success": False, "error": error_msg}), 400)
+        return None, (
+            jsonify(
+                build_engine_error_payload(
+                    error_msg,
+                    reason="validation_error",
+                )
+            ),
+            400,
+        )
 
     return (validated_data, inline_heatmap_options), None
 
@@ -1461,10 +1490,10 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.error(f"Error in make_mcts_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": "MCTS move generation failed. Please try again."
-        }
+        return build_engine_error_payload(
+            "MCTS move generation failed. Please try again.",
+            reason="engine_failure",
+        )
 
 # =============================================================================
 # API ROUTES
@@ -1862,7 +1891,12 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 display_board_size=display_board_size,
                 pie_rule_enabled=pie_rule_enabled,
             )
-            return jsonify({"success": False, "error": "No valid moves available"}), 400
+            return jsonify(
+                build_engine_error_payload(
+                    "No valid moves available",
+                    reason="no_valid_moves",
+                )
+            ), 400
         
         # Apply the move
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
@@ -1932,7 +1966,12 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
         )
-        return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
+        return jsonify(
+            build_engine_error_payload(
+                "Policy move generation failed. Please try again.",
+                reason="engine_failure",
+            )
+        ), 500
 
 
 @app.route("/api/policy_move", methods=["POST"])
@@ -2171,7 +2210,7 @@ def api_apply_trmph_sequence():
                 elo_rating=elo_rating,
                 display_board_size=display_board_size,
             )
-            return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
+            return jsonify({"error": f"Invalid TRMPH sequence format: {str(e)}"}), 400
         
         new_trmph = state_to_user_trmph(state, display_board_size)
         
@@ -2239,10 +2278,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Hex AI Public Web Server')
     parser.add_argument('--port', type=int, default=5001, help='Port to run the server on (default: 5001)')
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
+    parser.add_argument('--debug', dest='debug', action='store_true', help='Enable Flask debug mode')
+    parser.add_argument('--no-debug', dest='debug', action='store_false', help='Disable Flask debug mode')
+    parser.set_defaults(debug=None)
     args = parser.parse_args()
+
+    if args.debug is None:
+        debug_enabled = os.getenv("SF25_WEB_DEBUG", "0").lower() not in ("0", "false", "no")
+    else:
+        debug_enabled = args.debug
+
+    log_level_name = os.getenv("SF25_WEB_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
     
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=log_level)
     app.logger.info("=" * 50)
     app.logger.info("Hex AI Public Web Server Starting...")
+    app.logger.info("Debug mode: %s", debug_enabled)
     app.logger.info("=" * 50)
-    app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port)
+    app.run(
+        debug=debug_enabled,
+        use_reloader=False,
+        use_debugger=debug_enabled,
+        threaded=False,
+        host=args.host,
+        port=args.port,
+    )

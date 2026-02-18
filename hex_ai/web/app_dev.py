@@ -37,6 +37,7 @@ from hex_ai.web.inline_move_heatmap import (
 )
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
+    build_engine_error_payload,
     build_engine_move_response,
     build_game_state_response,
 )
@@ -279,10 +280,10 @@ def _load_model_or_error(model_id):
         model = get_model(model_id)
     except Exception as e:
         app.logger.error(f"Failed to get model {model_id}: {e}")
-        return None, {
-            "success": False,
-            "error": f"Model loading failed: {e}",
-        }
+        return None, build_engine_error_payload(
+            f"Model loading failed: {e}",
+            reason="model_load_failed",
+        )
 
     app.logger.info(f"Model loaded successfully: {type(model).__name__}")
     return model, None
@@ -724,10 +725,10 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.error(f"Error in make_mcts_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": f"MCTS move generation failed: {e}",
-        }
+        return build_engine_error_payload(
+            f"MCTS move generation failed: {e}",
+            reason="engine_failure",
+        )
 
 
 def _build_fixed_tree_debug_info(
@@ -939,10 +940,10 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
         app.logger.error(f"Error in make_fixed_tree_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": f"Fixed tree move generation failed: {e}",
-        }
+        return build_engine_error_payload(
+            f"Fixed tree move generation failed: {e}",
+            reason="engine_failure",
+        )
 
 
 @app.route("/api/constants", methods=["GET"])
@@ -1317,7 +1318,7 @@ def api_apply_trmph_sequence():
     try:
         state, _, moves_applied = apply_trmph_sequence_to_state(state, trmph_sequence)
     except ValueError as e:
-        return jsonify({"error": f"Invalid TRMPH sequence format: {e} [DEBUG-CHECK]"}), 400
+        return jsonify({"error": f"Invalid TRMPH sequence format: {e}"}), 400
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH sequence: {e}"}), 400
 
@@ -1364,7 +1365,15 @@ def _validate_engine_request(
             validate_api_input_fn=_strict_validate_api_input,
         )
         if error_msg:
-            return None, None, (jsonify({"success": False, "error": error_msg}), 400)
+            return None, None, (
+                jsonify(
+                    build_engine_error_payload(
+                        error_msg,
+                        reason="validation_error",
+                    )
+                ),
+                400,
+            )
         return validated_data, inline_heatmap_options, None
 
     is_valid, error_msg, validated_data = validate_api_input(
@@ -1374,7 +1383,15 @@ def _validate_engine_request(
         reject_unexpected=True,
     )
     if not is_valid:
-        return None, {"enabled": False}, (jsonify({"success": False, "error": error_msg}), 400)
+        return None, {"enabled": False}, (
+            jsonify(
+                build_engine_error_payload(
+                    error_msg,
+                    reason="validation_error",
+                )
+            ),
+            400,
+        )
 
     return validated_data, {"enabled": False}, None
 
@@ -1420,7 +1437,12 @@ def api_policy_move():
     try:
         verbose = _coerce_verbose_level(verbose)
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify(
+            build_engine_error_payload(
+                str(e),
+                reason="validation_error",
+            )
+        ), 400
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
     
@@ -1433,7 +1455,12 @@ def api_policy_move():
         move = select_policy_move(state, model, temperature)
         
         if move is None:
-            return jsonify({"success": False, "error": "No valid moves available"}), 400
+            return jsonify(
+                build_engine_error_payload(
+                    "No valid moves available",
+                    reason="no_valid_moves",
+                )
+            ), 400
         
         # Apply the move
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
@@ -1499,7 +1526,12 @@ def api_policy_move():
         
     except Exception as e:
         app.logger.error(f"Policy move error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify(
+            build_engine_error_payload(
+                str(e),
+                reason="engine_failure",
+            )
+        ), 500
 
 @app.route("/api/mcts_move", methods=["POST"])
 def api_mcts_move():
@@ -1537,7 +1569,12 @@ def api_mcts_move():
     try:
         verbose = _coerce_verbose_level(verbose)
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify(
+            build_engine_error_payload(
+                str(e),
+                reason="validation_error",
+            )
+        ), 400
     enable_gumbel = validated_data.get("enable_gumbel", True)
     gumbel_max_sims = validated_data.get("gumbel_max_sims", 500)
     
@@ -1612,7 +1649,12 @@ def api_fixed_tree_move():
     try:
         verbose = _coerce_verbose_level(verbose)
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify(
+            build_engine_error_payload(
+                str(e),
+                reason="validation_error",
+            )
+        ), 400
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
     
@@ -1620,7 +1662,12 @@ def api_fixed_tree_move():
         _validate_fixed_tree_search_widths(search_widths)
     except ValueError as e:
         app.logger.error(f"Error validating search_widths: {e}")
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify(
+            build_engine_error_payload(
+                str(e),
+                reason="validation_error",
+            )
+        ), 400
     
     result = make_fixed_tree_move(
         trmph,
@@ -1762,10 +1809,30 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Hex AI Web Server')
     parser.add_argument('--port', type=int, default=5001, help='Port to run the server on (default: 5001)')
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
+    parser.add_argument('--debug', dest='debug', action='store_true', help='Enable Flask debug mode')
+    parser.add_argument('--no-debug', dest='debug', action='store_false', help='Disable Flask debug mode')
+    parser.set_defaults(debug=None)
     args = parser.parse_args()
+
+    if args.debug is None:
+        debug_enabled = os.getenv("SF25_DEV_WEB_DEBUG", "0").lower() not in ("0", "false", "no")
+    else:
+        debug_enabled = args.debug
+
+    default_log_level = "DEBUG" if debug_enabled else "INFO"
+    log_level_name = os.getenv("SF25_DEV_WEB_LOG_LEVEL", default_log_level).upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
     
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=log_level)
     app.logger.info("=" * 50)
     app.logger.info("Hex AI Web Server Starting...")
+    app.logger.info("Debug mode: %s", debug_enabled)
     app.logger.info("=" * 50)
-    app.run(debug=True, use_reloader=False, use_debugger=True, threaded=False, host=args.host, port=args.port) 
+    app.run(
+        debug=debug_enabled,
+        use_reloader=False,
+        use_debugger=debug_enabled,
+        threaded=False,
+        host=args.host,
+        port=args.port,
+    ) 

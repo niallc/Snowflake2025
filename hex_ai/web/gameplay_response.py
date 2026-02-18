@@ -82,6 +82,17 @@ def build_engine_move_response(
     return response
 
 
+def build_engine_error_payload(error: str, *, reason: str | None = None) -> dict[str, Any]:
+    """Build a standardized engine error payload for interactive endpoints."""
+    payload: dict[str, Any] = {
+        "success": False,
+        "error": str(error),
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
+
+
 def apply_trmph_sequence_to_state(state, trmph_sequence: str):
     """
     Parse and apply a TRMPH sequence, stopping early if the game is over.

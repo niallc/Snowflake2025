@@ -1951,7 +1951,65 @@ class HexGame {
     }
 }
 
+const COOKIE_CONSENT_COOKIE = 'sf25_cookie_consent';
+const COOKIE_CONSENT_ACCEPTED = 'accepted';
+const COOKIE_CONSENT_DECLINED = 'declined';
+const COOKIE_CONSENT_DAYS = 180;
+
+function getCookieValue(name) {
+    const cookieParts = document.cookie ? document.cookie.split('; ') : [];
+    for (const part of cookieParts) {
+        const [key, ...valueParts] = part.split('=');
+        if (decodeURIComponent(key) === name) {
+            return decodeURIComponent(valueParts.join('='));
+        }
+    }
+    return null;
+}
+
+function setCookieValue(name, value, days) {
+    const maxAge = Math.max(1, Math.floor(days * 24 * 60 * 60));
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie =
+        `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax${secure}`;
+}
+
+function hideCookieConsentBanner(banner) {
+    if (!banner) {
+        return;
+    }
+    banner.hidden = true;
+}
+
+function initCookieConsentBanner() {
+    const banner = document.getElementById('cookie-consent-banner');
+    const acceptBtn = document.getElementById('cookie-consent-accept');
+    const declineBtn = document.getElementById('cookie-consent-decline');
+    if (!banner || !acceptBtn || !declineBtn) {
+        return;
+    }
+
+    const existingChoice = getCookieValue(COOKIE_CONSENT_COOKIE);
+    if (existingChoice === COOKIE_CONSENT_ACCEPTED || existingChoice === COOKIE_CONSENT_DECLINED) {
+        hideCookieConsentBanner(banner);
+        return;
+    }
+
+    banner.hidden = false;
+
+    acceptBtn.addEventListener('click', () => {
+        setCookieValue(COOKIE_CONSENT_COOKIE, COOKIE_CONSENT_ACCEPTED, COOKIE_CONSENT_DAYS);
+        hideCookieConsentBanner(banner);
+    });
+
+    declineBtn.addEventListener('click', () => {
+        setCookieValue(COOKIE_CONSENT_COOKIE, COOKIE_CONSENT_DECLINED, COOKIE_CONSENT_DAYS);
+        hideCookieConsentBanner(banner);
+    });
+}
+
 // Initialize the game when the page loads
 document.addEventListener('DOMContentLoaded', () => {
+    initCookieConsentBanner();
     new HexGame();
 });
