@@ -16,7 +16,6 @@ import numpy as np
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph
 from hex_ai.value_utils import (
-    winner_to_color, 
     select_policy_move,
 )
 from hex_ai.enums import Player, Piece
@@ -38,8 +37,8 @@ from hex_ai.web.inline_move_heatmap import (
 )
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
+    build_engine_move_response,
     build_game_state_response,
-    moves_to_trmph,
 )
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
@@ -1234,26 +1233,18 @@ def build_move_response(
     Returns:
         dict: Standardized move response
     """
-    response = {
-        "success": success,
-        "new_trmph": state_to_user_trmph(state, display_board_size),
-        "board": state.board.tolist(),
-        "player": winner_to_color(state.current_player_enum),
-        "legal_moves": moves_to_trmph(state.get_legal_moves()),
-        "winner": winner_to_color(state.winner) if state.winner is not None else None,
-        "move_made": move_made,
-        "game_over": state.game_over,
-        "display_board_size": display_board_size,
-        "network_board_size": BOARD_SIZE,
-    }
-    
-    if error:
-        response["error"] = error
-
-    if additional_fields:
-        response.update(additional_fields)
-        
-    return response
+    return build_engine_move_response(
+        state,
+        new_trmph=state_to_user_trmph(state, display_board_size),
+        move_made=move_made,
+        success=success,
+        error=error,
+        additional_fields={
+            "display_board_size": display_board_size,
+            "network_board_size": BOARD_SIZE,
+            **(additional_fields or {}),
+        },
+    )
 
 
 def _check_game_over_early_return(state, display_board_size):

@@ -54,6 +54,34 @@ def build_game_state_response(
     return response
 
 
+def build_engine_move_response(
+    state,
+    *,
+    new_trmph: str,
+    move_made: str | None = None,
+    success: bool = True,
+    error: str | None = None,
+    additional_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the shared move-result payload for engine-driven endpoints."""
+    response = {
+        "success": success,
+        "new_trmph": new_trmph,
+        "board": state.board.tolist(),
+        "player": winner_to_color(state.current_player_enum),
+        "legal_moves": moves_to_trmph(state.get_legal_moves()),
+        "winner": winner_to_color(state.winner) if state.winner is not None else None,
+        "move_made": move_made,
+        "game_over": state.game_over,
+    }
+
+    if error:
+        response["error"] = error
+    if additional_fields:
+        response.update(dict(additional_fields))
+    return response
+
+
 def apply_trmph_sequence_to_state(state, trmph_sequence: str):
     """
     Parse and apply a TRMPH sequence, stopping early if the game is over.

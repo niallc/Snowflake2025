@@ -16,7 +16,7 @@ from hex_ai.value_utils import (
     get_legal_policy_probs,
     select_policy_move,
 )
-from hex_ai.enums import Piece
+from hex_ai.enums import Piece, Player
 from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
     compute_best_child_win_probability_from_tree_data,
@@ -37,8 +37,8 @@ from hex_ai.web.inline_move_heatmap import (
 )
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
+    build_engine_move_response,
     build_game_state_response,
-    moves_to_trmph,
 )
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
@@ -59,27 +59,9 @@ CORS(app)
 # - player_index: canonical numeric (0=BLUE, 1=RED)
 # - player_raw: remove after frontend migrates
 
-# TODO: PERFORMANCE INVESTIGATION - MCTS vs Fixed Tree Search Performance Gap
-# Fixed tree search: ~6 games/sec with depth 2, ~100 leaf nodes
-# Current MCTS: <1 move/sec despite batching ~64 evaluations
-# This represents a ~100x slowdown that needs systematic investigation
-# Key areas: state copying, tree traversal overhead, batch utilization, model call efficiency
-
 # NOTE: Value head terminology - We use 'value_signed' as a shorthand for [-1, 1] scores
 # returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
 # which were the old sigmoid-based outputs.
-
-# TODO: Refactor duplicated logic across API functions
-# The following functions share common patterns that should be extracted into utilities:
-# - api_state(), api_apply_move(), api_apply_trmph_sequence(), api_move()
-# Common patterns: TRMPH parsing/validation, player color conversion, model inference, response construction
-
-# TODO: Additional refactoring opportunities:
-# 1. ✅ Create centralized ModelLoader utility (duplicated in get_model(), simple_model_inference.py, model_wrapper.py) - FIXED
-# 2. Consolidate temperature scaling logic (duplicated in batched_mcts.py, mcts.py, value_utils.py)
-# 3. Create centralized move selection utility (duplicated in batched_mcts.py, mcts.py, web/app.py)
-# 4. Create base MCTS node class (duplicated between BatchedMCTSNode and MCTSNode)
-# 5. Break up complex functions: search() in batched_mcts.py, play_single_game() in tournament.py
 
 # Add debug logging for incoming requests
 @app.before_request
@@ -238,69 +220,395 @@ def build_game_response(state, model_id, temperature, trmph_for_inference=None, 
     )
 
 
-def _build_engine_move_result(
-    state,
-    *,
-    new_trmph: str,
-    move_made=None,
-    success: bool = True,
-    error: str | None = None,
-    additional_fields=None,
-):
-    """Build a consistent move-result payload for engine-driven endpoints."""
-    result = {
-        "success": success,
-        "new_trmph": new_trmph,
-        "board": state.board.tolist(),
-        "player": winner_to_color(state.current_player),
-        "legal_moves": moves_to_trmph(state.get_legal_moves()),
-        "winner": winner_to_color(state.winner) if state.winner is not None else None,
-        "move_made": move_made,
-        "game_over": state.game_over,
-    }
-    if error:
-        result["error"] = error
-    if additional_fields:
-        result.update(additional_fields)
+ENGINE_NUMERIC_DEBUG_FIELDS = {
+    "search_time",
+    "total_compute_ms",
+    "encode_ms",
+    "forward_ms",
+    "expand_ms",
+    "backprop_ms",
+    "batch_count",
+    "cache_hits",
+    "cache_misses",
+    "root_value",
+    "best_child_value",
+    "win_probability",
+    "best_child_win_probability",
+    "pv_length",
+    "search_efficiency",
+    "mcts_probability",
+    "direct_probability",
+    "difference",
+    "total_visits",
+    "total_nodes",
+    "max_depth",
+    "inferences",
+    "unique_evals_total",
+    "effective_sims_total",
+    "unique_evals_per_sec",
+    "effective_sims_per_sec",
+    "deduplication_ratio",
+    "efficiency_gain_percent",
+}
+
+
+def _coerce_verbose_level(verbose):
+    """Parse verbose flag into an integer level."""
+    try:
+        return int(verbose)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid verbose value: {verbose}") from exc
+
+
+def _build_game_over_engine_result(state, trmph, debug_field):
+    """Return consistent game-over payload for engine move endpoints."""
+    app.logger.info("Game is over, returning current state")
+    result = build_engine_move_response(
+        state,
+        new_trmph=trmph,
+        move_made=None,
+        additional_fields={debug_field: {}},
+    )
+    app.logger.info(f"Returning early result: {result}")
     return result
 
 
-def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
+def _load_model_or_error(model_id):
+    """Load a model and return a response payload on failure."""
+    try:
+        model = get_model(model_id)
+    except Exception as e:
+        app.logger.error(f"Failed to get model {model_id}: {e}")
+        return None, {
+            "success": False,
+            "error": f"Model loading failed: {e}",
+        }
+
+    app.logger.info(f"Model loaded successfully: {type(model).__name__}")
+    return model, None
+
+
+def _build_legal_move_probabilities(state, policy_probs):
+    """Build mapping from legal TRMPH moves to policy probabilities."""
+    legal_move_probs = {}
+    for move in state.get_legal_moves():
+        move_trmph = fc.rowcol_to_trmph(*move)
+        tensor_idx = fc.rowcol_to_tensor(*move)
+        if 0 <= tensor_idx < len(policy_probs):
+            legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
+    return legal_move_probs
+
+
+def _compute_direct_policy_analysis(state, model, trmph, temperature):
+    """Compute direct policy probabilities for legal moves and log summary."""
+    app.logger.info("Getting direct policy comparison...")
+    policy_start = time.time()
+    policy_logits, value_output = model.simple_infer(trmph)
+    policy_time = time.time() - policy_start
+    app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
+
+    policy_probs = policy_logits_to_probs(policy_logits, temperature)
+    app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
+
+    legal_moves = state.get_legal_moves()
+    original_legal_moves_count = len(legal_moves)
+    app.logger.info(f"Legal moves count: {original_legal_moves_count}")
+
+    legal_move_probs = _build_legal_move_probabilities(state, policy_probs)
+    sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
+    app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
+
+    return legal_move_probs, original_legal_moves_count
+
+
+def _apply_selected_move(state, selected_move_trmph):
+    """Apply selected move with consistent logging."""
+    app.logger.info(f"Applying move: {selected_move_trmph}")
+    new_state = apply_move_to_state_trmph(state, selected_move_trmph)
+    app.logger.info(f"Move applied. New state game_over: {new_state.game_over}")
+    return new_state
+
+
+def _sanitize_numeric_debug_fields(obj, path=""):
+    """Replace unsupported numeric debug values with 0.0 for frontend safety."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            current_path = f"{path}.{key}" if path else key
+            if key in ENGINE_NUMERIC_DEBUG_FIELDS:
+                if value is None:
+                    app.logger.warning(
+                        f"Found None value in numeric field {current_path}, replacing with 0.0"
+                    )
+                    obj[key] = 0.0
+                elif isinstance(value, str):
+                    app.logger.warning(
+                        f"Found string value '{value}' in numeric field {current_path}, replacing with 0.0"
+                    )
+                    obj[key] = 0.0
+            _sanitize_numeric_debug_fields(value, current_path)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            _sanitize_numeric_debug_fields(item, f"{path}[{i}]")
+
+
+def _resolve_mcts_algorithm_label(stats, algorithm_termination_info):
+    """Resolve human-readable algorithm label for diagnostics."""
+    if algorithm_termination_info:
+        if algorithm_termination_info.reason == "terminal_move":
+            return "Terminal Move Detection"
+        if algorithm_termination_info.reason == "neural_network_confidence":
+            return "Confidence-Based Termination"
+        return "MCTS (Algorithm Termination)"
+
+    return "MCTS (Gumbel on)" if stats.get("gumbel_candidates_m", 0) > 0 else "MCTS (Gumbel off)"
+
+
+def _build_mcts_debug_info(
+    *,
+    stats,
+    tree_data,
+    algorithm_termination_info,
+    selected_move_trmph,
+    selected_move,
+    legal_move_probs,
+    original_legal_moves_count,
+    num_simulations,
+    exploration_constant,
+    temperature,
+    temperature_end,
+    enable_gumbel,
+    gumbel_max_sims,
+    mcts_search_time,
+):
+    """Assemble MCTS diagnostics payload."""
+    algorithm = _resolve_mcts_algorithm_label(stats, algorithm_termination_info)
+    root_win_prob = compute_win_probability_from_tree_data(tree_data)
+    best_child_signed_value = tree_data["v_ptm_ref_signed_best_child"]
+    best_child_win_prob = compute_best_child_win_probability_from_tree_data(tree_data)
+    algorithm_win_prob = (
+        algorithm_termination_info.win_probability if algorithm_termination_info else None
+    )
+    temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
+
+    app.logger.debug(
+        f"Value conversion: root_prob={root_win_prob:.3f}, "
+        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}"
+    )
+    if algorithm_termination_info:
+        app.logger.debug(
+            f"Algorithm termination: reason={algorithm_termination_info.reason}, "
+            f"termination_win_probability={algorithm_win_prob}"
+        )
+
+    mcts_debug_info = {
+        "algorithm_info": {
+            "algorithm": algorithm,
+            "early_termination": algorithm_termination_info is not None,
+            "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+            "early_termination_details": {
+                "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
+                "win_probability": algorithm_win_prob,
+                "move": algorithm_termination_info.move if algorithm_termination_info else None,
+            },
+            "parameters": {
+                "simulations": num_simulations,
+                "exploration_constant": exploration_constant,
+                "temperature": temperature,
+                "temperature_end": temperature_end,
+                "gumbel_enabled": enable_gumbel,
+                "gumbel_max_sims": gumbel_max_sims,
+            },
+        },
+        "search_stats": {
+            "num_simulations": num_simulations if not algorithm_termination_info else 0,
+            "search_time": mcts_search_time,
+            "exploration_constant": exploration_constant,
+            "temperature": temperature,
+            "mcts_stats": stats,
+            "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
+            "algorithm_used": algorithm,
+        },
+        "tree_statistics": {
+            "total_visits": tree_data["total_visits"] if not algorithm_termination_info else 0,
+            "total_nodes": tree_data["total_nodes"] if not algorithm_termination_info else 0,
+            "max_depth": tree_data["max_depth"] if not algorithm_termination_info else 0,
+            "inferences": tree_data["inferences"] if not algorithm_termination_info else 0,
+            "algorithm_note": "No tree search performed" if algorithm_termination_info else "Full MCTS tree search",
+        },
+        "move_selection": {
+            "selected_move": selected_move_trmph,
+            "selected_move_coords": selected_move,
+        },
+        "move_probabilities": {
+            "direct_policy": legal_move_probs,
+            "mcts_visits": tree_data["visit_counts"],
+            "mcts_probabilities": tree_data["mcts_probabilities"],
+            "mcts_temperature_scaled_probabilities": temperature_scaled_mcts_probs,
+        },
+        "comparison": {
+            "mcts_vs_direct": {},
+        },
+        "win_rate_analysis": {
+            "root_value": tree_data["v_ptm_ref_signed_root"],
+            "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
+            "win_probability": root_win_prob,
+            "best_child_win_probability": best_child_win_prob,
+        },
+        "move_sequence_analysis": {
+            "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data["principal_variation"]],
+            "alternative_lines": [],
+            "pv_length": len(tree_data["principal_variation"]),
+        },
+        "gumbel_analysis": {
+            "gumbel_used": stats.get("gumbel_candidates_m", 0) > 0,
+            "gumbel_candidates_m": stats.get("gumbel_candidates_m", 0),
+            "gumbel_rounds_R": stats.get("gumbel_rounds_R", 0),
+            "gumbel_nn_calls_per_move": stats.get("gumbel_nn_calls_per_move", 0),
+            "gumbel_total_leaves_evaluated": stats.get("gumbel_total_leaves_evaluated", 0),
+            "gumbel_distinct_leaves_evaluated": stats.get("gumbel_distinct_leaves_evaluated", 0),
+            "gumbel_avg_nn_batch_size": stats.get("gumbel_avg_nn_batch_size", 0.0),
+            "gumbel_leaves_distinct_ratio": stats.get("gumbel_leaves_distinct_ratio", 0.0),
+            "gumbel_selected_tensor_action": stats.get("gumbel_selected_tensor_action", None),
+            "gumbel_v_pi_01": stats.get("gumbel_v_pi_01", None),
+            "gumbel_final_rank_top_move": stats.get("gumbel_final_rank_top_move", None),
+            "gumbel_final_rank_top5": stats.get("gumbel_final_rank_top5", None),
+            "gumbel_selection_note": (
+                "Gumbel final selection uses log(prior) + c_scale*(q - v_pi) over a candidate set; "
+                "it is not the visit-count argmax."
+            ),
+        },
+        "summary": {
+            "selected_move": selected_move_trmph,
+            "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
+            "top_mcts_move": (
+                max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0]
+                if tree_data["mcts_probabilities"]
+                else None
+            ),
+            "top_mcts_move_temperature_scaled": (
+                max(temperature_scaled_mcts_probs.items(), key=lambda x: x[1])[0]
+                if temperature_scaled_mcts_probs
+                else None
+            ),
+            "top_mcts_move_raw_visits": (
+                max(tree_data["visit_counts"].items(), key=lambda x: x[1])[0]
+                if tree_data.get("visit_counts")
+                else None
+            ),
+            "total_legal_moves": original_legal_moves_count,
+            "moves_explored": tree_data["total_visits"] if not algorithm_termination_info else None,
+            "search_efficiency": (
+                tree_data["inferences"] / max(1, tree_data["total_visits"])
+                if not algorithm_termination_info
+                else 0.0
+            ),
+            "algorithm_summary": algorithm,
+            "gumbel_summary": (
+                f"Gumbel: {'ON' if stats.get('gumbel_candidates_m', 0) > 0 else 'OFF'} "
+                f"(candidates: {stats.get('gumbel_candidates_m', 0)}, rounds: {stats.get('gumbel_rounds_R', 0)})"
+            ),
+            "move_selection_explanation": (
+                "Selected Move is the move played (may be sampled). Top MCTS Move (Raw Visits) is the "
+                "visit-count argmax. Top MCTS Move (Temperature Scaled) is the argmax after temperature "
+                "scaling (closer to move selection)."
+            ),
+        },
+        "profiling_summary": {
+            "total_compute_ms": int(mcts_search_time * 1000.0),
+            "encode_ms": stats.get("encode_ms", 0),
+            "stack_ms": stats.get("stack_ms", 0),
+            "forward_ms": stats.get("forward_ms", 0),
+            "pure_forward_ms": stats.get("pure_forward_ms", 0),
+            "terminal_detect_ms": stats.get("terminal_detect_ms", 0),
+            "puct_calc_ms": stats.get("puct_calc_ms", 0),
+            "sync_ms": stats.get("sync_ms", 0),
+            "d2h_ms": stats.get("d2h_ms", 0),
+            "expand_ms": stats.get("expand_ms", 0),
+            "backprop_ms": stats.get("backprop_ms", 0),
+            "select_ms": stats.get("select_ms", 0),
+            "cache_lookup_ms": stats.get("cache_lookup_ms", 0),
+            "state_creation_ms": stats.get("state_creation_ms", 0),
+            "batch_count": stats.get("batch_count", 0),
+            "cache_hits": stats.get("cache_hits", 0),
+            "cache_misses": stats.get("cache_misses", 0),
+            "simulations_per_second": stats.get("simulations_per_second", 0),
+            "median_forward_ms": stats.get("median_forward_ms_ex_warm", 0),
+            "median_select_ms": stats.get("median_select_ms", 0),
+            "median_cache_hit_ms": stats.get("median_cache_hit_ms", 0),
+            "median_cache_miss_ms": stats.get("median_cache_miss_ms", 0),
+            "unique_evals_total": stats.get("unique_evals_total", 0),
+            "effective_sims_total": stats.get("effective_sims_total", 0),
+            "unique_evals_per_sec": stats.get("unique_evals_per_sec", 0),
+            "effective_sims_per_sec": stats.get("effective_sims_per_sec", 0),
+            "deduplication_ratio": stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)),
+            "efficiency_gain_percent": (
+                1.0 - (stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)))
+            ) * 100,
+        },
+    }
+
+    mcts_probs = tree_data["mcts_probabilities"]
+    for move_trmph, direct_prob in legal_move_probs.items():
+        mcts_prob = mcts_probs.get(move_trmph, 0.0)
+        temp_scaled_prob = temperature_scaled_mcts_probs.get(move_trmph, 0.0)
+        mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
+            "direct_probability": direct_prob,
+            "mcts_probability": mcts_prob,
+            "mcts_temperature_scaled_probability": temp_scaled_prob,
+            "difference": mcts_prob - direct_prob,
+        }
+    return mcts_debug_info
+
+
+def _log_mcts_timing_summary(stats, mcts_search_time):
+    """Emit summary logs for MCTS performance."""
+    forward_percentage = (
+        (stats.get("forward_ms", 0) / mcts_search_time / 10) if mcts_search_time > 0 else 0
+    )
+    app.logger.info("=== PERFORMANCE SUMMARY ===")
+    app.logger.info(f"Forward pass uses: {forward_percentage:.1f}% of total time")
+    app.logger.info(
+        f"Cache efficiency: {stats.get('cache_hits', 0)} hits, {stats.get('cache_misses', 0)} misses"
+    )
+    app.logger.info(
+        "Batch efficiency: %s batches, avg size %.1f",
+        stats.get("batch_count", 0),
+        sum(stats.get("batch_sizes", [0])) / max(1, len(stats.get("batch_sizes", []))),
+    )
+    app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.1f}")
+    app.logger.info("=== END PERFORMANCE SUMMARY ===")
+
+
+def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
-        mcts_verbose = int(verbose)
-        app.logger.info(f"=== MCTS MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={mcts_verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
+        mcts_verbose = _coerce_verbose_level(verbose)
+        app.logger.info("=== MCTS MOVE START ===")
+        app.logger.info(
+            "Input: model_id=%s, sims=%s, temp=%s->%s, verbose=%s, gumbel=%s, gumbel_max_sims=%s",
+            model_id,
+            num_simulations,
+            temperature,
+            temperature_end,
+            mcts_verbose,
+            enable_gumbel,
+            gumbel_max_sims,
+        )
         app.logger.info(f"Input TRMPH: {trmph}")
-        
+
         state = create_game_state_from_trmph(trmph, context="for MCTS move")
-        app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
-        
-        # If game is over, return current state
+        app.logger.info(
+            f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}"
+        )
         if state.game_over:
-            app.logger.info("Game is over, returning current state")
-            result = _build_engine_move_result(
-                state,
-                new_trmph=trmph,
-                move_made=None,
-                additional_fields={"mcts_debug_info": {}},
-            )
-            app.logger.info(f"Returning early result: {result}")
-            return result
-        
-        # Get model
-        try:
-            model = get_model(model_id)
-            app.logger.info(f"Model loaded successfully: {type(model).__name__}")
-        except Exception as e:
-            app.logger.error(f"Failed to get model {model_id}: {e}")
-            return {
-                "success": False,
-                "error": f"Model loading failed: {e}"
-            }
-        
-        # Create MCTS configuration
+            return _build_game_over_engine_result(state, trmph, "mcts_debug_info")
+
+        model, error_result = _load_model_or_error(model_id)
+        if error_result:
+            return error_result
+
         mcts_config, temperature_end = create_interactive_mcts_config(
             num_simulations=num_simulations,
             exploration_constant=exploration_constant,
@@ -312,22 +620,18 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             logger=app.logger,
         )
         app.logger.info(f"MCTS config created: {mcts_config}")
-        
-        # Get cached model wrapper for MCTS (avoid expensive recreation)
+
         app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
         model_wrapper_start = time.time()
         model_wrapper = get_cached_model_wrapper(model_id)
         model_wrapper_time = time.time() - model_wrapper_start
         app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
-        
-        # Run MCTS search with comprehensive timing
+
         app.logger.info("Starting MCTS search...")
         total_start_time = time.time()
-        
-        # Time the actual MCTS run
         mcts_start_time = time.time()
         app.logger.info("About to run interactive MCTS search...")
-        move, stats, tree_data, algorithm_termination_info = run_interactive_mcts_search(
+        selected_move, stats, tree_data, algorithm_termination_info = run_interactive_mcts_search(
             state=state,
             model_wrapper=model_wrapper,
             mcts_config=mcts_config,
@@ -337,261 +641,39 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.info("run_mcts_move completed successfully")
         mcts_search_time = time.time() - mcts_start_time
 
-        # Log detailed timing breakdown
-        app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
+        app.logger.debug("=== DETAILED TIMING BREAKDOWN ===")
         app.logger.debug(f"MCTS search completed in {mcts_search_time:.3f}s")
         app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
-        app.logger.debug(f"MCTS selected move: {move}")
-        
+        app.logger.debug(f"MCTS selected move: {selected_move}")
         app.logger.debug(f"Simulations per second: {stats.get('simulations_per_second', 0):.2f}")
-        app.logger.debug(f"Forward pass (total): {stats.get('forward_ms', 0):.1f}ms ({stats.get('forward_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"  - Pure neural network: {stats.get('pure_forward_ms', 0):.1f}ms ({stats.get('pure_forward_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"  - Device sync: {stats.get('sync_ms', 0):.1f}ms ({stats.get('sync_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Selection: {stats.get('select_ms', 0):.1f}ms ({stats.get('select_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"  - Terminal move detection: {stats.get('terminal_detect_ms', 0):.1f}ms ({stats.get('terminal_detect_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"  - PUCT calculation: {stats.get('puct_calc_ms', 0):.1f}ms ({stats.get('puct_calc_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"State creation: {stats.get('state_creation_ms', 0):.1f}ms ({stats.get('state_creation_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Cache lookup: {stats.get('cache_lookup_ms', 0):.1f}ms ({stats.get('cache_lookup_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Encoding: {stats.get('encode_ms', 0):.1f}ms ({stats.get('encode_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Stacking: {stats.get('stack_ms', 0):.1f}ms ({stats.get('stack_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Host-to-device: {stats.get('h2d_ms', 0):.1f}ms ({stats.get('h2d_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Device-to-host: {stats.get('d2h_ms', 0):.1f}ms ({stats.get('d2h_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Expansion: {stats.get('expand_ms', 0):.1f}ms ({stats.get('expand_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Backpropagation: {stats.get('backprop_ms', 0):.1f}ms ({stats.get('backprop_ms', 0)/mcts_search_time/10:.1f}%)")
-        app.logger.debug(f"Cache hits: {stats.get('cache_hits', 0)}, misses: {stats.get('cache_misses', 0)}")
-        app.logger.debug(f"Batch count: {stats.get('batch_count', 0)}, avg batch size: {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
-        app.logger.debug(f"Median forward time: {stats.get('median_forward_ms_ex_warm', 0):.1f}ms")
-        app.logger.debug(f"Median select time: {stats.get('median_select_ms', 0):.1f}ms")
-        app.logger.debug(f"Median terminal detect time: {stats.get('median_terminal_detect_ms', 0):.1f}ms")
-        app.logger.debug(f"Median PUCT calc time: {stats.get('median_puct_calc_ms', 0):.1f}ms")
-        app.logger.debug(f"=== END TIMING BREAKDOWN ===")
-        
-        # Add performance summary
-        forward_percentage = (stats.get('forward_ms', 0) / mcts_search_time / 10) if mcts_search_time > 0 else 0
-        app.logger.info(f"=== PERFORMANCE SUMMARY ===")
-        app.logger.info(f"Forward pass uses: {forward_percentage:.1f}% of total time")
-        app.logger.info(f"Cache efficiency: {stats.get('cache_hits', 0)} hits, {stats.get('cache_misses', 0)} misses")
-        app.logger.info(f"Batch efficiency: {stats.get('batch_count', 0)} batches, avg size {sum(stats.get('batch_sizes', [0]))/max(1, len(stats.get('batch_sizes', []))):.1f}")
-        app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.1f}")
-        app.logger.info(f"=== END PERFORMANCE SUMMARY ===")
-        
-        selected_move_trmph = fc.rowcol_to_trmph(*move)
+        _log_mcts_timing_summary(stats, mcts_search_time)
+
+        selected_move_trmph = fc.rowcol_to_trmph(*selected_move)
         app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
-        
-        # Get direct policy comparison
-        app.logger.info("Getting direct policy comparison...")
-        policy_start = time.time()
-        policy_logits, value_output = model.simple_infer(trmph)
-        policy_time = time.time() - policy_start
-        app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
-        
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
-        
-        # Get legal moves count for summary
-        legal_moves = state.get_legal_moves()
-        original_legal_moves_count = len(legal_moves)
-        app.logger.info(f"Legal moves count: {original_legal_moves_count}")
-        
-        # Get direct policy probabilities for comparison with MCTS
-        legal_move_probs = {}
-        for move in legal_moves:
-            move_trmph = fc.rowcol_to_trmph(*move)
-            tensor_idx = fc.rowcol_to_tensor(*move)
-            if 0 <= tensor_idx < len(policy_probs):
-                legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
-        
-        # Log top 10 legal move probabilities
-        sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
-        app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
-        
-        # Apply the move
-        app.logger.info(f"Applying move: {selected_move_trmph}")
-        state = apply_move_to_state_trmph(state, selected_move_trmph)
-        app.logger.info(f"Move applied. New state game_over: {state.game_over}")
-        
-        # Generate MCTS diagnostic info
-        # Determine algorithm type based on algorithm termination info and Gumbel usage
-        if algorithm_termination_info:
-            if algorithm_termination_info.reason == "terminal_move":
-                algorithm = "Terminal Move Detection"
-            elif algorithm_termination_info.reason == "neural_network_confidence":
-                algorithm = "Confidence-Based Termination"
-            else:
-                algorithm = "MCTS (Algorithm Termination)"
-        else:
-            # Check if Gumbel was used based on MCTS stats
-            gumbel_used = stats.get('gumbel_candidates_m', 0) > 0
-            if gumbel_used:
-                algorithm = "MCTS (Gumbel on)"
-            else:
-                algorithm = "MCTS (Gumbel off)"
-        
-        # Use centralized utilities for value conversions and tree data
-        
-        # Get win probabilities using centralized utility
-        root_win_prob = compute_win_probability_from_tree_data(tree_data)
-        best_child_signed_value = tree_data["v_ptm_ref_signed_best_child"]
-        best_child_win_prob = compute_best_child_win_probability_from_tree_data(tree_data)
-        
-        # Handle algorithm termination win probability.
-        # Contract: AlgorithmTerminationInfo exposes probability semantics in [0, 1].
-        if algorithm_termination_info:
-            algorithm_win_prob = algorithm_termination_info.win_probability
-        else:
-            algorithm_win_prob = None
-        
-        # Log the conversion for debugging
-        app.logger.debug(f"Value conversion: root_prob={root_win_prob:.3f}, "
-                        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}")
-        if algorithm_termination_info:
-            app.logger.debug(f"Algorithm termination: reason={algorithm_termination_info.reason}, "
-                           f"termination_win_probability={algorithm_win_prob}")
-        
-        # Get temperature-scaled MCTS probabilities from tree data (calculated by MCTS core)
-        temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
-        
-        mcts_debug_info = {
-            "algorithm_info": {
-                "algorithm": algorithm,
-                "early_termination": algorithm_termination_info is not None,
-                "early_termination_reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
-                "early_termination_details": {
-                    "reason": algorithm_termination_info.reason if algorithm_termination_info else "none",
-                    "win_probability": algorithm_win_prob,  # Use converted probability
-                    "move": algorithm_termination_info.move if algorithm_termination_info else None
-                },
-                "parameters": {
-                    "simulations": num_simulations,
-                    "exploration_constant": exploration_constant,
-                    "temperature": temperature,
-                    "temperature_end": temperature_end,
-                    "gumbel_enabled": enable_gumbel,
-                    "gumbel_max_sims": gumbel_max_sims
-                }
-            },
-            "search_stats": {
-                "num_simulations": num_simulations if not algorithm_termination_info else 0,
-                "search_time": mcts_search_time,
-                "exploration_constant": exploration_constant,
-                "temperature": temperature,
-                "mcts_stats": stats,
-                "inferences": tree_data.get("inferences", 0) if not algorithm_termination_info else 0,
-                "algorithm_used": algorithm
-            },
-            "tree_statistics": {
-                "total_visits": tree_data["total_visits"] if not algorithm_termination_info else 0,
-                "total_nodes": tree_data["total_nodes"] if not algorithm_termination_info else 0,
-                "max_depth": tree_data["max_depth"] if not algorithm_termination_info else 0,
-                "inferences": tree_data["inferences"] if not algorithm_termination_info else 0,
-                "algorithm_note": "No tree search performed" if algorithm_termination_info else "Full MCTS tree search"
-            },
-            "move_selection": {
-                "selected_move": selected_move_trmph,
-                "selected_move_coords": move
-            },
-            "move_probabilities": {
-                "direct_policy": legal_move_probs,
-                "mcts_visits": tree_data["visit_counts"],
-                "mcts_probabilities": tree_data["mcts_probabilities"],
-                "mcts_temperature_scaled_probabilities": temperature_scaled_mcts_probs
-            },
-            "comparison": {
-                "mcts_vs_direct": {}
-            },
-            "win_rate_analysis": {
-                "root_value": tree_data["v_ptm_ref_signed_root"],
-                "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
-                "win_probability": root_win_prob,
-                "best_child_win_probability": best_child_win_prob
-            },
-            "move_sequence_analysis": {
-                "principal_variation": [fc.rowcol_to_trmph(*move) for move in tree_data["principal_variation"]],
-                "alternative_lines": [],  # Placeholder - would need more complex tree analysis
-                "pv_length": len(tree_data["principal_variation"])
-            },
-            "gumbel_analysis": {
-                "gumbel_used": stats.get('gumbel_candidates_m', 0) > 0,
-                "gumbel_candidates_m": stats.get('gumbel_candidates_m', 0),
-                "gumbel_rounds_R": stats.get('gumbel_rounds_R', 0),
-                "gumbel_nn_calls_per_move": stats.get('gumbel_nn_calls_per_move', 0),
-                "gumbel_total_leaves_evaluated": stats.get('gumbel_total_leaves_evaluated', 0),
-                "gumbel_distinct_leaves_evaluated": stats.get('gumbel_distinct_leaves_evaluated', 0),
-                "gumbel_avg_nn_batch_size": stats.get('gumbel_avg_nn_batch_size', 0.0),
-                "gumbel_leaves_distinct_ratio": stats.get('gumbel_leaves_distinct_ratio', 0.0),
-                # Explain why the selected move can differ from top visits / top direct-policy:
-                # Gumbel uses a deterministic final re-ranking based on log prior + c_scale * (q - v_pi).
-                "gumbel_selected_tensor_action": stats.get("gumbel_selected_tensor_action", None),
-                "gumbel_v_pi_01": stats.get("gumbel_v_pi_01", None),
-                "gumbel_final_rank_top_move": stats.get("gumbel_final_rank_top_move", None),
-                "gumbel_final_rank_top5": stats.get("gumbel_final_rank_top5", None),
-                "gumbel_selection_note": "Gumbel final selection uses log(prior) + c_scale*(q - v_pi) over a candidate set; it is not the visit-count argmax."
-            },
-            "summary": {
-                # Always include the move actually played (this may differ from argmax due to temperature sampling or Gumbel)
-                "selected_move": selected_move_trmph,
-                "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                # "Top MCTS Move" is defined as the argmax under the root MCTS distribution (derived from visit counts).
-                "top_mcts_move": max(tree_data["mcts_probabilities"].items(), key=lambda x: x[1])[0] if tree_data["mcts_probabilities"] and len(tree_data["mcts_probabilities"]) > 0 else None,
-                "top_mcts_move_temperature_scaled": max(temperature_scaled_mcts_probs.items(), key=lambda x: x[1])[0] if temperature_scaled_mcts_probs and len(temperature_scaled_mcts_probs) > 0 else None,
-                # Raw visit-count argmax (can differ from argmax over normalized probabilities only by tie-breaking).
-                "top_mcts_move_raw_visits": max(tree_data["visit_counts"].items(), key=lambda x: x[1])[0] if tree_data.get("visit_counts") and len(tree_data["visit_counts"]) > 0 else None,
-                "total_legal_moves": original_legal_moves_count,
-                # Total number of simulations/visits performed at the root.
-                "moves_explored": tree_data["total_visits"] if not algorithm_termination_info else None,
-                "search_efficiency": tree_data["inferences"] / max(1, tree_data["total_visits"]) if not algorithm_termination_info else 0.0,
-                "algorithm_summary": algorithm,
-                "gumbel_summary": f"Gumbel: {'ON' if stats.get('gumbel_candidates_m', 0) > 0 else 'OFF'} (candidates: {stats.get('gumbel_candidates_m', 0)}, rounds: {stats.get('gumbel_rounds_R', 0)})",
-                "move_selection_explanation": "Selected Move is the move played (may be sampled). Top MCTS Move (Raw Visits) is the visit-count argmax. Top MCTS Move (Temperature Scaled) is the argmax after temperature scaling (closer to move selection)."
-            },
-                    "profiling_summary": {
-            "total_compute_ms": int(mcts_search_time * 1000.0),
-            "encode_ms": stats.get("encode_ms", 0),
-            "stack_ms": stats.get("stack_ms", 0),
-            "forward_ms": stats.get("forward_ms", 0),
-            "pure_forward_ms": stats.get("pure_forward_ms", 0),
-            "terminal_detect_ms": stats.get("terminal_detect_ms", 0),
-            "puct_calc_ms": stats.get("puct_calc_ms", 0),
-                "sync_ms": stats.get("sync_ms", 0),
-                "d2h_ms": stats.get("d2h_ms", 0),
-                "expand_ms": stats.get("expand_ms", 0),
-                "backprop_ms": stats.get("backprop_ms", 0),
-                "select_ms": stats.get("select_ms", 0),
-                "cache_lookup_ms": stats.get("cache_lookup_ms", 0),
-                "state_creation_ms": stats.get("state_creation_ms", 0),
-                "batch_count": stats.get("batch_count", 0),
-                "cache_hits": stats.get("cache_hits", 0),
-                "cache_misses": stats.get("cache_misses", 0),
-                "simulations_per_second": stats.get("simulations_per_second", 0),
-                "median_forward_ms": stats.get("median_forward_ms_ex_warm", 0),
-                "median_select_ms": stats.get("median_select_ms", 0),
-                "median_cache_hit_ms": stats.get("median_cache_hit_ms", 0),
-                "median_cache_miss_ms": stats.get("median_cache_miss_ms", 0),
-                # New MCTS performance metrics
-                "unique_evals_total": stats.get("unique_evals_total", 0),
-                "effective_sims_total": stats.get("effective_sims_total", 0),
-                "unique_evals_per_sec": stats.get("unique_evals_per_sec", 0),
-                "effective_sims_per_sec": stats.get("effective_sims_per_sec", 0),
-                "deduplication_ratio": stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)),
-                "efficiency_gain_percent": (1.0 - (stats.get("unique_evals_total", 0) / max(1, stats.get("effective_sims_total", 1)))) * 100,
-            },
-        }
-        
-        # Add comparison data
-        mcts_probs = tree_data["mcts_probabilities"]
-        for move_trmph in legal_move_probs:
-            direct_prob = legal_move_probs.get(move_trmph, 0)
-            mcts_prob = mcts_probs.get(move_trmph, 0.0)
-            temp_scaled_prob = temperature_scaled_mcts_probs.get(move_trmph, 0.0)
-            mcts_debug_info["comparison"]["mcts_vs_direct"][move_trmph] = {
-                "direct_probability": direct_prob,
-                "mcts_probability": mcts_prob,
-                "mcts_temperature_scaled_probability": temp_scaled_prob,
-                "difference": mcts_prob - direct_prob
-            }
-        
-        result = _build_engine_move_result(
+
+        legal_move_probs, original_legal_moves_count = _compute_direct_policy_analysis(
+            state, model, trmph, temperature
+        )
+        state = _apply_selected_move(state, selected_move_trmph)
+
+        mcts_debug_info = _build_mcts_debug_info(
+            stats=stats,
+            tree_data=tree_data,
+            algorithm_termination_info=algorithm_termination_info,
+            selected_move_trmph=selected_move_trmph,
+            selected_move=selected_move,
+            legal_move_probs=legal_move_probs,
+            original_legal_moves_count=original_legal_moves_count,
+            num_simulations=num_simulations,
+            exploration_constant=exploration_constant,
+            temperature=temperature,
+            temperature_end=temperature_end,
+            enable_gumbel=enable_gumbel,
+            gumbel_max_sims=gumbel_max_sims,
+            mcts_search_time=mcts_search_time,
+        )
+
+        result = build_engine_move_response(
             state,
             new_trmph=state.to_trmph(),
             move_made=selected_move_trmph,
@@ -600,136 +682,189 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                 "tree_data": tree_data,
             },
         )
-        
-        # Validate that no None values exist in numeric fields that frontend expects
-        def validate_numeric_fields(obj, path=""):
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    if key in ['search_time', 'total_compute_ms', 'encode_ms', 'forward_ms', 'expand_ms', 'backprop_ms', 
-                              'batch_count', 'cache_hits', 'cache_misses', 'root_value', 'best_child_value', 
-                              'win_probability', 'best_child_win_probability', 'pv_length', 'search_efficiency',
-                              'mcts_probability', 'direct_probability', 'difference', 'total_visits', 'total_nodes', 
-                              'max_depth', 'inferences', 'unique_evals_total', 'effective_sims_total', 
-                              'unique_evals_per_sec', 'effective_sims_per_sec', 'deduplication_ratio', 
-                              'efficiency_gain_percent']:
-                        if value is None:
-                            app.logger.warning(f"Found None value in numeric field {current_path}, replacing with 0.0")
-                            obj[key] = 0.0
-                        elif isinstance(value, str):
-                            app.logger.warning(f"Found string value '{value}' in numeric field {current_path}, replacing with 0.0")
-                            obj[key] = 0.0
-                    validate_numeric_fields(value, current_path)
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    validate_numeric_fields(item, f"{path}[{i}]")
-        
-        validate_numeric_fields(result)
-        
-        # Time JSON serialization and response preparation
-        json_start_time = time.time()
-        
-        # Calculate total wall time before JSON serialization
+        _sanitize_numeric_debug_fields(result)
+
         total_wall_time = time.time() - total_start_time
         post_mcts_time = total_wall_time - mcts_search_time
-        
-        app.logger.debug(f"=== MCTS MOVE COMPLETE ===")
-        app.logger.debug(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.debug("=== MCTS MOVE COMPLETE ===")
+        app.logger.debug("=== WALL TIME BREAKDOWN ===")
         app.logger.debug(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
         app.logger.debug(f"MCTS search time: {mcts_search_time:.3f}s")
         app.logger.debug(f"Post-MCTS processing: {post_mcts_time:.3f}s")
         app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.debug(f"=== END WALL TIME BREAKDOWN ===")
+        app.logger.debug("=== END WALL TIME BREAKDOWN ===")
         app.logger.debug(f"Final result keys: {list(result.keys())}")
         app.logger.debug(f"Move made: {result['move_made']}")
         app.logger.debug(f"Game over: {result['game_over']}")
         app.logger.debug(f"Winner: {result['winner']}")
-        
-        # Log detailed exploration info if available
-        if 'tree_data' in result and 'detailed_exploration' in result['tree_data']:
-            de = result['tree_data']['detailed_exploration']
-            app.logger.debug(f"Detailed exploration: enabled={de.get('enabled')}, "
-                           f"simulations={de.get('total_simulations')}, "
-                           f"trace_length={len(de.get('trace', []))}")
+
+        if "tree_data" in result and "detailed_exploration" in result["tree_data"]:
+            de = result["tree_data"]["detailed_exploration"]
+            app.logger.debug(
+                "Detailed exploration: enabled=%s, simulations=%s, trace_length=%s",
+                de.get("enabled"),
+                de.get("total_simulations"),
+                len(de.get("trace", [])),
+            )
         else:
             app.logger.debug("No detailed exploration data found in tree_data")
-        
-        # Log response size for debugging
-        import json
+
         try:
             response_json = json.dumps(result)
             response_size = len(response_json)
-            app.logger.debug(f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)")
+            app.logger.debug(
+                f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)"
+            )
         except Exception as e:
             app.logger.warning(f"Could not serialize response for size measurement: {e}")
-        
-        json_time = time.time() - json_start_time
-        app.logger.debug(f"JSON serialization timing took {json_time:.3f}s")
-        
+
         return result
     except Exception as e:
-        app.logger.error(f"=== MCTS MOVE ERROR ===")
+        app.logger.error("=== MCTS MOVE ERROR ===")
         app.logger.error(f"Error in make_mcts_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "success": False,
-            "error": f"MCTS move generation failed: {e}"
+            "error": f"MCTS move generation failed: {e}",
         }
+
+
+def _build_fixed_tree_debug_info(
+    *,
+    search_result,
+    stats,
+    search_widths,
+    temperature,
+    search_time,
+    selected_move_trmph,
+    legal_move_probs,
+    original_legal_moves_count,
+):
+    """Assemble fixed-tree diagnostics payload."""
+    algorithm = "Fixed Tree Search"
+    fixed_tree_debug_info = {
+        "algorithm_info": {
+            "algorithm": algorithm,
+            "early_termination": search_result.early_termination_info is not None,
+            "early_termination_reason": (
+                search_result.early_termination_info.reason
+                if search_result.early_termination_info
+                else "none"
+            ),
+            "early_termination_details": {
+                "reason": (
+                    search_result.early_termination_info.reason
+                    if search_result.early_termination_info
+                    else "none"
+                ),
+                "win_probability": (
+                    search_result.early_termination_info.win_probability
+                    if search_result.early_termination_info
+                    else None
+                ),
+                "move": (
+                    search_result.early_termination_info.move
+                    if search_result.early_termination_info
+                    else None
+                ),
+            },
+            "parameters": {
+                "search_widths": search_widths,
+                "temperature": temperature,
+            },
+        },
+        "search_stats": {
+            "search_time": search_time,
+            "search_widths": search_widths,
+            "temperature": temperature,
+            "fixed_tree_stats": stats,
+            "algorithm_used": algorithm,
+        },
+        "tree_statistics": {
+            "total_positions": stats.get("total_positions", 0),
+            "tree_depth": stats.get("tree_depth", 0),
+            "tree_width": stats.get("tree_width", 0),
+            "policy_evaluations": stats.get("policy_evaluations", 0),
+            "value_evaluations": stats.get("value_evaluations", 0),
+            "early_terminations": stats.get("early_terminations", 0),
+        },
+        "move_selection": {
+            "selected_move": selected_move_trmph,
+            "selected_move_coords": search_result.move,
+        },
+        "move_probabilities": {
+            "direct_policy": legal_move_probs,
+        },
+        "comparison": {
+            "fixed_tree_vs_direct": {},
+        },
+        "win_rate_analysis": {
+            "root_value": search_result.value,
+            "win_probability": search_result.win_probability,
+        },
+        "summary": {
+            "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
+            "total_legal_moves": original_legal_moves_count,
+            "moves_explored": f"{stats.get('total_positions', 0)}/{original_legal_moves_count}",
+            "search_efficiency": stats.get("total_positions", 0) / max(1, original_legal_moves_count),
+            "algorithm_summary": algorithm,
+        },
+        "profiling_summary": {
+            "total_compute_ms": int(search_time * 1000.0),
+            "search_time_ms": int(search_time * 1000.0),
+            "memory_usage_mb": stats.get("memory_usage_mb", 0.0),
+            "tree_building_time_ms": int(stats.get("tree_building_time", 0.0) * 1000.0),
+            "leaf_evaluation_time_ms": int(stats.get("leaf_evaluation_time", 0.0) * 1000.0),
+            "backup_time_ms": int(stats.get("backup_time", 0.0) * 1000.0),
+            "policy_nn_time_ms": int(stats.get("policy_nn_time", 0.0) * 1000.0),
+            "value_nn_time_ms": int(stats.get("value_nn_time", 0.0) * 1000.0),
+        },
+    }
+
+    for move_trmph, direct_prob in legal_move_probs.items():
+        fixed_tree_debug_info["comparison"]["fixed_tree_vs_direct"][move_trmph] = {
+            "direct_probability": direct_prob,
+            "fixed_tree_selected": move_trmph == selected_move_trmph,
+        }
+    return fixed_tree_debug_info
 
 
 def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
     """Make one computer move using Fixed Tree Search and return the new state with diagnostics."""
     try:
-        app.logger.info(f"=== FIXED TREE MOVE START ===")
-        app.logger.info(f"Input: model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
+        app.logger.info("=== FIXED TREE MOVE START ===")
+        app.logger.info(
+            f"Input: model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}"
+        )
         app.logger.info(f"Input TRMPH: {trmph}")
-        
+
         state = create_game_state_from_trmph(trmph, context="for Fixed Tree move")
-        app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
-        
-        # If game is over, return current state
+        app.logger.info(
+            f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}"
+        )
         if state.game_over:
-            app.logger.info("Game is over, returning current state")
-            result = _build_engine_move_result(
-                state,
-                new_trmph=trmph,
-                move_made=None,
-                additional_fields={"fixed_tree_debug_info": {}},
-            )
-            app.logger.info(f"Returning early result: {result}")
-            return result
-        
-        # Get model
-        try:
-            model = get_model(model_id)
-            app.logger.info(f"Model loaded successfully: {type(model).__name__}")
-        except Exception as e:
-            app.logger.error(f"Failed to get model {model_id}: {e}")
-            return {
-                "success": False,
-                "error": f"Model loading failed: {e}"
-            }
-        
-        # Create Fixed Tree Search configuration
+            return _build_game_over_engine_result(state, trmph, "fixed_tree_debug_info")
+
+        model, error_result = _load_model_or_error(model_id)
+        if error_result:
+            return error_result
+
         search_config = create_fixed_tree_config(
             search_widths=search_widths,
             temperature=temperature,
-            batch_size=1000,  # Default batch size
+            batch_size=1000,
             enable_early_termination=True,
-            early_termination_threshold=0.95
+            early_termination_threshold=0.95,
         )
         app.logger.info(f"Fixed tree config created: {search_config}")
-        
-        # Run Fixed Tree Search with comprehensive timing
+
         app.logger.info("Starting Fixed Tree Search...")
         total_start_time = time.time()
-        
-        # Time the actual search
         search_start_time = time.time()
         app.logger.info("About to call run_fixed_tree_search...")
         try:
-            result = run_fixed_tree_search(state, model, search_config, verbose)
+            search_result = run_fixed_tree_search(state, model, search_config, verbose)
             app.logger.info("run_fixed_tree_search completed successfully")
         except Exception as e:
             app.logger.error(f"run_fixed_tree_search failed with exception: {e}")
@@ -737,180 +872,76 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             app.logger.error(f"Traceback: {traceback.format_exc()}")
             raise
         search_time = time.time() - search_start_time
+        stats = search_result.stats
 
-        # Log detailed timing breakdown
-        app.logger.debug(f"=== DETAILED TIMING BREAKDOWN ===")
+        app.logger.debug("=== DETAILED TIMING BREAKDOWN ===")
         app.logger.debug(f"Fixed tree search completed in {search_time:.3f}s")
         app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
-        app.logger.debug(f"Fixed tree selected move: {result.move}")
-        
-        # Log performance metrics
-        stats = result.stats
+        app.logger.debug(f"Fixed tree selected move: {search_result.move}")
         app.logger.debug(f"Total positions: {stats.get('total_positions', 0)}")
         app.logger.debug(f"Policy evaluations: {stats.get('policy_evaluations', 0)}")
         app.logger.debug(f"Value evaluations: {stats.get('value_evaluations', 0)}")
         app.logger.debug(f"Tree depth: {stats.get('tree_depth', 0)}")
         app.logger.debug(f"Tree width: {stats.get('tree_width', 0)}")
         app.logger.debug(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
-        
-        # Add performance summary
-        app.logger.info(f"=== PERFORMANCE SUMMARY ===")
+
+        app.logger.info("=== PERFORMANCE SUMMARY ===")
         app.logger.info(f"Total positions evaluated: {stats.get('total_positions', 0)}")
         app.logger.info(f"Search time: {search_time:.3f}s")
         app.logger.info(f"Tree depth: {stats.get('tree_depth', 0)}, max width: {stats.get('tree_width', 0)}")
         app.logger.info(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
-        app.logger.info(f"=== END PERFORMANCE SUMMARY ===")
-        
-        selected_move_trmph = fc.rowcol_to_trmph(*result.move)
+        app.logger.info("=== END PERFORMANCE SUMMARY ===")
+
+        selected_move_trmph = fc.rowcol_to_trmph(*search_result.move)
         app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
-        
-        # Get direct policy comparison
-        app.logger.info("Getting direct policy comparison...")
-        policy_start = time.time()
-        policy_logits, value_output = model.simple_infer(trmph)
-        policy_time = time.time() - policy_start
-        app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
-        
-        policy_probs = policy_logits_to_probs(policy_logits, temperature)
-        app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
-        
-        # Get legal moves count for summary
-        legal_moves = state.get_legal_moves()
-        original_legal_moves_count = len(legal_moves)
-        app.logger.info(f"Legal moves count: {original_legal_moves_count}")
-        
-        # Get direct policy probabilities for comparison with Fixed Tree
-        legal_move_probs = {}
-        for move in legal_moves:
-            move_trmph = fc.rowcol_to_trmph(*move)
-            tensor_idx = fc.rowcol_to_tensor(*move)
-            if 0 <= tensor_idx < len(policy_probs):
-                legal_move_probs[move_trmph] = float(policy_probs[tensor_idx])
-        
-        # Log top 10 legal move probabilities
-        sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-        top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
-        app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
-        
-        # Apply the move
-        app.logger.info(f"Applying move: {selected_move_trmph}")
-        state = apply_move_to_state_trmph(state, selected_move_trmph)
-        app.logger.info(f"Move applied. New state game_over: {state.game_over}")
-        
-        # Generate Fixed Tree diagnostic info
-        algorithm = "Fixed Tree Search"
-        
-        # Get win probabilities using centralized utility
-        root_win_prob = result.win_probability
-        
-        # Get tree data for analysis
-        tree_data = result.tree_data
-        
-        fixed_tree_debug_info = {
-            "algorithm_info": {
-                "algorithm": algorithm,
-                "early_termination": result.early_termination_info is not None,
-                "early_termination_reason": result.early_termination_info.reason if result.early_termination_info else "none",
-                "early_termination_details": {
-                    "reason": result.early_termination_info.reason if result.early_termination_info else "none",
-                    "win_probability": result.early_termination_info.win_probability if result.early_termination_info else None,
-                    "move": result.early_termination_info.move if result.early_termination_info else None
-                },
-                "parameters": {
-                    "search_widths": search_widths,
-                    "temperature": temperature
-                }
-            },
-            "search_stats": {
-                "search_time": search_time,
-                "search_widths": search_widths,
-                "temperature": temperature,
-                "fixed_tree_stats": stats,
-                "algorithm_used": algorithm
-            },
-            "tree_statistics": {
-                "total_positions": stats.get('total_positions', 0),
-                "tree_depth": stats.get('tree_depth', 0),
-                "tree_width": stats.get('tree_width', 0),
-                "policy_evaluations": stats.get('policy_evaluations', 0),
-                "value_evaluations": stats.get('value_evaluations', 0),
-                "early_terminations": stats.get('early_terminations', 0)
-            },
-            "move_selection": {
-                "selected_move": selected_move_trmph,
-                "selected_move_coords": result.move
-            },
-            "move_probabilities": {
-                "direct_policy": legal_move_probs
-            },
-            "comparison": {
-                "fixed_tree_vs_direct": {}
-            },
-            "win_rate_analysis": {
-                "root_value": result.value,
-                "win_probability": root_win_prob
-            },
-            "summary": {
-                "top_direct_move": max(legal_move_probs.items(), key=lambda x: x[1])[0] if legal_move_probs else None,
-                "total_legal_moves": original_legal_moves_count,
-                "moves_explored": f"{stats.get('total_positions', 0)}/{original_legal_moves_count}",
-                "search_efficiency": stats.get('total_positions', 0) / max(1, original_legal_moves_count),
-                "algorithm_summary": algorithm
-            },
-            "profiling_summary": {
-                "total_compute_ms": int(search_time * 1000.0),
-                "search_time_ms": int(search_time * 1000.0),
-                "memory_usage_mb": stats.get('memory_usage_mb', 0.0),
-                "tree_building_time_ms": int(stats.get('tree_building_time', 0.0) * 1000.0),
-                "leaf_evaluation_time_ms": int(stats.get('leaf_evaluation_time', 0.0) * 1000.0),
-                "backup_time_ms": int(stats.get('backup_time', 0.0) * 1000.0),
-                "policy_nn_time_ms": int(stats.get('policy_nn_time', 0.0) * 1000.0),
-                "value_nn_time_ms": int(stats.get('value_nn_time', 0.0) * 1000.0)
-            }
-        }
-        
-        # Add comparison data
-        for move_trmph in legal_move_probs:
-            direct_prob = legal_move_probs.get(move_trmph, 0)
-            fixed_tree_debug_info["comparison"]["fixed_tree_vs_direct"][move_trmph] = {
-                "direct_probability": direct_prob,
-                "fixed_tree_selected": move_trmph == selected_move_trmph
-            }
-        
-        result_data = _build_engine_move_result(
+
+        legal_move_probs, original_legal_moves_count = _compute_direct_policy_analysis(
+            state, model, trmph, temperature
+        )
+        state = _apply_selected_move(state, selected_move_trmph)
+
+        fixed_tree_debug_info = _build_fixed_tree_debug_info(
+            search_result=search_result,
+            stats=stats,
+            search_widths=search_widths,
+            temperature=temperature,
+            search_time=search_time,
+            selected_move_trmph=selected_move_trmph,
+            legal_move_probs=legal_move_probs,
+            original_legal_moves_count=original_legal_moves_count,
+        )
+
+        result_data = build_engine_move_response(
             state,
             new_trmph=state.to_trmph(),
             move_made=selected_move_trmph,
             additional_fields={
                 "fixed_tree_debug_info": fixed_tree_debug_info,
-                "tree_data": tree_data,
+                "tree_data": search_result.tree_data,
             },
         )
-        
-        # Calculate total wall time before JSON serialization
+
         total_wall_time = time.time() - total_start_time
         post_search_time = total_wall_time - search_time
-        
-        app.logger.debug(f"=== FIXED TREE MOVE COMPLETE ===")
-        app.logger.debug(f"=== WALL TIME BREAKDOWN ===")
+        app.logger.debug("=== FIXED TREE MOVE COMPLETE ===")
+        app.logger.debug("=== WALL TIME BREAKDOWN ===")
         app.logger.debug(f"Fixed tree search time: {search_time:.3f}s")
         app.logger.debug(f"Post-search processing: {post_search_time:.3f}s")
         app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.debug(f"=== END WALL TIME BREAKDOWN ===")
+        app.logger.debug("=== END WALL TIME BREAKDOWN ===")
         app.logger.debug(f"Final result keys: {list(result_data.keys())}")
         app.logger.debug(f"Move made: {result_data['move_made']}")
         app.logger.debug(f"Game over: {result_data['game_over']}")
         app.logger.debug(f"Winner: {result_data['winner']}")
-        
         return result_data
     except Exception as e:
-        app.logger.error(f"=== FIXED TREE MOVE ERROR ===")
+        app.logger.error("=== FIXED TREE MOVE ERROR ===")
         app.logger.error(f"Error in make_fixed_tree_move: {e}")
         import traceback
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "success": False,
-            "error": f"Fixed tree move generation failed: {e}"
+            "error": f"Fixed tree move generation failed: {e}",
         }
 
 
@@ -924,12 +955,9 @@ def api_constants():
             "BLUE": Piece.BLUE.value,
             "RED": Piece.RED.value
         },
-        # Frontend currently expects numeric player codes; expose Enum .value at boundary
-        # TODO: Figure out: should we change the frontend to use the Player enum instead?
-        #       If not, we should at least use constants rather than literals here.
         "PLAYER_VALUES": {
-        	"BLUE": 0,
-        	"RED": 1
+            "BLUE": Player.BLUE.value,
+            "RED": Player.RED.value,
         },
         "WINNER_VALUES": {
             "BLUE": TRMPH_BLUE_WIN,
@@ -1450,9 +1478,9 @@ def api_mcts_move():
     temperature_end = validated_data.get("temperature_end", 0.1)  # Default final temperature
     verbose = validated_data.get("verbose", 0)
     try:
-        verbose = int(verbose)
-    except (TypeError, ValueError):
-        return jsonify({"success": False, "error": f"Invalid verbose value: {verbose}"}), 400
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     enable_gumbel = validated_data.get("enable_gumbel", True)
     gumbel_max_sims = validated_data.get("gumbel_max_sims", 500)
     
@@ -1522,6 +1550,10 @@ def api_fixed_tree_move():
     search_widths = validated_data.get("search_widths")
     temperature = validated_data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
     verbose = validated_data.get("verbose", 0)
+    try:
+        verbose = _coerce_verbose_level(verbose)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
     
