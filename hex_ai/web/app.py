@@ -654,6 +654,20 @@ def _build_trmph_stats(trmph):
         "trmph_moves": _safe_count_trmph_moves(trmph)
     }
 
+def _build_sequence_info_for_trmph(trmph):
+    if not ANALYTICS_ENABLED:
+        return {}
+    return _update_sequence_info(getattr(g, "analytics_client_id", None), trmph)
+
+def _log_usage_event_with_trmph_context(event, trmph, **fields):
+    """Log analytics event with shared TRMPH and request-sequence context."""
+    log_usage_event(
+        event,
+        **fields,
+        **_build_trmph_stats(trmph),
+        **_build_sequence_info_for_trmph(trmph),
+    )
+
 def _prune_none_values(payload):
     return {k: v for k, v in payload.items() if v is not None}
 
@@ -1762,16 +1776,13 @@ def api_state():
         },
     )
 
-    trmph_stats = _build_trmph_stats(trmph)
-    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-    log_usage_event(
+    _log_usage_event_with_trmph_context(
         "state",
+        trmph,
         status=200,
         elo_rating=elo_rating,
         display_board_size=display_board_size,
         pie_rule_enabled=pie_rule_enabled,
-        **trmph_stats,
-        **seq_info
     )
     return jsonify(response)
 
@@ -1858,10 +1869,9 @@ def api_move_heatmap():
         }
         response.update(heatmap.to_dict())
 
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "move_heatmap",
+            trmph,
             status=200,
             elo_rating=elo_rating,
             model_id=model_id,
@@ -1871,24 +1881,19 @@ def api_move_heatmap():
             selected_move_count=response["selected_move_count"],
             legal_move_count=response["legal_move_count"],
             display_board_size=display_board_size,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify(response)
     except Exception as e:
         app.logger.error(f"Error in api_move_heatmap: {e}")
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "move_heatmap",
+            trmph,
             status=500,
             success=False,
             reason="exception",
             elo_rating=elo_rating,
             model_id=model_id,
             display_board_size=display_board_size,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify({"success": False, "error": "Failed to compute move heatmap"}), 500
 
@@ -1945,10 +1950,9 @@ def api_apply_move():
                 pie_rule_enabled=pie_rule_enabled,
             ),
         })
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "apply_move",
+            trmph,
             status=200,
             move=move,
             move_valid=False,
@@ -1956,8 +1960,6 @@ def api_apply_move():
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
             moves_requested=1,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify(response)
 
@@ -1973,10 +1975,9 @@ def api_apply_move():
             pie_rule_enabled=pie_rule_enabled,
         ),
     })
-    trmph_stats = _build_trmph_stats(trmph)
-    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-    log_usage_event(
+    _log_usage_event_with_trmph_context(
         "apply_move",
+        trmph,
         status=200,
         move=move,
         move_valid=True,
@@ -1986,8 +1987,6 @@ def api_apply_move():
         moves_requested=1,
         new_trmph_len=len(fc.strip_trmph_preamble((new_trmph or "").strip())),
         new_trmph_moves=_safe_count_trmph_moves(new_trmph),
-        **trmph_stats,
-        **seq_info
     )
     return jsonify(response)
 
@@ -2057,10 +2056,9 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 inline_heatmap_options=inline_heatmap_options,
             )
 
-            trmph_stats = _build_trmph_stats(trmph)
-            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-            log_usage_event(
+            _log_usage_event_with_trmph_context(
                 "policy_move",
+                trmph,
                 status=200,
                 success=True,
                 reason="pie_rule_swap",
@@ -2081,8 +2079,6 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 pie_rule_cache_hit=pie_decision["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=0,
-                **trmph_stats,
-                **seq_info
             )
             return jsonify(result)
         
@@ -2091,10 +2087,9 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
         move = select_policy_move(state, model, temperature)
         
         if move is None:
-            trmph_stats = _build_trmph_stats(trmph)
-            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-            log_usage_event(
+            _log_usage_event_with_trmph_context(
                 "policy_move",
+                trmph,
                 status=400,
                 success=False,
                 reason="no_valid_moves",
@@ -2105,8 +2100,6 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 num_simulations=difficulty_params["num_simulations"],
                 display_board_size=display_board_size,
                 pie_rule_enabled=pie_rule_enabled,
-                **trmph_stats,
-                **seq_info
             )
             return jsonify({"success": False, "error": "No valid moves available"}), 400
         
@@ -2144,10 +2137,9 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph}")
 
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "policy_move",
+            trmph,
             status=200,
             success=True,
             elo_rating=elo_rating,
@@ -2163,26 +2155,21 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
             pie_rule_enabled=pie_rule_enabled,
             pie_rule_action="declined" if pie_decision else "none",
             moves_requested=1,
-            **trmph_stats,
-            **seq_info
         )
         
         return jsonify(result)
         
     except Exception as e:
         app.logger.error(f"Policy move error: {e}")
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "policy_move",
+            trmph,
             status=500,
             success=False,
             reason="exception",
             elo_rating=elo_rating,
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify({"success": False, "error": "Policy move generation failed. Please try again."}), 500
 
@@ -2264,10 +2251,9 @@ def api_mcts_move():
                 mcts_config=_build_mcts_config_response_fields(difficulty_params),
                 inline_heatmap_options=inline_heatmap_options,
             )
-            trmph_stats = _build_trmph_stats(trmph)
-            seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-            log_usage_event(
+            _log_usage_event_with_trmph_context(
                 "mcts_move",
+                trmph,
                 status=200,
                 success=True,
                 reason="pie_rule_swap",
@@ -2289,8 +2275,6 @@ def api_mcts_move():
                 pie_rule_cache_hit=pie_decision["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=0,
-                **trmph_stats,
-                **seq_info
             )
             return jsonify(result)
     
@@ -2348,10 +2332,9 @@ def api_mcts_move():
     else:
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
 
-    trmph_stats = _build_trmph_stats(trmph)
-    seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-    log_usage_event(
+    _log_usage_event_with_trmph_context(
         "mcts_move",
+        trmph,
         status=200,
         success=bool(result.get("success")),
         elo_rating=elo_rating,
@@ -2368,8 +2351,6 @@ def api_mcts_move():
         pie_rule_enabled=pie_rule_enabled,
         pie_rule_action=result.get("pie_rule_action"),
         moves_requested=1,
-        **trmph_stats,
-        **seq_info
     )
     
     return jsonify(result)
@@ -2433,17 +2414,14 @@ def api_apply_trmph_sequence():
                         break
             except ValueError as e:
                 app.logger.error(f"Invalid TRMPH sequence format: {e}")
-                trmph_stats = _build_trmph_stats(trmph)
-                seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-                log_usage_event(
+                _log_usage_event_with_trmph_context(
                     "apply_trmph_sequence",
+                    trmph,
                     status=400,
                     success=False,
                     reason="invalid_sequence",
                     elo_rating=elo_rating,
                     display_board_size=display_board_size,
-                    **trmph_stats,
-                    **seq_info
                 )
                 return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
         
@@ -2459,10 +2437,9 @@ def api_apply_trmph_sequence():
                 pie_rule_enabled=pie_rule_enabled,
             ),
         })
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "apply_trmph_sequence",
+            trmph,
             status=200,
             success=True,
             elo_rating=elo_rating,
@@ -2470,25 +2447,20 @@ def api_apply_trmph_sequence():
             pie_rule_enabled=pie_rule_enabled,
             moves_requested=_safe_count_trmph_moves(trmph_sequence),
             moves_applied=moves_applied,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify(response)
         
     except Exception as e:
         app.logger.error(f"TRMPH sequence application error: {e}")
-        trmph_stats = _build_trmph_stats(trmph)
-        seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
-        log_usage_event(
+        _log_usage_event_with_trmph_context(
             "apply_trmph_sequence",
+            trmph,
             status=500,
             success=False,
             reason="exception",
             elo_rating=elo_rating,
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
-            **trmph_stats,
-            **seq_info
         )
         return jsonify({"error": "Failed to apply TRMPH sequence. Please check the sequence and try again."}), 500
 
