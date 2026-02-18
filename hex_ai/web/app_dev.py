@@ -13,7 +13,6 @@ from hex_ai.inference.mcts import run_mcts_move, create_mcts_config
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
     winner_to_color, 
-    ValuePredictor,
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_policy_move,
@@ -29,11 +28,18 @@ from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_all_model_info, is_valid_model_id
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
-from hex_ai.web.move_heatmap import build_policy_value_heatmap
+from hex_ai.web.move_heatmap import (
+    build_policy_value_heatmap,
+    parse_move_heatmap_request_params,
+)
 from hex_ai.web.inline_move_heatmap import (
-    INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
-    parse_inline_move_heatmap_options,
+    validate_request_with_inline_heatmap,
     maybe_attach_inline_move_heatmap,
+)
+from hex_ai.web.gameplay_response import (
+    apply_trmph_sequence_to_state,
+    build_game_state_response,
+    moves_to_trmph,
 )
 from hex_ai.web.interactive_core import (
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
@@ -126,18 +132,8 @@ def validate_trmph_input(trmph):
     return core_validate_trmph_input(trmph, board_size=BOARD_SIZE)
 
 def validate_api_input(data, required_fields=None, optional_fields=None):
-    """
-    Validate API input data and normalize TRMPH fields.
-    
-    Args:
-        data: The JSON data from the request
-        required_fields: List of fields that must be present
-        optional_fields: List of optional fields to validate if present
-        
-    Returns:
-        tuple: (is_valid, error_response_or_None)
-    """
-    is_valid, error_msg, validated_data = core_validate_api_input(
+    """Centralized validation for API endpoints."""
+    return core_validate_api_input(
         data,
         required_fields=required_fields,
         optional_fields=optional_fields,
@@ -145,13 +141,6 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
         reject_unexpected=False,
         trmph_validator=validate_trmph_input,
     )
-    if not is_valid:
-        return False, (jsonify({"error": error_msg}), 400)
-
-    # Preserve existing endpoint behavior that reads normalized values from `data`.
-    data.clear()
-    data.update(validated_data)
-    return True, None
 
 # --- Model Management ---
 def get_model(model_id="best"):
@@ -249,14 +238,21 @@ def clear_model_wrapper_cache():
     app.logger.info("Model cache cleared")
     return 0  # Return 0 since we don't track individual cache sizes anymore
 
-# --- Utility: Convert (row, col) moves to trmph moves ---
-def moves_to_trmph(moves):
-    return [fc.rowcol_to_trmph(row, col) for row, col in moves]
-
-
 def create_game_state_from_trmph(trmph, context=""):
     """Create game state from normalized TRMPH input."""
     return core_create_game_state_from_trmph_input(trmph, context=context)
+
+
+def build_game_response(state, model_id, temperature, trmph_for_inference=None, additional_fields=None):
+    """Build standardized state payload for dev endpoints."""
+    model = get_model(model_id)
+    return build_game_state_response(
+        state,
+        model=model,
+        temperature=temperature,
+        trmph_for_inference=trmph_for_inference,
+        additional_fields=additional_fields,
+    )
 
 
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
@@ -1134,61 +1130,40 @@ def api_refresh_models():
 @app.route("/api/state", methods=["POST"])
 def api_state():
     data = request.get_json()
-    # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "temperature", "verbose"])
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=["model_id", "temperature", "verbose"],
+    )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "best")  # Default to best
-    temperature = data.get("temperature", 1.0)  # Default temperature
-    verbose = data.get("verbose", 0)  # Get verbose level
+    trmph = validated_data.get("trmph")
+    model_id = validated_data.get("model_id", "best")
+    temperature = validated_data.get("temperature", 1.0)
+    verbose = validated_data.get("verbose", 0)
     
     try:
         state = create_game_state_from_trmph(trmph, context="for state endpoint")
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
 
-    board = state.board.tolist()
-    player_enum = state.current_player_enum  # Use enum directly
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
+    response = build_game_response(
+        state,
+        model_id,
+        temperature,
+        trmph_for_inference=trmph,
+        additional_fields={"trmph": trmph},
+    )
 
     # Debug logging for board data (only if verbose >= 4)
     if verbose >= 4:
+        board = response.get("board", [])
         app.logger.debug(f"Board data being sent to frontend: {board}")
         app.logger.debug(f"Board type: {type(board)}, Board shape: {len(board)}x{len(board[0]) if board else 0}")
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
-
-    # Use enum-based color conversion - much safer
-    player_color = winner_to_color(player_enum)
-
-    # Model inference - fail fast if this fails
-    model = get_model(model_id)
-    policy_logits, value_signed = model.simple_infer(trmph)
-    # Apply temperature scaling to policy using centralized utility
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    # Map policy to trmph moves
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    # Win probability for current player - use enum directly
-    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
-
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-    return jsonify({
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,  # Canonical enum name
-        "player_index": player_index,     # Canonical numeric index (0=BLUE,1=RED)
-        "legal_moves": legal_moves,
-        "winner": winner,
-        "policy": policy_dict,
-        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_probability": win_probability,
-        "trmph": trmph,
-    })
+    return jsonify(response)
 
 
 @app.route("/api/move_heatmap", methods=["POST"])
@@ -1199,39 +1174,30 @@ def api_move_heatmap():
     Scores are always from the *current player to move* perspective.
     """
     data = request.get_json()
-    is_valid, error_response = validate_api_input(
+    is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id", "score_type", "selection_mode", "top_k", "policy_temperature"]
+        optional_fields=["model_id", "score_type", "selection_mode", "top_k", "policy_temperature"],
     )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "best")
-    score_type = data.get("score_type", "policy_value")
-    selection_mode = data.get("selection_mode", "all_legal")
-    top_k = data.get("top_k", 12)
-    policy_temperature = data.get("policy_temperature", 1.0)
+    trmph = validated_data.get("trmph")
+    try:
+        parsed_heatmap_params = parse_move_heatmap_request_params(
+            validated_data,
+            default_model_id="best",
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    model_id = parsed_heatmap_params["model_id"]
+    score_type = parsed_heatmap_params["score_type"]
+    selection_mode = parsed_heatmap_params["selection_mode"]
+    top_k = parsed_heatmap_params["top_k"]
+    policy_temperature = parsed_heatmap_params["policy_temperature"]
 
     try:
-        if score_type != "policy_value":
-            return jsonify({"success": False, "error": f"Unsupported score_type: {score_type}"}), 400
-        if selection_mode not in {"policy_top_k", "all_legal"}:
-            return jsonify({"success": False, "error": f"Invalid selection_mode: {selection_mode}"}), 400
-        try:
-            top_k = int(top_k)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "top_k must be an integer"}), 400
-        if top_k < 1:
-            return jsonify({"success": False, "error": "top_k must be >= 1"}), 400
-        try:
-            policy_temperature = float(policy_temperature)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "policy_temperature must be numeric"}), 400
-        if policy_temperature <= 0:
-            return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
-
         state = create_game_state_from_trmph(trmph, context="for move heatmap")
     except Exception as e:
         return jsonify({"success": False, "error": f"Invalid TRMPH: {e}"}), 400
@@ -1261,16 +1227,19 @@ def api_move_heatmap():
 def api_apply_move():
     """Apply only a human move without making a computer move."""
     data = request.get_json()
-    # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph", "move"], optional_fields=["model_id", "temperature", "verbose"])
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=["trmph", "move"],
+        optional_fields=["model_id", "temperature", "verbose"],
+    )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    move = data.get("move")
-    model_id = data.get("model_id", "best")
-    temperature = data.get("temperature", 1.0)  # Default temperature
-    verbose = data.get("verbose", 0)  # Get verbose level
+    trmph = validated_data.get("trmph")
+    move = validated_data.get("move")
+    model_id = validated_data.get("model_id", "best")
+    temperature = validated_data.get("temperature", 1.0)
+    verbose = validated_data.get("verbose", 0)
     
     try:
         state = create_game_state_from_trmph(trmph, context="for apply_move")
@@ -1283,61 +1252,46 @@ def api_apply_move():
         return jsonify({"error": f"Invalid move: {e}"}), 400
 
     new_trmph = state.to_trmph()
-    board = state.board.tolist()
-    player_enum = state.current_player_enum  # Use enum directly
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
+    response = build_game_response(
+        state,
+        model_id,
+        temperature,
+        trmph_for_inference=new_trmph,
+        additional_fields={
+            "new_trmph": new_trmph,
+            "model_move": None,
+        },
+    )
 
     # Debug logging for board data (only if verbose >= 4)
     if verbose >= 4:
+        board = response.get("board", [])
         app.logger.debug(f"Apply move - Board data being sent to frontend: {board}")
         app.logger.debug(f"Apply move - Board data type: {type(board)}, Board shape: {len(board[0]) if board else 0}")
         if board and len(board) > 0 and len(board[0]) > 0:
             app.logger.debug(f"Apply move - Sample board values: [0,0]='{board[0][0]}', [0,1]='{board[0][1]}', [1,0]='{board[1][0]}'")
-
-    # Use enum-based color conversion - much safer
-    player_color = winner_to_color(player_enum)
-    winner_color = winner_to_color(winner) if winner is not None else None
-
-    # Recompute policy/value for the new state - fail fast if this fails
-    model = get_model(model_id)
-    policy_logits, value_signed = model.simple_infer(new_trmph)
-    # Apply temperature scaling to policy using centralized utility
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
-
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-    return jsonify({
-        "new_trmph": new_trmph,
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,
-        "player_index": player_index,
-        "legal_moves": legal_moves,
-        "winner": winner_color,
-        "model_move": None,  # No computer move made
-        "policy": policy_dict,
-        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_probability": win_probability,
-    })
+    return jsonify(response)
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
 def api_apply_trmph_sequence():
     """Apply a sequence of TRMPH moves to the board state."""
     data = request.get_json()
-    # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["trmph_sequence", "model_id", "temperature", "verbose"])
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=["trmph_sequence", "model_id", "temperature", "verbose"],
+    )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    trmph_sequence = data.get("trmph_sequence", "")
-    model_id = data.get("model_id", "best")
-    temperature = data.get("temperature", 1.0)
-    verbose = data.get("verbose", 0)
+    trmph = validated_data.get("trmph")
+    trmph_sequence = validated_data.get("trmph_sequence", "")
+    model_id = validated_data.get("model_id", "best")
+    temperature = validated_data.get("temperature", 1.0)
+    verbose = validated_data.get("verbose", 0)
+
+    if not trmph_sequence.strip():
+        return jsonify({"error": "No TRMPH sequence provided"}), 400
     
     try:
         # Start with the current state
@@ -1345,81 +1299,44 @@ def api_apply_trmph_sequence():
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
     
-    # Parse and apply the sequence of moves
     try:
-        # Strip any whitespace and split by commas or spaces if needed
-        trmph_sequence = trmph_sequence.strip()
-        if not trmph_sequence:
-            return jsonify({"error": "No TRMPH sequence provided"}), 400
-        
-        # Parse the moves using the existing utility
-        moves = fc.split_trmph_moves(trmph_sequence)
-        
-        # Apply each move
-        for move in moves:
-            if state.game_over:
-                break  # Stop if game is already over
-            state = apply_move_to_state_trmph(state, move)
-        
+        state, _, moves_applied = apply_trmph_sequence_to_state(state, trmph_sequence)
     except ValueError as e:
-        # Specific handling for format conversion errors
         return jsonify({"error": f"Invalid TRMPH sequence format: {e} [DEBUG-CHECK]"}), 400
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH sequence: {e}"}), 400
 
     new_trmph = state.to_trmph()
-    board = state.board.tolist()
-    player_enum = state.current_player_enum  # Use enum directly
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
+    response = build_game_response(
+        state,
+        model_id,
+        temperature,
+        trmph_for_inference=new_trmph,
+        additional_fields={
+            "new_trmph": new_trmph,
+            "moves_applied": moves_applied,
+            "game_over": state.game_over,
+        },
+    )
 
-    # Use enum-based color conversion - much safer
-    player_color = winner_to_color(player_enum)
-    winner_color = winner_to_color(winner) if winner is not None else None
-
-    # Recompute policy/value for the new state - fail fast if this fails
-    model = get_model(model_id)
-    policy_logits, value_signed = model.simple_infer(new_trmph)
-    # Apply temperature scaling to policy using centralized utility
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
-
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-    return jsonify({
-        "new_trmph": new_trmph,
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,
-        "player_index": player_index,
-        "legal_moves": legal_moves,
-        "winner": winner_color,
-        "policy": policy_dict,
-        "value_signed": float(value_signed) if 'value_signed' in locals() else 0.0,
-        "win_probability": win_probability,
-        "moves_applied": len(moves),
-        "game_over": state.game_over,
-    })
+    if verbose >= 4:
+        board = response.get("board", [])
+        app.logger.debug(f"Apply sequence - Board data being sent to frontend: {board}")
+    return jsonify(response)
 
 
 def _validate_request_with_inline_heatmap(data, required_fields, optional_fields):
     """Shared validation path for move endpoints that support inline heatmap options."""
-    is_valid, error_response = validate_api_input(
+    validated_data, inline_heatmap_options, error_msg = validate_request_with_inline_heatmap(
         data,
         required_fields=required_fields,
-        optional_fields=optional_fields + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+        optional_fields=optional_fields,
+        validate_api_input_fn=validate_api_input,
     )
-    if not is_valid:
-        return None, None, error_response
+    if error_msg:
+        return None, None, (jsonify({"success": False, "error": error_msg}), 400)
 
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(data)
-    except ValueError as e:
-        return None, None, (jsonify({"success": False, "error": str(e)}), 400)
-
-    return data, inline_heatmap_options, None
+    return validated_data, inline_heatmap_options, None
 
 
 
@@ -1617,16 +1534,19 @@ def api_fixed_tree_move():
     app.logger.info(f"=== FIXED TREE API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph", "search_widths"], optional_fields=["model_id", "temperature", "verbose"])
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=["trmph", "search_widths"],
+        optional_fields=["model_id", "temperature", "verbose"],
+    )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "best")
-    search_widths = data.get("search_widths")  # Required parameter
-    temperature = data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
-    verbose = data.get("verbose", 0)
+    trmph = validated_data.get("trmph")
+    model_id = validated_data.get("model_id", "best")
+    search_widths = validated_data.get("search_widths")
+    temperature = validated_data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
+    verbose = validated_data.get("verbose", 0)
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
     
@@ -1685,15 +1605,18 @@ def api_save_game():
     app.logger.info(f"=== SAVE GAME API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["winner", "model_id", "mcts_params"])
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=["winner", "model_id", "mcts_params"],
+    )
     if not is_valid:
-        return error_response
+        return jsonify({"error": error_msg}), 400
 
-    trmph = data.get("trmph")
-    winner = data.get("winner")  # "blue", "red", or None if game not finished
-    model_id = data.get("model_id", "best")
-    mcts_params = data.get("mcts_params", {})
+    trmph = validated_data.get("trmph")
+    winner = validated_data.get("winner")
+    model_id = validated_data.get("model_id", "best")
+    mcts_params = validated_data.get("mcts_params", {})
     
     if not trmph:
         return jsonify({"success": False, "error": "TRMPH sequence is required"}), 400

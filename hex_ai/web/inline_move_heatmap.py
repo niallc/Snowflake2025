@@ -1,6 +1,6 @@
 """Shared helpers for optional inline move heatmap responses."""
 
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from hex_ai.web.move_heatmap import build_policy_value_heatmap
 
@@ -11,6 +11,36 @@ INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS = [
     "heatmap_top_k",
     "heatmap_policy_temperature",
 ]
+
+
+def validate_request_with_inline_heatmap(
+    data: Mapping[str, Any],
+    *,
+    required_fields: Sequence[str] | None,
+    optional_fields: Sequence[str] | None,
+    validate_api_input_fn: Callable[..., tuple[bool, str | None, dict | None]],
+):
+    """
+    Validate endpoint payload and parse inline move heatmap options.
+
+    Returns:
+        tuple: (validated_data, inline_heatmap_options, error_message)
+    """
+    full_optional_fields = list(optional_fields or []) + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
+    is_valid, error_msg, validated_data = validate_api_input_fn(
+        data,
+        required_fields=required_fields,
+        optional_fields=full_optional_fields,
+    )
+    if not is_valid:
+        return None, None, error_msg
+
+    try:
+        inline_heatmap_options = parse_inline_move_heatmap_options(validated_data)
+    except ValueError as exc:
+        return None, None, str(exc)
+
+    return validated_data, inline_heatmap_options, None
 
 
 def parse_inline_move_heatmap_options(request_data: Mapping[str, Any]) -> dict:

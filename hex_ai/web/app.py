@@ -23,8 +23,6 @@ from hex_ai.value_utils import (
     Winner, 
     winner_to_color, 
     temperature_scaled_softmax, 
-    ValuePredictor,
-    policy_logits_to_probs,
     get_legal_policy_probs,
     select_top_k_moves,
     select_policy_move,
@@ -36,11 +34,18 @@ from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
-from hex_ai.web.move_heatmap import build_policy_value_heatmap
+from hex_ai.web.move_heatmap import (
+    build_policy_value_heatmap,
+    parse_move_heatmap_request_params,
+)
 from hex_ai.web.inline_move_heatmap import (
-    INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
-    parse_inline_move_heatmap_options,
+    validate_request_with_inline_heatmap,
     maybe_attach_inline_move_heatmap,
+)
+from hex_ai.web.gameplay_response import (
+    apply_trmph_sequence_to_state,
+    build_game_state_response,
+    moves_to_trmph,
 )
 from hex_ai.web.interactive_core import (
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
@@ -1195,59 +1200,24 @@ def build_game_response(
     Returns:
         dict: Standardized game response
     """
-    # Extract basic state information
-    board = state.board.tolist()
-    player_enum = state.current_player_enum
-    legal_moves = moves_to_trmph(state.get_legal_moves())
-    winner = state.winner
-    
-    # Use enum-based color conversion
-    player_color = winner_to_color(player_enum)
-    winner_color = winner_to_color(winner) if winner is not None else None
-    
     # Get difficulty parameters and apply temperature scaling
     difficulty_params = get_difficulty_parameters(elo_rating)
     temperature = difficulty_params["temperature"]
     model_id = difficulty_params["model"]
-    
-    # Model inference
-    model = get_model(model_id)
-    if trmph_for_inference is None:
-        trmph_for_inference = state.to_trmph()
-    
-    policy_logits, value_signed = model.simple_infer(trmph_for_inference)
-    
-    policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    policy_dict = {fc.tensor_to_trmph(i): float(prob) for i, prob in enumerate(policy_probs)}
-    win_probability = ValuePredictor.get_win_probability(value_signed, player_enum)
-    
-    # Consistent enum-based player representation
-    player_enum_name = player_enum.name
-    player_index = int(player_enum.value)
-    
-    # Build base response
-    response = {
-        "board": board,
-        "player": player_color,
-        "player_enum": player_enum_name,
-        "player_index": player_index,
-        "legal_moves": legal_moves,
-        "winner": winner_color,
-        "policy": policy_dict,
-        "value_signed": float(value_signed),
-        "win_probability": win_probability,
-        "display_board_size": display_board_size,
-        "network_board_size": BOARD_SIZE,
-    }
-    
-    # Add any additional fields
-    if additional_fields:
-        response.update(additional_fields)
-    
-    return response
 
-def moves_to_trmph(moves):
-    return [fc.rowcol_to_trmph(row, col) for row, col in moves]
+    model = get_model(model_id)
+    response = build_game_state_response(
+        state,
+        model=model,
+        temperature=temperature,
+        trmph_for_inference=trmph_for_inference,
+        additional_fields={
+            "display_board_size": display_board_size,
+            "network_board_size": BOARD_SIZE,
+            **(additional_fields or {}),
+        },
+    )
+    return response
 
 def build_move_response(
     state,
@@ -1432,7 +1402,7 @@ INTERACTIVE_MOVE_OPTIONAL_FIELDS = [
     "elo_rating",
     "display_board_size",
     "pie_rule_enabled",
-] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
+]
 
 
 def _validate_interactive_move_request(data):
@@ -1444,19 +1414,15 @@ def _validate_interactive_move_request(data):
             - (validated_data, inline_heatmap_options) on success, None on failure
             - Flask error response tuple on failure, None on success
     """
-    is_valid, error_msg, validated_data = validate_api_input(
+    validated_data, inline_heatmap_options, error_msg = validate_request_with_inline_heatmap(
         data,
         required_fields=None,
         optional_fields=INTERACTIVE_MOVE_OPTIONAL_FIELDS,
+        validate_api_input_fn=validate_api_input,
     )
-    if not is_valid:
+    if error_msg:
         app.logger.warning(f"Invalid input rejected: {error_msg}")
         return None, (jsonify({"success": False, "error": error_msg}), 400)
-
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(validated_data)
-    except ValueError as e:
-        return None, (jsonify({"success": False, "error": str(e)}), 400)
 
     return (validated_data, inline_heatmap_options), None
 
@@ -1659,29 +1625,22 @@ def api_move_heatmap():
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     model_id = validated_data.get("model_id")
-    score_type = validated_data.get("score_type", "policy_value")
-    selection_mode = validated_data.get("selection_mode", "all_legal")
-    top_k = validated_data.get("top_k", 12)
-    policy_temperature = validated_data.get("policy_temperature", 1.0)
 
     try:
-        if score_type != "policy_value":
-            return jsonify({"success": False, "error": f"Unsupported score_type: {score_type}"}), 400
-        if selection_mode not in {"policy_top_k", "all_legal"}:
-            return jsonify({"success": False, "error": f"Invalid selection_mode: {selection_mode}"}), 400
-        try:
-            top_k = int(top_k)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "top_k must be an integer"}), 400
-        if top_k < 1:
-            return jsonify({"success": False, "error": "top_k must be >= 1"}), 400
-        try:
-            policy_temperature = float(policy_temperature)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "policy_temperature must be numeric"}), 400
-        if policy_temperature <= 0:
-            return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
+        parsed_heatmap_params = parse_move_heatmap_request_params(
+            validated_data,
+            default_model_id=None,
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
+    score_type = parsed_heatmap_params["score_type"]
+    selection_mode = parsed_heatmap_params["selection_mode"]
+    top_k = parsed_heatmap_params["top_k"]
+    policy_temperature = parsed_heatmap_params["policy_temperature"]
+    model_id = parsed_heatmap_params["model_id"]
+
+    try:
         state = create_game_state_from_trmph(
             trmph,
             display_board_size=display_board_size,
@@ -2235,35 +2194,20 @@ def api_apply_trmph_sequence():
         )
         
         # Apply the TRMPH sequence
-        moves_applied = 0
-        if trmph_sequence and trmph_sequence.strip():
-            # Use the proper TRMPH parsing utility instead of naive string slicing
-            try:
-                app.logger.info(f"Attempting to split TRMPH sequence: '{trmph_sequence}'")
-                moves = fc.split_trmph_moves(trmph_sequence.strip())
-                app.logger.info(f"Applying {len(moves)} moves from sequence: {moves}")
-                
-                # Apply each move
-                for move in moves:
-                    if not state.game_over:
-                        state = apply_move_to_state_trmph(state, move)
-                        moves_applied += 1
-                        app.logger.info(f"Applied move {move}, game_over: {state.game_over}")
-                    else:
-                        app.logger.info(f"Game is over, skipping remaining moves")
-                        break
-            except ValueError as e:
-                app.logger.error(f"Invalid TRMPH sequence format: {e}")
-                _log_usage_event_with_trmph_context(
-                    "apply_trmph_sequence",
-                    trmph,
-                    status=400,
-                    success=False,
-                    reason="invalid_sequence",
-                    elo_rating=elo_rating,
-                    display_board_size=display_board_size,
-                )
-                return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
+        try:
+            state, _, moves_applied = apply_trmph_sequence_to_state(state, trmph_sequence)
+        except ValueError as e:
+            app.logger.error(f"Invalid TRMPH sequence format: {e}")
+            _log_usage_event_with_trmph_context(
+                "apply_trmph_sequence",
+                trmph,
+                status=400,
+                success=False,
+                reason="invalid_sequence",
+                elo_rating=elo_rating,
+                display_board_size=display_board_size,
+            )
+            return jsonify({"error": f"Invalid TRMPH sequence format [DEBUG-CHECK]: {str(e)}"}), 400
         
         new_trmph = state_to_user_trmph(state, display_board_size)
         

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph
@@ -97,6 +97,48 @@ def _policy_ranking_for_legal_moves(
         reverse=True,
     )
     return ranked_moves, move_probs
+
+
+def parse_move_heatmap_request_params(
+    request_data: Mapping[str, Any],
+    *,
+    default_model_id=None,
+) -> Dict[str, Any]:
+    """
+    Parse and validate shared move-heatmap request options.
+    """
+    model_id = request_data.get("model_id", default_model_id)
+    score_type = request_data.get("score_type", "policy_value")
+    selection_mode = request_data.get("selection_mode", "all_legal")
+    top_k = request_data.get("top_k", 12)
+    policy_temperature = request_data.get("policy_temperature", 1.0)
+
+    if score_type != "policy_value":
+        raise ValueError(f"Unsupported score_type: {score_type}")
+    if selection_mode not in {"policy_top_k", "all_legal"}:
+        raise ValueError(f"Invalid selection_mode: {selection_mode}")
+
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_k must be an integer") from exc
+    if top_k < 1:
+        raise ValueError("top_k must be >= 1")
+
+    try:
+        policy_temperature = float(policy_temperature)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("policy_temperature must be numeric") from exc
+    if policy_temperature <= 0:
+        raise ValueError("policy_temperature must be > 0")
+
+    return {
+        "model_id": model_id,
+        "score_type": score_type,
+        "selection_mode": selection_mode,
+        "top_k": top_k,
+        "policy_temperature": policy_temperature,
+    }
 
 
 def build_policy_value_heatmap(
