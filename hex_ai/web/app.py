@@ -1708,30 +1708,21 @@ def api_apply_move():
     try:
         state = apply_move_to_state_trmph(state, move)
     except Exception as e:
-        # Silently ignore invalid moves (e.g., clicking on already filled hex)
-        app.logger.debug(f"Invalid move ignored: {e}")
-        # Return current state without error - user will learn not to click filled hexes
-        response = build_game_response(state, elo_rating, display_board_size, state.to_trmph(), {
-            "new_trmph": trmph,
-            "model_move": None,  # No computer move made
-            **build_pie_rule_response_fields(
-                trmph=trmph,
-                state=state,
-                pie_rule_enabled=pie_rule_enabled,
-            ),
-        })
+        sanitized_error = sanitize_exception_message(e)
+        app.logger.warning("Invalid move rejected: %s", sanitized_error)
         _log_usage_event_with_trmph_context(
             "apply_move",
             trmph,
-            status=200,
+            status=400,
             move=move,
             move_valid=False,
+            reason="invalid_move",
             elo_rating=elo_rating,
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
             moves_requested=1,
         )
-        return jsonify(response)
+        return jsonify({"error": f"Invalid move: {sanitized_error}"}), 400
 
     new_trmph = state_to_user_trmph(state, display_board_size)
     
@@ -2105,8 +2096,9 @@ def api_mcts_move():
     _log_usage_event_with_trmph_context(
         "mcts_move",
         trmph,
-        status=200,
+        status=200 if result.get("success") else 500,
         success=bool(result.get("success")),
+        reason=None if result.get("success") else "engine_failure",
         elo_rating=elo_rating,
         algorithm=difficulty_params["algorithm"],
         model_id=difficulty_params["model"],
@@ -2123,7 +2115,8 @@ def api_mcts_move():
         moves_requested=1,
     )
     
-    return jsonify(result)
+    status_code = 200 if result.get("success") else 500
+    return jsonify(result), status_code
 
 @app.route("/api/apply_trmph_sequence", methods=["POST"])
 @rate_limit(ENDPOINT_COSTS['api_apply_trmph_sequence'])

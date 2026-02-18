@@ -116,14 +116,14 @@ def validate_trmph_input(trmph):
     """Validate TRMPH format."""
     return core_validate_trmph_input(trmph, board_size=BOARD_SIZE)
 
-def validate_api_input(data, required_fields=None, optional_fields=None):
+def validate_api_input(data, required_fields=None, optional_fields=None, *, reject_unexpected=False):
     """Centralized validation for API endpoints."""
     return core_validate_api_input(
         data,
         required_fields=required_fields,
         optional_fields=optional_fields,
         logger=app.logger,
-        reject_unexpected=False,
+        reject_unexpected=reject_unexpected,
         trmph_validator=validate_trmph_input,
     )
 
@@ -1348,12 +1348,20 @@ def _validate_engine_request(
     supports_inline_heatmap=False,
 ):
     """Validate engine endpoint payloads with one shared code path."""
+    def _strict_validate_api_input(payload, *, required_fields=None, optional_fields=None):
+        return validate_api_input(
+            payload,
+            required_fields=required_fields,
+            optional_fields=optional_fields,
+            reject_unexpected=True,
+        )
+
     if supports_inline_heatmap:
         validated_data, inline_heatmap_options, error_msg = validate_request_with_inline_heatmap(
             data,
             required_fields=required_fields,
             optional_fields=optional_fields,
-            validate_api_input_fn=validate_api_input,
+            validate_api_input_fn=_strict_validate_api_input,
         )
         if error_msg:
             return None, None, (jsonify({"success": False, "error": error_msg}), 400)
@@ -1363,6 +1371,7 @@ def _validate_engine_request(
         data,
         required_fields=required_fields,
         optional_fields=optional_fields,
+        reject_unexpected=True,
     )
     if not is_valid:
         return None, {"enabled": False}, (jsonify({"success": False, "error": error_msg}), 400)
@@ -1576,7 +1585,8 @@ def api_mcts_move():
     else:
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
     
-    return jsonify(result)
+    status_code = 200 if result.get("success") else 500
+    return jsonify(result), status_code
 
 @app.route("/api/fixed_tree_move", methods=["POST"])
 def api_fixed_tree_move():
@@ -1636,7 +1646,8 @@ def api_fixed_tree_move():
     else:
         app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
     
-    return jsonify(result)
+    status_code = 200 if result.get("success") else 500
+    return jsonify(result), status_code
 
 @app.route("/api/save_game", methods=["POST"])
 def api_save_game():
