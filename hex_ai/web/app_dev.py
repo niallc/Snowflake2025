@@ -1533,6 +1533,24 @@ def api_apply_trmph_sequence():
     })
 
 
+def _validate_request_with_inline_heatmap(data, required_fields, optional_fields):
+    """Shared validation path for move endpoints that support inline heatmap options."""
+    is_valid, error_response = validate_api_input(
+        data,
+        required_fields=required_fields,
+        optional_fields=optional_fields + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+    )
+    if not is_valid:
+        return None, None, error_response
+
+    try:
+        inline_heatmap_options = parse_inline_move_heatmap_options(data)
+    except ValueError as e:
+        return None, None, (jsonify({"success": False, "error": str(e)}), 400)
+
+    return data, inline_heatmap_options, None
+
+
 
 @app.route("/api/policy_move", methods=["POST"])
 def api_policy_move():
@@ -1542,22 +1560,18 @@ def api_policy_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    is_valid, error_response = validate_api_input(
+    validated_data, inline_heatmap_options, error_response = _validate_request_with_inline_heatmap(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id", "temperature", "verbose"] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+        optional_fields=["model_id", "temperature", "verbose"],
     )
-    if not is_valid:
+    if error_response:
         return error_response
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(data)
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
 
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")
-    temperature = data.get("temperature", 0.15)  # Default policy temperature
-    verbose = data.get("verbose", 0)
+    trmph = validated_data.get("trmph")
+    model_id = validated_data.get("model_id", "model1")
+    temperature = validated_data.get("temperature", 0.15)  # Default policy temperature
+    verbose = validated_data.get("verbose", 0)
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
     
@@ -1648,7 +1662,7 @@ def api_mcts_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    is_valid, error_response = validate_api_input(
+    validated_data, inline_heatmap_options, error_response = _validate_request_with_inline_heatmap(
         data,
         required_fields=["trmph"],
         optional_fields=[
@@ -1660,28 +1674,24 @@ def api_mcts_move():
             "verbose",
             "enable_gumbel",
             "gumbel_max_sims",
-        ] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+        ],
     )
-    if not is_valid:
+    if error_response:
         return error_response
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(data)
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
 
-    trmph = data.get("trmph")
-    model_id = data.get("model_id", "model1")
-    num_simulations = data.get("num_simulations", 200)
-    exploration_constant = data.get("exploration_constant", 2.8)
-    temperature = data.get("temperature", 1.0)
-    temperature_end = data.get("temperature_end", 0.1)  # Default final temperature
-    verbose = data.get("verbose", 0)
+    trmph = validated_data.get("trmph")
+    model_id = validated_data.get("model_id", "model1")
+    num_simulations = validated_data.get("num_simulations", 200)
+    exploration_constant = validated_data.get("exploration_constant", 2.8)
+    temperature = validated_data.get("temperature", 1.0)
+    temperature_end = validated_data.get("temperature_end", 0.1)  # Default final temperature
+    verbose = validated_data.get("verbose", 0)
     try:
         verbose = int(verbose)
     except (TypeError, ValueError):
         return jsonify({"success": False, "error": f"Invalid verbose value: {verbose}"}), 400
-    enable_gumbel = data.get("enable_gumbel", True)
-    gumbel_max_sims = data.get("gumbel_max_sims", 500)
+    enable_gumbel = validated_data.get("enable_gumbel", True)
+    gumbel_max_sims = validated_data.get("gumbel_max_sims", 500)
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
     

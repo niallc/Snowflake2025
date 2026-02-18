@@ -23,3 +23,9 @@ This file captures project-specific guidance for Codex agents working in this re
 - This is a single-developer project with no external API compatibility requirements.
 - Prefer one clear contract and fail-fast behavior over backward-compatibility shims.
 - Do not add fallback paths for legacy field names/semantics unless explicitly requested.
+
+### 2026-02-18 - model_config.py Churn During Training
+- `hex_ai/inference/model_config.py` is expected to change frequently as training identifies new best models.
+- Typical updates are append-only additions to `MODEL_GENERATIONS`.
+- Do not treat these updates as unexpected or concerning during unrelated cleanup/refactor work.
+- Ignore unrelated `model_config.py` changes unless the task explicitly requires editing that file.

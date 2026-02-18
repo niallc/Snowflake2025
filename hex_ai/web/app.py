@@ -1517,6 +1517,40 @@ def _execute_mcts_move_workflow(state, model_id, mcts_params, display_board_size
     # Apply move and build response
     return _apply_move_and_build_response(state, move, display_board_size)
 
+
+INTERACTIVE_MOVE_OPTIONAL_FIELDS = [
+    "trmph",
+    "elo_rating",
+    "display_board_size",
+    "pie_rule_enabled",
+] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
+
+
+def _validate_interactive_move_request(data):
+    """
+    Validate shared interactive move-request fields and parse inline heatmap options.
+
+    Returns:
+        tuple:
+            - (validated_data, inline_heatmap_options) on success, None on failure
+            - Flask error response tuple on failure, None on success
+    """
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=None,
+        optional_fields=INTERACTIVE_MOVE_OPTIONAL_FIELDS,
+    )
+    if not is_valid:
+        app.logger.warning(f"Invalid input rejected: {error_msg}")
+        return None, (jsonify({"success": False, "error": error_msg}), 400)
+
+    try:
+        inline_heatmap_options = parse_inline_move_heatmap_options(validated_data)
+    except ValueError as e:
+        return None, (jsonify({"success": False, "error": str(e)}), 400)
+
+    return (validated_data, inline_heatmap_options), None
+
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims,
                    display_board_size=DEFAULT_DISPLAY_BOARD_SIZE):
@@ -1902,16 +1936,12 @@ def api_apply_move():
     )
     return jsonify(response)
 
-def _execute_policy_move_from_validated_data(validated_data):
+def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_options):
     """Shared policy-move workflow used by policy endpoint and MCTS policy fallback."""
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(validated_data)
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -2136,18 +2166,14 @@ def api_policy_move():
     app.logger.info(f"=== POLICY API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    # Validate input using centralized validation
-    is_valid, error_msg, validated_data = validate_api_input(
-        data, 
-        required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled'] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
-    )
-    
-    if not is_valid:
-        app.logger.warning(f"Invalid input rejected: {error_msg}")
-        return jsonify({"success": False, "error": error_msg}), 400
+    request_payload, error_response = _validate_interactive_move_request(data)
+    if error_response:
+        return error_response
 
-    return _execute_policy_move_from_validated_data(validated_data)
+    validated_data, inline_heatmap_options = request_payload
+    return _execute_policy_move_from_validated_data(
+        validated_data, inline_heatmap_options
+    )
 
 @app.route("/api/mcts_move", methods=["POST"])
 @rate_limit(ENDPOINT_COSTS['api_mcts_move'])
@@ -2157,25 +2183,15 @@ def api_mcts_move():
     app.logger.info(f"=== MCTS API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    # Validate input using centralized validation
-    is_valid, error_msg, validated_data = validate_api_input(
-        data, 
-        required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled'] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
-    )
-    
-    if not is_valid:
-        app.logger.warning(f"Invalid input rejected: {error_msg}")
-        return jsonify({"success": False, "error": error_msg}), 400
-    
+    request_payload, error_response = _validate_interactive_move_request(data)
+    if error_response:
+        return error_response
+
+    validated_data, inline_heatmap_options = request_payload
     trmph = validated_data.get("trmph", "")
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
-    try:
-        inline_heatmap_options = parse_inline_move_heatmap_options(validated_data)
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -2274,7 +2290,9 @@ def api_mcts_move():
     
     if difficulty_params["algorithm"] == "policy":
         # Use policy move for lower difficulties
-        return _execute_policy_move_from_validated_data(validated_data)
+        return _execute_policy_move_from_validated_data(
+            validated_data, inline_heatmap_options
+        )
     
     # Use MCTS for higher difficulties
     result = make_mcts_move(
