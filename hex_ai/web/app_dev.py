@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify, send_from_directory
 import os
+import json
 import numpy as np
 from flask_cors import CORS
 import logging
 from datetime import datetime
-import time # Added for time.time()
+import time
 
 import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import apply_move_to_state_trmph
@@ -1378,7 +1379,7 @@ def _validate_fixed_tree_search_widths(search_widths):
 def api_policy_move():
     """Make a computer move using policy sampling."""
     data = request.get_json()
-    app.logger.info(f"=== POLICY API CALL ===")
+    app.logger.info("=== POLICY API CALL ===")
     app.logger.info(f"Request data: {data}")
     
     # Validate input
@@ -1466,7 +1467,7 @@ def api_policy_move():
             logger=app.logger,
         )
         
-        app.logger.info(f"=== POLICY API RESPONSE ===")
+        app.logger.info("=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
         
         return jsonify(result)
@@ -1479,7 +1480,7 @@ def api_policy_move():
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
-    app.logger.info(f"=== MCTS API CALL ===")
+    app.logger.info("=== MCTS API CALL ===")
     app.logger.info(f"Request data: {data}")
     
     # Validate input
@@ -1543,7 +1544,7 @@ def api_mcts_move():
             logger=app.logger,
         )
     
-    app.logger.info(f"=== MCTS API RESPONSE ===")
+    app.logger.info("=== MCTS API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
     if result.get('success'):
         app.logger.info(f"Result keys: {list(result.keys())}")
@@ -1565,7 +1566,7 @@ def api_mcts_move():
 def api_fixed_tree_move():
     """Make a computer move using Fixed Tree Search with diagnostic output."""
     data = request.get_json()
-    app.logger.info(f"=== FIXED TREE API CALL ===")
+    app.logger.info("=== FIXED TREE API CALL ===")
     app.logger.info(f"Request data: {data}")
     
     validated_data, _, error_response = _validate_engine_request(
@@ -1603,7 +1604,7 @@ def api_fixed_tree_move():
         verbose
     )
     
-    app.logger.info(f"=== FIXED TREE API RESPONSE ===")
+    app.logger.info("=== FIXED TREE API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
     if result.get('success'):
         app.logger.info(f"Result keys: {list(result.keys())}")
@@ -1625,7 +1626,7 @@ def api_fixed_tree_move():
 def api_save_game():
     """Save a game to the web_games directory in TRMPH format."""
     data = request.get_json()
-    app.logger.info(f"=== SAVE GAME API CALL ===")
+    app.logger.info("=== SAVE GAME API CALL ===")
     app.logger.info(f"Request data: {data}")
     
     is_valid, error_msg, validated_data = validate_api_input(
