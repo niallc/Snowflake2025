@@ -6,9 +6,8 @@ import logging
 from datetime import datetime
 import time # Added for time.time()
 
-import re
 import hex_ai.utils.format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
+from hex_ai.inference.game_engine import HexGameEngine, apply_move_to_state_trmph
 
 from hex_ai.inference.mcts import run_mcts_move, create_mcts_config
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
@@ -35,6 +34,11 @@ from hex_ai.web.inline_move_heatmap import (
     INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
     parse_inline_move_heatmap_options,
     maybe_attach_inline_move_heatmap,
+)
+from hex_ai.web.interactive_core import (
+    create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
+    validate_api_input as core_validate_api_input,
+    validate_trmph_input as core_validate_trmph_input,
 )
 
 app = Flask(__name__, static_folder="static")
@@ -118,23 +122,8 @@ preload_default_models()
 
 # --- Input Validation ---
 def validate_trmph_input(trmph):
-    """Validate TRMPH format using regex."""
-    if trmph == "":
-        return True, None
-    
-    if not trmph:
-        return False, "Empty TRMPH string"
-    
-    # Basic format check: comma-separated moves
-    # Allow empty board (just preamble) or moves
-    # Preamble is typically "#[size]," or similar, but we focus on moves
-    
-    # Check for invalid characters
-    # Allowed: a-z, 0-9, #, ,, space, newline
-    if not re.match(r'^[a-z0-9#,\s]*$', trmph):
-        return False, "Invalid characters in TRMPH string"
-        
-    return True, None
+    """Validate TRMPH format."""
+    return core_validate_trmph_input(trmph, board_size=BOARD_SIZE)
 
 def validate_api_input(data, required_fields=None, optional_fields=None):
     """
@@ -148,37 +137,20 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
     Returns:
         tuple: (is_valid, error_response_or_None)
     """
-    if not data:
-        return False, (jsonify({"error": "No data provided"}), 400)
-    
-    if required_fields:
-        for field in required_fields:
-            if field not in data:
-                return False, (jsonify({"error": f"Missing required field: {field}"}), 400)
-    
-    # List of fields that contain game input strings to be normalized
-    game_input_fields = ['trmph', 'move', 'trmph_sequence']
-    
-    # Combine required and optional fields to check for game inputs
-    all_fields = (required_fields or []) + (optional_fields or [])
-    
-    for field in all_fields:
-        if field in data and field in game_input_fields:
-            try:
-                # Normalize the game input (handles LittleGolem format, swap, etc.)
-                # This modifies the data dictionary in-place
-                data[field] = fc.normalize_game_input(data[field])
-                
-                # For 'trmph' and 'move' fields, perform additional validation
-                if field in ['trmph', 'move']:
-                    is_valid, error_msg = validate_trmph_input(data[field])
-                    if not is_valid:
-                        return False, (jsonify({"error": f"Invalid {field} format: {error_msg} [DEBUG-CHECK]"}), 400)
-                        
-            except ValueError as e:
-                app.logger.warning(f"Normalization failed for {field}: {e}")
-                return False, (jsonify({"error": f"Invalid {field} format: {str(e)} [DEBUG-CHECK]"}), 400)
+    is_valid, error_msg, validated_data = core_validate_api_input(
+        data,
+        required_fields=required_fields,
+        optional_fields=optional_fields,
+        logger=app.logger,
+        reject_unexpected=False,
+        trmph_validator=validate_trmph_input,
+    )
+    if not is_valid:
+        return False, (jsonify({"error": error_msg}), 400)
 
+    # Preserve existing endpoint behavior that reads normalized values from `data`.
+    data.clear()
+    data.update(validated_data)
     return True, None
 
 # --- Model Management ---
@@ -282,6 +254,11 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 
+def create_game_state_from_trmph(trmph, context=""):
+    """Create game state from normalized TRMPH input."""
+    return core_create_game_state_from_trmph_input(trmph, context=context)
+
+
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
     """Make one computer move using MCTS and return the new state with diagnostics."""
@@ -291,7 +268,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         app.logger.info(f"Input: model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={mcts_verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for MCTS move")
         app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
         
         # If game is over, return current state
@@ -729,7 +706,7 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
         app.logger.info(f"Input: model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
         app.logger.info(f"Input TRMPH: {trmph}")
         
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for Fixed Tree move")
         app.logger.info(f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}")
         
         # If game is over, return current state
@@ -1168,7 +1145,7 @@ def api_state():
     verbose = data.get("verbose", 0)  # Get verbose level
     
     try:
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for state endpoint")
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
 
@@ -1255,7 +1232,7 @@ def api_move_heatmap():
         if policy_temperature <= 0:
             return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
 
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for move heatmap")
     except Exception as e:
         return jsonify({"success": False, "error": f"Invalid TRMPH: {e}"}), 400
 
@@ -1296,7 +1273,7 @@ def api_apply_move():
     verbose = data.get("verbose", 0)  # Get verbose level
     
     try:
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for apply_move")
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
     
@@ -1364,7 +1341,7 @@ def api_apply_trmph_sequence():
     
     try:
         # Start with the current state
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for apply_trmph_sequence")
     except Exception as e:
         return jsonify({"error": f"Invalid TRMPH: {e}"}), 400
     
@@ -1471,7 +1448,7 @@ def api_policy_move():
     
     try:
         # Parse TRMPH and get game state
-        state = HexGameState.from_trmph(trmph)
+        state = create_game_state_from_trmph(trmph, context="for policy move")
         
         # Get model and make policy move
         model = get_model(model_id)
@@ -1602,7 +1579,10 @@ def api_mcts_move():
     )
 
     if result.get("success") and inline_heatmap_options.get("enabled"):
-        heatmap_state = HexGameState.from_trmph(result["new_trmph"])
+        heatmap_state = create_game_state_from_trmph(
+            result["new_trmph"],
+            context="for inline move heatmap",
+        )
         maybe_attach_inline_move_heatmap(
             result=result,
             state=heatmap_state,

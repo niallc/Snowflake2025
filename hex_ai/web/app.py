@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
 import re
-import string
 import uuid
 import random
 import threading
@@ -42,6 +41,13 @@ from hex_ai.web.inline_move_heatmap import (
     INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
     parse_inline_move_heatmap_options,
     maybe_attach_inline_move_heatmap,
+)
+from hex_ai.web.interactive_core import (
+    create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
+    validate_api_input as core_validate_api_input,
+    validate_boolean_flag as core_validate_boolean_flag,
+    validate_elo_rating as core_validate_elo_rating,
+    validate_trmph_input as core_validate_trmph_input,
 )
 
 app = Flask(__name__, static_folder="static_public")
@@ -762,210 +768,42 @@ preload_default_model()
 # =============================================================================
 
 def validate_trmph_input(trmph_string):
-    """
-    Validate TRMPH input format for security.
-    
-    Only allows single letters a-m followed by numbers 1-13.
-    Pattern: ([a-m]([0-9]|1[0-3]))+
-    Also allows empty strings for initial game state.
-    
-    Args:
-        trmph_string (str): The TRMPH string to validate
-        
-    Returns:
-        tuple: (is_valid, error_message) where is_valid is bool and error_message is str or None
-    """
-    # Handle None values (from frontend null/undefined) by treating as empty string
-    if trmph_string is None:
-        trmph_string = ""
-    
-    if not isinstance(trmph_string, str):
-        return False, "TRMPH input must be a string"
-    
-    # Remove any whitespace
-    trmph_string = trmph_string.strip()
-    
-    # Allow empty strings for initial game state
-    if not trmph_string:
-        return True, None
-    
-    # Build pattern based on board size
-    max_col = string.ascii_lowercase[BOARD_SIZE - 1]  # 'm' for 13x13
-    if BOARD_SIZE <= 9:
-        # For boards 9x9 or smaller, only single digits
-        number_pattern = f'[1-{BOARD_SIZE}]'
-    else:
-        # For boards 10x10 or larger, handle 10-13 range
-        number_pattern = f'(1[0-{BOARD_SIZE%10}]|[1-9])'
-    
-    trmph_pattern_with_prefix = re.compile(f'^#{BOARD_SIZE},([a-{max_col}]{number_pattern})+$')
-    trmph_pattern_without_prefix = re.compile(f'^([a-{max_col}]{number_pattern})+$')
-    
-    if not (trmph_pattern_with_prefix.match(trmph_string) or trmph_pattern_without_prefix.match(trmph_string)):
-        return False, f"Invalid TRMPH format. Only letters a-{max_col} followed by numbers 1-{BOARD_SIZE} are allowed (e.g., a1b2c3 or #{BOARD_SIZE},a1b2c3)"
-    
-    # Use existing utility function to properly count moves
-    try:
-        # Strip the #{BOARD_SIZE}, prefix if present before parsing moves
-        prefix = f'#{BOARD_SIZE},'
-        if trmph_string.startswith(prefix):
-            bare_moves = trmph_string[len(prefix):]  # Remove prefix
-        else:
-            bare_moves = trmph_string
-        
-        moves = fc.split_trmph_moves(bare_moves)
-        max_moves = BOARD_SIZE * BOARD_SIZE  # 13^2 = 169
-        if len(moves) > max_moves:
-            return False, f"Too many moves (maximum {max_moves} moves for a complete game)"
-    except ValueError as e:
-        return False, f"Invalid TRMPH format: {str(e)}"
-    
-    return True, None
+    """Validate TRMPH input format for security."""
+    return core_validate_trmph_input(trmph_string, board_size=BOARD_SIZE)
+
+
+def _validate_move_within_display_board(move_text: str, display_board_size: int) -> None:
+    row, col = fc.trmph_move_to_rowcol(move_text, board_size=BOARD_SIZE)
+    if row >= display_board_size or col >= display_board_size:
+        raise ValueError(
+            f"Move '{move_text}' is outside top-left {display_board_size}x{display_board_size} display board"
+        )
 
 def validate_api_input(data, required_fields=None, optional_fields=None):
-    """
-    Centralized validation for API endpoints.
-    
-    Args:
-        data (dict): The request data to validate
-        required_fields (list): List of required field names
-        optional_fields (list): List of optional field names that should be validated if present
-        
-    Returns:
-        tuple: (is_valid, error_message, validated_data) where validated_data is the cleaned data
-    """
-    if not isinstance(data, dict):
-        return False, "Request data must be a JSON object", None
-    
-    # Reject unexpected fields (defense-in-depth)
-    all_allowed = set(required_fields or []) | set(optional_fields or [])
-    unexpected = set(data.keys()) - all_allowed
-    if unexpected:
-        return False, f"Unexpected fields: {list(unexpected)}", None
-    
-    validated_data = {}
-
-    display_board_size = DEFAULT_DISPLAY_BOARD_SIZE
-    if "display_board_size" in all_allowed:
-        try:
-            display_board_size = validate_display_board_size(
-                data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
-            )
-            validated_data["display_board_size"] = display_board_size
-        except ValueError as e:
-            app.logger.warning(f"Validation failed for display_board_size: {e}")
-            return False, f"Invalid display_board_size: {e}", None
-
-    # Process all allowed fields present in data
-    for field in all_allowed:
-        if field not in data or field == "display_board_size":
-            continue
-
-        if field in ['trmph', 'move', 'trmph_sequence']:
-            # Normalize input first (handle LittleGolem format, swap, etc.)
-            try:
-                normalized_input = fc.normalize_game_input(data[field])
-            except ValueError as e:
-                app.logger.warning(f"Normalization failed for {field}: {e}")
-                return False, f"Invalid format for {field}: {str(e)}", None
-            except Exception as e:
-                app.logger.error(f"Input normalization failed for {field}: {e}")
-                return False, f"Normalization error for {field}: {str(e)}", None
-
-            # Validate TRMPH syntax first.
-            is_valid, error_msg = validate_trmph_input(normalized_input)
-            if not is_valid:
-                return False, f"Invalid {field} [DEBUG-CHECK]: {error_msg}", None
-
-            # Enforce display-board geometry constraints.
-            try:
-                if field in {"trmph", "trmph_sequence"}:
-                    validated_data[field] = normalize_user_trmph_for_display(
-                        normalized_input, display_board_size, field_name=field
-                    )
-                else:
-                    row, col = fc.trmph_move_to_rowcol(normalized_input, board_size=BOARD_SIZE)
-                    if row >= display_board_size or col >= display_board_size:
-                        return (
-                            False,
-                            f"Move '{normalized_input}' is outside top-left "
-                            f"{display_board_size}x{display_board_size} display board",
-                            None,
-                        )
-                    validated_data[field] = normalized_input
-            except ValueError as e:
-                app.logger.warning(f"Display-board validation failed for {field}: {e}")
-                return False, f"Invalid {field}: {e}", None
-        elif field == 'elo_rating':
-            # ELO rating needs special validation
-            try:
-                validated_data[field] = validate_elo_rating(data[field])
-            except ValueError as e:
-                app.logger.warning(f"Validation failed for {field}: {e}")
-                return False, f"Invalid {field}: {e}", None
-        elif field == 'pie_rule_enabled':
-            # Pie-rule toggle accepts booleans and common string/int forms.
-            try:
-                validated_data[field] = validate_boolean_flag(data[field], field)
-            except ValueError as e:
-                app.logger.warning(f"Validation failed for {field}: {e}")
-                return False, f"Invalid {field}: {e}", None
-        else:
-            # Other fields just copy over
-            validated_data[field] = data[field]
-
-    # Check required fields are present
-    if required_fields:
-        for field in required_fields:
-            if field not in validated_data:
-                return False, f"Missing required field: {field}", None
-    
-    return True, None, validated_data
+    """Centralized validation for API endpoints."""
+    return core_validate_api_input(
+        data,
+        required_fields=required_fields,
+        optional_fields=optional_fields,
+        logger=app.logger,
+        reject_unexpected=True,
+        trmph_validator=validate_trmph_input,
+        default_display_board_size=DEFAULT_DISPLAY_BOARD_SIZE,
+        display_board_size_validator=validate_display_board_size,
+        normalize_trmph_for_display_fn=normalize_user_trmph_for_display,
+        move_in_display_validator=_validate_move_within_display_board,
+        elo_validator=validate_elo_rating,
+        boolean_fields={"pie_rule_enabled"},
+    )
 
 def validate_elo_rating(value):
-    """
-    Validate and convert ELO rating to integer.
-    
-    Args:
-        value: ELO rating value (int, float, str, or None)
-        
-    Returns:
-        int: Validated ELO rating in range [MIN_ELO, MAX_ELO]
-        
-    Raises:
-        ValueError: If value is None, cannot be converted, or is out of range
-    """
-    if value is None:
-        raise ValueError("ELO rating is required and cannot be null")
-    
-    try:
-        # Convert to float first to handle string inputs like "1000.0"
-        elo_float = float(value)
-        elo_int = int(round(elo_float))
-    except (ValueError, TypeError):
-        raise ValueError("ELO rating must be a number")
-    
-    if not (MIN_ELO <= elo_int <= MAX_ELO):
-        raise ValueError(f"ELO rating must be between {MIN_ELO} and {MAX_ELO}")
-    
-    return elo_int
+    """Validate and convert ELO rating to integer."""
+    return core_validate_elo_rating(value, min_elo=MIN_ELO, max_elo=MAX_ELO)
 
 
 def validate_boolean_flag(value, field_name):
     """Validate and normalize a boolean feature flag from JSON input."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    raise ValueError(
-        f"{field_name} must be a boolean (or one of true/false, 1/0)"
-    )
+    return core_validate_boolean_flag(value, field_name)
 
 def sanitize_exception_message(exception):
     """
@@ -1320,13 +1158,15 @@ def create_game_state_from_trmph(trmph, display_board_size=DEFAULT_DISPLAY_BOARD
         Exception: If TRMPH is invalid
     """
     display_board_size = validate_display_board_size(display_board_size)
-    user_bare_moves = normalize_user_trmph_for_display(
-        trmph, display_board_size, field_name="trmph"
+    state = core_create_game_state_from_trmph_input(
+        trmph,
+        context=context,
+        display_board_size=display_board_size,
+        normalize_user_trmph_fn=normalize_user_trmph_for_display,
+        compose_full_trmph_fn=compose_full_trmph_from_user_trmph,
+        apply_display_mask_fn=apply_display_mask_to_state,
     )
-    full_trmph = compose_full_trmph_from_user_trmph(user_bare_moves, display_board_size)
-
-    state = HexGameState.from_trmph(full_trmph)
-    state = apply_display_mask_to_state(state, display_board_size)
+    user_bare_moves = normalize_user_trmph_for_display(trmph, display_board_size, field_name="trmph")
     app.logger.info(
         "Loaded masked game state %s: display=%sx%s, user_moves=%s",
         context,
