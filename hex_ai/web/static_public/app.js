@@ -441,6 +441,56 @@ class HexGame {
         return fallback;
     }
 
+    getHeatmapBandClass(score) {
+        if (!Number.isFinite(score)) {
+            return null;
+        }
+        if (window.HexHeatmap && typeof window.HexHeatmap.classifyScore === 'function') {
+            return window.HexHeatmap.classifyScore(score, { neutralBand: 0.035 });
+        }
+        if (score < 0.465) {
+            return 'below';
+        }
+        if (score > 0.535) {
+            return 'above';
+        }
+        return 'even';
+    }
+
+    getTooltipTextForHex(row, col) {
+        const trmph = this.rowColToTRMPH(row, col);
+        const score = this.getHeatmapScoreForMove(row, col);
+        if (!Number.isFinite(score)) {
+            return trmph;
+        }
+        const percent = window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function'
+            ? window.HexHeatmap.formatPercent(score)
+            : `${(score * 100).toFixed(1)}%`;
+        const band = this.getHeatmapBandClass(score);
+        const bandLabel = band === 'above'
+            ? '>50%'
+            : band === 'below'
+                ? '<50%'
+                : '~50%';
+        return `${trmph} (${percent} win, ${bandLabel})`;
+    }
+
+    applyHeatmapClasses(hexElement, cellValue, row, col) {
+        hexElement.classList.remove('heatmap-scored', 'heatmap-above', 'heatmap-below', 'heatmap-even');
+        if (cellValue !== this.pieceValues.EMPTY) {
+            return;
+        }
+        const score = this.getHeatmapScoreForMove(row, col);
+        if (!Number.isFinite(score)) {
+            return;
+        }
+        hexElement.classList.add('heatmap-scored');
+        const bandClass = this.getHeatmapBandClass(score);
+        if (bandClass) {
+            hexElement.classList.add(`heatmap-${bandClass}`);
+        }
+    }
+
     updateHeatmapControls() {
         if (this.heatmapEnabledCheck) {
             this.heatmapEnabledCheck.checked = this.heatmapEnabled;
@@ -679,6 +729,23 @@ class HexGame {
         return await response.json();
     }
 
+    buildInlineHeatmapRequestPayload() {
+        return {
+            heatmap_enabled: this.heatmapEnabled,
+            heatmap_selection_mode: this.heatmapScope,
+            heatmap_top_k: this.heatmapTopK,
+            heatmap_policy_temperature: this.heatmapPolicyTemperature
+        };
+    }
+
+    applyHeatmapPayload(payload) {
+        this.heatmapScores = payload && payload.scores ? payload.scores : {};
+        this.heatmapPolicyProbs = payload && payload.policy_probs ? payload.policy_probs : {};
+        this.heatmapMinScore = payload && Number.isFinite(payload.min_score) ? payload.min_score : null;
+        this.heatmapMaxScore = payload && Number.isFinite(payload.max_score) ? payload.max_score : null;
+        this.heatmapError = null;
+    }
+
     redrawCurrentBoard() {
         if (!this.previousBoard) {
             return;
@@ -710,11 +777,7 @@ class HexGame {
             if (requestToken !== this.heatmapRequestToken) {
                 return;
             }
-            this.heatmapScores = data.scores || {};
-            this.heatmapPolicyProbs = data.policy_probs || {};
-            this.heatmapMinScore = Number.isFinite(data.min_score) ? data.min_score : null;
-            this.heatmapMaxScore = Number.isFinite(data.max_score) ? data.max_score : null;
-            this.heatmapError = null;
+            this.applyHeatmapPayload(data);
         } catch (error) {
             if (requestToken !== this.heatmapRequestToken) {
                 return;
@@ -732,8 +795,14 @@ class HexGame {
         }
     }
 
-    async renderBoardWithHeatmap(board) {
-        await this.refreshHeatmap(false);
+    async renderBoardWithHeatmap(board, inlineHeatmap = null) {
+        if (this.heatmapEnabled && inlineHeatmap) {
+            this.heatmapLoading = false;
+            this.applyHeatmapPayload(inlineHeatmap);
+            this.updateHeatmapControls();
+        } else {
+            await this.refreshHeatmap(false);
+        }
         await this.renderBoard(board);
     }
 
@@ -914,7 +983,8 @@ class HexGame {
                     trmph: this.currentTRMPH,
                     elo_rating: this.validateEloRating(),
                     display_board_size: this.validateBoardSize(),
-                    pie_rule_enabled: this.getPieRuleRequestEnabled()
+                    pie_rule_enabled: this.getPieRuleRequestEnabled(),
+                    ...this.buildInlineHeatmapRequestPayload()
                 })
             });
 
@@ -948,7 +1018,7 @@ class HexGame {
                 }
                 this.legalMoves = data.legal_moves || [];
 
-                await this.renderBoardWithHeatmap(data.board);
+                await this.renderBoardWithHeatmap(data.board, data.move_heatmap || null);
                 this.updateTrmphDisplay();
                 this.updateButtonStates();
 
@@ -1107,17 +1177,14 @@ class HexGame {
     updateHex(row, col, newValue) {
         const key = `${row},${col}`;
         let hexElement = this.hexElements.get(key);
-        const isScoredHeatmapCell = this.isHeatmapScoredCell(newValue, row, col);
 
         if (!hexElement) {
             // Create new hex if it doesn't exist (shouldn't happen in normal flow)
             const { x, y } = this.hexCenter(row, col, 18);
             hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue, row, col), false);
-            if (isScoredHeatmapCell) {
-                hexElement.classList.add('heatmap-scored');
-            }
             hexElement.setAttribute('data-row', row);
             hexElement.setAttribute('data-col', col);
+            this.applyHeatmapClasses(hexElement, newValue, row, col);
             this.svg.appendChild(hexElement);
             this.hexElements.set(key, hexElement);
         } else {
@@ -1125,7 +1192,7 @@ class HexGame {
             const newColor = this.getHexColor(newValue, row, col);
             hexElement.style.transition = 'none'; // Disable transition for instant update
             hexElement.setAttribute('fill', newColor);
-            hexElement.classList.toggle('heatmap-scored', isScoredHeatmapCell);
+            this.applyHeatmapClasses(hexElement, newValue, row, col);
 
             // Re-enable transitions after a brief delay for hover effects
             setTimeout(() => {
@@ -1147,14 +1214,6 @@ class HexGame {
             }
         }
         return colors.EMPTY_HEX_GRAY; // Empty hex color
-    }
-
-    isHeatmapScoredCell(cellValue, row, col) {
-        if (cellValue !== this.pieceValues.EMPTY) {
-            return false;
-        }
-        const score = this.getHeatmapScoreForMove(row, col);
-        return Number.isFinite(score);
     }
 
     shouldShadeHex(row, col) {
@@ -1254,6 +1313,14 @@ class HexGame {
     }
 
     drawHexBoard(board) {
+        if (
+            window.HexHeatmap &&
+            window.HexHeatmap.tooltip &&
+            typeof window.HexHeatmap.tooltip.hide === 'function'
+        ) {
+            window.HexHeatmap.tooltip.hide();
+        }
+
         // Constants for hexagonal board - adapted from working dev version
         const HEX_RADIUS = 18; // Slightly smaller for mobile
         const BOARD_SIZE = this.validateBoardSize();
@@ -1298,11 +1365,9 @@ class HexGame {
                 const isLegal = this.isLegalMove(row, col);
                 const shouldShade = !this.heatmapEnabled && isEmpty && this.shouldShadeHex(row, col);
                 const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal, shouldShade);
-                if (this.isHeatmapScoredCell(cell, row, col)) {
-                    hex.classList.add('heatmap-scored');
-                }
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
+                this.applyHeatmapClasses(hex, cell, row, col);
 
                 if (isLegal && !this.isLoading) {
                     hex.classList.add('clickable');
@@ -1398,6 +1463,42 @@ class HexGame {
         if (highlight) {
             hex.style.cursor = 'pointer';
         }
+
+        hex.addEventListener('mouseenter', (event) => {
+            const row = parseInt(hex.getAttribute('data-row'), 10);
+            const col = parseInt(hex.getAttribute('data-col'), 10);
+            if (Number.isNaN(row) || Number.isNaN(col)) {
+                return;
+            }
+            const text = this.getTooltipTextForHex(row, col);
+            if (
+                window.HexHeatmap &&
+                window.HexHeatmap.tooltip &&
+                typeof window.HexHeatmap.tooltip.show === 'function'
+            ) {
+                window.HexHeatmap.tooltip.show(event, text, { darkMode: this.darkMode });
+            }
+        });
+
+        hex.addEventListener('mousemove', (event) => {
+            if (
+                window.HexHeatmap &&
+                window.HexHeatmap.tooltip &&
+                typeof window.HexHeatmap.tooltip.move === 'function'
+            ) {
+                window.HexHeatmap.tooltip.move(event);
+            }
+        });
+
+        hex.addEventListener('mouseleave', () => {
+            if (
+                window.HexHeatmap &&
+                window.HexHeatmap.tooltip &&
+                typeof window.HexHeatmap.tooltip.hide === 'function'
+            ) {
+                window.HexHeatmap.tooltip.hide();
+            }
+        });
         return hex;
     }
 

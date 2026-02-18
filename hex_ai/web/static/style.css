@@ -239,12 +239,34 @@ small {
 }
 
 #board-container svg polygon.heatmap-scored {
-  stroke: #6c778f;
   stroke-width: 2.5;
 }
 
-[data-theme="dark"] #board-container svg polygon.heatmap-scored {
-  stroke: #aab8d1;
+#board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #946018;
+  stroke-dasharray: 6 4;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #257f53;
+  stroke-dasharray: none;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #6c778f;
+  stroke-dasharray: 2.5 3.5;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #e7b65f;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #71e2a1;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #b6c2df;
 }
 
 #controls {

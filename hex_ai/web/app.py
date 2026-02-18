@@ -1376,6 +1376,75 @@ def build_move_response(
         
     return response
 
+
+INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS = [
+    "heatmap_enabled",
+    "heatmap_selection_mode",
+    "heatmap_top_k",
+    "heatmap_policy_temperature",
+]
+
+
+def _parse_inline_move_heatmap_options(validated_data):
+    """Parse optional inline heatmap options from a validated request payload."""
+    enabled = bool(validated_data.get("heatmap_enabled", False))
+    if not enabled:
+        return {"enabled": False}
+
+    selection_mode = validated_data.get("heatmap_selection_mode", "policy_top_k")
+    top_k = validated_data.get("heatmap_top_k", 12)
+    policy_temperature = validated_data.get("heatmap_policy_temperature", 1.0)
+
+    if selection_mode not in {"policy_top_k", "all_legal"}:
+        raise ValueError(f"Invalid heatmap_selection_mode: {selection_mode}")
+
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError):
+        raise ValueError("heatmap_top_k must be an integer")
+    if top_k < 1:
+        raise ValueError("heatmap_top_k must be >= 1")
+
+    try:
+        policy_temperature = float(policy_temperature)
+    except (TypeError, ValueError):
+        raise ValueError("heatmap_policy_temperature must be numeric")
+    if policy_temperature <= 0:
+        raise ValueError("heatmap_policy_temperature must be > 0")
+
+    return {
+        "enabled": True,
+        "selection_mode": selection_mode,
+        "top_k": top_k,
+        "policy_temperature": policy_temperature,
+    }
+
+
+def _maybe_attach_inline_move_heatmap(result, state, model_id, heatmap_options):
+    """Attach move heatmap payload to a successful move response when requested."""
+    if not heatmap_options.get("enabled"):
+        return
+    if not result.get("success"):
+        return
+
+    try:
+        model = get_model(model_id)
+        heatmap = build_policy_value_heatmap(
+            state=state,
+            model=model,
+            selection_mode=heatmap_options["selection_mode"],
+            top_k=heatmap_options["top_k"],
+            policy_temperature=heatmap_options["policy_temperature"],
+        )
+        result["move_heatmap"] = heatmap.to_dict()
+    except Exception as e:
+        app.logger.warning(
+            "Inline move heatmap generation failed (model=%s): %s",
+            model_id,
+            e,
+        )
+        result["move_heatmap_error"] = "Failed to compute move heatmap"
+
 def _check_game_over_early_return(state, display_board_size):
     """Check if game is over and return early response if so."""
     if state.game_over:
@@ -1908,7 +1977,7 @@ def api_policy_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled'] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
     )
     
     if not is_valid:
@@ -1919,6 +1988,10 @@ def api_policy_move():
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
+    try:
+        inline_heatmap_options = _parse_inline_move_heatmap_options(validated_data)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -1990,6 +2063,12 @@ def api_policy_move():
                 "gumbel_max_sims": difficulty_params.get("gumbel_max_sims", 0),
                 "algorithm": difficulty_params["algorithm"],
             }
+            _maybe_attach_inline_move_heatmap(
+                result=result,
+                state=state,
+                model_id=model_id,
+                heatmap_options=inline_heatmap_options,
+            )
 
             trmph_stats = _build_trmph_stats(trmph)
             seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
@@ -2072,6 +2151,12 @@ def api_policy_move():
             'gumbel_max_sims': difficulty_params.get('gumbel_max_sims', 0),
             'algorithm': difficulty_params['algorithm']
         }
+        _maybe_attach_inline_move_heatmap(
+            result=result,
+            state=new_state,
+            model_id=model_id,
+            heatmap_options=inline_heatmap_options,
+        )
         
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph}")
@@ -2130,7 +2215,7 @@ def api_mcts_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled'] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS
     )
     
     if not is_valid:
@@ -2141,6 +2226,10 @@ def api_mcts_move():
     elo_rating = validated_data.get("elo_rating", 1000)
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
+    try:
+        inline_heatmap_options = _parse_inline_move_heatmap_options(validated_data)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     
     app.logger.info(
         "Parsed parameters: trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -2199,6 +2288,12 @@ def api_mcts_move():
                 "gumbel_max_sims": difficulty_params["gumbel_max_sims"],
                 "algorithm": difficulty_params["algorithm"],
             }
+            _maybe_attach_inline_move_heatmap(
+                result=result,
+                state=state,
+                model_id=difficulty_params["model"],
+                heatmap_options=inline_heatmap_options,
+            )
             trmph_stats = _build_trmph_stats(trmph)
             seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
             log_usage_event(
@@ -2231,7 +2326,8 @@ def api_mcts_move():
     
     if difficulty_params["algorithm"] == "policy":
         # Use policy move for lower difficulties
-        return api_policy_move()
+        # Call the undecorated handler to avoid double rate-limit charging.
+        return api_policy_move.__wrapped__()
     
     # Use MCTS for higher difficulties
     result = make_mcts_move(
@@ -2257,6 +2353,18 @@ def api_mcts_move():
                 pie_rule_action="declined" if pie_decision else "none",
             )
         )
+        if inline_heatmap_options.get("enabled"):
+            heatmap_state = create_game_state_from_trmph(
+                result.get("new_trmph", ""),
+                display_board_size=display_board_size,
+                context="for inline move heatmap",
+            )
+            _maybe_attach_inline_move_heatmap(
+                result=result,
+                state=heatmap_state,
+                model_id=difficulty_params["model"],
+                heatmap_options=inline_heatmap_options,
+            )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")

@@ -376,6 +376,75 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 
+INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS = [
+    "heatmap_enabled",
+    "heatmap_selection_mode",
+    "heatmap_top_k",
+    "heatmap_policy_temperature",
+]
+
+
+def _parse_inline_move_heatmap_options(data):
+    """Parse optional inline heatmap settings from API request data."""
+    enabled = bool(data.get("heatmap_enabled", False))
+    if not enabled:
+        return {"enabled": False}
+
+    selection_mode = data.get("heatmap_selection_mode", "policy_top_k")
+    top_k = data.get("heatmap_top_k", 12)
+    policy_temperature = data.get("heatmap_policy_temperature", 1.0)
+
+    if selection_mode not in {"policy_top_k", "all_legal"}:
+        raise ValueError(f"Invalid heatmap_selection_mode: {selection_mode}")
+
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError):
+        raise ValueError("heatmap_top_k must be an integer")
+    if top_k < 1:
+        raise ValueError("heatmap_top_k must be >= 1")
+
+    try:
+        policy_temperature = float(policy_temperature)
+    except (TypeError, ValueError):
+        raise ValueError("heatmap_policy_temperature must be numeric")
+    if policy_temperature <= 0:
+        raise ValueError("heatmap_policy_temperature must be > 0")
+
+    return {
+        "enabled": True,
+        "selection_mode": selection_mode,
+        "top_k": top_k,
+        "policy_temperature": policy_temperature,
+    }
+
+
+def _maybe_attach_inline_move_heatmap(result, state, model_id, heatmap_options):
+    """Attach inline move heatmap payload to successful move responses."""
+    if not heatmap_options.get("enabled"):
+        return
+    if not result.get("success"):
+        return
+
+    try:
+        model = get_model(model_id)
+        heatmap = build_policy_value_heatmap(
+            state=state,
+            model=model,
+            selection_mode=heatmap_options["selection_mode"],
+            top_k=heatmap_options["top_k"],
+            policy_temperature=heatmap_options["policy_temperature"],
+        )
+        result["move_heatmap"] = heatmap.to_dict()
+    except Exception as e:
+        app.logger.warning(
+            "Inline move heatmap generation failed (model=%s): %s",
+            model_id,
+            e,
+        )
+        result["move_heatmap_error"] = "Failed to compute move heatmap"
+
+
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims,
                    orchestration_overrides=None):
@@ -1537,9 +1606,17 @@ def api_policy_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "temperature", "verbose"])
+    is_valid, error_response = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=["model_id", "temperature", "verbose"] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+    )
     if not is_valid:
         return error_response
+    try:
+        inline_heatmap_options = _parse_inline_move_heatmap_options(data)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
@@ -1608,6 +1685,13 @@ def api_policy_move():
                     "total_legal_moves": len(legal_moves)
                 }
             }
+
+        _maybe_attach_inline_move_heatmap(
+            result=result,
+            state=new_state,
+            model_id=model_id,
+            heatmap_options=inline_heatmap_options,
+        )
         
         app.logger.info(f"=== POLICY API RESPONSE ===")
         app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
@@ -1626,9 +1710,26 @@ def api_mcts_move():
     app.logger.info(f"Request data: {data}")
     
     # Validate input
-    is_valid, error_response = validate_api_input(data, required_fields=["trmph"], optional_fields=["model_id", "num_simulations", "exploration_constant", "temperature", "temperature_end", "verbose", "enable_gumbel", "gumbel_max_sims"])
+    is_valid, error_response = validate_api_input(
+        data,
+        required_fields=["trmph"],
+        optional_fields=[
+            "model_id",
+            "num_simulations",
+            "exploration_constant",
+            "temperature",
+            "temperature_end",
+            "verbose",
+            "enable_gumbel",
+            "gumbel_max_sims",
+        ] + INLINE_MOVE_HEATMAP_OPTIONAL_FIELDS,
+    )
     if not is_valid:
         return error_response
+    try:
+        inline_heatmap_options = _parse_inline_move_heatmap_options(data)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
     trmph = data.get("trmph")
     model_id = data.get("model_id", "model1")
@@ -1661,6 +1762,15 @@ def api_mcts_move():
         enable_gumbel=enable_gumbel,
         gumbel_max_sims=gumbel_max_sims
     )
+
+    if result.get("success") and inline_heatmap_options.get("enabled"):
+        heatmap_state = HexGameState.from_trmph(result["new_trmph"])
+        _maybe_attach_inline_move_heatmap(
+            result=result,
+            state=heatmap_state,
+            model_id=model_id,
+            heatmap_options=inline_heatmap_options,
+        )
     
     app.logger.info(f"=== MCTS API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")

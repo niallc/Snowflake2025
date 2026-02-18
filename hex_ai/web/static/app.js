@@ -480,37 +480,34 @@ function rowcolToTrmph(row, col) {
   return String.fromCharCode(97 + col) + (row + 1);
 }
 
-// --- Custom Tooltip Functions ---
-let tooltip = null;
-
+// --- Shared tooltip wrappers ---
 function showTooltip(event, text) {
-  // Remove existing tooltip
-  hideTooltip();
-  
-  // Create tooltip element
-  tooltip = document.createElement('div');
-  tooltip.textContent = text;
-  tooltip.style.cssText = `
-    position: fixed;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-family: monospace;
-    pointer-events: none;
-    z-index: 1000;
-    left: ${event.clientX + 10}px;
-    top: ${event.clientY - 30}px;
-  `;
-  
-  document.body.appendChild(tooltip);
+  if (
+    window.HexHeatmap &&
+    window.HexHeatmap.tooltip &&
+    typeof window.HexHeatmap.tooltip.show === 'function'
+  ) {
+    window.HexHeatmap.tooltip.show(event, text, { darkMode: state.dark_mode });
+  }
+}
+
+function moveTooltip(event) {
+  if (
+    window.HexHeatmap &&
+    window.HexHeatmap.tooltip &&
+    typeof window.HexHeatmap.tooltip.move === 'function'
+  ) {
+    window.HexHeatmap.tooltip.move(event);
+  }
 }
 
 function hideTooltip() {
-  if (tooltip) {
-    tooltip.remove();
-    tooltip = null;
+  if (
+    window.HexHeatmap &&
+    window.HexHeatmap.tooltip &&
+    typeof window.HexHeatmap.tooltip.hide === 'function'
+  ) {
+    window.HexHeatmap.tooltip.hide();
   }
 }
 
@@ -593,6 +590,12 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
                                enable_gumbel, gumbel_max_sims, 
                                move_method, search_widths) {
   console.log(`makeComputerMove called with model_id: ${model_id}, move_method: ${move_method}`);
+  const inlineHeatmapFields = {
+    heatmap_enabled: state.heatmap_enabled,
+    heatmap_selection_mode: state.heatmap_scope,
+    heatmap_top_k: state.heatmap_top_k,
+    heatmap_policy_temperature: state.heatmap_policy_temperature
+  };
   
   if (move_method === 'policy') {
     // Use policy endpoint for fast policy sampling
@@ -603,7 +606,8 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         trmph, 
         model_id, 
         temperature, 
-        verbose
+        verbose,
+        ...inlineHeatmapFields
       }),
     });
     if (!resp.ok) throw new Error('API error');
@@ -618,7 +622,8 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         model_id, 
         search_widths,
         temperature, 
-        verbose
+        verbose,
+        ...inlineHeatmapFields
       }),
     });
     if (!resp.ok) throw new Error('API error');
@@ -636,7 +641,8 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         temperature, 
         verbose,
         enable_gumbel,
-        gumbel_max_sims
+        gumbel_max_sims,
+        ...inlineHeatmapFields
       }),
     });
     if (!resp.ok) throw new Error('API error');
@@ -650,6 +656,26 @@ function clearHeatmapData() {
   state.heatmap_min_score = null;
   state.heatmap_max_score = null;
   state.heatmap_error = null;
+}
+
+function applyHeatmapPayload(payload) {
+  state.heatmap_scores = payload && payload.scores ? payload.scores : {};
+  state.heatmap_policy_probs = payload && payload.policy_probs ? payload.policy_probs : {};
+  state.heatmap_min_score = payload && Number.isFinite(payload.min_score) ? payload.min_score : null;
+  state.heatmap_max_score = payload && Number.isFinite(payload.max_score) ? payload.max_score : null;
+  state.heatmap_error = null;
+}
+
+function applyInlineHeatmapFromResponse(result) {
+  if (!state.heatmap_enabled) {
+    return false;
+  }
+  if (!result || !result.move_heatmap) {
+    return false;
+  }
+  applyHeatmapPayload(result.move_heatmap);
+  state.heatmap_loading = false;
+  return true;
 }
 
 function getHeatmapScoreForMove(moveTrmph) {
@@ -673,6 +699,22 @@ function getHeatmapFillColor(score) {
     });
   }
   return COLORS.EMPTY_HEX_COLOR;
+}
+
+function getHeatmapBandClass(score) {
+  if (!Number.isFinite(score)) {
+    return null;
+  }
+  if (window.HexHeatmap && typeof window.HexHeatmap.classifyScore === 'function') {
+    return window.HexHeatmap.classifyScore(score, { neutralBand: 0.035 });
+  }
+  if (score < 0.465) {
+    return 'below';
+  }
+  if (score > 0.535) {
+    return 'above';
+  }
+  return 'even';
 }
 
 function updateHeatmapControls() {
@@ -760,11 +802,7 @@ async function refreshMoveHeatmap() {
     if (requestToken !== heatmapRequestToken) {
       return;
     }
-    state.heatmap_scores = result.scores || {};
-    state.heatmap_policy_probs = result.policy_probs || {};
-    state.heatmap_min_score = Number.isFinite(result.min_score) ? result.min_score : null;
-    state.heatmap_max_score = Number.isFinite(result.max_score) ? result.max_score : null;
-    state.heatmap_error = null;
+    applyHeatmapPayload(result);
   } catch (err) {
     if (requestToken !== heatmapRequestToken) {
       return;
@@ -786,6 +824,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
     debugBoardState(board, legalMoves, lastMove, winner, lastMovePlayer);
   }
   
+  hideTooltip();
   container.innerHTML = '';
   // Math for flat-topped hex grid, blue at top/bottom
   const w = HEX_RADIUS * Math.sqrt(3);
@@ -860,6 +899,7 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       let fill = COLORS.EMPTY_HEX_COLOR;
       const heatmapScore = getHeatmapScoreForMove(moveTrmph);
       const isScoredHeatmapCell = cell === GAME_CONSTANTS.PIECE_VALUES.EMPTY && Number.isFinite(heatmapScore);
+      const heatmapBandClass = isScoredHeatmapCell ? getHeatmapBandClass(heatmapScore) : null;
       if (isScoredHeatmapCell) {
         fill = getHeatmapFillColor(heatmapScore);
       }
@@ -881,6 +921,9 @@ function drawBoard(container, board, legalMoves, lastMove, winner, lastMovePlaye
       const hex = makeHex(x, y, HEX_RADIUS, fill, isLegal);
       if (isScoredHeatmapCell) {
         hex.classList.add('heatmap-scored');
+        if (heatmapBandClass) {
+          hex.classList.add(`heatmap-${heatmapBandClass}`);
+        }
       }
       hex.setAttribute('data-row', row);
       hex.setAttribute('data-col', col);
@@ -976,7 +1019,13 @@ function makeHex(cx, cy, r, fill, highlight) {
         const percent = window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function'
           ? window.HexHeatmap.formatPercent(score)
           : `${(score * 100).toFixed(1)}%`;
-        tooltipText = `${trmph} (${percent} win)`;
+        const band = getHeatmapBandClass(score);
+        const bandLabel = band === 'above'
+          ? '>50%'
+          : band === 'below'
+            ? '<50%'
+            : '~50%';
+        tooltipText = `${trmph} (${percent} win, ${bandLabel})`;
       }
       showTooltip(e, tooltipText);
     } else {
@@ -986,6 +1035,10 @@ function makeHex(cx, cy, r, fill, highlight) {
   
   hex.addEventListener('mouseleave', function(e) {
     hideTooltip();
+  });
+
+  hex.addEventListener('mousemove', function(e) {
+    moveTooltip(e);
   });
   
   return hex;
@@ -1214,8 +1267,11 @@ async function onCellClick(e) {
         displayDetailedExploration({ tree_data: computerResult.tree_data });
       }
         
+        const usedInlineHeatmap = applyInlineHeatmapFromResponse(computerResult);
         updateUI();
-        void refreshMoveHeatmap();
+        if (!usedInlineHeatmap) {
+          void refreshMoveHeatmap();
+        }
       } else {
         alert('Computer move failed: ' + computerResult.error);
       }
@@ -1282,8 +1338,11 @@ async function stepComputerMove() {
         displayDetailedExploration({ tree_data: result.tree_data });
       }
       
+      const usedInlineHeatmap = applyInlineHeatmapFromResponse(result);
       updateUI();
-      void refreshMoveHeatmap();
+      if (!usedInlineHeatmap) {
+        void refreshMoveHeatmap();
+      }
       
       // If auto-step is active and game isn't over, schedule next move
       if (state.auto_step_active && !state.winner) {

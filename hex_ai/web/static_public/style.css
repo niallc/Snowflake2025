@@ -362,7 +362,7 @@ h1 {
   transition: fill 0.2s ease, stroke 0.2s ease;
 }
 
-#board-container svg polygon:hover {
+#board-container svg polygon:hover:not(.heatmap-scored) {
   stroke-width: 2;
   stroke: #666;
 }
@@ -374,16 +374,33 @@ h1 {
 #board-container svg polygon.clickable:hover {
   filter: brightness(0.96) saturate(1.08);
   stroke-width: 3;
-  stroke: #333;
 }
 
 #board-container svg polygon.heatmap-scored {
+  stroke-width: 2.2;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #946018;
+  stroke-dasharray: 6 4;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #257f53;
+  stroke-dasharray: none;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-even {
   stroke: #6c778f;
-  stroke-width: 2;
+  stroke-dasharray: 2.5 3.5;
+}
+
+#board-container svg polygon.heatmap-scored.clickable:hover {
+  stroke-width: 3;
 }
 
 /* Dark mode hover effects */
-[data-theme="dark"] #board-container svg polygon:hover {
+[data-theme="dark"] #board-container svg polygon:hover:not(.heatmap-scored) {
   stroke-width: 2;
   stroke: #999; /* Lighter gray for dark mode */
 }
@@ -391,11 +408,18 @@ h1 {
 [data-theme="dark"] #board-container svg polygon.clickable:hover {
   filter: brightness(1.12) saturate(1.06);
   stroke-width: 3;
-  stroke: #ccc; /* Light gray for dark mode */
 }
 
-[data-theme="dark"] #board-container svg polygon.heatmap-scored {
-  stroke: #aab8d1;
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #e7b65f;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #71e2a1;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #b6c2df;
 }
 
 /* Purple shading for central hexes on empty board */

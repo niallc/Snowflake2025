@@ -66,6 +66,119 @@
     return parseRgbString(trimmed) || fallback;
   }
 
+  function emphasizeScoreAroundMidpoint(score, options = {}) {
+    const normalized = clamp(score, 0.0, 1.0);
+    const contrastGamma = clamp(
+      Number.isFinite(options.contrastGamma) ? options.contrastGamma : 0.78,
+      0.4,
+      1.0
+    );
+    const distanceFromMid = Math.abs(normalized - 0.5) * 2.0;
+    const emphasizedDistance = Math.pow(distanceFromMid, contrastGamma) * 0.5;
+    return normalized >= 0.5
+      ? 0.5 + emphasizedDistance
+      : 0.5 - emphasizedDistance;
+  }
+
+  function classifyScore(score, options = {}) {
+    if (!Number.isFinite(score)) {
+      return null;
+    }
+    const midpoint = Number.isFinite(options.midpoint) ? options.midpoint : 0.5;
+    const neutralBand = clamp(
+      Number.isFinite(options.neutralBand) ? options.neutralBand : 0.03,
+      0.0,
+      0.2
+    );
+    if (score < midpoint - neutralBand) {
+      return 'below';
+    }
+    if (score > midpoint + neutralBand) {
+      return 'above';
+    }
+    return 'even';
+  }
+
+  let tooltipElement = null;
+
+  function ensureTooltipElement(darkMode) {
+    if (tooltipElement) {
+      return tooltipElement;
+    }
+    tooltipElement = document.createElement('div');
+    tooltipElement.style.position = 'fixed';
+    tooltipElement.style.padding = '4px 8px';
+    tooltipElement.style.borderRadius = '4px';
+    tooltipElement.style.fontSize = '12px';
+    tooltipElement.style.fontFamily = 'monospace';
+    tooltipElement.style.pointerEvents = 'none';
+    tooltipElement.style.zIndex = '1000';
+    tooltipElement.style.border = '1px solid transparent';
+    tooltipElement.style.boxShadow = '0 2px 6px rgba(0,0,0,0.25)';
+    applyTooltipTheme(tooltipElement, darkMode);
+    return tooltipElement;
+  }
+
+  function applyTooltipTheme(element, darkMode) {
+    if (!element) {
+      return;
+    }
+    if (darkMode) {
+      element.style.background = 'rgba(20, 20, 24, 0.94)';
+      element.style.color = '#f0f3ff';
+      element.style.borderColor = '#5f6b89';
+    } else {
+      element.style.background = 'rgba(18, 22, 28, 0.9)';
+      element.style.color = '#f6fbff';
+      element.style.borderColor = '#7b88a7';
+    }
+  }
+
+  function positionTooltip(event, options = {}) {
+    if (!tooltipElement || !event) {
+      return;
+    }
+    const offsetX = Number.isFinite(options.offsetX) ? options.offsetX : 12;
+    const offsetY = Number.isFinite(options.offsetY) ? options.offsetY : -24;
+    let left = event.clientX + offsetX;
+    let top = event.clientY + offsetY;
+    const rect = tooltipElement.getBoundingClientRect();
+    const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+    const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+    left = clamp(left, 8, maxLeft);
+    top = clamp(top, 8, maxTop);
+    tooltipElement.style.left = `${left}px`;
+    tooltipElement.style.top = `${top}px`;
+  }
+
+  function showTooltip(event, text, options = {}) {
+    if (typeof document === 'undefined' || !event) {
+      return;
+    }
+    const element = ensureTooltipElement(Boolean(options.darkMode));
+    applyTooltipTheme(element, Boolean(options.darkMode));
+    element.textContent = text;
+    if (!element.parentElement) {
+      document.body.appendChild(element);
+    }
+    positionTooltip(event, options);
+  }
+
+  function moveTooltip(event, options = {}) {
+    if (!tooltipElement || !event) {
+      return;
+    }
+    positionTooltip(event, options);
+  }
+
+  function hideTooltip() {
+    if (!tooltipElement) {
+      return;
+    }
+    tooltipElement.remove();
+    tooltipElement = null;
+  }
+
   function scoreToColor(score, options = {}) {
     if (!Number.isFinite(score)) {
       return options.fallback || 'rgb(128, 128, 128)';
@@ -73,17 +186,17 @@
 
     const palette = options.darkMode
       ? {
-          low: '#d79a45',
-          mid: '#77809a',
-          high: '#57c98b',
+          low: '#d09138',
+          mid: '#6b7292',
+          high: '#46c985',
         }
       : {
-          low: '#c9832d',
-          mid: '#9ea7c2',
-          high: '#2f9f68',
+          low: '#b87418',
+          mid: '#8a93b0',
+          high: '#1f9f60',
         };
 
-    const normalized = clamp(score, 0.0, 1.0);
+    const normalized = emphasizeScoreAroundMidpoint(score, options);
     const alpha = clamp(
       Number.isFinite(options.alpha) ? options.alpha : 0.62,
       0.05,
@@ -120,7 +233,14 @@
 
   global.HexHeatmap = {
     clamp,
+    classifyScore,
+    emphasizeScoreAroundMidpoint,
     scoreToColor,
     formatPercent,
+    tooltip: {
+      show: showTooltip,
+      move: moveTooltip,
+      hide: hideTooltip,
+    },
   };
 })(window);
