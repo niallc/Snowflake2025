@@ -4,6 +4,7 @@ from flask_cors import CORS
 import json
 import logging
 import time
+import ipaddress
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
@@ -53,8 +54,18 @@ from hex_ai.web.interactive_core import (
     validate_trmph_input as core_validate_trmph_input,
 )
 
+CORS_ALLOW_ALL = os.getenv("SF25_CORS_ALLOW_ALL", "0").lower() not in ("0", "false", "no")
+CORS_ALLOWED_ORIGINS = tuple(
+    origin.strip()
+    for origin in os.getenv("SF25_CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+)
+
 app = Flask(__name__, static_folder="static_public")
-CORS(app)
+if CORS_ALLOW_ALL:
+    CORS(app)
+elif CORS_ALLOWED_ORIGINS:
+    CORS(app, resources={r"/api/*": {"origins": list(CORS_ALLOWED_ORIGINS)}})
 
 # =============================================================================
 # ANALYTICS CONFIGURATION
@@ -69,6 +80,7 @@ ANALYTICS_SALT = os.getenv("SF25_ANALYTICS_SALT", "")
 ANALYTICS_HASH_IP = os.getenv("SF25_ANALYTICS_HASH_IP", "1").lower() not in ("0", "false", "no")
 ANALYTICS_INCLUDE_IP = os.getenv("SF25_ANALYTICS_INCLUDE_IP", "0").lower() not in ("0", "false", "no")
 ANALYTICS_REQUIRE_CONSENT = os.getenv("SF25_ANALYTICS_REQUIRE_CONSENT", "1").lower() not in ("0", "false", "no")
+TRUST_PROXY_HEADERS = os.getenv("SF25_TRUST_PROXY_HEADERS", "0").lower() not in ("0", "false", "no")
 ANALYTICS_CONSENT_COOKIE_NAME = os.getenv("SF25_ANALYTICS_CONSENT_COOKIE_NAME", "sf25_cookie_consent")
 ANALYTICS_CONSENT_ACCEPT_VALUE = os.getenv("SF25_ANALYTICS_CONSENT_ACCEPT_VALUE", "accepted")
 ANALYTICS_COOKIE_NAME = os.getenv("SF25_ANALYTICS_COOKIE_NAME", "sf25_cid")
@@ -613,21 +625,27 @@ _ALLOWED_STATE_REASONS = {
 def _is_request_secure():
     if request.is_secure:
         return True
-    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
-    if forwarded_proto:
-        return forwarded_proto.split(",")[0].strip().lower() == "https"
+    if TRUST_PROXY_HEADERS:
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+        if forwarded_proto:
+            return forwarded_proto.split(",")[0].strip().lower() == "https"
     return False
 
 def _get_client_ip():
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.remote_addr
+    if TRUST_PROXY_HEADERS:
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+    return (request.remote_addr or "unknown").strip()
 
 
 def _extract_country_code():
     """Return two-letter country code from trusted proxy headers when available."""
-    if not ANALYTICS_INCLUDE_COUNTRY or not ANALYTICS_COUNTRY_HEADERS:
+    if (
+        not ANALYTICS_INCLUDE_COUNTRY
+        or not ANALYTICS_COUNTRY_HEADERS
+        or not TRUST_PROXY_HEADERS
+    ):
         return None
     for header in ANALYTICS_COUNTRY_HEADERS:
         value = request.headers.get(header)
@@ -1037,9 +1055,7 @@ def rate_limit(cost: float):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             # Get client IP address
-            client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.remote_addr)
-            if client_ip:
-                client_ip = client_ip.split(',')[0].strip()  # Handle multiple proxies
+            client_ip = _get_client_ip()
             
             # Check global rate limit first
             allowed, wait_time = check_global_rate_limit(client_ip)
@@ -1442,6 +1458,17 @@ def _execute_mcts_move_workflow(state, model_id, mcts_params, display_board_size
     
     # Apply move and build response
     return _apply_move_and_build_response(state, move, display_board_size)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True when host is loopback-only."""
+    normalized = (host or "").strip().lower()
+    if normalized in {"localhost", "[::1]"}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 INTERACTIVE_MOVE_OPTIONAL_FIELDS = [
@@ -2351,6 +2378,11 @@ if __name__ == "__main__":
         debug_enabled = os.getenv("SF25_WEB_DEBUG", "0").lower() not in ("0", "false", "no")
     else:
         debug_enabled = args.debug
+    if debug_enabled and not _is_loopback_host(args.host):
+        raise RuntimeError(
+            "Refusing to start with debug enabled on a non-loopback host. "
+            "Use --no-debug or bind to 127.0.0.1/localhost."
+        )
 
     log_level_name = os.getenv("SF25_WEB_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
@@ -2359,6 +2391,9 @@ if __name__ == "__main__":
     app.logger.info("=" * 50)
     app.logger.info("Hex AI Public Web Server Starting...")
     app.logger.info("Debug mode: %s", debug_enabled)
+    app.logger.info("Trust proxy headers: %s", TRUST_PROXY_HEADERS)
+    app.logger.info("CORS allow all: %s", CORS_ALLOW_ALL)
+    app.logger.info("CORS allowed origins: %s", list(CORS_ALLOWED_ORIGINS))
     app.logger.info("=" * 50)
     app.run(
         debug=debug_enabled,
