@@ -75,6 +75,15 @@ ANALYTICS_COOKIE_NAME = os.getenv("SF25_ANALYTICS_COOKIE_NAME", "sf25_cid")
 ANALYTICS_COOKIE_DAYS = int(os.getenv("SF25_ANALYTICS_COOKIE_DAYS", "365"))
 ANALYTICS_SEQUENCE_TTL_SECONDS = int(os.getenv("SF25_ANALYTICS_SEQUENCE_TTL_SECONDS", "3600"))
 ANALYTICS_SEQUENCE_MAX_CLIENTS = int(os.getenv("SF25_ANALYTICS_SEQUENCE_MAX_CLIENTS", "10000"))
+ANALYTICS_INCLUDE_COUNTRY = os.getenv("SF25_ANALYTICS_INCLUDE_COUNTRY", "1").lower() not in ("0", "false", "no")
+ANALYTICS_COUNTRY_HEADERS = tuple(
+    header.strip()
+    for header in os.getenv(
+        "SF25_ANALYTICS_COUNTRY_HEADERS",
+        "CF-IPCountry,X-Country-Code,X-Appengine-Country",
+    ).split(",")
+    if header.strip()
+)
 
 class MonthlyJsonlHandler(logging.Handler):
     def __init__(self, base_path: str):
@@ -591,6 +600,15 @@ def bad_request(e):
 # =============================================================================
 
 _last_trmph_by_client = {}
+_ALLOWED_STATE_REASONS = {
+    "initial_load",
+    "manual_refresh",
+    "reset",
+    "undo",
+    "redo",
+    "pie_rule_toggle",
+    "other",
+}
 
 def _is_request_secure():
     if request.is_secure:
@@ -606,6 +624,22 @@ def _get_client_ip():
         return forwarded_for.split(",")[0].strip()
     return request.remote_addr
 
+
+def _extract_country_code():
+    """Return two-letter country code from trusted proxy headers when available."""
+    if not ANALYTICS_INCLUDE_COUNTRY or not ANALYTICS_COUNTRY_HEADERS:
+        return None
+    for header in ANALYTICS_COUNTRY_HEADERS:
+        value = request.headers.get(header)
+        if not value:
+            continue
+        country = value.strip().upper()
+        if country in {"XX", "A1", "A2", "T1"}:
+            return None
+        if re.fullmatch(r"[A-Z]{2}", country):
+            return country
+    return None
+
 def _hash_identifier(value):
     if not value:
         return None
@@ -618,6 +652,26 @@ def _safe_count_trmph_moves(trmph_text):
         return fc.count_trmph_moves(trmph_text)
     except Exception:
         return None
+
+
+def _normalize_state_reason(value):
+    if value is None:
+        return "manual_refresh"
+    normalized = str(value).strip().lower()
+    if normalized in _ALLOWED_STATE_REASONS:
+        return normalized
+    return "other"
+
+
+def _build_heatmap_analytics_fields(heatmap_options):
+    if not heatmap_options:
+        return {}
+    return {
+        "heatmap_enabled": bool(heatmap_options.get("enabled", False)),
+        "heatmap_selection_mode": heatmap_options.get("selection_mode"),
+        "heatmap_top_k": heatmap_options.get("top_k"),
+        "heatmap_policy_temperature": heatmap_options.get("policy_temperature"),
+    }
 
 def _update_sequence_info(client_id, trmph):
     if not client_id:
@@ -713,6 +767,7 @@ def log_usage_event(event, **fields):
             "client_id": getattr(g, "analytics_client_id", None),
             "ip_hash": ip_value if (ANALYTICS_INCLUDE_IP and ANALYTICS_HASH_IP) else None,
             "ip": ip_value if (ANALYTICS_INCLUDE_IP and not ANALYTICS_HASH_IP) else None,
+            "country": _extract_country_code(),
             "ua_hash": ua_hash,
         }
         payload.update(fields)
@@ -1540,7 +1595,7 @@ def api_state():
     is_valid, error_msg, validated_data = validate_api_input(
         data, 
         required_fields=None,  # No required fields
-        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled']
+        optional_fields=['trmph', 'elo_rating', 'display_board_size', 'pie_rule_enabled', 'state_reason']
     )
     
     if not is_valid:
@@ -1551,6 +1606,7 @@ def api_state():
     elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)  # Default to configured default difficulty
     display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
+    state_reason = _normalize_state_reason(validated_data.get("state_reason"))
     
     app.logger.info(
         "api_state called with trmph='%s', elo_rating=%s, display_board_size=%s",
@@ -1589,6 +1645,7 @@ def api_state():
         elo_rating=elo_rating,
         display_board_size=display_board_size,
         pie_rule_enabled=pie_rule_enabled,
+        state_reason=state_reason,
     )
     return jsonify(response)
 
@@ -1680,6 +1737,7 @@ def api_move_heatmap():
             selected_move_count=response["selected_move_count"],
             legal_move_count=response["legal_move_count"],
             display_board_size=display_board_size,
+            heatmap_enabled=True,
         )
         return jsonify(response)
     except Exception as e:
@@ -1869,6 +1927,7 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 pie_rule_cache_hit=pie_decision["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=0,
+                **_build_heatmap_analytics_fields(inline_heatmap_options),
             )
             return jsonify(result)
         
@@ -1890,6 +1949,7 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 num_simulations=difficulty_params["num_simulations"],
                 display_board_size=display_board_size,
                 pie_rule_enabled=pie_rule_enabled,
+                **_build_heatmap_analytics_fields(inline_heatmap_options),
             )
             return jsonify(
                 build_engine_error_payload(
@@ -1950,6 +2010,7 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
             pie_rule_enabled=pie_rule_enabled,
             pie_rule_action="declined" if pie_decision else "none",
             moves_requested=1,
+            **_build_heatmap_analytics_fields(inline_heatmap_options),
         )
         
         return jsonify(result)
@@ -1965,6 +2026,7 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
             elo_rating=elo_rating,
             display_board_size=display_board_size,
             pie_rule_enabled=pie_rule_enabled,
+            **_build_heatmap_analytics_fields(inline_heatmap_options),
         )
         return jsonify(
             build_engine_error_payload(
@@ -2075,6 +2137,7 @@ def api_mcts_move():
                 pie_rule_cache_hit=pie_decision["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=0,
+                **_build_heatmap_analytics_fields(inline_heatmap_options),
             )
             return jsonify(result)
     
@@ -2152,6 +2215,7 @@ def api_mcts_move():
         pie_rule_enabled=pie_rule_enabled,
         pie_rule_action=result.get("pie_rule_action"),
         moves_requested=1,
+        **_build_heatmap_analytics_fields(inline_heatmap_options),
     )
     
     status_code = 200 if result.get("success") else 500

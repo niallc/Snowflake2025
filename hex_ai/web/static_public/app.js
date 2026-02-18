@@ -199,7 +199,7 @@ class HexGame {
                 this.pieRuleEnabled = e.target.checked;
                 localStorage.setItem('hex_ai_pie_rule_enabled', String(this.pieRuleEnabled));
                 this.updatePieRuleUi();
-                await this.loadGameStateWithoutAutoMove();
+                await this.loadGameStateWithoutAutoMove('pie_rule_toggle');
             });
         }
 
@@ -881,7 +881,7 @@ class HexGame {
 
             this.initializeBoard();
             // Initial load - allow computer auto-move
-            await this.loadGameState(true);
+            await this.loadGameState(true, 'initial_load');
             this.isInitialLoad = false; // Mark initial load as complete
         } catch (error) {
             console.error('Failed to load game constants:', error);
@@ -916,7 +916,7 @@ class HexGame {
             this.previousBoard = null; // Clear board cache
             this.hexElements.clear(); // Clear hex cache
             this.updateTrmphDisplay();
-            await this.loadGameState(false); // Don't auto-move after reset
+            await this.loadGameState(false, 'reset'); // Don't auto-move after reset
 
             // Show instruction text for the new empty board
             this.showInstructionText();
@@ -953,7 +953,7 @@ class HexGame {
             this.previousBoard = null;
             this.hexElements.clear();
 
-            await this.loadGameStateWithoutAutoMove();
+            await this.loadGameStateWithoutAutoMove('undo');
 
             // Show instruction text if we're back to an empty board
             if (this.isBoardEmpty(this.previousBoard)) {
@@ -1051,7 +1051,7 @@ class HexGame {
         setTimeout(() => this.makeComputerMove(), 500);
     }
 
-    async loadGameState(autoMove = true) {
+    async loadGameState(autoMove = true, stateReason = 'manual_refresh') {
         try {
             console.log(`Loading game state with TRMPH: '${this.currentTRMPH}', ELO: ${this.validateEloRating()}`);
 
@@ -1062,7 +1062,8 @@ class HexGame {
                     trmph: this.currentTRMPH,
                     elo_rating: this.validateEloRating(),
                     display_board_size: this.validateBoardSize(),
-                    pie_rule_enabled: this.getPieRuleRequestEnabled()
+                    pie_rule_enabled: this.getPieRuleRequestEnabled(),
+                    state_reason: stateReason
                 })
             });
 
@@ -1114,8 +1115,8 @@ class HexGame {
         }
     }
 
-    async loadGameStateWithoutAutoMove() {
-        return this.loadGameState(false);
+    async loadGameStateWithoutAutoMove(stateReason = 'manual_refresh') {
+        return this.loadGameState(false, stateReason);
     }
 
     // =============================================================================
@@ -1731,7 +1732,7 @@ class HexGame {
             this.previousBoard = null;
             this.hexElements.clear();
 
-            await this.loadGameStateWithoutAutoMove();
+            await this.loadGameStateWithoutAutoMove('redo');
 
             // Show instruction text if we're back to an empty board
             if (this.isBoardEmpty(this.previousBoard)) {
