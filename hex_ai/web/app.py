@@ -14,24 +14,18 @@ import threading
 import numpy as np
 
 import hex_ai.utils.format_conversion as fc
-from hex_ai.inference.game_engine import HexGameState, HexGameEngine, apply_move_to_state_trmph
-from hex_ai.inference.simple_model_inference import SimpleModelInference
-
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, run_mcts_move, create_mcts_config
-from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.inference.game_engine import HexGameState, apply_move_to_state_trmph
 from hex_ai.value_utils import (
-    Winner, 
     winner_to_color, 
-    temperature_scaled_softmax, 
-    get_legal_policy_probs,
-    select_top_k_moves,
     select_policy_move,
-    signed_to_prob,
 )
 from hex_ai.enums import Player, Piece
-from hex_ai.inference.mcts_utils import compute_win_probability_from_tree_data
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN
-from hex_ai.inference.model_config import get_model_path, get_model_info, get_all_model_info, register_model, is_valid_model_id, get_normalized_path, get_model_path_with_fallback, get_available_model_with_fallback
+from hex_ai.inference.model_config import (
+    is_valid_model_id,
+    get_normalized_path,
+    get_model_path_with_fallback,
+)
 from hex_ai.inference.model_cache import get_model_cache
 from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
 from hex_ai.web.move_heatmap import (
@@ -46,6 +40,10 @@ from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
     build_game_state_response,
     moves_to_trmph,
+)
+from hex_ai.web.mcts_interactive_utils import (
+    create_interactive_mcts_config,
+    run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
@@ -849,7 +847,6 @@ def sanitize_exception_message(exception):
 # TOKEN BUCKET RATE LIMITING
 # =============================================================================
 
-import time
 from functools import wraps
 from collections import defaultdict
 
@@ -1027,30 +1024,28 @@ def rate_limit(cost: float):
 # MODEL MANAGEMENT
 # =============================================================================
 
+def _resolve_registered_model_path(model_id: str) -> str:
+    """Resolve a registered model identifier to an absolute model path."""
+    if not is_valid_model_id(model_id):
+        raise ValueError(f"Unknown model_id: {model_id}")
+    return get_model_path_with_fallback(model_id)
+
+
 def get_model(model_id="best"):
     """Get or create a model instance for the given model_id using centralized cache with fallback support."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
-    
-    # Use centralized model configuration with fallback support
-    if is_valid_model_id(model_id):
-        model_path = get_model_path_with_fallback(model_id)
-        app.logger.debug(f"Found model {model_id} -> {model_path}")
-        return MODEL_CACHE.get_simple_model(model_path)
-    
-    app.logger.error(f"Unknown model_id: {model_id}")
-    raise ValueError(f"Unknown model_id: {model_id}")
+
+    model_path = _resolve_registered_model_path(model_id)
+    app.logger.debug(f"Found model {model_id} -> {model_path}")
+    return MODEL_CACHE.get_simple_model(model_path)
 
 def get_cached_model_wrapper(model_id: str):
     """Get or create a cached ModelWrapper instance for the given model_id using centralized cache with fallback support."""
     app.logger.debug(f"get_cached_model_wrapper called with model_id: {model_id}")
-    
-    # Get the model path for this model_id with fallback support
-    if is_valid_model_id(model_id):
-        model_path = get_model_path_with_fallback(model_id)
-        app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
-        return MODEL_CACHE.get_wrapper_model(model_path)
-    else:
-        raise ValueError(f"Unknown model_id: {model_id}")
+
+    model_path = _resolve_registered_model_path(model_id)
+    app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
+    return MODEL_CACHE.get_wrapper_model(model_path)
 
 # =============================================================================
 # DIFFICULTY LEVEL MAPPING
@@ -1283,24 +1278,17 @@ def _load_model_safely(model_id):
 
 def _create_mcts_configuration(num_simulations, exploration_constant, temperature, temperature_end, enable_gumbel, gumbel_max_sims):
     """Create MCTS configuration with temperature adjustments."""
-    if temperature_end > temperature:
-        app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
-        temperature_end = temperature / 10
-    
-    if temperature < 0.02:
-        app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
-    
-    mcts_config = create_mcts_config(
-        config_type="tournament",
-        confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
-        sims=num_simulations,
-        c_puct=exploration_constant,
-        temperature_start=temperature,
+    mcts_config, _ = create_interactive_mcts_config(
+        num_simulations=num_simulations,
+        exploration_constant=exploration_constant,
+        temperature=temperature,
         temperature_end=temperature_end,
-        enable_gumbel_root_selection=enable_gumbel,
-        gumbel_sim_threshold=gumbel_max_sims
+        enable_gumbel=enable_gumbel,
+        gumbel_max_sims=gumbel_max_sims,
+        confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
+        logger=app.logger,
     )
-    
+
     # Log detailed MCTS configuration
     app.logger.info(f"=== DETAILED MCTS CONFIG ===")
     app.logger.info(f"Simulations: {mcts_config.sims}")
@@ -1332,25 +1320,17 @@ def _create_mcts_configuration(num_simulations, exploration_constant, temperatur
 
 def _execute_mcts_search(state, model_id, mcts_config):
     """Execute MCTS search and return the selected move."""
-    # Create game engine
-    engine = HexGameEngine()
-    app.logger.info("Game engine created")
-    
     # Get cached model wrapper for MCTS
     app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
     model_wrapper = get_cached_model_wrapper(model_id)
-    
-    # Run MCTS search
-    app.logger.info("Starting MCTS search...")
-    try:
-        move, stats, tree_data, algorithm_termination_info = run_mcts_move(engine, model_wrapper, state, mcts_config)
-        app.logger.info("run_mcts_move completed successfully")
-    except Exception as e:
-        app.logger.error(f"run_mcts_move failed with exception: {e}")
-        import traceback
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
-        raise
-    
+
+    move, _, _, _ = run_interactive_mcts_search(
+        state=state,
+        model_wrapper=model_wrapper,
+        mcts_config=mcts_config,
+        verbose=0,
+        logger=app.logger,
+    )
     return move
 
 def _apply_move_and_build_response(state, move, display_board_size):

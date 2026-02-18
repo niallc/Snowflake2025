@@ -7,9 +7,8 @@ from datetime import datetime
 import time # Added for time.time()
 
 import hex_ai.utils.format_conversion as fc
-from hex_ai.inference.game_engine import HexGameEngine, apply_move_to_state_trmph
+from hex_ai.inference.game_engine import apply_move_to_state_trmph
 
-from hex_ai.inference.mcts import run_mcts_move, create_mcts_config
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
     winner_to_color, 
@@ -40,6 +39,10 @@ from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
     build_game_state_response,
     moves_to_trmph,
+)
+from hex_ai.web.mcts_interactive_utils import (
+    create_interactive_mcts_config,
+    run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
@@ -143,45 +146,36 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
     )
 
 # --- Model Management ---
+def _resolve_model_path(model_id: str) -> str:
+    """Resolve dynamic/registered/direct model inputs to a concrete file path."""
+    if model_id in DYNAMIC_MODELS:
+        model_path = DYNAMIC_MODELS[model_id]
+        if not os.path.isabs(model_path):
+            model_path = os.path.join("checkpoints", model_path)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file does not exist: {model_path}")
+        return model_path
+
+    if is_valid_model_id(model_id):
+        return get_model_path(model_id)
+
+    if os.path.exists(model_id):
+        return model_id
+
+    app.logger.error(f"Unknown model_id: {model_id}")
+    app.logger.error(
+        f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, registered={get_all_model_info()}"
+    )
+    raise ValueError(f"Unknown model_id: {model_id}")
+
+
 def get_model(model_id="best"):
     """Get or create a model instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_model called with model_id: {model_id}")
-    
-    # Check if it's a dynamic model (user-selected) - these override the central registry
-    if model_id in DYNAMIC_MODELS:
-        model_path = DYNAMIC_MODELS[model_id]
-        app.logger.debug(f"Found dynamic model {model_id} -> {model_path}")
-        
-        # Handle relative paths by prepending checkpoints directory
-        if not os.path.isabs(model_path):
-            full_model_path = os.path.join("checkpoints", model_path)
-            app.logger.debug(f"Converted relative path to: {full_model_path}")
-        else:
-            full_model_path = model_path
-        
-        # Check if file exists before loading
-        if not os.path.exists(full_model_path):
-            raise FileNotFoundError(f"Model file does not exist: {full_model_path}")
-        
-        app.logger.debug(f"Loading dynamic model {model_id} from {full_model_path}")
-        return MODEL_CACHE.get_simple_model(full_model_path)
-    
-    # Use centralized model configuration
-    if is_valid_model_id(model_id):
-        model_path = get_model_path(model_id)
-        app.logger.debug(f"Found model {model_id} -> {model_path}")
-        
-        # Centralized config provides absolute paths, so use directly
-        return MODEL_CACHE.get_simple_model(model_path)
-    
-    # If model_id is a direct path, try to load it
-    if os.path.exists(model_id):
-        app.logger.debug(f"Model_id appears to be a direct path: {model_id}")
-        return MODEL_CACHE.get_simple_model(model_id)
-    
-    app.logger.error(f"Unknown model_id: {model_id}")
-    app.logger.error(f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, registered={get_all_model_info()}")
-    raise ValueError(f"Unknown model_id: {model_id}")
+
+    model_path = _resolve_model_path(model_id)
+    app.logger.debug(f"Resolved model {model_id} -> {model_path}")
+    return MODEL_CACHE.get_simple_model(model_path)
 
 def register_dynamic_model(model_id: str, model_path: str):
     """Register a dynamically selected model."""
@@ -216,19 +210,8 @@ def get_available_models():
 def get_cached_model_wrapper(model_id: str):
     """Get or create a cached ModelWrapper instance for the given model_id using centralized cache."""
     app.logger.debug(f"get_cached_model_wrapper called with model_id: {model_id}")
-    
-    # Get the model path for this model_id
-    if model_id in DYNAMIC_MODELS:
-        model_path = DYNAMIC_MODELS[model_id]
-        if not os.path.isabs(model_path):
-            model_path = os.path.join("checkpoints", model_path)
-    elif is_valid_model_id(model_id):
-        model_path = get_model_path(model_id)
-    elif os.path.exists(model_id):
-        model_path = model_id
-    else:
-        raise ValueError(f"Unknown model_id: {model_id}")
-    
+
+    model_path = _resolve_model_path(model_id)
     app.logger.debug(f"Getting ModelWrapper for path: {model_path}")
     return MODEL_CACHE.get_wrapper_model(model_path)
 
@@ -255,6 +238,33 @@ def build_game_response(state, model_id, temperature, trmph_for_inference=None, 
     )
 
 
+def _build_engine_move_result(
+    state,
+    *,
+    new_trmph: str,
+    move_made=None,
+    success: bool = True,
+    error: str | None = None,
+    additional_fields=None,
+):
+    """Build a consistent move-result payload for engine-driven endpoints."""
+    result = {
+        "success": success,
+        "new_trmph": new_trmph,
+        "board": state.board.tolist(),
+        "player": winner_to_color(state.current_player),
+        "legal_moves": moves_to_trmph(state.get_legal_moves()),
+        "winner": winner_to_color(state.winner) if state.winner is not None else None,
+        "move_made": move_made,
+        "game_over": state.game_over,
+    }
+    if error:
+        result["error"] = error
+    if additional_fields:
+        result.update(additional_fields)
+    return result
+
+
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant, 
                    temperature, temperature_end, verbose, enable_gumbel, gumbel_max_sims):
     """Make one computer move using MCTS and return the new state with diagnostics."""
@@ -270,17 +280,12 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         # If game is over, return current state
         if state.game_over:
             app.logger.info("Game is over, returning current state")
-            result = {
-                "success": True,
-                "new_trmph": trmph,
-                "board": state.board.tolist(),
-                "player": winner_to_color(state.current_player),
-                "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": winner_to_color(state.winner) if state.winner is not None else None,
-                "move_made": None,
-                "game_over": True,
-                "mcts_debug_info": {}
-            }
+            result = _build_engine_move_result(
+                state,
+                new_trmph=trmph,
+                move_made=None,
+                additional_fields={"mcts_debug_info": {}},
+            )
             app.logger.info(f"Returning early result: {result}")
             return result
         
@@ -296,30 +301,17 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             }
         
         # Create MCTS configuration
-        # Ensure temperature_end is <= temperature_start
-        if temperature_end > temperature:
-            app.logger.info(f"Adjusting temperature_end from {temperature_end} to {temperature/10} (temperature_start/10)")
-            temperature_end = temperature / 10
-        
-        # Warn about very low temperatures that will use deterministic selection
-        if temperature < 0.02:
-            app.logger.info(f"Temperature {temperature} is very low (< 0.02), will use deterministic selection to avoid numerical issues")
-        
-        mcts_config = create_mcts_config(
-            config_type="tournament",
-            confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
-            sims=num_simulations,
-            c_puct=exploration_constant,
-            temperature_start=temperature,
+        mcts_config, temperature_end = create_interactive_mcts_config(
+            num_simulations=num_simulations,
+            exploration_constant=exploration_constant,
+            temperature=temperature,
             temperature_end=temperature_end,
-            enable_gumbel_root_selection=enable_gumbel,
-            gumbel_sim_threshold=gumbel_max_sims
+            enable_gumbel=enable_gumbel,
+            gumbel_max_sims=gumbel_max_sims,
+            confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
+            logger=app.logger,
         )
         app.logger.info(f"MCTS config created: {mcts_config}")
-        
-        # Create game engine
-        engine = HexGameEngine()
-        app.logger.info("Game engine created")
         
         # Get cached model wrapper for MCTS (avoid expensive recreation)
         app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
@@ -334,21 +326,15 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         
         # Time the actual MCTS run
         mcts_start_time = time.time()
-        app.logger.info("About to call run_mcts_move...")
-        try:
-            move, stats, tree_data, algorithm_termination_info = run_mcts_move(
-                engine,
-                model_wrapper,
-                state,
-                mcts_config,
-                verbose=mcts_verbose,
-            )
-            app.logger.info("run_mcts_move completed successfully")
-        except Exception as e:
-            app.logger.error(f"run_mcts_move failed with exception: {e}")
-            import traceback
-            app.logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+        app.logger.info("About to run interactive MCTS search...")
+        move, stats, tree_data, algorithm_termination_info = run_interactive_mcts_search(
+            state=state,
+            model_wrapper=model_wrapper,
+            mcts_config=mcts_config,
+            verbose=mcts_verbose,
+            logger=app.logger,
+        )
+        app.logger.info("run_mcts_move completed successfully")
         mcts_search_time = time.time() - mcts_start_time
 
         # Log detailed timing breakdown
@@ -605,18 +591,15 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
                 "difference": mcts_prob - direct_prob
             }
         
-        result = {
-            "success": True,
-            "new_trmph": state.to_trmph(),
-            "board": state.board.tolist(),
-            "player": winner_to_color(state.current_player),
-            "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": winner_to_color(state.winner) if state.winner is not None else None,
-            "move_made": selected_move_trmph,
-            "game_over": state.game_over,
-            "mcts_debug_info": mcts_debug_info,
-            "tree_data": tree_data
-        }
+        result = _build_engine_move_result(
+            state,
+            new_trmph=state.to_trmph(),
+            move_made=selected_move_trmph,
+            additional_fields={
+                "mcts_debug_info": mcts_debug_info,
+                "tree_data": tree_data,
+            },
+        )
         
         # Validate that no None values exist in numeric fields that frontend expects
         def validate_numeric_fields(obj, path=""):
@@ -708,17 +691,12 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
         # If game is over, return current state
         if state.game_over:
             app.logger.info("Game is over, returning current state")
-            result = {
-                "success": True,
-                "new_trmph": trmph,
-                "board": state.board.tolist(),
-                "player": winner_to_color(state.current_player),
-                "legal_moves": moves_to_trmph(state.get_legal_moves()),
-                "winner": winner_to_color(state.winner) if state.winner is not None else None,
-                "move_made": None,
-                "game_over": True,
-                "fixed_tree_debug_info": {}
-            }
+            result = _build_engine_move_result(
+                state,
+                new_trmph=trmph,
+                move_made=None,
+                additional_fields={"fixed_tree_debug_info": {}},
+            )
             app.logger.info(f"Returning early result: {result}")
             return result
         
@@ -899,18 +877,15 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
                 "fixed_tree_selected": move_trmph == selected_move_trmph
             }
         
-        result_data = {
-            "success": True,
-            "new_trmph": state.to_trmph(),
-            "board": state.board.tolist(),
-            "player": winner_to_color(state.current_player),
-            "legal_moves": moves_to_trmph(state.get_legal_moves()),
-            "winner": winner_to_color(state.winner) if state.winner is not None else None,
-            "move_made": selected_move_trmph,
-            "game_over": state.game_over,
-            "fixed_tree_debug_info": fixed_tree_debug_info,
-            "tree_data": tree_data
-        }
+        result_data = _build_engine_move_result(
+            state,
+            new_trmph=state.to_trmph(),
+            move_made=selected_move_trmph,
+            additional_fields={
+                "fixed_tree_debug_info": fixed_tree_debug_info,
+                "tree_data": tree_data,
+            },
+        )
         
         # Calculate total wall time before JSON serialization
         total_wall_time = time.time() - total_start_time
