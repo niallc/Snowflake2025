@@ -496,6 +496,61 @@ def build_pie_rule_response_fields(
     return response
 
 
+def _build_mcts_config_response_fields(difficulty_params, temperature_end=None):
+    """Build consistent MCTS config payload fields for move responses."""
+    resolved_temperature_end = (
+        difficulty_params["temperature"] if temperature_end is None else temperature_end
+    )
+    return {
+        "model": difficulty_params["model"],
+        "num_simulations": difficulty_params["num_simulations"],
+        "exploration_constant": difficulty_params["exploration_constant"],
+        "temperature": difficulty_params["temperature"],
+        "temperature_end": resolved_temperature_end,
+        "enable_gumbel": difficulty_params["enable_gumbel"],
+        "gumbel_max_sims": difficulty_params.get("gumbel_max_sims", 0),
+        "algorithm": difficulty_params["algorithm"],
+    }
+
+
+def _build_pie_rule_swap_move_response(
+    state,
+    trmph,
+    display_board_size,
+    pie_rule_enabled,
+    pie_decision,
+    model_id,
+    mcts_config,
+    inline_heatmap_options,
+):
+    """Build a consistent response payload for pie-rule swap outcomes."""
+    result = build_move_response(
+        state,
+        display_board_size=display_board_size,
+        move_made=None,
+        additional_fields={
+            "pie_rule_swap_computer_colors": True,
+            **build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_decision=pie_decision,
+                pie_rule_action="swapped",
+            ),
+        },
+    )
+    result["mcts_config"] = mcts_config
+    maybe_attach_inline_move_heatmap(
+        result=result,
+        state=state,
+        model_id=model_id,
+        heatmap_options=inline_heatmap_options,
+        model_getter=get_model,
+        logger=app.logger,
+    )
+    return result
+
+
 # =============================================================================
 # FLASK APP CONFIGURATION
 # =============================================================================
@@ -1988,38 +2043,18 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                 pie_decision["swap_probability"],
                 pie_decision["swap_roll"],
             )
-            result = build_move_response(
-                state,
-                display_board_size=display_board_size,
-                move_made=None,
-                additional_fields={
-                    "pie_rule_swap_computer_colors": True,
-                    **build_pie_rule_response_fields(
-                        trmph=trmph,
-                        state=state,
-                        pie_rule_enabled=pie_rule_enabled,
-                        pie_decision=pie_decision,
-                        pie_rule_action="swapped",
-                    ),
-                },
-            )
-            result["mcts_config"] = {
-                "model": model_id,
-                "num_simulations": difficulty_params["num_simulations"],
-                "exploration_constant": difficulty_params["exploration_constant"],
-                "temperature": temperature,
-                "temperature_end": temperature,
-                "enable_gumbel": difficulty_params["enable_gumbel"],
-                "gumbel_max_sims": difficulty_params.get("gumbel_max_sims", 0),
-                "algorithm": difficulty_params["algorithm"],
-            }
-            maybe_attach_inline_move_heatmap(
-                result=result,
+            result = _build_pie_rule_swap_move_response(
                 state=state,
+                trmph=trmph,
+                display_board_size=display_board_size,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_decision=pie_decision,
                 model_id=model_id,
-                heatmap_options=inline_heatmap_options,
-                model_getter=get_model,
-                logger=app.logger,
+                mcts_config=_build_mcts_config_response_fields(
+                    difficulty_params,
+                    temperature_end=temperature,
+                ),
+                inline_heatmap_options=inline_heatmap_options,
             )
 
             trmph_stats = _build_trmph_stats(trmph)
@@ -2093,16 +2128,10 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
         )
         
         # Add configuration to result for frontend verification
-        result['mcts_config'] = {
-            'model': model_id,
-            'num_simulations': difficulty_params['num_simulations'],
-            'exploration_constant': difficulty_params['exploration_constant'],
-            'temperature': temperature,
-            'temperature_end': temperature,  # Policy moves use same temperature throughout
-            'enable_gumbel': difficulty_params['enable_gumbel'],
-            'gumbel_max_sims': difficulty_params.get('gumbel_max_sims', 0),
-            'algorithm': difficulty_params['algorithm']
-        }
+        result["mcts_config"] = _build_mcts_config_response_fields(
+            difficulty_params,
+            temperature_end=temperature,
+        )
         maybe_attach_inline_move_heatmap(
             result=result,
             state=new_state,
@@ -2225,38 +2254,15 @@ def api_mcts_move():
                 pie_decision["swap_probability"],
                 pie_decision["swap_roll"],
             )
-            result = build_move_response(
-                state,
-                display_board_size=display_board_size,
-                move_made=None,
-                additional_fields={
-                    "pie_rule_swap_computer_colors": True,
-                    **build_pie_rule_response_fields(
-                        trmph=trmph,
-                        state=state,
-                        pie_rule_enabled=pie_rule_enabled,
-                        pie_decision=pie_decision,
-                        pie_rule_action="swapped",
-                    ),
-                },
-            )
-            result["mcts_config"] = {
-                "model": difficulty_params["model"],
-                "num_simulations": difficulty_params["num_simulations"],
-                "exploration_constant": difficulty_params["exploration_constant"],
-                "temperature": difficulty_params["temperature"],
-                "temperature_end": difficulty_params["temperature_end"],
-                "enable_gumbel": difficulty_params["enable_gumbel"],
-                "gumbel_max_sims": difficulty_params["gumbel_max_sims"],
-                "algorithm": difficulty_params["algorithm"],
-            }
-            maybe_attach_inline_move_heatmap(
-                result=result,
+            result = _build_pie_rule_swap_move_response(
                 state=state,
+                trmph=trmph,
+                display_board_size=display_board_size,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_decision=pie_decision,
                 model_id=difficulty_params["model"],
-                heatmap_options=inline_heatmap_options,
-                model_getter=get_model,
-                logger=app.logger,
+                mcts_config=_build_mcts_config_response_fields(difficulty_params),
+                inline_heatmap_options=inline_heatmap_options,
             )
             trmph_stats = _build_trmph_stats(trmph)
             seq_info = _update_sequence_info(getattr(g, "analytics_client_id", None), trmph) if ANALYTICS_ENABLED else {}
