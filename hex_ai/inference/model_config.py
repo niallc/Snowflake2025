@@ -233,7 +233,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     52: {
         "dir": "hyperparameter_tuning/pipeline_20260217_232105/",
-        "models": ["epoch158_mini44.pt.gz", "epoch158_mini15.pt.gz", "epoch157_mini89.pt.gz"]
+        "models": ["epoch158_mini48.pt.gz", "epoch158_mini15.pt.gz", "epoch157_mini89.pt.gz"]
     },
 }
 
@@ -293,7 +293,7 @@ SIMPLE_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, SIMPLE_MODEL_DIR, SIMPLE_
 # Beginner model configuration (intended for sf18_shuffled-only training runs)
 # TODO: Update BEGINNER_MODEL_DIR/FILE to the sf18-only checkpoint once trained.
 BEGINNER_MODEL_DIR = "hyperparameter_tuning/sf18_2026_retrain_beginner_models"
-BEGINNER_MODEL_FILE = "epoch1_mini3.pt.gz"
+BEGINNER_MODEL_FILE = "epoch1_mini10.pt.gz"
 BEGINNER_MODEL_PATH = os.path.join(CHECKPOINTS_BASE_DIR, BEGINNER_MODEL_DIR, BEGINNER_MODEL_FILE)
 # Legacy models (for historical comparison)
 LEGACY_MODELS = {}

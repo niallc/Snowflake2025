@@ -3,7 +3,8 @@
 Prune old hyperparameter-tuning checkpoints with conservative safety rules.
 
 Rules:
-1. Keep all checkpoint files referenced by MODEL_GENERATIONS.
+1. Keep all checkpoint files referenced by model_config.py
+   (MODEL_GENERATIONS + explicit model constants/registry entries).
 2. In each directory, keep the first and last checkpoint by training order.
 3. In each directory, keep every Nth checkpoint (default: every 10th).
 
@@ -16,11 +17,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 
 MODEL_FILENAME_RE = re.compile(r"^epoch(?P<epoch>\d+)_mini(?P<mini>\d+)\.pt(?:\.gz)?$")
@@ -77,6 +79,120 @@ def load_model_generations(config_path: Path) -> Dict[int, dict]:
         raise ValueError("MODEL_GENERATIONS must evaluate to a dictionary")
 
     return data
+
+
+def _iter_top_level_name_assignments(tree: ast.AST) -> Iterable[Tuple[str, ast.AST]]:
+    """Yield top-level assignments in source order as (name, value_node)."""
+    if not isinstance(tree, ast.Module):
+        return
+
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            yield node.target.id, node.value
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    yield target.id, node.value
+
+
+def _eval_string_expr(node: ast.AST, env: Dict[str, Any]) -> str:
+    """Evaluate a restricted AST expression to a string using previously bound names."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+
+    if isinstance(node, ast.Name):
+        value = env.get(node.id)
+        if isinstance(value, str):
+            return value
+        raise ValueError(f"Unsupported name reference: {node.id}")
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id == "os"
+        and node.func.value.attr == "path"
+        and node.func.attr == "join"
+    ):
+        parts = [_eval_string_expr(arg, env) for arg in node.args]
+        return os.path.join(*parts)
+
+    raise ValueError("Unsupported string expression")
+
+
+def load_explicit_model_paths(config_path: Path) -> Set[str]:
+    """
+    Load explicit model paths from model_config.py outside MODEL_GENERATIONS.
+
+    This conservatively resolves top-level string assignments and `os.path.join(...)`
+    expressions, then collects:
+    - `*_MODEL_PATH` string constants
+    - string-valued entries from `MODEL_REGISTRY`
+    """
+    source = config_path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(config_path))
+    env: Dict[str, Any] = {}
+    explicit_paths: Set[str] = set()
+
+    for name, value_node in _iter_top_level_name_assignments(tree):
+        if value_node is None:
+            continue
+
+        if name == "MODEL_REGISTRY" and isinstance(value_node, ast.Dict):
+            registry: Dict[str, str] = {}
+            for key_node, path_node in zip(value_node.keys, value_node.values):
+                if not (isinstance(key_node, ast.Constant) and isinstance(key_node.value, str)):
+                    continue
+                try:
+                    resolved_path = _eval_string_expr(path_node, env)
+                except ValueError:
+                    continue
+                registry[str(key_node.value)] = resolved_path
+                explicit_paths.add(resolved_path)
+            env[name] = registry
+            continue
+
+        try:
+            resolved_value = _eval_string_expr(value_node, env)
+        except ValueError:
+            continue
+
+        env[name] = resolved_value
+        if name.endswith("_MODEL_PATH"):
+            explicit_paths.add(resolved_value)
+
+    return explicit_paths
+
+
+def resolve_explicit_model_paths(
+    explicit_model_paths: Set[str],
+    checkpoints_root: Path,
+) -> Tuple[Set[Path], List[str]]:
+    """Resolve explicit model paths to existing files under checkpoints root."""
+    protected: Set[Path] = set()
+    missing: List[str] = []
+    checkpoints_root = checkpoints_root.resolve()
+    repo_root = checkpoints_root.parent
+
+    for raw_path in sorted(explicit_model_paths):
+        path = Path(raw_path)
+
+        if path.is_absolute():
+            candidate = path.resolve()
+        else:
+            if path.parts and path.parts[0] == checkpoints_root.name:
+                candidate = (repo_root / path).resolve()
+            else:
+                candidate = (checkpoints_root / path).resolve()
+
+        if candidate.is_file():
+            protected.add(candidate)
+        else:
+            missing.append(raw_path)
+
+    return protected, missing
 
 
 def build_protected_paths(
@@ -206,7 +322,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Prune checkpoint files in checkpoints/hyperparameter_tuning while preserving "
-            "MODEL_GENERATIONS references, first+last per directory, and every 10th checkpoint."
+            "model_config.py references, first+last per directory, and every 10th checkpoint."
         )
     )
     parser.add_argument(
@@ -274,10 +390,17 @@ def main() -> int:
         return 2
 
     model_generations = load_model_generations(model_config)
-    protected_paths, fuzzy_matches, missing_refs = build_protected_paths(
+    protected_from_generations, fuzzy_matches, generation_missing_refs = build_protected_paths(
         model_generations=model_generations,
         checkpoints_root=checkpoints_root,
     )
+    explicit_model_paths = load_explicit_model_paths(model_config)
+    protected_from_explicit, explicit_missing_refs = resolve_explicit_model_paths(
+        explicit_model_paths,
+        checkpoints_root=checkpoints_root,
+    )
+    protected_paths = protected_from_generations | protected_from_explicit
+    missing_refs = sorted(set(generation_missing_refs + explicit_missing_refs))
 
     grouped = discover_candidate_files(target_root)
     total_candidates = sum(len(files) for files in grouped.values())
@@ -301,12 +424,17 @@ def main() -> int:
     print(f"files to delete: {len(to_delete)}")
     print(f"estimated space reclaimed: {format_bytes(delete_bytes)}")
     print()
-    print(f"MODEL_GENERATIONS references loaded: {len(protected_paths)} existing files")
-    print(f"MODEL_GENERATIONS references inside target root: {len(protected_in_target)}")
+    print(f"model_config references loaded: {len(protected_paths)} existing files")
+    print(
+        "  breakdown: "
+        f"MODEL_GENERATIONS={len(protected_from_generations)}, "
+        f"explicit_paths={len(protected_from_explicit)}"
+    )
+    print(f"model_config references inside target root: {len(protected_in_target)}")
     if fuzzy_matches:
         print(f"conservative extension fallbacks matched: {len(fuzzy_matches)}")
     if missing_refs:
-        print(f"MODEL_GENERATIONS references not found on disk: {len(missing_refs)}")
+        print(f"model_config references not found on disk: {len(missing_refs)}")
         for ref in missing_refs[:10]:
             print(f"  missing: {ref}")
         if len(missing_refs) > 10:
