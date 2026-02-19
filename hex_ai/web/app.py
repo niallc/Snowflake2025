@@ -635,7 +635,11 @@ def _get_client_ip():
     if TRUST_PROXY_HEADERS:
         forwarded_for = request.headers.get("X-Forwarded-For", "")
         if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
+            # With nginx `proxy_add_x_forwarded_for`, the right-most item is
+            # the direct client IP observed by our trusted proxy.
+            parts = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+            if parts:
+                return parts[-1]
     return (request.remote_addr or "unknown").strip()
 
 
