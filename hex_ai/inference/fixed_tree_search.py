@@ -19,6 +19,7 @@ from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import temperature_scaled_softmax, get_top_k_moves_with_probs, sample_moves_from_policy
 from hex_ai.enums import Player
+from hex_ai.value_utils import ValuePredictor
 from hex_ai.utils.timing import MCTSTimingTracker
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ class FixedTreeSearch:
     def __init__(self, model: SimpleModelInference, config: FixedTreeSearchConfig):
         self.model = model
         self.config = config
+        self.root_player_enum: Optional[Player] = None
         self.timing_tracker = MCTSTimingTracker()
         self.stats = {
             'total_positions': 0,
@@ -147,10 +149,19 @@ class FixedTreeSearch:
             'backup_time': 0.0,
             'memory_usage_mb': 0.0,
         }
+
+    def _get_root_player_enum(self, fallback_state: Optional[HexGameState] = None) -> Player:
+        """Return root player enum for current search, optionally deriving from fallback state."""
+        if self.root_player_enum is not None:
+            return self.root_player_enum
+        if fallback_state is not None and fallback_state.current_player_enum is not None:
+            return fallback_state.current_player_enum
+        raise RuntimeError("FixedTreeSearch root player not initialized")
     
     def run(self, state: HexGameState, verbose: int = 0) -> FixedTreeSearchResult:
         """Run fixed tree search and return complete result."""
         start_time = time.time()
+        self.root_player_enum = state.current_player_enum
         
         # Reset memory warning flag for this search
         self._memory_warning_logged = False
@@ -249,6 +260,7 @@ class FixedTreeSearch:
         """Check if search should terminate early."""
         if not self.config.enable_early_termination:
             return None
+        root_player = self._get_root_player_enum(fallback_state=state)
         
         # Check for terminal moves
         if state.game_over:
@@ -269,21 +281,29 @@ class FixedTreeSearch:
                 }
         
         # Check neural network confidence
-        policy, value = self.model.simple_infer(state.board)
-        win_probability = (value + 1.0) / 2.0
+        policy, value_signed_red_ref = self.model.simple_infer(state.board)
+        root_value = ValuePredictor.convert_to_minimax_value(
+            value_signed_red_ref,
+            root_player=root_player,
+        )
+        root_win_probability = (root_value + 1.0) / 2.0
         
-        if win_probability >= self.config.early_termination_threshold:
+        if root_win_probability >= self.config.early_termination_threshold:
             # High confidence win - select best move from policy
             # Get legal moves for the current state
             legal_moves = state.get_legal_moves()
+            if not legal_moves:
+                raise RuntimeError(
+                    "No legal moves available in non-terminal state during early termination"
+                )
             board_size = state.board.shape[0]
             top_moves = get_top_k_moves_with_probs(policy, legal_moves, board_size, 1)
             best_move = top_moves[0][0]
             return {
                 'reason': 'high_confidence',
                 'move': best_move,
-                'value': value,
-                'win_probability': win_probability
+                'value': root_value,
+                'win_probability': root_win_probability
             }
         
         return None
@@ -337,8 +357,12 @@ class FixedTreeSearch:
     
     def _set_node_policy(self, node: MinimaxNode, policy: np.ndarray, value: float):
         """Set policy and value for a node (callback for batch processing)."""
+        root_player = self._get_root_player_enum()
         node.policy = policy
-        node.value = value
+        node.value = ValuePredictor.convert_to_minimax_value(
+            value,
+            root_player=root_player,
+        )
     
     def _expand_node(self, node: MinimaxNode, width: int) -> List[MinimaxNode]:
         """Expand a node by sampling moves from its policy."""
@@ -367,8 +391,9 @@ class FixedTreeSearch:
             is_terminal = child_state.game_over
             terminal_value = None
             if is_terminal:
+                root_player = self._get_root_player_enum()
                 winner = child_state.winner_enum
-                if winner == node.state.current_player_enum:
+                if winner == root_player:
                     terminal_value = 1.0
                 elif winner is not None:
                     terminal_value = -1.0
@@ -423,7 +448,11 @@ class FixedTreeSearch:
     
     def _set_node_value(self, node: MinimaxNode, policy: np.ndarray, value: float):
         """Set value for a node (callback for batch processing)."""
-        node.value = value
+        root_player = self._get_root_player_enum()
+        node.value = ValuePredictor.convert_to_minimax_value(
+            value,
+            root_player=root_player,
+        )
     
     def _minimax_backup(self, node: MinimaxNode) -> float:
         """Perform minimax backup from leaf nodes to root."""

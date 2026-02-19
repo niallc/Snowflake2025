@@ -530,7 +530,7 @@ async function fetchConstants() {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
   });
-  if (!resp.ok) throw new Error('API error');
+  if (!resp.ok) await throwApiError(resp, 'Constants request failed');
   return await resp.json();
 }
 
@@ -539,7 +539,7 @@ async function fetchModels() {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
   });
-  if (!resp.ok) throw new Error('API error');
+  if (!resp.ok) await throwApiError(resp, 'Models request failed');
   return await resp.json();
 }
 
@@ -549,7 +549,7 @@ async function fetchState(trmph, model_id = 'best', temperature = 1.0) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ trmph, model_id, temperature, verbose: state.verbose_level }),
   });
-  if (!resp.ok) throw new Error('API error');
+  if (!resp.ok) await throwApiError(resp, 'State request failed');
   return await resp.json();
 }
 
@@ -585,7 +585,7 @@ async function applyHumanMove(trmph, move, model_id = 'best', temperature = 1.0)
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ trmph, move, model_id, temperature, verbose: state.verbose_level }),
   });
-  if (!resp.ok) throw new Error('API error');
+  if (!resp.ok) await throwApiError(resp, 'Apply move request failed');
   return await resp.json();
 }
 

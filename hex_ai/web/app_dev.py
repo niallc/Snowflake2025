@@ -274,6 +274,42 @@ def _build_game_over_engine_result(state, trmph, debug_field):
     return result
 
 
+def _attach_inline_heatmap_if_requested(
+    *,
+    result,
+    inline_heatmap_options,
+    model_id,
+    state=None,
+):
+    """Attach inline move heatmap when requested and the move response succeeded."""
+    if not result.get("success"):
+        return
+    if not inline_heatmap_options.get("enabled"):
+        return
+
+    heatmap_state = state
+    if heatmap_state is None:
+        new_trmph = result.get("new_trmph")
+        if not isinstance(new_trmph, str):
+            app.logger.warning(
+                "Skipping inline move heatmap attachment: result missing new_trmph"
+            )
+            return
+        heatmap_state = create_game_state_from_trmph(
+            new_trmph,
+            context="for inline move heatmap",
+        )
+
+    maybe_attach_inline_move_heatmap(
+        result=result,
+        state=heatmap_state,
+        model_id=model_id,
+        heatmap_options=inline_heatmap_options,
+        model_getter=get_model,
+        logger=app.logger,
+    )
+
+
 def _load_model_or_error(model_id):
     """Load a model and return a response payload on failure."""
     try:
@@ -743,32 +779,25 @@ def _build_fixed_tree_debug_info(
     original_legal_moves_count,
 ):
     """Assemble fixed-tree diagnostics payload."""
+    early_termination_info = search_result.early_termination_info
+
+    def _early_term_field(field_name, default=None):
+        if early_termination_info is None:
+            return default
+        if isinstance(early_termination_info, dict):
+            return early_termination_info.get(field_name, default)
+        return getattr(early_termination_info, field_name, default)
+
     algorithm = "Fixed Tree Search"
     fixed_tree_debug_info = {
         "algorithm_info": {
             "algorithm": algorithm,
-            "early_termination": search_result.early_termination_info is not None,
-            "early_termination_reason": (
-                search_result.early_termination_info.reason
-                if search_result.early_termination_info
-                else "none"
-            ),
+            "early_termination": early_termination_info is not None,
+            "early_termination_reason": _early_term_field("reason", "none"),
             "early_termination_details": {
-                "reason": (
-                    search_result.early_termination_info.reason
-                    if search_result.early_termination_info
-                    else "none"
-                ),
-                "win_probability": (
-                    search_result.early_termination_info.win_probability
-                    if search_result.early_termination_info
-                    else None
-                ),
-                "move": (
-                    search_result.early_termination_info.move
-                    if search_result.early_termination_info
-                    else None
-                ),
+                "reason": _early_term_field("reason", "none"),
+                "win_probability": _early_term_field("win_probability", None),
+                "move": _early_term_field("move", None),
             },
             "parameters": {
                 "search_widths": search_widths,
@@ -1346,7 +1375,7 @@ def _validate_engine_request(
     *,
     required_fields,
     optional_fields,
-    supports_inline_heatmap=False,
+    supports_inline_heatmap=True,
 ):
     """Validate engine endpoint payloads with one shared code path."""
     def _strict_validate_api_input(payload, *, required_fields=None, optional_fields=None):
@@ -1447,7 +1476,6 @@ def api_policy_move():
         data,
         required_fields=["trmph"],
         optional_fields=["model_id", "temperature", "verbose"],
-        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1532,13 +1560,11 @@ def api_policy_move():
                 }
             }
 
-        maybe_attach_inline_move_heatmap(
+        _attach_inline_heatmap_if_requested(
             result=result,
-            state=new_state,
+            inline_heatmap_options=inline_heatmap_options,
             model_id=model_id,
-            heatmap_options=inline_heatmap_options,
-            model_getter=get_model,
-            logger=app.logger,
+            state=new_state,
         )
         
         app.logger.info("=== POLICY API RESPONSE ===")
@@ -1576,7 +1602,6 @@ def api_mcts_move():
             "enable_gumbel",
             "gumbel_max_sims",
         ],
-        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1614,19 +1639,11 @@ def api_mcts_move():
         gumbel_max_sims=gumbel_max_sims
     )
 
-    if result.get("success") and inline_heatmap_options.get("enabled"):
-        heatmap_state = create_game_state_from_trmph(
-            result["new_trmph"],
-            context="for inline move heatmap",
-        )
-        maybe_attach_inline_move_heatmap(
-            result=result,
-            state=heatmap_state,
-            model_id=model_id,
-            heatmap_options=inline_heatmap_options,
-            model_getter=get_model,
-            logger=app.logger,
-        )
+    _attach_inline_heatmap_if_requested(
+        result=result,
+        inline_heatmap_options=inline_heatmap_options,
+        model_id=model_id,
+    )
     
     app.logger.info("=== MCTS API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
@@ -1658,7 +1675,6 @@ def api_fixed_tree_move():
         data,
         required_fields=["trmph", "search_widths"],
         optional_fields=["model_id", "temperature", "verbose"],
-        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1699,19 +1715,11 @@ def api_fixed_tree_move():
         verbose
     )
 
-    if result.get("success") and inline_heatmap_options.get("enabled"):
-        heatmap_state = create_game_state_from_trmph(
-            result["new_trmph"],
-            context="for inline move heatmap",
-        )
-        maybe_attach_inline_move_heatmap(
-            result=result,
-            state=heatmap_state,
-            model_id=model_id,
-            heatmap_options=inline_heatmap_options,
-            model_getter=get_model,
-            logger=app.logger,
-        )
+    _attach_inline_heatmap_if_requested(
+        result=result,
+        inline_heatmap_options=inline_heatmap_options,
+        model_id=model_id,
+    )
     
     app.logger.info("=== FIXED TREE API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
