@@ -36,6 +36,10 @@ from hex_ai.web.inline_move_heatmap import (
     validate_request_with_inline_heatmap,
     maybe_attach_inline_move_heatmap,
 )
+from hex_ai.web.small_board_opening_calibration import (
+    remap_small_board_opening_scores,
+    should_apply_small_board_opening_remap,
+)
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
     build_engine_error_payload,
@@ -344,7 +348,12 @@ def _compute_pie_rule_opening_scores(model_id: str, display_board_size: int):
         top_k=None,
         policy_temperature=1.0,
     )
-    return heatmap.scores
+    remapped_scores, remap_meta = remap_small_board_opening_scores(
+        heatmap.scores,
+        display_board_size=display_board_size,
+        network_board_size=BOARD_SIZE,
+    )
+    return remapped_scores, remap_meta
 
 
 def _get_pie_rule_opening_scores(model_id: str, display_board_size: int):
@@ -365,7 +374,7 @@ def _get_pie_rule_opening_scores(model_id: str, display_board_size: int):
         cache_meta["cache_hit"] = True
         return cached["scores"], cache_meta
 
-    scores = _compute_pie_rule_opening_scores(model_id, display_board_size)
+    scores, remap_meta = _compute_pie_rule_opening_scores(model_id, display_board_size)
     new_entry = {
         "scores": scores,
         "model_id": model_identity["model_id"],
@@ -373,6 +382,9 @@ def _get_pie_rule_opening_scores(model_id: str, display_board_size: int):
         "model_mtime_ns": model_identity["model_mtime_ns"],
         "epoch": model_identity["epoch"],
         "mini": model_identity["mini"],
+        "opening_score_remap_applied": bool(remap_meta.get("applied", False)),
+        "opening_score_remap_reason": remap_meta.get("reason"),
+        "opening_score_remap_anchor_moves": remap_meta.get("anchor_moves"),
         "computed_at_unix": time.time(),
     }
 
@@ -388,6 +400,53 @@ def _get_pie_rule_opening_scores(model_id: str, display_board_size: int):
     cache_meta = dict(existing)
     cache_meta["cache_hit"] = True
     return existing["scores"], cache_meta
+
+
+def _maybe_remap_first_move_heatmap_scores(
+    *,
+    trmph: str,
+    display_board_size: int,
+    model_id: str,
+    scores: dict[str, float],
+) -> tuple[dict[str, float], bool]:
+    """
+    Apply opening-score remap for opening-position heatmaps on small boards.
+
+    If anchors are unavailable in the provided subset (e.g. policy_top_k), reuse
+    the pie-rule opening cache and project those calibrated scores onto the subset.
+    """
+    if _safe_count_trmph_moves(trmph) != 0:
+        return scores, False
+    if not should_apply_small_board_opening_remap(
+        display_board_size=display_board_size,
+        network_board_size=BOARD_SIZE,
+    ):
+        return scores, False
+
+    remapped_scores, remap_meta = remap_small_board_opening_scores(
+        scores,
+        display_board_size=display_board_size,
+        network_board_size=BOARD_SIZE,
+    )
+    if remap_meta.get("applied"):
+        return remapped_scores, True
+
+    if remap_meta.get("reason") != "missing_anchor_moves":
+        return scores, False
+
+    opening_scores, _cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
+    projected_scores = {}
+    changed = False
+    for move, score in scores.items():
+        calibrated = opening_scores.get(move)
+        if calibrated is None:
+            projected_scores[move] = float(score)
+            continue
+        calibrated = float(calibrated)
+        projected_scores[move] = calibrated
+        if abs(calibrated - float(score)) > 1e-12:
+            changed = True
+    return projected_scores, changed
 
 
 def _pie_rule_swap_probability_from_opening_prob(opening_win_prob: float) -> float:
@@ -492,6 +551,9 @@ def evaluate_pie_rule_swap_decision(
         "cache_model_path": cache_meta.get("model_path"),
         "cache_model_epoch": cache_meta.get("epoch"),
         "cache_model_mini": cache_meta.get("mini"),
+        "opening_score_remap_applied": bool(
+            cache_meta.get("opening_score_remap_applied", False)
+        ),
     }
 
 
@@ -525,6 +587,9 @@ def build_pie_rule_response_fields(
             "pie_rule_cache_hit": pie_decision["cache_hit"],
             "pie_rule_cache_model_epoch": pie_decision["cache_model_epoch"],
             "pie_rule_cache_model_mini": pie_decision["cache_model_mini"],
+            "pie_rule_opening_score_remap_applied": pie_decision[
+                "opening_score_remap_applied"
+            ],
         }
     )
     return response
@@ -1745,6 +1810,23 @@ def api_move_heatmap():
             top_k=top_k,
             policy_temperature=policy_temperature,
         )
+        heatmap_payload = heatmap.to_dict()
+        remap_applied = False
+        remapped_scores, remap_applied = _maybe_remap_first_move_heatmap_scores(
+            trmph=trmph,
+            display_board_size=display_board_size,
+            model_id=model_id,
+            scores=dict(heatmap_payload["scores"]),
+        )
+        if remap_applied:
+            heatmap_payload["scores"] = remapped_scores
+            if remapped_scores:
+                heatmap_payload["min_score"] = min(remapped_scores.values())
+                heatmap_payload["max_score"] = max(remapped_scores.values())
+            else:
+                heatmap_payload["min_score"] = None
+                heatmap_payload["max_score"] = None
+        heatmap_payload["opening_score_remap_applied"] = bool(remap_applied)
 
         response = {
             "success": True,
@@ -1754,7 +1836,7 @@ def api_move_heatmap():
             "display_board_size": display_board_size,
             "network_board_size": BOARD_SIZE,
         }
-        response.update(heatmap.to_dict())
+        response.update(heatmap_payload)
 
         _log_usage_event_with_trmph_context(
             "move_heatmap",
