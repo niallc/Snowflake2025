@@ -1,4 +1,5 @@
 import logging
+import sys
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.memory_profiler import get_profiler, write_epoch_summary
 from hex_ai.memory_leak_diagnostics import get_diagnostics
@@ -52,7 +53,14 @@ class MiniEpochOrchestrator:
         train_dataset = getattr(self.train_loader, 'dataset', None)
         if train_dataset is not None:
             if hasattr(train_dataset, 'position_pool'):
-                metrics['train_position_pool_size'] = float(len(train_dataset.position_pool))
+                position_pool = train_dataset.position_pool
+                metrics['train_position_pool_size'] = float(len(position_pool))
+                if position_pool:
+                    avg_position_bytes = self._estimate_average_entry_bytes(position_pool, max_samples=64)
+                    metrics['train_position_avg_bytes'] = float(avg_position_bytes)
+                    metrics['train_position_pool_est_mb'] = float(
+                        (avg_position_bytes * len(position_pool)) / (1024 ** 2)
+                    )
             if hasattr(train_dataset, 'shard_queues'):
                 metrics['train_shards_remaining'] = float(
                     sum(len(queue) for queue in train_dataset.shard_queues)
@@ -69,10 +77,64 @@ class MiniEpochOrchestrator:
                     metrics['validation_positions_consumed'] = float(val_dataset.validation_position_index)
 
         if hasattr(self.trainer, 'gradient_clipping_debug'):
-            metrics['gradient_clipping_debug_len'] = float(len(self.trainer.gradient_clipping_debug))
+            debug_entries = self.trainer.gradient_clipping_debug
+            metrics['gradient_clipping_debug_len'] = float(len(debug_entries))
+            if debug_entries:
+                avg_debug_entry_bytes = self._estimate_average_entry_bytes(debug_entries, max_samples=128)
+                metrics['gradient_clipping_debug_avg_bytes'] = float(avg_debug_entry_bytes)
+                metrics['gradient_clipping_debug_est_mb'] = float(
+                    (avg_debug_entry_bytes * len(debug_entries)) / (1024 ** 2)
+                )
 
         if metrics:
             profiler.log_object_census(metrics, label=label, extra_json={'batch_count': batch_count})
+
+    def _estimate_average_entry_bytes(self, values, max_samples: int = 64) -> float:
+        """
+        Approximate average deep size for a container's entries.
+
+        This is intentionally heuristic and bounded to keep profiling overhead low.
+        """
+        if not values:
+            return 0.0
+        sample_count = min(len(values), max_samples)
+        sample = values[:sample_count]
+        total = 0
+        for item in sample:
+            total += self._estimate_object_bytes(item, max_depth=3)
+        return total / max(1, sample_count)
+
+    def _estimate_object_bytes(self, obj, max_depth: int = 3, _depth: int = 0, _seen=None) -> int:
+        """Best-effort deep size estimate for small Python objects and numpy-like arrays."""
+        if _seen is None:
+            _seen = set()
+        obj_id = id(obj)
+        if obj_id in _seen:
+            return 0
+        _seen.add(obj_id)
+
+        size = sys.getsizeof(obj)
+        if hasattr(obj, 'nbytes'):
+            try:
+                size += int(obj.nbytes)
+            except Exception:
+                pass
+
+        if _depth >= max_depth:
+            return size
+
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                size += self._estimate_object_bytes(key, max_depth=max_depth, _depth=_depth + 1, _seen=_seen)
+                size += self._estimate_object_bytes(value, max_depth=max_depth, _depth=_depth + 1, _seen=_seen)
+        elif isinstance(obj, (list, tuple)):
+            for value in obj:
+                size += self._estimate_object_bytes(value, max_depth=max_depth, _depth=_depth + 1, _seen=_seen)
+        elif isinstance(obj, (set, frozenset)):
+            for value in obj:
+                size += self._estimate_object_bytes(value, max_depth=max_depth, _depth=_depth + 1, _seen=_seen)
+
+        return size
 
     def run(self):
         """

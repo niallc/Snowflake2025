@@ -18,7 +18,6 @@ import json
 import logging
 import random
 import time
-import copy
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union, Any
 from datetime import datetime
@@ -189,7 +188,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Position pool and shard management
         self.position_pool: List[Dict] = []
         self.shard_queues: List[List[Path]] = []  # One queue per directory
-        self.loaded_shards: set = set()  # Track loaded shards to prevent duplicates
+        # Track loaded shard counts per directory for proportional loading.
+        # Using counts avoids storing one path string per loaded shard.
+        self.loaded_shard_counts: List[int] = [0] * len(self.data_dirs)
         self.directory_weights: List[float] = []  # Proportional weights for each directory
         
         # Statistics and monitoring
@@ -365,8 +366,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             # Restore original shard queues
             self.shard_queues = [queue.copy() for queue in self._original_shard_queues]
             
-            # Clear loaded shards tracking
-            self.loaded_shards = set()
+            # Clear loaded shard tracking
+            self.loaded_shard_counts = [0] * len(self.data_dirs)
             
             # Clear position pool
             self.position_pool = []
@@ -462,7 +463,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         data = pickle.load(f)
                     
                     if isinstance(data, dict) and 'examples' in data:
-                        all_validation_positions.extend(data['examples'])
+                        # Keep only fields needed by training/validation to reduce steady-state memory.
+                        all_validation_positions.extend(
+                            self._create_compact_position_example(example, copy_arrays=False)
+                            for example in data['examples']
+                        )
                     
                     # Explicitly clear shard data dict after extending (examples are kept in all_validation_positions)
                     # This ensures the 'data' dict wrapper can be freed
@@ -525,6 +530,28 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         if self.verbose:
             self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
                            f"estimated {estimated_final_memory_gb:.2f}GB memory usage")
+
+    def _create_compact_position_example(self, example: Dict, copy_arrays: bool) -> Dict:
+        """
+        Build a compact in-memory training example.
+
+        We intentionally drop metadata fields after shuffling/processing because the
+        training loop only consumes board/policy/value/player_to_move.
+        """
+        board = example.get('board')
+        policy = example.get('policy')
+
+        if copy_arrays and isinstance(board, np.ndarray):
+            board = board.copy()
+        if copy_arrays and isinstance(policy, np.ndarray):
+            policy = policy.copy()
+
+        return {
+            'board': board,
+            'policy': policy,
+            'value': example.get('value'),
+            'player_to_move': example.get('player_to_move'),
+        }
     
     def _monitor_memory(self) -> bool:
         """
@@ -669,23 +696,14 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
                     continue
                 
-                # Add positions to pool (with explicit copying to break any shared references)
-                # Use deepcopy to ensure all fields (including metadata) are properly copied
+                # Add positions to pool (with explicit copying to break shared array references).
+                # Also drop metadata fields to keep memory overhead lower.
                 first_copy_checked = False  # Track if we've checked the first copy for diagnostics
                 for example in file_examples:
                     if positions_added >= positions_needed:
                         break
                     
-                    # Deep copy the entire example to break all shared references
-                    # This ensures the original 'data' dict can be garbage collected
-                    example_copy = copy.deepcopy(example)
-                    
-                    # Explicitly copy numpy arrays to ensure they're independent
-                    # (deepcopy should handle this, but being explicit for clarity and performance)
-                    if isinstance(example_copy.get('board'), np.ndarray):
-                        example_copy['board'] = example_copy['board'].copy()
-                    if isinstance(example_copy.get('policy'), np.ndarray) and example_copy['policy'] is not None:
-                        example_copy['policy'] = example_copy['policy'].copy()
+                    example_copy = self._create_compact_position_example(example, copy_arrays=True)
                     
                     # Check for array sharing AFTER copying (memory leak diagnostic)
                     # This verifies that the copy actually broke the memory sharing
@@ -697,7 +715,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     positions_added += 1
                 
                 # Mark shard as loaded and remove from queue
-                self.loaded_shards.add(str(shard_path))
+                self.loaded_shard_counts[selected_dir_idx] += 1
                 self.shard_queues[selected_dir_idx].pop(0)
                 self.total_shards_loaded += 1
                 shards_loaded_this_refill += 1
@@ -762,8 +780,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         current_ratios = []
         for dir_idx in available_dirs:
             # Count how many shards we've loaded from this directory
-            loaded_from_dir = sum(1 for shard_path in self.loaded_shards 
-                                if str(shard_path).startswith(self.data_dirs[dir_idx]))
+            loaded_from_dir = self.loaded_shard_counts[dir_idx]
             total_shards_in_dir = len(self.shard_queues[dir_idx]) + loaded_from_dir
             
             if total_shards_in_dir > 0:
@@ -1401,5 +1418,3 @@ class DataShuffler:
         except Exception as e:
             logger.error(f"Error during shuffling process: {e}")
             raise
-
-
