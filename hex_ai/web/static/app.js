@@ -512,6 +512,19 @@ function hideTooltip() {
 }
 
 // --- API Calls ---
+async function throwApiError(resp, fallbackMessage = 'API error') {
+  let message = `${fallbackMessage} (${resp.status})`;
+  try {
+    const err = await resp.json();
+    if (err && typeof err.error === 'string' && err.error.trim()) {
+      message = err.error;
+    }
+  } catch (_ignore) {
+    // Keep default fallback when body is not JSON.
+  }
+  throw new Error(message);
+}
+
 async function fetchConstants() {
   const resp = await fetch('/api/constants', {
     method: 'GET',
@@ -561,16 +574,7 @@ async function fetchMoveHeatmap(
     }),
   });
   if (!resp.ok) {
-    let message = `API error (${resp.status})`;
-    try {
-      const err = await resp.json();
-      if (err && err.error) {
-        message = err.error;
-      }
-    } catch (_ignore) {
-      // Keep default message when body is not JSON.
-    }
-    throw new Error(message);
+    await throwApiError(resp, 'Move heatmap request failed');
   }
   return await resp.json();
 }
@@ -610,7 +614,7 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         ...inlineHeatmapFields
       }),
     });
-    if (!resp.ok) throw new Error('API error');
+    if (!resp.ok) await throwApiError(resp, 'Policy move request failed');
     return await resp.json();
   } else if (move_method === 'fixed_tree') {
     // Use fixed tree search endpoint
@@ -626,7 +630,7 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         ...inlineHeatmapFields
       }),
     });
-    if (!resp.ok) throw new Error('API error');
+    if (!resp.ok) await throwApiError(resp, 'Fixed tree move request failed');
     return await resp.json();
   } else {
     // Use MCTS endpoint (default)
@@ -645,7 +649,7 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
         ...inlineHeatmapFields
       }),
     });
-    if (!resp.ok) throw new Error('API error');
+    if (!resp.ok) await throwApiError(resp, 'MCTS move request failed');
     return await resp.json();
   }
 }

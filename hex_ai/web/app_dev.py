@@ -1397,19 +1397,41 @@ def _validate_engine_request(
 
 
 def _validate_fixed_tree_search_widths(search_widths):
-    """Validate fixed-tree search widths and product constraint."""
-    if not search_widths:
-        raise ValueError("search_widths parameter is required")
+    """
+    Validate fixed-tree search widths and return a normalized integer list.
 
-    try:
-        product = np.prod(search_widths)
-    except Exception as exc:
-        raise ValueError(f"Invalid search_widths: {exc}") from exc
+    Enforces positive integer widths and the configured product cap.
+    """
+    if not isinstance(search_widths, (list, tuple)) or not search_widths:
+        raise ValueError("search_widths must be a non-empty array of positive integers")
 
-    if product > FIXED_TREE_MAX_PRODUCT:
-        raise ValueError(
-            f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}"
-        )
+    normalized_widths = []
+    product = 1
+
+    for idx, width in enumerate(search_widths):
+        if isinstance(width, bool):
+            raise ValueError(f"search_widths[{idx}] must be a positive integer")
+
+        try:
+            width_float = float(width)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"search_widths[{idx}] must be a positive integer") from exc
+
+        if not np.isfinite(width_float) or not width_float.is_integer():
+            raise ValueError(f"search_widths[{idx}] must be a positive integer")
+
+        width_int = int(width_float)
+        if width_int <= 0:
+            raise ValueError(f"search_widths[{idx}] must be > 0")
+
+        normalized_widths.append(width_int)
+        product *= width_int
+        if product > FIXED_TREE_MAX_PRODUCT:
+            raise ValueError(
+                f"Product of search widths ({product}) exceeds limit of {FIXED_TREE_MAX_PRODUCT}"
+            )
+
+    return normalized_widths
 
 
 
@@ -1632,11 +1654,11 @@ def api_fixed_tree_move():
     app.logger.info("=== FIXED TREE API CALL ===")
     app.logger.info(f"Request data: {data}")
     
-    validated_data, _, error_response = _validate_engine_request(
+    validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph", "search_widths"],
         optional_fields=["model_id", "temperature", "verbose"],
-        supports_inline_heatmap=False,
+        supports_inline_heatmap=True,
     )
     if error_response:
         return error_response
@@ -1659,7 +1681,7 @@ def api_fixed_tree_move():
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
     
     try:
-        _validate_fixed_tree_search_widths(search_widths)
+        search_widths = _validate_fixed_tree_search_widths(search_widths)
     except ValueError as e:
         app.logger.error(f"Error validating search_widths: {e}")
         return jsonify(
@@ -1676,6 +1698,20 @@ def api_fixed_tree_move():
         temperature,
         verbose
     )
+
+    if result.get("success") and inline_heatmap_options.get("enabled"):
+        heatmap_state = create_game_state_from_trmph(
+            result["new_trmph"],
+            context="for inline move heatmap",
+        )
+        maybe_attach_inline_move_heatmap(
+            result=result,
+            state=heatmap_state,
+            model_id=model_id,
+            heatmap_options=inline_heatmap_options,
+            model_getter=get_model,
+            logger=app.logger,
+        )
     
     app.logger.info("=== FIXED TREE API RESPONSE ===")
     app.logger.info(f"Result success: {result.get('success', 'MISSING')}")

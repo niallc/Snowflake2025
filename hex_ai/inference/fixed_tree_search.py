@@ -276,7 +276,8 @@ class FixedTreeSearch:
             # High confidence win - select best move from policy
             # Get legal moves for the current state
             legal_moves = state.get_legal_moves()
-            top_moves = get_top_k_moves_with_probs(policy, legal_moves, 13, 1)
+            board_size = state.board.shape[0]
+            top_moves = get_top_k_moves_with_probs(policy, legal_moves, board_size, 1)
             best_move = top_moves[0][0]
             return {
                 'reason': 'high_confidence',
@@ -346,7 +347,14 @@ class FixedTreeSearch:
         
         # Sample moves from policy
         legal_moves = node.state.get_legal_moves()
-        moves_with_probs = sample_moves_from_policy(node.policy, legal_moves, 13, width, self.config.temperature)
+        board_size = node.state.board.shape[0]
+        moves_with_probs = sample_moves_from_policy(
+            node.policy,
+            legal_moves,
+            board_size,
+            width,
+            self.config.temperature,
+        )
         moves = [move for move, prob in moves_with_probs]
         
         children = []
