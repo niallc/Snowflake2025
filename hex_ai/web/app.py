@@ -37,6 +37,7 @@ from hex_ai.web.inline_move_heatmap import (
     maybe_attach_inline_move_heatmap,
 )
 from hex_ai.web.small_board_opening_calibration import (
+    build_small_board_opening_diagnostics,
     remap_small_board_opening_scores,
     should_apply_small_board_opening_remap,
 )
@@ -348,11 +349,25 @@ def _compute_pie_rule_opening_scores(model_id: str, display_board_size: int):
         top_k=None,
         policy_temperature=1.0,
     )
+    raw_scores = dict(heatmap.scores)
     remapped_scores, remap_meta = remap_small_board_opening_scores(
-        heatmap.scores,
+        raw_scores,
         display_board_size=display_board_size,
         network_board_size=BOARD_SIZE,
     )
+    if remap_meta.get("applied"):
+        diagnostics = build_small_board_opening_diagnostics(
+            raw_scores,
+            remapped_scores,
+            display_board_size=display_board_size,
+            network_board_size=BOARD_SIZE,
+        )
+        diagnostics["context"] = "pie_rule_opening_cache"
+        diagnostics["model_id"] = model_id
+        app.logger.info(
+            "Small-board opening remap diagnostics: %s",
+            json.dumps(diagnostics, sort_keys=True),
+        )
     return remapped_scores, remap_meta
 
 
@@ -408,7 +423,7 @@ def _maybe_remap_first_move_heatmap_scores(
     display_board_size: int,
     model_id: str,
     scores: dict[str, float],
-) -> tuple[dict[str, float], bool]:
+) -> tuple[dict[str, float], bool, dict[str, object]]:
     """
     Apply opening-score remap for opening-position heatmaps on small boards.
 
@@ -416,12 +431,12 @@ def _maybe_remap_first_move_heatmap_scores(
     the pie-rule opening cache and project those calibrated scores onto the subset.
     """
     if _safe_count_trmph_moves(trmph) != 0:
-        return scores, False
+        return scores, False, {"reason": "not_opening_position"}
     if not should_apply_small_board_opening_remap(
         display_board_size=display_board_size,
         network_board_size=BOARD_SIZE,
     ):
-        return scores, False
+        return scores, False, {"reason": "not_small_board"}
 
     remapped_scores, remap_meta = remap_small_board_opening_scores(
         scores,
@@ -429,12 +444,15 @@ def _maybe_remap_first_move_heatmap_scores(
         network_board_size=BOARD_SIZE,
     )
     if remap_meta.get("applied"):
-        return remapped_scores, True
+        return remapped_scores, True, {"reason": "direct", "source": "direct_remap"}
 
     if remap_meta.get("reason") != "missing_anchor_moves":
-        return scores, False
+        return scores, False, {
+            "reason": str(remap_meta.get("reason", "not_applied")),
+            "source": "direct_remap",
+        }
 
-    opening_scores, _cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
+    opening_scores, cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
     projected_scores = {}
     changed = False
     for move, score in scores.items():
@@ -446,7 +464,11 @@ def _maybe_remap_first_move_heatmap_scores(
         projected_scores[move] = calibrated
         if abs(calibrated - float(score)) > 1e-12:
             changed = True
-    return projected_scores, changed
+    return projected_scores, changed, {
+        "reason": "missing_anchor_moves",
+        "source": "projection_from_opening_cache",
+        "cache_hit": bool(cache_meta.get("cache_hit", False)),
+    }
 
 
 def _pie_rule_swap_probability_from_opening_prob(opening_win_prob: float) -> float:
@@ -1811,12 +1833,12 @@ def api_move_heatmap():
             policy_temperature=policy_temperature,
         )
         heatmap_payload = heatmap.to_dict()
-        remap_applied = False
-        remapped_scores, remap_applied = _maybe_remap_first_move_heatmap_scores(
+        raw_scores = dict(heatmap_payload["scores"])
+        remapped_scores, remap_applied, remap_context = _maybe_remap_first_move_heatmap_scores(
             trmph=trmph,
             display_board_size=display_board_size,
             model_id=model_id,
-            scores=dict(heatmap_payload["scores"]),
+            scores=raw_scores,
         )
         if remap_applied:
             heatmap_payload["scores"] = remapped_scores
@@ -1826,7 +1848,24 @@ def api_move_heatmap():
             else:
                 heatmap_payload["min_score"] = None
                 heatmap_payload["max_score"] = None
+            diagnostics = build_small_board_opening_diagnostics(
+                raw_scores,
+                remapped_scores,
+                display_board_size=display_board_size,
+                network_board_size=BOARD_SIZE,
+            )
+            diagnostics["context"] = "api_move_heatmap"
+            diagnostics["model_id"] = model_id
+            diagnostics["selection_mode"] = selection_mode
+            diagnostics["remap_source"] = remap_context.get("source")
+            diagnostics["remap_reason"] = remap_context.get("reason")
+            app.logger.info(
+                "Small-board opening remap diagnostics: %s",
+                json.dumps(diagnostics, sort_keys=True),
+            )
         heatmap_payload["opening_score_remap_applied"] = bool(remap_applied)
+        heatmap_payload["opening_score_remap_source"] = remap_context.get("source")
+        heatmap_payload["opening_score_remap_reason"] = remap_context.get("reason")
 
         response = {
             "success": True,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 
 import hex_ai.utils.format_conversion as fc
+import numpy as np
 
 
 SMALL_BOARD_OPENING_TARGETS = {
@@ -53,6 +54,76 @@ def get_small_board_opening_anchor_moves(display_board_size: int) -> dict[str, s
 
 def _clamp_0_1(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _score_distribution_stats(scores: Mapping[str, float]) -> dict[str, float | int | None]:
+    values = [float(score) for score in scores.values()]
+    if not values:
+        return {
+            "count": 0,
+            "min": None,
+            "max": None,
+            "median": None,
+        }
+    return {
+        "count": len(values),
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "median": float(np.median(values)),
+    }
+
+
+def build_small_board_opening_diagnostics(
+    raw_scores: Mapping[str, float],
+    remapped_scores: Mapping[str, float],
+    *,
+    display_board_size: int,
+    network_board_size: int,
+) -> dict[str, object]:
+    """
+    Build concise diagnostics payload for opening-score remap debugging.
+
+    Includes:
+    - min/max/median before and after remap
+    - key watch moves (a1, a2, center, (k,k), (k,k-1))
+    """
+    anchor_moves = get_small_board_opening_anchor_moves(display_board_size)
+    k = int(display_board_size)
+    kk = fc.rowcol_to_trmph(k - 1, k - 1, board_size=k)
+    kk_minus_1 = fc.rowcol_to_trmph(k - 1, max(0, k - 2), board_size=k)
+
+    watch_moves = {
+        "a1": "a1",
+        "a2": "a2",
+        "center": anchor_moves["center"],
+        "k_k": kk,
+        "k_k_minus_1": kk_minus_1,
+    }
+
+    watch_scores = {
+        label: {
+            "move": move,
+            "raw": (
+                float(raw_scores[move])
+                if move in raw_scores
+                else None
+            ),
+            "remapped": (
+                float(remapped_scores[move])
+                if move in remapped_scores
+                else None
+            ),
+        }
+        for label, move in watch_moves.items()
+    }
+
+    return {
+        "display_board_size": int(display_board_size),
+        "network_board_size": int(network_board_size),
+        "stats_before": _score_distribution_stats(raw_scores),
+        "stats_after": _score_distribution_stats(remapped_scores),
+        "watch_scores": watch_scores,
+    }
 
 
 def _piecewise_linear_map(
