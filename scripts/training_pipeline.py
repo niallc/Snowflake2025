@@ -92,6 +92,7 @@ class PipelineConfig:
     run_training: bool = True
     cleanup_intermediate: bool = True
     enable_memory_profiling: bool = False  # Enable memory profiling
+    memory_profile_interval_seconds: int = 60  # Timeline sampling interval when profiling
     
     def __post_init__(self):
         """Generate derived paths and validate configuration."""
@@ -674,7 +675,7 @@ class TrainingPipeline:
         
         # Start memory profiling if enabled
         if self.config.enable_memory_profiling:
-            start_profiling()
+            start_profiling(interval_seconds=self.config.memory_profile_interval_seconds)
             take_snapshot("pipeline_start")
         
         try:
@@ -967,6 +968,8 @@ Examples:
     parser.add_argument("--no-cleanup", action="store_true", help="Keep intermediate files")
     parser.add_argument("--enable-memory-profiling", action="store_true", 
                        help="Enable memory profiling (tracks RSS vs heap and takes snapshots)")
+    parser.add_argument("--memory-profile-interval-seconds", type=int, default=60,
+                       help="Sampling interval for memory profiling timeline (default: 60)")
     
     return parser.parse_args()
 
@@ -1078,7 +1081,8 @@ def main():
             run_shuffling=not args.no_shuffling,
             run_training=not args.no_training,
             cleanup_intermediate=not args.no_cleanup,
-            enable_memory_profiling=args.enable_memory_profiling
+            enable_memory_profiling=args.enable_memory_profiling,
+            memory_profile_interval_seconds=args.memory_profile_interval_seconds
         )
         
         # Create and run pipeline

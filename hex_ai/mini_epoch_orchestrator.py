@@ -37,6 +37,43 @@ class MiniEpochOrchestrator:
         self.shutdown_handler = shutdown_handler
         self.start_epoch = start_epoch
 
+    def _log_mini_epoch_memory_markers(self, epoch: int, mini_epoch: int, batch_count: int) -> None:
+        """
+        Emit lightweight memory/census markers tied to mini-epoch boundaries.
+        """
+        profiler = get_profiler()
+        if profiler is None:
+            return
+
+        label = f"epoch_{epoch}_mini_{mini_epoch}_end"
+        profiler.log_measurement(label=label)
+
+        metrics = {}
+        train_dataset = getattr(self.train_loader, 'dataset', None)
+        if train_dataset is not None:
+            if hasattr(train_dataset, 'position_pool'):
+                metrics['train_position_pool_size'] = float(len(train_dataset.position_pool))
+            if hasattr(train_dataset, 'shard_queues'):
+                metrics['train_shards_remaining'] = float(
+                    sum(len(queue) for queue in train_dataset.shard_queues)
+                )
+            if hasattr(train_dataset, 'total_positions_yielded'):
+                metrics['train_positions_yielded'] = float(train_dataset.total_positions_yielded)
+
+        if self.val_loader is not None:
+            val_dataset = getattr(self.val_loader, 'dataset', None)
+            if val_dataset is not None:
+                if hasattr(val_dataset, 'validation_positions'):
+                    metrics['validation_positions_total'] = float(len(val_dataset.validation_positions))
+                if hasattr(val_dataset, 'validation_position_index'):
+                    metrics['validation_positions_consumed'] = float(val_dataset.validation_position_index)
+
+        if hasattr(self.trainer, 'gradient_clipping_debug'):
+            metrics['gradient_clipping_debug_len'] = float(len(self.trainer.gradient_clipping_debug))
+
+        if metrics:
+            profiler.log_object_census(metrics, label=label, extra_json={'batch_count': batch_count})
+
     def run(self):
         """
         Run the training loop with mini-epoch validation and checkpointing.
@@ -66,18 +103,32 @@ class MiniEpochOrchestrator:
             
             batch_iter = iter(self.train_loader)
             mini_epoch_idx = 0
+            epoch_exhausted = False
             while True:
-                mini_epoch_batches = []
                 try:
-                    for _ in range(self.mini_epoch_batches):
-                        mini_epoch_batches.append(next(batch_iter))
-                        batch_count += 1
+                    first_batch = next(batch_iter)
+                    batch_count += 1
                 except StopIteration:
                     self.logger.info(f"End of epoch {epoch+1} reached (StopIteration)")
-                    pass  # End of epoch
-                if not mini_epoch_batches:
                     self.logger.info(f"No more data in epoch {epoch+1}, breaking")
                     break  # No more data
+
+                remaining_batches = self.mini_epoch_batches - 1
+
+                # Stream mini-epoch batches instead of buffering the whole chunk.
+                # This lowers peak memory during long-running training.
+                def _mini_epoch_batch_stream():
+                    nonlocal batch_count, epoch_exhausted
+                    yield first_batch
+                    for _ in range(remaining_batches):
+                        try:
+                            batch = next(batch_iter)
+                            batch_count += 1
+                            yield batch
+                        except StopIteration:
+                            self.logger.info(f"End of epoch {epoch+1} reached (StopIteration)")
+                            epoch_exhausted = True
+                            return
                 
                 # Validation (do this before training so we can pass metrics)
                 val_metrics = None
@@ -90,7 +141,12 @@ class MiniEpochOrchestrator:
                     raise GracefulShutdownRequested()
                 
                 # Train on this mini-epoch
-                train_metrics = self.trainer.train_on_batches(mini_epoch_batches, epoch=epoch+1, mini_epoch=mini_epoch_idx+1, val_metrics=val_metrics)
+                train_metrics = self.trainer.train_on_batches(
+                    _mini_epoch_batch_stream(),
+                    epoch=epoch+1,
+                    mini_epoch=mini_epoch_idx+1,
+                    val_metrics=val_metrics
+                )
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
@@ -117,7 +173,13 @@ class MiniEpochOrchestrator:
                         )
                     msg += f"| Batches processed: {batch_count}"
                     self.logger.info(msg)
+
+                self._log_mini_epoch_memory_markers(epoch + 1, mini_epoch_idx + 1, batch_count)
                 mini_epoch_idx += 1
+
+                if epoch_exhausted:
+                    self.logger.info(f"No more data in epoch {epoch+1}, breaking")
+                    break
             
             # Take memory snapshot and write epoch summary after each epoch (if profiling enabled)
             profiler = get_profiler()

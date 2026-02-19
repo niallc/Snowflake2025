@@ -1298,14 +1298,6 @@ class Trainer:
             # Store both values for logging
             if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
                 state['gradient_norms'].append(post_clip_gradient_norm)  # Use post-clip for statistics
-                # Store both values for debugging
-                if not hasattr(self, 'gradient_clipping_debug'):
-                    self.gradient_clipping_debug = []
-                self.gradient_clipping_debug.append({
-                    'pre_clip': pre_clip_gradient_norm,
-                    'post_clip': post_clip_gradient_norm,
-                    'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
-                })
 
     def _handle_progress_logging(self, batch_idx: int, epoch: int, mini_epoch: int, state: Dict) -> None:
         """Handle progress logging for the current batch."""
