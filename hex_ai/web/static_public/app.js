@@ -41,6 +41,8 @@ class HexGame {
 
         // Difficulty levels will be loaded from backend in loadGameConstants()
         this.difficultyLevels = null;
+        this.trmphBoardShareBaseUrl = null;
+        this.virtualBoardPrefillMoves = {};
 
         // Purple hexes configuration using TRMPH coordinates
         this.PURPLE_HEXES = ['b10', 'b11', 'b12', 'b3', 'b4', 'b5', 'b6', 'd10',
@@ -51,21 +53,6 @@ class HexGame {
             'i11', 'i3', 'i4', 'i5', 'i6', 'i7', 'i8', 'i9', 'j10', 'j11', 'j3', 'j4', 'j5', 'j6',
             'j7', 'j8', 'j9', 'k10', 'k11', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'l2', 'l3',
             'l4', 'l5', 'l6', 'l7', 'l8', 'l9', 'l10', 'l11'];
-
-        this.virtualBoardPrefillMoves = {
-            13: '',
-            12: 'a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12',
-            11: 'a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11',
-            10: 'a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10',
-            9: 'a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9',
-            8: 'a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8',
-            7: 'a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7',
-            6: 'a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6',
-            5: 'a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5',
-            4: 'a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4',
-            3: 'a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3',
-            2: 'a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2'
-        };
 
         this.initializeElements();
         this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
@@ -829,6 +816,23 @@ class HexGame {
             const response = await fetch('/api/constants');
             const data = await response.json();
             this.boardSize = data.BOARD_SIZE;
+            if (typeof data.TRMPH_BOARD_SHARE_BASE_URL !== 'string' || !data.TRMPH_BOARD_SHARE_BASE_URL.trim()) {
+                throw new Error('TRMPH_BOARD_SHARE_BASE_URL is missing from backend constants');
+            }
+            this.trmphBoardShareBaseUrl = data.TRMPH_BOARD_SHARE_BASE_URL.trim();
+
+            if (!data.VIRTUAL_BOARD_PREFILL_MOVES || typeof data.VIRTUAL_BOARD_PREFILL_MOVES !== 'object') {
+                throw new Error('VIRTUAL_BOARD_PREFILL_MOVES is missing from backend constants');
+            }
+            this.virtualBoardPrefillMoves = Object.fromEntries(
+                Object.entries(data.VIRTUAL_BOARD_PREFILL_MOVES).map(([size, moves]) => {
+                    const parsedSize = parseInt(size, 10);
+                    if (!Number.isFinite(parsedSize)) {
+                        throw new Error(`Invalid display board size in VIRTUAL_BOARD_PREFILL_MOVES: ${size}`);
+                    }
+                    return [parsedSize, typeof moves === 'string' ? moves : ''];
+                })
+            );
             this.pieceValues = data.PIECE_VALUES;
             this.playerValues = data.PLAYER_VALUES;
             this.winnerValues = data.WINNER_VALUES;
@@ -1748,11 +1752,67 @@ class HexGame {
     }
 
 
-    copyTrmph() {
-        this.trmphDisplay.select();
-        this.trmphDisplay.setSelectionRange(0, 99999); // For mobile devices
-        document.execCommand('copy');
-        this.showSuccess('TRMPH sequence copied to clipboard');
+    getCurrentBareTrmphMoves() {
+        const current = (this.currentTRMPH || '').trim();
+        const preambleMatch = current.match(/^#(\d+),/);
+        const bareMoves = preambleMatch ? current.substring(preambleMatch[0].length) : current;
+        return this.stripVirtualPrefillIfPresent(bareMoves);
+    }
+
+    buildTrmphBoardUrl() {
+        if (!Number.isFinite(this.boardSize)) {
+            throw new Error('BOARD_SIZE not initialized from backend');
+        }
+        if (typeof this.trmphBoardShareBaseUrl !== 'string' || !this.trmphBoardShareBaseUrl) {
+            throw new Error('TRMPH board share base URL not initialized from backend');
+        }
+
+        const displaySize = this.validateBoardSize();
+        const prefill = this.virtualBoardPrefillMoves[displaySize];
+        if (typeof prefill !== 'string') {
+            throw new Error(`Missing virtual-board prefill for display board size ${displaySize}`);
+        }
+
+        const bareMoves = this.getCurrentBareTrmphMoves();
+        return `${this.trmphBoardShareBaseUrl}#${this.boardSize},${prefill}${bareMoves}`;
+    }
+
+    async writeTextToClipboard(text) {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            try {
+                await navigator.clipboard.writeText(text);
+                return;
+            } catch (_clipboardError) {
+                // Fall back to execCommand below when clipboard API is unavailable/blocked.
+            }
+        }
+
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
+        document.body.appendChild(textArea);
+        textArea.select();
+        textArea.setSelectionRange(0, text.length);
+
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (!copied) {
+            throw new Error('document.execCommand(copy) failed');
+        }
+    }
+
+    async copyTrmph() {
+        try {
+            const boardUrl = this.buildTrmphBoardUrl();
+            await this.writeTextToClipboard(boardUrl);
+            this.showSuccess('TRMPH board link copied to clipboard');
+        } catch (error) {
+            console.error('Failed to copy TRMPH board link:', error);
+            this.showError('Failed to copy TRMPH board link');
+        }
     }
 
 

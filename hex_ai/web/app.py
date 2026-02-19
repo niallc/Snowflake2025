@@ -178,6 +178,7 @@ DISPLAY_BOARD_SIZE_OPTIONS = list(range(BOARD_SIZE, MIN_DISPLAY_BOARD_SIZE - 1, 
 
 # Derived from legacy_code/FileConversion.py and existing rules.html guidance.
 # Values are bare TRMPH move strings (no "#13," prefix).
+TRMPH_BOARD_SHARE_BASE_URL = "https://trmph.com/hex/board"
 VIRTUAL_BOARD_PREFILL_MOVES = {
     13: "",
     12: "a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12",
@@ -1680,6 +1681,7 @@ def api_constants():
     """Return game constants for frontend use."""
     return jsonify({
         "BOARD_SIZE": BOARD_SIZE,
+        "TRMPH_BOARD_SHARE_BASE_URL": TRMPH_BOARD_SHARE_BASE_URL,
         "PIECE_VALUES": {
             "EMPTY": Piece.EMPTY.value,
             "BLUE": Piece.BLUE.value,
@@ -1696,6 +1698,7 @@ def api_constants():
         "DISPLAY_BOARD_SIZE_OPTIONS": DISPLAY_BOARD_SIZE_OPTIONS,
         "DEFAULT_DISPLAY_BOARD_SIZE": DEFAULT_DISPLAY_BOARD_SIZE,
         "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
+        "VIRTUAL_BOARD_PREFILL_MOVES": VIRTUAL_BOARD_PREFILL_MOVES,
         "DEFAULT_PIE_RULE_ENABLED": DEFAULT_PIE_RULE_ENABLED,
         "DIFFICULTY_LEVELS": get_difficulty_levels(),
         "ELO_CONFIG": {
