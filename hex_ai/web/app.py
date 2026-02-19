@@ -67,6 +67,8 @@ CORS_ALLOWED_ORIGINS = tuple(
 )
 
 app = Flask(__name__, static_folder="static_public")
+# Prevent duplicate app log lines when root logger handlers are configured.
+app.logger.propagate = False
 if CORS_ALLOW_ALL:
     CORS(app)
 elif CORS_ALLOWED_ORIGINS:
@@ -362,8 +364,8 @@ def _compute_pie_rule_opening_scores(model_id: str, display_board_size: int):
             display_board_size=display_board_size,
             network_board_size=BOARD_SIZE,
         )
-        diagnostics["context"] = "pie_rule_opening_cache"
-        diagnostics["model_id"] = model_id
+        diagnostics["ctx"] = "pie_cache"
+        diagnostics["model"] = model_id
         app.logger.info(
             "Small-board opening remap diagnostics: %s",
             json.dumps(diagnostics, sort_keys=True),
@@ -1854,11 +1856,11 @@ def api_move_heatmap():
                 display_board_size=display_board_size,
                 network_board_size=BOARD_SIZE,
             )
-            diagnostics["context"] = "api_move_heatmap"
-            diagnostics["model_id"] = model_id
-            diagnostics["selection_mode"] = selection_mode
-            diagnostics["remap_source"] = remap_context.get("source")
-            diagnostics["remap_reason"] = remap_context.get("reason")
+            diagnostics["ctx"] = "api_heatmap"
+            diagnostics["model"] = model_id
+            diagnostics["sel"] = selection_mode
+            diagnostics["src"] = remap_context.get("source")
+            diagnostics["why"] = remap_context.get("reason")
             app.logger.info(
                 "Small-board opening remap diagnostics: %s",
                 json.dumps(diagnostics, sort_keys=True),

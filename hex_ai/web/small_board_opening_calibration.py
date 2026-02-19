@@ -73,6 +73,24 @@ def _score_distribution_stats(scores: Mapping[str, float]) -> dict[str, float | 
     }
 
 
+def _round_sig(value: float | None, sig_figs: int = 3) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if not np.isfinite(numeric) or numeric == 0.0:
+        return numeric
+    return float(f"{numeric:.{sig_figs}g}")
+
+
+def _compact_rounded_stats(stats: dict[str, float | int | None]) -> dict[str, float | int | None]:
+    return {
+        "n": int(stats["count"]),
+        "min": _round_sig(stats["min"]),
+        "med": _round_sig(stats["median"]),
+        "max": _round_sig(stats["max"]),
+    }
+
+
 def build_small_board_opening_diagnostics(
     raw_scores: Mapping[str, float],
     remapped_scores: Mapping[str, float],
@@ -117,12 +135,23 @@ def build_small_board_opening_diagnostics(
         for label, move in watch_moves.items()
     }
 
+    compact_watch_scores = {}
+    for label, score_payload in watch_scores.items():
+        move = score_payload["move"]
+        compact_label = label if label in {"a1", "a2"} else f"{label}:{move}"
+        compact_watch_scores[compact_label] = {
+            "raw": _round_sig(score_payload["raw"]),
+            "norm": _round_sig(score_payload["remapped"]),
+        }
+
     return {
-        "display_board_size": int(display_board_size),
-        "network_board_size": int(network_board_size),
-        "stats_before": _score_distribution_stats(raw_scores),
-        "stats_after": _score_distribution_stats(remapped_scores),
-        "watch_scores": watch_scores,
+        "board": (
+            f"{int(display_board_size)}x{int(display_board_size)}"
+            f"->{int(network_board_size)}x{int(network_board_size)}"
+        ),
+        "before": _compact_rounded_stats(_score_distribution_stats(raw_scores)),
+        "after": _compact_rounded_stats(_score_distribution_stats(remapped_scores)),
+        "watch": compact_watch_scores,
     }
 
 
