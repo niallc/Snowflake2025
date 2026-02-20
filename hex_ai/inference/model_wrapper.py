@@ -15,6 +15,9 @@ class ModelWrapper:
     Designed for easy extension to ensembles and prediction caching.
     Now supports passing a model instance (e.g., for legacy models).
     """
+    # Class-level flag to only log initialization once per tournament
+    _initialization_logged = False
+    
     def __init__(
         self,
         checkpoint_path: str,
@@ -31,17 +34,23 @@ class ModelWrapper:
         self.model = self._load_model(checkpoint_path, model_type)
         self.model.eval()
         self.model.to(self.device)
+        # Memory note:
+        # - Model parameters live on device (CPU/CUDA/MPS). Even after Python objects are freed,
+        #   backends (especially CUDA/MPS) may keep memory "reserved" for performance.
+        # - So, OS-reported RSS/VRAM not dropping after a round is not, by itself, proof of a leak.
         self._logged_batch_predict_info = False
-        # Log effective device details for diagnostics
-        try:
-            param_device = next(self.model.parameters()).device
-        except StopIteration:
-            param_device = torch.device("unknown")
-        logging.getLogger(__name__).info(
-            f"ModelWrapper initialized: wrapper_device={self.device}, param_device={param_device}, "
-            f"mps_available={torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False}, "
-            f"cuda_available={torch.cuda.is_available()}"
-        )
+        # Log effective device details for diagnostics (only once per tournament)
+        if not ModelWrapper._initialization_logged:
+            try:
+                param_device = next(self.model.parameters()).device
+            except StopIteration:
+                param_device = torch.device("unknown")
+            logging.getLogger(__name__).info(
+                f"ModelWrapper initialized: wrapper_device={self.device}, param_device={param_device}, "
+                f"mps_available={torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False}, "
+                f"cuda_available={torch.cuda.is_available()}"
+            )
+            ModelWrapper._initialization_logged = True
         # self.prediction_cache = {}  # Uncomment to enable prediction caching
 
     def _detect_device(self, device: Optional[str]) -> torch.device:

@@ -28,7 +28,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "value_learning_rate_factor": [1],  # Value head learns slower if this is < 1
     "value_weight_decay_factor": [1],  # Value head gets more regularization if this is > 1
     "policy_weight": [0.7],
-    "learning_rate": [1.2e-3],  # Updated default for AdamW
+    "learning_rate": [8e-4],  # Updated default for AdamW
     
     # AdamW optimizer parameters
     "betas": [(0.9, 0.999)],  # Coefficients for computing running averages
@@ -648,16 +648,3 @@ class TrainingUtilities:
             return torch.cuda.memory_allocated() / (1024 * 1024)
         return None
     
-    @staticmethod
-    def get_checkpoints_to_keep(max_epoch: int, max_checkpoints: int) -> set:
-        """Determine which checkpoints to keep based on epoch number."""
-        # Always keep last 3, and 2, 5, 10, 20, 40, 60, 100, ...
-        keep = set()
-        if max_epoch < 4:
-            keep.update(range(1, max_epoch + 1))
-        else:
-            keep.update([max_epoch, max_epoch - 1, max_epoch - 2])
-            for k in [2, 5, 10, 20, 40, 60, 100, 140, 200, 300]:
-                if k <= max_epoch:
-                    keep.add(k)
-        return keep

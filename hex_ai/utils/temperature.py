@@ -2,8 +2,47 @@
 Temperature utility functions for the hex_ai library.
 """
 
-from typing import Optional
-from hex_ai.config import BOARD_SIZE as CFG_BOARD_SIZE
+from typing import Optional, Protocol
+
+
+def _require_positive_board_size(board_size: Optional[int], *, required: bool) -> Optional[int]:
+    """Validate board_size when provided (or required)."""
+    if board_size is None:
+        if required:
+            raise ValueError("board_size must be provided for game_progress temperature decay")
+        return None
+    if isinstance(board_size, bool):
+        raise TypeError("board_size must be an integer, got bool")
+
+    try:
+        size = int(board_size)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"board_size must be an integer, got {type(board_size)}") from exc
+    if size <= 0:
+        raise ValueError(f"board_size must be positive, got {board_size}")
+    return size
+
+
+SUPPORTED_TEMPERATURE_DECAY_TYPES = ("linear", "exponential", "step", "game_progress")
+
+
+class MCTSTemperatureConfig(Protocol):
+    """Protocol for MCTS configs that supply temperature-decay parameters."""
+    temperature_start: float
+    temperature_end: float
+    temperature_decay_type: str
+    temperature_decay_moves: int
+    temperature_step_thresholds: list[int]
+    temperature_step_values: list[float]
+
+
+def _validate_temperature_decay_type(temperature_decay_type: str) -> None:
+    """Fail fast on unsupported temperature decay modes."""
+    if temperature_decay_type not in SUPPORTED_TEMPERATURE_DECAY_TYPES:
+        raise ValueError(
+            f"Unsupported temperature_decay_type '{temperature_decay_type}'. "
+            f"Expected one of {SUPPORTED_TEMPERATURE_DECAY_TYPES}"
+        )
 
 
 def calculate_temperature_decay(
@@ -14,7 +53,8 @@ def calculate_temperature_decay(
     temperature_step_thresholds: list[int],
     temperature_step_values: list[float],
     move_count: int,
-    start_temp_override: Optional[float] = None
+    start_temp_override: Optional[float] = None,
+    board_size: Optional[int] = None,
 ) -> float:
     """
     Calculate temperature based on decay configuration and current move count.
@@ -28,10 +68,13 @@ def calculate_temperature_decay(
         temperature_step_values: Temperature values for step decay
         move_count: Number of moves played so far (0-based)
         start_temp_override: Optional override for starting temperature
+        board_size: Explicit board size. Required for "game_progress" decay.
     
     Returns:
         Current temperature value
     """
+    _validate_temperature_decay_type(temperature_decay_type)
+
     # Determine the starting temperature
     # Use override if provided, otherwise use temperature_start
     if start_temp_override is not None:
@@ -68,11 +111,30 @@ def calculate_temperature_decay(
     elif temperature_decay_type == "game_progress":
         # Temperature based on percentage of game completed
         # Estimate total game length as board_size^2 (full board)
-        board_size = CFG_BOARD_SIZE
-        estimated_total_moves = board_size * board_size
+        resolved_board_size = _require_positive_board_size(board_size, required=True)
+        estimated_total_moves = resolved_board_size * resolved_board_size
         progress = min(move_count / max(1, estimated_total_moves), 1.0)
         return start_temp + (temperature_end - start_temp) * progress
-    
-    else:
-        # Unknown decay type, return starting temperature
-        return start_temp
+
+    raise RuntimeError(
+        f"Unhandled temperature_decay_type '{temperature_decay_type}' "
+        "after validation; this indicates a logic bug."
+    )
+
+
+def calculate_mcts_root_temperature(move_count: int, cfg: MCTSTemperatureConfig, board_size: int) -> float:
+    """
+    Canonical non-Gumbel MCTS root temperature calculation.
+
+    This is shared by root move selection and visit-probability reporting.
+    """
+    return calculate_temperature_decay(
+        temperature_start=cfg.temperature_start,
+        temperature_end=cfg.temperature_end,
+        temperature_decay_type=cfg.temperature_decay_type,
+        temperature_decay_moves=cfg.temperature_decay_moves,
+        temperature_step_thresholds=cfg.temperature_step_thresholds,
+        temperature_step_values=cfg.temperature_step_values,
+        move_count=move_count,
+        board_size=board_size,
+    )

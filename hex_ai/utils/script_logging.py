@@ -24,7 +24,6 @@ class ScriptConfig:
     num_games: int
     strategy_config: Dict[str, Any]
     temperatures: Union[float, List[float], Dict[str, float]]
-    random_seed: int
     pie_rule: bool = False
     opening_length: Optional[int] = None
     opening_strategy: Optional[str] = None
@@ -48,6 +47,7 @@ class ScriptConfig:
     default_checkpoint_dir: Optional[str] = None
     temperature_end: Optional[float] = None
     no_batched_inference: Optional[bool] = None
+    confidence_termination_threshold: Optional[Union[float, List[float], Dict[str, float]]] = None
 
 
 class ConfigurationPrinter:
@@ -99,9 +99,17 @@ class ConfigurationPrinter:
         # Print pie rule information (tournaments only)
         if config.script_type != "selfplay":
             print(f"  Pie rule: {config.pie_rule}")
-        
-        # Print random seed
-        print(f"  Random seed: {config.random_seed}")
+
+        # Print confidence-based early termination threshold
+        if config.confidence_termination_threshold is not None:
+            if isinstance(config.confidence_termination_threshold, dict):
+                print("  Early termination threshold (per participant):")
+                for name, threshold in config.confidence_termination_threshold.items():
+                    print(f"    {name}: {threshold}")
+            elif isinstance(config.confidence_termination_threshold, list):
+                print(f"  Early termination thresholds: {config.confidence_termination_threshold}")
+            else:
+                print(f"  Early termination threshold: {config.confidence_termination_threshold}")
         
         # Print Gumbel configuration summary
         if include_gumbel:
@@ -379,7 +387,6 @@ def create_script_config_from_args(
         num_games=getattr(args, 'num_games', getattr(args, 'num_openings', 100)),
         strategy_config=strategy_config,
         temperatures=temperatures,
-        random_seed=getattr(args, 'seed', 0),
         pie_rule=getattr(args, 'pie_rule', not getattr(args, 'no_pie_rule', False)),
         opening_length=getattr(args, 'opening_length', None),
         opening_strategy=getattr(args, 'opening_strategy', None),
@@ -400,5 +407,6 @@ def create_script_config_from_args(
         output_dir=getattr(args, 'output_dir', None),
         checkpoint_dirs=getattr(args, 'checkpoint_dirs', None),
         default_checkpoint_dir=getattr(args, 'default_checkpoint_dir', None),
+        confidence_termination_threshold=getattr(args, 'confidence_termination_threshold', None),
         **kwargs
     )

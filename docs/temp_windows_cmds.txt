@@ -1,0 +1,104 @@
+# PowerShell Training Command for Windows
+
+# Activate the virtual environment
+hex_ai_env\Scripts\Activate.ps1
+
+# Set PYTHONPATH for the project
+$env:PYTHONPATH = "."
+
+# Note: The training pipeline now uses improved shard discovery logic
+# that finds files by shard number rather than using skip/take logic
+
+# Run the training pipeline with all data directories and shard ranges
+python scripts/training_pipeline.py `
+  --use-current-best-model `
+  --no-selfplay `
+  --no-preprocessing --no-trmph-processing --no-shuffling `
+  --training-data-dirs `
+    data/processed/sf18_shuffled `
+    data/processed/shuffled_selfplay_20250912_093351 `
+    data/processed/shuffled_selfplay_20250909_143400 `
+    data/processed/shuffled_sf25_20250906 `
+    data/processed/shuffled_selfplay_20250915_080433 `
+    data/processed/shuffled_selfplay_20250915_082202 `
+    data/processed/shuffled_selfplay_20250921_093611 `
+    data/processed/shuffled_selfplay_20250922_071957 `
+    data/processed/shuffled_selfplay_20250923_072259 `
+    data/processed/shuffled_selfplay_20250924_105628 `
+    data/processed/shuffled_selfplay_20250929_133829 `
+    data/processed/shuffled_selfplay_20251003_203155 `
+    data/processed/shuffled_selfplay_20251005_123332 `
+    data/processed/shuffled_selfplay_20251011_083026 `
+    data/processed/shuffled_selfplay_20251013_174955 `
+    data/processed/shuffled_selfplay_20251016_125706 `
+  --shard-ranges `
+    "0213-0215" `
+    "0013-0017" `
+    "0010-0015" `
+    "0015-0021" `
+    "0015-0021" `
+    "0015-0021" `
+    "0010-0014" `
+    "0010-0014" `
+    "0010-0014" `
+    "0010-0014" `
+    "0020-0027" `
+    "0089-0095" `
+    "0071-0080" `
+    "0021-0040" `
+    "0000-0030" `
+    "0000-0090" `
+  --validation-dirs `
+    data/processed/sf18_shuffled `
+    data/processed/shuffled_selfplay_20250924_105628 `
+    data/processed/shuffled_selfplay_20250929_133829 `
+    data/processed/shuffled_selfplay_20251003_203155 `
+    data/processed/shuffled_selfplay_20251005_123332 `
+    data/processed/shuffled_selfplay_20251011_083026 `
+    data/processed/shuffled_selfplay_20251013_174955 `
+    data/processed/shuffled_selfplay_20251016_125706 `
+  --validation-shard-ranges `
+    "498-498" `
+    "98-99" `
+    "97-99" `
+    "96-99" `
+    "94-99" `
+    "94-99" `
+    "90-99" `
+    "90-99"
+
+# Notes:
+# - Use backtick (`) for line continuation in PowerShell instead of backslash (\)
+# - Forward slashes in paths work fine with Python on Windows
+# - Make sure to run this from the project root directory
+# - The virtual environment activation may require setting execution policy if not already done:
+#   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# PowerShell Tournament Command for Windows
+
+# Activate the virtual environment
+cd .\Documents\Niall\programming\Snowflake2025\
+hex_ai_env\Scripts\Activate.ps1
+# git pull origin oct10
+
+# Set PYTHONPATH for the project
+$env:PYTHONPATH = "."
+
+# Run the tournament
+python scripts/run_tournament.py `
+  --knockout-dir=checkpoints/hyperparameter_tuning/pipeline_20251106_124025/ `
+  --knockout-config='{\"mcts_sims\": 38, \"enable_gumbel_root_selection\": true, \"temperature\": 1.0}' `
+  --top-k=2 `
+  --epoch-range="73,76" `
+  --mini-epoch-range="1,100" `
+  --games-per-match=50 `
+  --round-robin-games=100 `
+  --model-dirs="checkpoints/hyperparameter_tuning/pipeline_20251105_220508,checkpoints/hyperparameter_tuning/pipeline_20251102_235603,checkpoints/hyperparameter_tuning/pipeline_20251029_212557,checkpoints/hyperparameter_tuning/pipeline_20251027_065000" `
+  --model-files="epoch74_mini13.pt.gz,epoch72_mini7.pt.gz,epoch68_mini15.pt.gz,epoch64_mini20.pt.gz" `
+  --strategies="mcts,mcts,mcts,mcts" `
+  --mcts-sims=38 `
+  --enable-gumbel=true `
+  --trmph-source=data/sf25/oct14/ `
+  --temperature=1.0
+
+  

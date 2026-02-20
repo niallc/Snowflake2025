@@ -103,7 +103,7 @@ class TournamentModelConfig:
     """
     
     def __init__(self,
-                 default_model: str = "current_best",
+                 default_model: str = "best",
                  model_names: Optional[List[str]] = None,
                  model_paths: Optional[List[str]] = None,
                  per_participant_models: Optional[Dict[str, str]] = None):

@@ -31,6 +31,11 @@ NUM_PLAYERS = 2
 POLICY_OUTPUT_SIZE = BOARD_SIZE * BOARD_SIZE  # 169 for 13x13 board
 VALUE_OUTPUT_SIZE = 1
 
+# Fixed Tree Search configuration
+FIXED_TREE_MAX_PRODUCT = 100000  # Maximum product of search widths
+FIXED_TREE_DEFAULT_WIDTH = POLICY_OUTPUT_SIZE  # Default to full board sweep (169)
+FIXED_TREE_DEFAULT_TEMPERATURE = 0.2
+
 # One-hot encoded board constants (for 2N×N and 3N×N formats)
 PIECE_ONEHOT = 1      # Value for occupied positions in one-hot encoding
 EMPTY_ONEHOT = 0      # Value for empty positions in one-hot encoding
@@ -62,7 +67,7 @@ TRAINING_RED_WIN = 1.0
 TRMPH_PREFIX = "#13,"
 
 # Default hyperparameters
-LEARNING_RATE = 0.001
+LEARNING_RATE = 8e-4
 BATCH_SIZE = 256
 NUM_EPOCHS = 10
 
@@ -78,7 +83,7 @@ CHANNEL_PROGRESSION = [64, 128, 256, 512]  # Standard ResNet progression
 # MCTS inference defaults
 DEFAULT_BATCH_CAP = 64  # Default batch size for neural network evaluation
 DEFAULT_C_PUCT = 2.9    # Default PUCT exploration constant
-DEFAULT_MCTS_SIMS = 50  # Default number of MCTS simulations
+DEFAULT_MCTS_SIMS = 37  # Default number of MCTS simulations
 DEFAULT_CACHE_SIZE = 60000  # Default cache size for model inference
 DEFAULT_TEMPERATURE_START = 1.0  # Default starting temperature for move sampling
 DEFAULT_TEMPERATURE_END = 1.0  # Default ending temperature for move sampling
@@ -88,6 +93,8 @@ DEFAULT_GUMBEL_SIM_THRESHOLD = 99002  # Default simulation threshold for Gumbel 
 DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
 DEFAULT_GUMBEL_C_SCALE = 100  # Default Gumbel-AlphaZero c_scale parameter
 DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
+# Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
+TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.90
 
 # Gumbel candidate scaling defaults (power-law scaling)
 DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 75.0  # Scale factor for power-law candidate scaling
@@ -106,7 +113,12 @@ REFLECTION_AUGMENTATION = True
 # Dataset configuration
 DEFAULT_POOL_SIZE = 1_000_000  # Default number of positions to maintain in memory
 DEFAULT_REFILL_THRESHOLD = 750_000  # Refill pool when it drops below this many positions
-DEFAULT_MAX_MEMORY_GB = 14.0  # Maximum memory usage before graceful shutdown
+DEFAULT_MAX_MEMORY_GB = 28.0  # Maximum memory usage before graceful shutdown
+
+# Validation data memory estimation
+# Based on analysis of sample files: ~2.33x compression ratio (memory/disk)
+VALIDATION_DATA_COMPRESSION_RATIO = 2.33  # Memory size / disk size ratio
+MAX_TEMP_MEMORY_GB = 25.0  # Maximum temporary memory for loading validation data
 
 # Logging
 WANDB_PROJECT_NAME = "hex-ai-2025"

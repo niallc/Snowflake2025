@@ -626,7 +626,7 @@ class FirstNaNDetector:
             }
         }
         
-        with open(json_file, 'w') as f:
+        with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(json_summary, f, indent=2)
         
         self.first_nan_logger.info(f"JSON summary saved to: {json_file}")
@@ -780,7 +780,7 @@ class FirstNaNDetector:
             'batch_count': 0
         }
         
-        with open(json_file, 'w') as f:
+        with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(json_data, f, indent=2)
         
         self.first_nan_logger.info(f"Component debug data saved to: {debug_file}")
@@ -794,7 +794,7 @@ class FirstNaNDetector:
         # Create final summary with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         summary_file = self.log_dir / f"nan_detection_summary_{timestamp}.txt"
-        with open(summary_file, 'w') as f:
+        with open(summary_file, 'w', encoding='utf-8') as f:
             f.write("NaN DETECTION SUMMARY\n")
             f.write("=" * 50 + "\n")
             f.write(f"NaN detected: {self.nan_detected}\n")
@@ -804,10 +804,10 @@ class FirstNaNDetector:
             f.write(f"Timestamp: {datetime.now().isoformat()}\n")
             
             if self.nan_detected:
-                f.write("\n🚨 NaN WAS DETECTED DURING THIS RUN 🚨\n")
+                f.write("\n*** NaN WAS DETECTED DURING THIS RUN ***\n")
                 f.write("Check first_nan_detection.log for details.\n")
             else:
-                f.write("\n✅ No NaN detected during this run.\n")
+                f.write("\n*** No NaN detected during this run ***\n")
         
         self.first_nan_logger.info(f"Final summary saved to: {summary_file}")
 

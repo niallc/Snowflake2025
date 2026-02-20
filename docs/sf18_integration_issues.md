@@ -136,7 +136,6 @@ python temp/SF18Interface/HttpGameServer.py \
 
 # Run tournament
 source hex_ai_env/bin/activate
-export PYTHONPATH=.
 python scripts/run_sf18_tournament.py \
   --models=current_best \
   --strategies=mcts \

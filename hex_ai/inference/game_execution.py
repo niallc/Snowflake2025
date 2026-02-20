@@ -12,9 +12,11 @@ import logging
 import os
 import random
 import time
+import warnings
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
+import gc
 
 from hex_ai.config import (
     BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
@@ -39,8 +41,17 @@ from hex_ai.utils.deterministic_tournament_utils import (
     play_strategy_pair_games,
     report_strategy_pair_results
 )
+from hex_ai.memory_profiler import get_profiler
 
 logger = logging.getLogger(__name__)
+
+# PyTorch can emit this warning from internal legacy distributed symbols even
+# when project code does not call torch.distributed.reduce_op directly.
+warnings.filterwarnings(
+    "ignore",
+    message=r"`torch\.distributed\.reduce_op` is deprecated, please use `torch\.distributed\.ReduceOp` instead",
+    category=FutureWarning,
+)
 
 # Constants
 DEFAULT_OPENING_LENGTH = 5
@@ -59,6 +70,7 @@ class DeterministicTournamentResult(BaseTournamentResult):
         # Track timing data for each strategy
         self.strategy_timings = {name: 0.0 for name in participants}
         self.strategy_move_counts = {name: 0 for name in participants}
+        # Memory note: This is a small amount of information per game, unlikely to be a significant memory issue.
         self.game_timings = []  # List of individual game timing data
         self.start_time = time.time()
         self.end_time: Optional[float] = None
@@ -174,6 +186,109 @@ def get_move_config_for_strategy(strategy_config: StrategyConfig, global_tempera
     return MoveSelectionConfig(**config_dict)
 
 
+def _normalize_opening_line(raw_line: str) -> Optional[str]:
+    """
+    Normalize an opening source line into a TRMPH payload, or return None to skip.
+
+    Supported input lines:
+    - TRMPH game/opening lines (e.g. "#13,...", optionally with winner)
+    - "Opening N: #13,..." lines from saved opening lists
+    - Header/comment lines beginning with "#" (except TRMPH "#13,") are skipped
+    """
+    line = raw_line.strip()
+    if not line:
+        return None
+
+    # Saved openings files commonly use: "Opening 1: #13,..."
+    if line.startswith("Opening "):
+        if ":" not in line:
+            raise ValueError(f"Invalid opening line format: {raw_line.rstrip()!r}")
+        line = line.split(":", 1)[1].strip()
+        if not line:
+            return None
+
+    # Skip human-readable comments/headers, but keep TRMPH lines like "#13,..."
+    if line.startswith("#") and not line.startswith(TRMPH_PREFIX):
+        return None
+
+    return line
+
+
+def load_openings_from_file(
+    file_path: str,
+    opening_length: int = DEFAULT_OPENING_LENGTH,
+    *,
+    max_openings: Optional[int] = None,
+    require_winner: bool = False,
+    strict: bool = True,
+) -> List[OpeningPosition]:
+    """
+    Load opening positions from a file using a single parsing path.
+
+    This accepts TRMPH files (with metadata headers), plain opening lists, and
+    saved "Opening N: #13,..." files.
+
+    Args:
+        file_path: Path to input file
+        opening_length: Number of moves to keep per opening
+        max_openings: Optional cap on number of openings returned
+        require_winner: If True, only keep lines with explicit winner indicators
+        strict: If True, raise on malformed non-comment lines; if False, warn/skip
+
+    Returns:
+        List of OpeningPosition objects
+
+    Raises:
+        ValueError: If parsing fails in strict mode or no valid openings are found
+    """
+    openings: List[OpeningPosition] = []
+
+    with open(file_path, 'r') as f:
+        for line_num, raw_line in enumerate(f, 1):
+            if max_openings is not None and len(openings) >= max_openings:
+                break
+
+            try:
+                normalized = _normalize_opening_line(raw_line)
+                if normalized is None:
+                    continue
+
+                trmph_string, winner_indicator = parse_trmph_line_flexible(normalized)
+                if require_winner and winner_indicator is None:
+                    continue
+
+                moves = trmph_to_moves(trmph_string, BOARD_SIZE)
+                if len(moves) < opening_length:
+                    logger.warning(
+                        "Skipping short opening in %s line %d: got %d moves, need %d",
+                        file_path, line_num, len(moves), opening_length
+                    )
+                    continue
+
+                opening_moves = moves[:opening_length]
+                # Guard against malformed inputs with duplicate coordinates in one opening.
+                if len(set(opening_moves)) != len(opening_moves):
+                    logger.warning(
+                        "Skipping opening with duplicate moves in %s line %d: %s",
+                        file_path, line_num, opening_moves
+                    )
+                    continue
+
+                source_game = f"{os.path.basename(file_path)}:line{line_num}"
+                openings.append(OpeningPosition(opening_moves, source_game, opening_length))
+
+            except Exception as e:
+                if strict:
+                    raise ValueError(f"Error parsing line {line_num} in {file_path}: {e}")
+                logger.warning("Could not parse line %d in %s: %s", line_num, file_path, e)
+                continue
+
+    if not openings:
+        raise ValueError(f"No valid openings found in {file_path}")
+
+    return openings
+
+
 def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH, 
                                    max_openings: int = 500) -> List[OpeningPosition]:
     """
@@ -186,54 +301,19 @@ def extract_openings_from_trmph_file(file_path: str, opening_length: int = DEFAU
     
     Returns:
         List of OpeningPosition objects
-    
-    Raises:
-        ValueError: If file format is invalid or moves are malformed
     """
-    openings = []
-    
-    with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            if len(openings) >= max_openings:
-                break
-            
-            line = line.strip()
-            if not line or not line.startswith(TRMPH_PREFIX):
-                continue
-            
-            # Parse TRMPH line using centralized utility
-            try:
-                trmph_string, winner_indicator = parse_trmph_line_flexible(line)
-                
-                # Skip lines without winner indicator (we need completed games for openings)
-                if winner_indicator is None:
-                    continue
-                
-                # Convert TRMPH moves to row,col coordinates using centralized utility
-                try:
-                    moves = trmph_to_moves(trmph_string, BOARD_SIZE)
-                except ValueError as e:
-                    logger.warning(f"Could not parse moves in line {line_num}: {e}")
-                    continue
-                
-                # Only use openings with enough moves
-                if len(moves) >= opening_length:
-                    opening_moves = moves[:opening_length]
-                    
-                    # Check for duplicate moves within the opening
-                    unique_moves = set(opening_moves)
-                    if len(unique_moves) == len(opening_moves):
-                        # No duplicates within this opening
-                        source_game = f"{os.path.basename(file_path)}:line{line_num}"
-                        openings.append(OpeningPosition(opening_moves, source_game, opening_length))
-                    else:
-                        logger.warning(f"Skipping opening with duplicate moves in line {line_num}: {opening_moves}")
-                
-            except Exception as e:
-                logger.warning(f"Could not parse line {line_num} in {file_path}: {e}")
-                continue
-    
-    return openings
+    try:
+        return load_openings_from_file(
+            file_path=file_path,
+            opening_length=opening_length,
+            max_openings=max_openings,
+            require_winner=True,
+            strict=False,
+        )
+    except ValueError:
+        # Non-strict parsing can still yield no valid openings; callers of this helper
+        # expect an empty list in that case rather than an exception.
+        return []
 
 
 def find_trmph_files(source_dir: str) -> List[str]:
@@ -339,6 +419,34 @@ def generate_diverse_openings(trmph_files: List[str], opening_length: int = DEFA
             logger.warning(f"Could not save cache file {cache_file}: {e}")
     
     return diverse_openings
+
+
+def select_random_openings(
+    openings: List[OpeningPosition],
+    num_openings: int,
+    seed: Optional[int] = None
+) -> List[OpeningPosition]:
+    """
+    Randomly select a subset of openings without replacement.
+
+    Args:
+        openings: Full opening pool
+        num_openings: Number of openings requested
+        seed: Optional seed for reproducible selection
+
+    Returns:
+        Selected opening subset
+    """
+    if num_openings >= len(openings):
+        logger.info(f"Requested {num_openings} openings, returning all {len(openings)} available")
+        return openings.copy()
+
+    rng = random.Random(seed) if seed is not None else random
+    selected_indices = rng.sample(range(len(openings)), num_openings)
+    selected_openings = [openings[i] for i in selected_indices]
+
+    logger.info(f"Randomly selected {len(selected_openings)} unique openings from pool of {len(openings)}")
+    return selected_openings
 
 
 def play_deterministic_game(
@@ -491,7 +599,8 @@ def run_round_robin_tournament(
     seed: Optional[int] = None,
     output_dir: Optional[str] = None,
     command_line: str = None,
-    run_desc: Optional[str] = None
+    run_desc: Optional[str] = None,
+    mps_empty_cache_per_pair: bool = False,
 ) -> DeterministicTournamentResult:
     """
     Run a round-robin tournament using pre-generated opening positions.
@@ -536,11 +645,40 @@ def run_round_robin_tournament(
     
     # Run round-robin between all strategy pairs
     for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
-        logger.info(f"\nPlaying {len(openings)} games: {strategy_a.name} vs {strategy_b.name}")
+        profiler = get_profiler()
+        if profiler is not None:
+            profiler.log_measurement(label=f"pair_start:{strategy_a.name}_vs_{strategy_b.name}")
+
+        openings_per_pair = len(openings)
+        games_per_pair = openings_per_pair * 2  # Each opening is played twice with swapped colors.
+        logger.info(
+            f"\nPlaying {games_per_pair} games ({openings_per_pair} openings x 2 colors): "
+            f"{strategy_a.name} vs {strategy_b.name}"
+        )
         
-        # Load models temporarily for this match only
+        # Load models temporarily for this match only (keeps peak memory lower).
         match_model_paths = [strategy_a.model_path, strategy_b.model_path]
         model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
+
+        # Best-effort census: counts of live model objects (helps distinguish true retention vs allocator high-water).
+        if profiler is not None:
+            try:
+                from hex_ai.inference.simple_model_inference import SimpleModelInference
+                from hex_ai.inference.model_wrapper import ModelWrapper
+                n_simple = 0
+                n_wrapper = 0
+                for o in gc.get_objects():
+                    if isinstance(o, SimpleModelInference):
+                        n_simple += 1
+                    elif isinstance(o, ModelWrapper):
+                        n_wrapper += 1
+                profiler.log_object_census(
+                    {"live_simple_model_inference": n_simple, "live_model_wrapper": n_wrapper},
+                    label=f"after_model_load:{strategy_a.name}_vs_{strategy_b.name}",
+                )
+            except Exception:
+                # Diagnostics should never break tournament execution.
+                pass
         
         # Set up output files for this strategy pair
         trmph_file, csv_file = setup_strategy_pair_files(output_dir, strategy_a, strategy_b)
@@ -552,7 +690,7 @@ def run_round_robin_tournament(
         pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
         pair_strategy_configs = [strategy_a, strategy_b]
         actual_trmph_file = write_tournament_trmph_header(
-            trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, 
+            trmph_file, pair_model_paths, games_per_pair, play_config, BOARD_SIZE,
             strategy_configs=pair_strategy_configs
         )
         
@@ -572,6 +710,34 @@ def run_round_robin_tournament(
         # Clean up temporary models to free memory
         # The temporary models will be garbage collected when this iteration ends
         logger.debug(f"Cleaning up temporary models for match: {strategy_a.name} vs {strategy_b.name}")
+
+        # Diagnostic only: on MPS, empty the backend cache between pairs to test allocator behavior.
+        if mps_empty_cache_per_pair:
+            try:
+                import torch
+                if torch.backends.mps.is_available() and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                    torch.mps.empty_cache()
+            except Exception:
+                pass
+
+        if profiler is not None:
+            profiler.log_measurement(label=f"pair_end:{strategy_a.name}_vs_{strategy_b.name}")
+            try:
+                from hex_ai.inference.simple_model_inference import SimpleModelInference
+                from hex_ai.inference.model_wrapper import ModelWrapper
+                n_simple = 0
+                n_wrapper = 0
+                for o in gc.get_objects():
+                    if isinstance(o, SimpleModelInference):
+                        n_simple += 1
+                    elif isinstance(o, ModelWrapper):
+                        n_wrapper += 1
+                profiler.log_object_census(
+                    {"live_simple_model_inference": n_simple, "live_model_wrapper": n_wrapper},
+                    label=f"after_pair_end:{strategy_a.name}_vs_{strategy_b.name}",
+                )
+            except Exception:
+                pass
     
     logger.info(f"Tournament complete. Total unique games played: {len(duplicate_tracker.seen_games)}")
     return result

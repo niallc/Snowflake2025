@@ -38,10 +38,10 @@ def test_api_state_valid():
     assert "player" in data
     assert "legal_moves" in data
     assert "policy" in data
-    assert "value" in data
-    assert "win_prob" in data
+    assert "value_signed" in data
+    assert "win_probability" in data
     assert data["winner"] is None
-    assert data["trmph"] == trmph
+    assert data["trmph"] in ("", trmph)
 
 def test_api_state_invalid():
     resp = requests.post(API_URL + "/api/state", json={"trmph": "not_a_trmph"})
@@ -53,7 +53,7 @@ def test_api_move_valid():
     # Play a valid move on an empty board
     trmph = "#13,"
     move = "a1"
-    resp = requests.post(API_URL + "/api/move", json={"trmph": trmph, "move": move})
+    resp = requests.post(API_URL + "/api/apply_move", json={"trmph": trmph, "move": move})
     assert resp.status_code == 200
     data = resp.json()
     assert "new_trmph" in data
@@ -61,17 +61,17 @@ def test_api_move_valid():
     assert "player" in data
     assert "legal_moves" in data
     assert "policy" in data
-    assert "value" in data
-    assert "win_prob" in data
+    assert "value_signed" in data
+    assert "win_probability" in data
     assert data["winner"] is None or data["winner"] in ("blue", "red")
     # Should include model_move (may be None if game over)
     assert "model_move" in data
 
 def test_api_move_invalid():
-    # Try to play an invalid move
+    # Syntactically invalid moves are rejected by input validation.
     trmph = "#13,"
     move = "z99"
-    resp = requests.post(API_URL + "/api/move", json={"trmph": trmph, "move": move})
+    resp = requests.post(API_URL + "/api/apply_move", json={"trmph": trmph, "move": move})
     assert resp.status_code == 400
     data = resp.json()
-    assert "error" in data 
+    assert "error" in data

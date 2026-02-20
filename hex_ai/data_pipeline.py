@@ -26,14 +26,15 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from time import sleep
 import psutil
 from .models import TwoHeadedResNet
-from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
+from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, PLAYER_CHANNEL, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB, VALIDATION_DATA_COMPRESSION_RATIO, MAX_TEMP_MEMORY_GB
 from hex_ai.data_utils import get_player_to_move_from_board, create_augmented_example_with_player_to_move
 from hex_ai.error_handling import check_data_loading_errors, get_board_state_error_tracker
+from hex_ai.memory_leak_diagnostics import get_diagnostics
 
 logger = logging.getLogger(__name__)
 
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
-# TODO: Refine ths as I doubt the actual validation gets nearly this but (once we restrict to max_validation_examples)
+# TODO: Refine ths as I doubt the actual validation gets nearly this big
 MAX_VALIDATION_MEMORY_GB = 9.0
 
 
@@ -131,6 +132,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         verbose: Verbose level (2=default, 3=detailed pool/shard info)
         random_seed: Random seed for reproducible behavior
         is_validation: Whether this is a validation dataset (enables special validation behavior)
+        shutdown_handler: Optional graceful shutdown handler to check for interrupts during pool refill
     """
     
     def __init__(self,
@@ -143,7 +145,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                  max_examples_unaugmented: Optional[int] = None,
                  verbose: int = 2,
                  random_seed: Optional[int] = None,
-                 is_validation: bool = False):
+                 is_validation: bool = False,
+                 shutdown_handler: Optional[Any] = None):
         super().__init__()
         
         # Validate inputs
@@ -170,6 +173,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.verbose = verbose
         self.random_seed = random_seed
         self.is_validation = is_validation
+        self.shutdown_handler = shutdown_handler
         
         # Set up random seed
         if random_seed is not None:
@@ -184,7 +188,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Position pool and shard management
         self.position_pool: List[Dict] = []
         self.shard_queues: List[List[Path]] = []  # One queue per directory
-        self.loaded_shards: set = set()  # Track loaded shards to prevent duplicates
+        # Track loaded shard counts per directory for proportional loading.
+        # Using counts avoids storing one path string per loaded shard.
+        self.loaded_shard_counts: List[int] = [0] * len(self.data_dirs)
         self.directory_weights: List[float] = []  # Proportional weights for each directory
         
         # Statistics and monitoring
@@ -194,13 +200,23 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self._memory_warning_logged = False  # Track if we've already logged the memory warning
         self._shards_exhausted_logged = False  # Track if we've already logged that shards are exhausted
         
+        # Memory leak diagnostics (if enabled)
+        self.diagnostics = get_diagnostics()
+        
         # Initialize shard discovery and weighting
+        if self.verbose:
+            dataset_type = "validation" if self.is_validation else "training"
+            self.logger.info(f"Initializing {dataset_type} dataset...")
         self._discover_shards()
         self._calculate_directory_weights()
         
         # Validation-specific initialization
         if self.is_validation:
+            if self.verbose:
+                self.logger.info("Loading validation data...")
             self._initialize_validation_dataset()
+            if self.verbose:
+                self.logger.info("Validation data loaded. Done.")
         
         if self.verbose:
             dataset_type = "validation" if self.is_validation else "training"
@@ -212,7 +228,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     
     def _discover_shards(self):
         """Discover and organize shards from all directories."""
-        from hex_ai.data_collection import parse_shard_range
+        from hex_ai.data_collection import expand_shard_range_spec
         
         self.shard_queues = []
         
@@ -225,18 +241,18 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     self.shard_queues.append([])  # Empty queue for this directory
                     continue
                 
-                # Parse shard range for this directory
-                start, end = parse_shard_range(shard_range, data_dir)
-                
-                if end is None:  # 'all' case
-                    skip_files = 0
-                    max_files = None
-                else:
-                    skip_files = start
-                    max_files = end - start + 1
+                # Parse shard range for this directory.
+                shard_numbers = expand_shard_range_spec(shard_range, data_dir)
                 
                 # Discover files in this directory
-                data_files = discover_processed_files(data_dir, skip_files=skip_files, max_files=max_files)
+                dataset_type = "validation" if self.is_validation else "training"
+                process_context = f"{dataset_type} dataset initialization"
+                
+                if shard_numbers is None:  # 'all' case - get all files
+                    data_files = discover_training_data_files_all(data_dir, process_context=process_context)
+                else:
+                    # Use shard-based approach
+                    data_files = discover_training_data_files_by_shards(data_dir, shard_numbers, process_context=process_context)
                 
                 if not data_files:
                     raise RuntimeError(f"No data files found in {data_dir} with range {shard_range}")
@@ -315,7 +331,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.estimated_total_games = total_estimated_games
         
         if self.verbose:
-            self.logger.info(f"Estimated total training data: ~{total_estimated_positions:,} positions from ~{total_estimated_games:,} games")
+            self.logger.info(f"Estimated total positions: ~{total_estimated_positions:,} positions from ~{total_estimated_games:,} games")
     
     def get_data_summary(self) -> dict:
         """Get a summary of the estimated training data."""
@@ -350,8 +366,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             # Restore original shard queues
             self.shard_queues = [queue.copy() for queue in self._original_shard_queues]
             
-            # Clear loaded shards tracking
-            self.loaded_shards = set()
+            # Clear loaded shard tracking
+            self.loaded_shard_counts = [0] * len(self.data_dirs)
             
             # Clear position pool
             self.position_pool = []
@@ -368,7 +384,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.logger.info(f"[StreamingMixedShardDataset] Training dataset reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
     
     def _calculate_directory_weights(self):
-        """Calculate proportional weights for each directory based on shard counts."""
+        """Calculate proportional weights for each directory based on shard counts.
+        
+        Note: Weights are based on number of shards (files), not position counts.
+        This prevents over-weighting directories with very large individual shards.
+        """
         shard_counts = [len(queue) for queue in self.shard_queues]
         total_shards = sum(shard_counts)
         
@@ -378,16 +398,61 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.directory_weights = [count / total_shards for count in shard_counts]
         
         if self.verbose:
-            self.logger.info(f"Directory weights: {[f'{w:.3f}' for w in self.directory_weights]}")
+            self.logger.info(f"Directory weights (based on shard counts): {[f'{w:.3f}' for w in self.directory_weights]}")
     
     def _initialize_validation_dataset(self):
         """
-        Initialize validation dataset with memory guards and shuffling.
-        Loads all validation data into memory, applies memory guards, and shuffles deterministically.
+        Initialize validation dataset with improved memory estimation and guards.
+        Estimates memory usage from disk sizes before loading, then loads and shuffles data.
         """
-        # Load all validation data into memory for shuffling
+        if self.verbose:
+            self.logger.info("Estimating memory usage...")
+        # Step 1: Estimate total disk size and memory usage before loading
+        total_disk_size = 0
+        
+        # Count total shards to examine
+        total_shards_to_check = 0
+        for shard_queue in self.shard_queues:
+            total_shards_to_check += len([p for p in shard_queue if p.exists()])
+        
+        if self.verbose and total_shards_to_check > 0:
+            self.logger.info(f"Checking {total_shards_to_check} shards for memory estimation...")
+        
+        shards_checked = 0
+        for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
+            if not shard_queue:
+                continue
+            for shard_path in shard_queue:
+                if shard_path.exists():
+                    total_disk_size += shard_path.stat().st_size
+                    shards_checked += 1
+                    if self.verbose and total_shards_to_check > 10:  # Only show dots for many files
+                        print(".", end="", flush=True)
+        
+        if self.verbose and total_shards_to_check > 10:
+            print()  # Newline after dots
+        
+        # Estimate memory usage from disk size using compression ratio
+        estimated_temp_memory_gb = (total_disk_size * VALIDATION_DATA_COMPRESSION_RATIO) / (1024**3)
+        
+        # Check if temporary loading would exceed memory limit
+        if estimated_temp_memory_gb > MAX_TEMP_MEMORY_GB:
+            raise RuntimeError(f"Validation data would use {estimated_temp_memory_gb:.1f}GB during loading, exceeds {MAX_TEMP_MEMORY_GB}GB limit")
+        
+        # Step 2: Load all validation data into memory for shuffling
+        if self.verbose:
+            self.logger.info("Loading validation shards...")
         all_validation_positions = []
         
+        # Count total shards to load
+        total_shards_to_load = 0
+        for shard_queue in self.shard_queues:
+            total_shards_to_load += len(shard_queue)
+        
+        if self.verbose and total_shards_to_load > 0:
+            self.logger.info(f"Loading {total_shards_to_load} validation shards...")
+        
+        shards_loaded = 0
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
             if not shard_queue:
                 continue
@@ -398,31 +463,61 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         data = pickle.load(f)
                     
                     if isinstance(data, dict) and 'examples' in data:
-                        all_validation_positions.extend(data['examples'])
+                        # Keep only fields needed by training/validation to reduce steady-state memory.
+                        all_validation_positions.extend(
+                            self._create_compact_position_example(example, copy_arrays=False)
+                            for example in data['examples']
+                        )
+                    
+                    # Explicitly clear shard data dict after extending (examples are kept in all_validation_positions)
+                    # This ensures the 'data' dict wrapper can be freed
+                    del data
+                    
+                    shards_loaded += 1
+                    if self.verbose and total_shards_to_load > 5:  # Only show dots for multiple files
+                        print(".", end="", flush=True)
                         
                 except Exception as e:
                     self.logger.error(f"Failed to load validation shard {shard_path}: {e}")
                     raise RuntimeError(f"Failed to load validation shard {shard_path}: {e}")
         
-        # Memory guards - crash if validation data is too large
-        # Based on actual testing: ~4.5 KB per position in memory
-        estimated_memory_gb = len(all_validation_positions) * 0.0045 / 1024  # 4.5 KB per position
-        estimated_positions = len(all_validation_positions)
+        if self.verbose and total_shards_to_load > 5:
+            print()  # Newline after dots
         
-        if estimated_memory_gb > MAX_VALIDATION_MEMORY_GB:
-            raise RuntimeError(f"Validation data would use {estimated_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
+        # Step 3: Calculate usage fraction before shuffling/limiting
+        total_loaded_positions = len(all_validation_positions)
         
-        if estimated_positions > 5_000_000:
-            raise RuntimeError(f"Validation data would have {estimated_positions:,} positions, exceeds 5M limit")
+        # Calculate usage fraction: how much of the loaded data we'll actually use
+        if self.max_examples_unaugmented is not None and total_loaded_positions > self.max_examples_unaugmented:
+            # We loaded more than we need, so we'll use a fraction
+            usage_fraction = self.max_examples_unaugmented / total_loaded_positions
+        else:
+            # We'll use all loaded data
+            usage_fraction = 1.0
         
-        # Shuffle validation data deterministically
+        # Estimate final memory usage based on usage fraction
+        estimated_final_memory_gb = estimated_temp_memory_gb * usage_fraction
+        
+        # Step 4: Check final memory usage against validation limit
+        if estimated_final_memory_gb > MAX_VALIDATION_MEMORY_GB:
+            raise RuntimeError(f"Validation data would use {estimated_final_memory_gb:.1f}GB, exceeds {MAX_VALIDATION_MEMORY_GB}GB limit")
+        
+        # Step 5: Shuffle validation data deterministically
+        if self.verbose:
+            self.logger.info("Shuffling validation data...")
         if self.random_seed is not None:
             random.seed(self.random_seed)
         random.shuffle(all_validation_positions)
         
-        # Limit to max_validation_examples if specified
+        # Step 6: Limit to max_validation_examples if specified
         if self.max_examples_unaugmented is not None and len(all_validation_positions) > self.max_examples_unaugmented:
             all_validation_positions = all_validation_positions[:self.max_examples_unaugmented]
+        
+        # Step 7: Get final position count and check limits
+        actual_positions = len(all_validation_positions)
+        
+        if actual_positions > 5_000_000:
+            raise RuntimeError(f"Validation data would have {actual_positions:,} positions, exceeds 5M limit")
         
         # Store shuffled validation data
         self.validation_positions = all_validation_positions
@@ -434,7 +529,29 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         if self.verbose:
             self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
-                           f"estimated {estimated_memory_gb:.2f}GB memory usage")
+                           f"estimated {estimated_final_memory_gb:.2f}GB memory usage")
+
+    def _create_compact_position_example(self, example: Dict, copy_arrays: bool) -> Dict:
+        """
+        Build a compact in-memory training example.
+
+        We intentionally drop metadata fields after shuffling/processing because the
+        training loop only consumes board/policy/value/player_to_move.
+        """
+        board = example.get('board')
+        policy = example.get('policy')
+
+        if copy_arrays and isinstance(board, np.ndarray):
+            board = board.copy()
+        if copy_arrays and isinstance(policy, np.ndarray):
+            policy = policy.copy()
+
+        return {
+            'board': board,
+            'policy': policy,
+            'value': example.get('value'),
+            'player_to_move': example.get('player_to_move'),
+        }
     
     def _monitor_memory(self) -> bool:
         """
@@ -540,11 +657,21 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         if positions_needed <= 0:
             return
         
+        # Show progress for initial pool filling (when pool is empty)
+        if len(self.position_pool) == 0 and self.verbose:
+            self.logger.info(f"Loading initial training pool ({self.pool_size:,} positions)...")
+        
         # Load shards proportionally until we have enough positions
         positions_added = 0
         shards_loaded_this_refill = 0
         
         while positions_added < positions_needed and self._has_available_shards():
+            # Check for shutdown periodically during pool refill
+            if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
+                self.logger.info("Shutdown requested during pool refill, stopping data loading")
+                from hex_ai.error_handling import GracefulShutdownRequested
+                raise GracefulShutdownRequested()
+            
             # Select directory to load from based on weights
             selected_dir_idx = self._select_directory_for_loading()
             if selected_dir_idx is None:
@@ -560,27 +687,53 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 
                 file_examples = data['examples'] if 'examples' in data else []
                 
+                # Track shard data loading for diagnostics
+                if self.diagnostics:
+                    self.diagnostics.track_shard_data_loaded(data, str(shard_path))
+                
                 if not file_examples:
                     self.logger.warning(f"Shard {shard_path} contains no examples, skipping")
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
                     continue
                 
-                # Add positions to pool
+                # Add positions to pool (with explicit copying to break shared array references).
+                # Also drop metadata fields to keep memory overhead lower.
+                first_copy_checked = False  # Track if we've checked the first copy for diagnostics
                 for example in file_examples:
                     if positions_added >= positions_needed:
                         break
-                    self.position_pool.append(example)
+                    
+                    example_copy = self._create_compact_position_example(example, copy_arrays=True)
+                    
+                    # Check for array sharing AFTER copying (memory leak diagnostic)
+                    # This verifies that the copy actually broke the memory sharing
+                    if self.diagnostics and not first_copy_checked:
+                        self.diagnostics.check_array_sharing(example_copy, data, str(shard_path))
+                        first_copy_checked = True
+                    
+                    self.position_pool.append(example_copy)
                     positions_added += 1
                 
                 # Mark shard as loaded and remove from queue
-                self.loaded_shards.add(str(shard_path))
+                self.loaded_shard_counts[selected_dir_idx] += 1
                 self.shard_queues[selected_dir_idx].pop(0)
                 self.total_shards_loaded += 1
                 shards_loaded_this_refill += 1
                 
+                # Show progress dots for initial pool loading
+                if len(self.position_pool) == 0 and self.verbose and shards_loaded_this_refill % 5 == 0:
+                    print(".", end="", flush=True)
+                
                 if self.verbose >= 3:
                     self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
                                    f"(added {min(positions_added, positions_needed)} to pool)")
+                
+                # Explicitly clear shard data to help garbage collection
+                # This ensures the loaded shard data can be freed immediately
+                if self.diagnostics:
+                    self.diagnostics.verify_shard_data_freed(str(shard_path))
+                del data
+                del file_examples
                 
             except Exception as e:
                 self.logger.error(f"Failed to load shard {shard_path}: {e}")
@@ -592,6 +745,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             if self.verbose >= 3:
                 self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
                                f"(total pool size: {len(self.position_pool):,})")
+            
+            # Track pool size for memory leak diagnostics
+            if self.diagnostics:
+                self.diagnostics.track_pool_size(len(self.position_pool))
+        
+        # Show completion message for initial pool loading
+        if len(self.position_pool) == positions_added and self.verbose and shards_loaded_this_refill > 0:
+            print()  # Newline after dots
+            self.logger.info(f"Training pool loaded. Done. ({positions_added:,} positions from {shards_loaded_this_refill} shards)")
         
         if self.verbose >= 3:
             self.logger.info(f"Pool refill complete: added {positions_added:,} positions from {shards_loaded_this_refill} shards")
@@ -618,8 +780,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         current_ratios = []
         for dir_idx in available_dirs:
             # Count how many shards we've loaded from this directory
-            loaded_from_dir = sum(1 for shard_path in self.loaded_shards 
-                                if str(shard_path).startswith(self.data_dirs[dir_idx]))
+            loaded_from_dir = self.loaded_shard_counts[dir_idx]
             total_shards_in_dir = len(self.shard_queues[dir_idx]) + loaded_from_dir
             
             if total_shards_in_dir > 0:
@@ -722,18 +883,22 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         return 10**12
 
 
-def discover_processed_files(data_dir: str = "data/processed", skip_files: int = 0, max_files: Optional[int] = None) -> List[Path]:
+def discover_training_data_files_all(data_dir: str = "data/processed", process_context: str = "training data loading") -> List[Path]:
     """
-    Discover all processed data files in the specified directory.
+    Discover all training data files in the specified directory.
+    
+    This function finds either:
+    - Shuffled training data files (shuffled_*.pkl.gz) if shuffling_progress.json exists
+    - Ordered position files (*_processed.pkl.gz) otherwise
     
     Args:
-        data_dir: Directory containing processed data files
-        skip_files: Number of files to skip from the beginning (sorted by name)
-        max_files: Maximum number of files to use after skipping (None = use all remaining)
+        data_dir: Directory containing data files
+        process_context: Context string describing what process is calling this function
         
     Returns:
-        List of paths to processed data files
+        List of paths to all data files
     """
+    
     data_path = Path(data_dir)
     if not data_path.exists():
         raise FileNotFoundError(f"Data directory {data_dir} not found")
@@ -742,34 +907,115 @@ def discover_processed_files(data_dir: str = "data/processed", skip_files: int =
     if (data_path / "shuffling_progress.json").exists():
         # Shuffled data: look for shuffled_*.pkl.gz files
         data_files = list(data_path.glob("shuffled_*.pkl.gz"))
-        logger.info(f"Found {len(data_files)} shuffled data files")
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(data_files)} shuffled data files in {data_dir}")
     else:
         # Original processed data: look for *_processed.pkl.gz files
         data_files = list(data_path.glob("*_processed.pkl.gz"))
-        logger.info(f"WARNING: Failed to find shuffled files. Found {len(data_files)} processed data files")
-        logger.info(f"WARNING: Do you want to quit this run and try again? (Ctrl+C to quit)")
-        sleep(5)
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for processed data files in {data_dir}")
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found {len(data_files)} processed data files (not shuffled)")
+        if len(data_files) == 0:
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: No processed data files found in {data_dir}")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: This directory does not contain the expected processed data files")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: Expected files matching pattern: *_processed.pkl.gz")
+            logger.warning(f"[DATA_DISCOVERY] {process_context}: Do you want to quit this run and try again? (Ctrl+C to quit)")
+            sleep(5)
     
     if not data_files:
         raise FileNotFoundError(f"No data files found in {data_dir}")
     
     # Sort files by name for consistent ordering
     data_files.sort()
-    
-    # Skip the first N files if requested
-    if skip_files > 0:
-        if skip_files >= len(data_files):
-            raise ValueError(f"Cannot skip {skip_files} files when only {len(data_files)} files exist in {data_dir}")
-        data_files = data_files[skip_files:]
-        logger.info(f"Skipped first {skip_files} files from {data_dir}, using {len(data_files)} remaining files")
-    
-    # Limit to max_files if requested
-    if max_files is not None and max_files > 0:
-        if max_files < len(data_files):
-            data_files = data_files[:max_files]
-            logger.info(f"Limited to first {max_files} files from {data_dir}, using {len(data_files)} files total")
-    
     return data_files
+
+
+def discover_training_data_files_by_shards(data_dir: str, shard_numbers: List[int], process_context: str = "training data loading") -> List[Path]:
+    """
+    Discover training data files by specific shard numbers.
+    
+    This function finds files by shard number rather than using skip/take logic.
+    It validates that files follow the expected naming pattern and crashes if expected shards are missing.
+    
+    Args:
+        data_dir: Directory containing data files
+        shard_numbers: List of shard numbers to find (e.g., [213, 214, 215])
+        process_context: Context string describing what process is calling this function
+        
+    Returns:
+        List of paths to data files for the requested shards
+        
+    Raises:
+        FileNotFoundError: If data directory doesn't exist or no files found
+        ValueError: If expected shard files are missing or don't follow expected pattern
+    """
+    import re
+    
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data directory {data_dir} not found")
+    
+    # Determine file pattern based on directory type
+    if (data_path / "shuffling_progress.json").exists():
+        # Shuffled data: look for shuffled_*.pkl.gz files
+        pattern = "shuffled_*.pkl.gz"
+        expected_format = r"shuffled_(\d+)\.pkl\.gz"
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for shuffled data files in {data_dir}")
+    else:
+        # Original processed data: look for *_processed.pkl.gz files  
+        pattern = "*_processed.pkl.gz"
+        expected_format = r"(\d+)_processed\.pkl\.gz"
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Looking for processed data files in {data_dir}")
+    
+    # Get all files matching the pattern
+    all_files = list(data_path.glob(pattern))
+    if not all_files:
+        raise FileNotFoundError(f"No data files found in {data_dir} matching pattern {pattern}")
+    
+    # Validate file naming pattern and extract shard numbers
+    shard_to_file = {}
+    for file_path in all_files:
+        match = re.match(expected_format, file_path.name)
+        if not match:
+            raise ValueError(f"File {file_path.name} does not follow expected naming pattern {expected_format}")
+        
+        shard_num = int(match.group(1))
+        shard_to_file[shard_num] = file_path
+    
+    # Find requested shard files
+    found_files = []
+    missing_shards = []
+    
+    for shard_num in shard_numbers:
+        if shard_num in shard_to_file:
+            found_files.append(shard_to_file[shard_num])
+        else:
+            missing_shards.append(shard_num)
+    
+    # Crash if any expected shards are missing
+    if missing_shards:
+        available_shards = sorted(shard_to_file.keys())
+        missing_preview = missing_shards[:20]
+        available_span = (
+            f"{available_shards[0]}-{available_shards[-1]}"
+            if available_shards
+            else "none"
+        )
+        raise ValueError(
+            f"Missing expected shards (count={len(missing_shards)}; first={missing_preview}) in {data_dir}. "
+            f"Available shard span: {available_span} (count={len(available_shards)}). "
+            "If the dataset has gaps, use non-contiguous ranges (e.g. '0-206,208-498') or use 'all'."
+        )
+    
+    # Sort by shard number for consistent ordering
+    found_files.sort(key=lambda p: int(re.match(expected_format, p.name).group(1)))
+    
+    if shard_numbers:
+        logger.info(
+            f"[DATA_DISCOVERY] {process_context}: Found {len(found_files)} files for "
+            f"{len(shard_numbers)} requested shards ({shard_numbers[0]}-{shard_numbers[-1]}) in {data_dir}"
+        )
+    else:
+        logger.info(f"[DATA_DISCOVERY] {process_context}: Found 0 files in {data_dir}")
+    return found_files
 
 
 # ============================================================================
@@ -1172,7 +1418,3 @@ class DataShuffler:
         except Exception as e:
             logger.error(f"Error during shuffling process: {e}")
             raise
-
-
-
-

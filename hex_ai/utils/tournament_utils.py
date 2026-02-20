@@ -134,14 +134,23 @@ def extract_model_name_from_label(player_label: str, checkpoint_path: str) -> st
         checkpoint_path: The actual checkpoint path for fallback
         
     Returns:
-        User-friendly model name for display
+        User-friendly model name for display (without .pt.gz extension)
     """
     if player_label != checkpoint_path:
         # This is a generated label like "Player2_model.pt.gz"
-        return os.path.basename(player_label)
+        filename = os.path.basename(player_label)
     else:
         # This is just the filename
-        return os.path.basename(checkpoint_path)
+        filename = os.path.basename(checkpoint_path)
+    
+    # Remove .pt.gz extension if present
+    if filename.endswith('.pt.gz'):
+        return filename[:-6]  # Remove '.pt.gz' (6 characters)
+    elif filename.endswith('.pt'):
+        return filename[:-3]  # Remove '.pt' (3 characters) as fallback
+    else:
+        # Return filename as-is if no expected extension
+        return filename
 
 
 def print_tournament_configuration(

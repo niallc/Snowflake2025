@@ -16,6 +16,7 @@ from hex_ai.enums import Piece, Channel, piece_to_char, channel_to_int, player_t
 
 import string
 import logging
+import re
 logger = logging.getLogger(__name__)
 
 LETTERS = string.ascii_lowercase
@@ -26,9 +27,17 @@ LETTERS = string.ascii_lowercase
 
 # --- TRMPH/Move Conversion Functions (from data_utils.py) ---
 def strip_trmph_preamble(trmph_text: str) -> str:
-    match = __import__('re').compile(r"#(\d+),").search(trmph_text)
+    """Strip TRMPH preamble if present, otherwise return input as-is.
+    
+    This allows the function to work with both full TRMPH strings (#13,a1b2)
+    and already-normalized strings (a1b2).
+    """
+    match = re.compile(r"#(\d+),").search(trmph_text)
     if not match:
-        raise ValueError(f"No board preamble found in trmph string: {trmph_text}")
+        # No preamble found - assume input is already normalized (bare moves).
+        # Validation of move format happens downstream in split_trmph_moves().
+        return trmph_text
+    
     return trmph_text[match.end():]
 
 def split_trmph_moves(bare_moves: str) -> list[str]:
@@ -44,7 +53,29 @@ def split_trmph_moves(bare_moves: str) -> list[str]:
         i = j
     return moves
 
+def count_trmph_moves(trmph_text: str) -> int:
+    """
+    Count moves in a TRMPH string (with or without preamble).
+    Returns 0 for empty/None input. Raises ValueError for invalid format.
+    """
+    if not trmph_text:
+        return 0
+    bare_moves = strip_trmph_preamble(trmph_text)
+    if not bare_moves:
+        return 0
+    return len(split_trmph_moves(bare_moves))
+
+def _validate_board_size(board_size: int) -> int:
+    """Validate and normalize board size for coordinate conversion helpers."""
+    size = int(board_size)
+    if size <= 0:
+        raise ValueError(f"Board size must be positive, got {board_size}")
+    if size > len(LETTERS):
+        raise ValueError(f"Board size {size} exceeds supported coordinate range ({len(LETTERS)})")
+    return size
+
 def trmph_move_to_rowcol(move: str, board_size: int = BOARD_SIZE) -> tuple[int, int]:
+    board_size = _validate_board_size(board_size)
     if len(move) < 2 or len(move) > 4:
         raise ValueError(f"Invalid trmph move: {move}")
     letter = move[0]
@@ -120,6 +151,7 @@ def parse_trmph_to_board(trmph_text: str, board_size: int = BOARD_SIZE) -> np.nd
 
 
 def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
+    board_size = _validate_board_size(board_size)
     if not (0 <= row < board_size) or not (0 <= col < board_size):
         raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {board_size}")
     letter = LETTERS[col]
@@ -127,29 +159,34 @@ def rowcol_to_trmph(row: int, col: int, board_size: int = BOARD_SIZE) -> str:
     return letter + number
 
 def tensor_to_rowcol(tensor_pos: int) -> Tuple[int, int]:
-    if not (0 <= tensor_pos < BOARD_SIZE * BOARD_SIZE):
-        raise ValueError(f"Invalid tensor position: {tensor_pos}")
-    row = tensor_pos // BOARD_SIZE
-    col = tensor_pos % BOARD_SIZE
-    return row, col
+    return tensor_to_rowcol_with_size(tensor_pos, BOARD_SIZE)
 
 def rowcol_to_tensor(row: int, col: int) -> int:
-    if not (0 <= row < BOARD_SIZE) or not (0 <= col < BOARD_SIZE):
-        raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {BOARD_SIZE}")
-    return row * BOARD_SIZE + col
+    return rowcol_to_tensor_with_size(row, col, BOARD_SIZE)
 
 def rowcol_to_tensor_with_size(row: int, col: int, board_size: int) -> int:
     """Convert row, col coordinates to tensor index with specified board size."""
+    board_size = _validate_board_size(board_size)
     if not (0 <= row < board_size) or not (0 <= col < board_size):
         raise ValueError(f"Invalid coordinates: ({row}, {col}) for board size {board_size}")
     return row * board_size + col
 
+def tensor_to_rowcol_with_size(tensor_pos: int, board_size: int) -> Tuple[int, int]:
+    """Convert tensor index to row, col coordinates with specified board size."""
+    board_size = _validate_board_size(board_size)
+    max_actions = board_size * board_size
+    if not (0 <= tensor_pos < max_actions):
+        raise ValueError(f"Invalid tensor position: {tensor_pos} for board size {board_size}")
+    row = tensor_pos // board_size
+    col = tensor_pos % board_size
+    return row, col
+
 def trmph_to_tensor(move: str, board_size: int = BOARD_SIZE) -> int:
     row, col = trmph_move_to_rowcol(move, board_size)
-    return rowcol_to_tensor(row, col)
+    return rowcol_to_tensor_with_size(row, col, board_size)
 
 def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
-    row, col = tensor_to_rowcol(tensor_pos)
+    row, col = tensor_to_rowcol_with_size(tensor_pos, board_size)
     return rowcol_to_trmph(row, col, board_size)
 
 # --- Board/Tensor Conversion Functions ---
@@ -244,3 +281,63 @@ def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
     board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     
     return board_nxn
+
+def normalize_game_input(text: str, board_size: int = BOARD_SIZE) -> str:
+    if not text:
+        return ""
+        
+    # Check for swap
+    is_swap = "swap" in text.lower()
+    
+    # Clean up the text
+    try:
+        if text.startswith('#'):
+             text = strip_trmph_preamble(text)
+    except ValueError:
+        pass
+
+    # Remove "swap" keyword
+    clean_text = re.sub(r'swap', '', text, flags=re.IGNORECASE)
+    
+    # Remove move numbers (e.g. "1.", "10.")
+    clean_text = re.sub(r'\b\d+\.', '', clean_text)
+    
+    # Remove all non-alphanumeric characters
+    clean_text = re.sub(r'[^a-zA-Z0-9]', '', clean_text)
+    
+    # If it was a swap game, we need to transpose all moves EXCEPT the first one
+    # The user wants the original move preserved, but the rest of the game reflected
+    if is_swap:
+        try:
+            # Ensure lowercase for move processing
+            moves = split_trmph_moves(clean_text.lower())
+            processed_moves = []
+            
+            # Handle first move (keep original)
+            if moves:
+                processed_moves.append(moves[0])
+                
+            # Handle subsequent moves (transpose)
+            for move in moves[1:]:
+                row, col = trmph_move_to_rowcol(move, board_size)
+                # Transpose: swap row and col
+                processed_moves.append(rowcol_to_trmph(col, row, board_size))
+                
+            return "".join(processed_moves)
+        except ValueError as e:
+            # If parsing fails, return original cleaned text and let validation handle it
+            logger.warning(f"Failed to transpose swap moves: {e}")
+            
+    # Strict Validation
+    if clean_text and not clean_text.isalnum():
+        raise ValueError("Invalid format: Input contains characters other than letters and numbers.")
+
+    if clean_text and not any(c.isdigit() for c in clean_text):
+         raise ValueError("Invalid format: Input must contain move numbers (e.g. a3).")
+         
+    if clean_text:
+        if not re.match(r'^([a-zA-Z]\d+)+$', clean_text):
+             raise ValueError("Invalid format: Input does not look like a sequence of moves (e.g. a3e6).")
+
+    # Convert to lowercase to ensure consistency with TRMPH format (e.g. a3, not A3)
+    return clean_text.lower()

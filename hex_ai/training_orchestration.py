@@ -26,7 +26,7 @@ from .models import TwoHeadedResNet
 from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
-from hex_ai.data_pipeline import discover_processed_files
+from hex_ai.data_pipeline import discover_training_data_files_all
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
 
@@ -45,7 +45,8 @@ def create_datasets(data_dirs: List[str],
                    refill_threshold: int = DEFAULT_REFILL_THRESHOLD,
                    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
-                   verbose: int = 2):
+                   verbose: int = 2,
+                   shutdown_handler=None):
     """
     Create DataLoader objects from StreamingMixedShardDataset for train and val sets.
     Returns (train_loader, val_loader).
@@ -53,6 +54,7 @@ def create_datasets(data_dirs: List[str],
     from hex_ai.data_pipeline import StreamingMixedShardDataset
     
     try:
+        logger.info("Creating training dataset...")
         train_dataset = StreamingMixedShardDataset(
             data_dirs=data_dirs,
             shard_ranges=shard_ranges,
@@ -62,21 +64,29 @@ def create_datasets(data_dirs: List[str],
             enable_augmentation=True,
             max_examples_unaugmented=max_examples_unaugmented,
             verbose=verbose,
-            random_seed=random_seed
-        )
-        
-        val_dataset = StreamingMixedShardDataset(
-            data_dirs=validation_dirs,
-            shard_ranges=validation_shard_ranges,
-            pool_size=pool_size,
-            refill_threshold=refill_threshold,
-            max_memory_gb=max_memory_gb,
-            enable_augmentation=False,  # Validation dataset is not augmented
-            max_examples_unaugmented=max_validation_examples,
-            verbose=verbose,
             random_seed=random_seed,
-            is_validation=True  # Enable validation-specific behavior
-        ) if max_validation_examples and validation_dirs else None
+            shutdown_handler=shutdown_handler
+        )
+        logger.info("Training dataset created. Done.")
+        
+        if max_validation_examples and validation_dirs:
+            logger.info("Creating validation dataset...")
+            val_dataset = StreamingMixedShardDataset(
+                data_dirs=validation_dirs,
+                shard_ranges=validation_shard_ranges,
+                pool_size=pool_size,
+                refill_threshold=refill_threshold,
+                max_memory_gb=max_memory_gb,
+                enable_augmentation=False,  # Validation dataset is not augmented
+                max_examples_unaugmented=max_validation_examples,
+                verbose=verbose,
+                random_seed=random_seed,
+                is_validation=True,  # Enable validation-specific behavior
+                shutdown_handler=shutdown_handler
+            )
+            logger.info("Validation dataset created. Done.")
+        else:
+            val_dataset = None
         
         # Log data summary after shard discovery
         train_summary = train_dataset.get_data_summary()
@@ -87,6 +97,18 @@ def create_datasets(data_dirs: List[str],
         logger.info(f"Estimated total games: ~{train_summary['estimated_total_games']:,}")
         logger.info(f"Total shards: {train_summary['total_shards']}")
         logger.info(f"Data directories: {train_summary['directories']}")
+        if max_examples_unaugmented is not None and train_summary['estimated_total_positions'] > 0:
+            estimated_positions = train_summary['estimated_total_positions']
+            coverage = min(1.0, max_examples_unaugmented / estimated_positions)
+            logger.info(
+                f"Per-epoch training cap: {max_examples_unaugmented:,} unaugmented samples "
+                f"(~{coverage:.1%} of estimated available positions)"
+            )
+            if coverage < 0.5:
+                logger.warning(
+                    "Per-epoch cap is significantly below estimated available training data. "
+                    "Increase max_examples_unaugmented/--max_samples if you want longer epochs."
+                )
         logger.info("=" * 60)
         
         # Log validation data summary if validation dataset exists
@@ -471,6 +493,7 @@ def run_hyperparameter_tuning_current_data(
     
     # Create datasets using the new mixed shard approach
     logger.info(f"Using StreamingMixedShardDataset with pool_size={pool_size:,}, refill_threshold={refill_threshold:,}")
+    logger.info("Creating training and validation datasets...")
     train_loader, val_loader = create_datasets(
         data_dirs=data_dirs,
         shard_ranges=shard_ranges,
@@ -484,8 +507,10 @@ def run_hyperparameter_tuning_current_data(
         refill_threshold=refill_threshold,
         max_memory_gb=max_memory_gb,
         random_seed=random_seed,
-        verbose=verbose
+        verbose=verbose,
+        shutdown_handler=shutdown_handler
     )
+    logger.info("Datasets created. Done.")
     
     # Log dataset information
     logger.info(f"\nStreaming mixed dataset: up to {max_examples_unaugmented} training examples, up to {max_validation_examples} validation examples.")
@@ -496,6 +521,7 @@ def run_hyperparameter_tuning_current_data(
     device = select_device()
     logger.info(f"Using device {device}...")
     logger.info(f"Starting {len(experiments)} experiments...")
+    logger.info("Initializing training...")
 
     all_results = []
     total_start_time = time.time()

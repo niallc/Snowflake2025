@@ -69,11 +69,13 @@ def create_required_directories():
     print()
     print("🎮 To start playing:")
     print("   source hex_ai_env/bin/activate")
-    print("   PYTHONPATH=. python -m hex_ai.web.app --port 5001")
+    print("   pip install -e .  # once per venv")
+    print("   python -m hex_ai.web.app --port 5001")
     print()
     print("🏋️ To start training:")
     print("   source hex_ai_env/bin/activate") 
-    print("   PYTHONPATH=. python scripts/training_pipeline.py --help")
+    print("   pip install -e .  # once per venv")
+    print("   python scripts/training_pipeline.py --help")
 
 if __name__ == "__main__":
     create_required_directories()

@@ -55,7 +55,9 @@ SHORT_LABELS = HYPERPARAMETER_SHORT_LABELS
 VARYING_PARAMS = [k for k, v in SWEEP.items() if len(v) > 1]
 
 # Configuration
-MAX_SAMPLES = 1_000_000  # Training samples (will be 4x larger with augmentation)
+# max_samples is a per-epoch cap on unaugmented positions yielded by the dataset.
+# Augmentation is applied on-the-fly per sample; this does not multiply the sample count.
+MAX_SAMPLES = 1_000_000
 MAX_VALIDATION_SAMPLES = 95_000  # Validation samples (no augmentation)
 
 # Mini-epoch configuration - more intuitive parameters
@@ -64,7 +66,7 @@ MAX_MINI_EPOCHS_PER_EPOCH = 200     # No more than 200 mini-epochs per epoch
 TARGET_SAMPLES_PER_MINI_EPOCH = 250000  # Target ~250k unaugmented samples per mini-epoch
 
 AUGMENTATION_CONFIG = {'enable_augmentation': True}
-EPOCHS = 2  # training now resets the epoch count this this is the further number of epochs to train
+EPOCHS = 10  # This this is (also?) the extra number of epochs to train when resuming
 
 # Build all parameter combinations
 def all_param_combinations(sweep_dict):
@@ -151,8 +153,11 @@ Examples:
   # Use specific shard ranges (shards 251-300 from first dir, all shards from second)
   python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled data/processed/shuffled_sf25_20250906 --shard-ranges "251-300" "all"
 
+  # Skip missing shards with a non-contiguous range
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/sf18_shuffled --shard-ranges "0-206,208-498"
+
   # Use current best model from model_config.py
-  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-current-best-model
+  python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --use-best-model
 
   # Use data shards in sorted order (no shuffling)
   python scripts/hyperparam_sweep.py --data-dirs data/processed/shuffled --no-shuffle-shards
@@ -167,7 +172,7 @@ Examples:
         '--shard-ranges',
         type=str,
         nargs='+',
-        help='Shard ranges for each data directory. Format: "start-end" or "all" (e.g., --shard-ranges "251-300" "all" to use shards 251-300 from first dir, all shards from second).'
+        help='Shard ranges for each data directory. Format: "start-end", comma-separated ranges like "0-206,208-498", or "all" (e.g., --shard-ranges "251-300" "all").'
     )
     
     # Validation data arguments
@@ -195,7 +200,7 @@ Examples:
     
     # Resume training arguments
     parser.add_argument(
-        '--use-current-best-model',
+        '--use-best-model',
         action='store_true',
         help='Use the current best model from hex_ai.inference.model_config as the resume checkpoint'
     )
@@ -212,7 +217,7 @@ Examples:
                        help="Directory to save experiment results")
     parser.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs to train")
     parser.add_argument("--max_samples", type=int, default=MAX_SAMPLES, 
-                       help="Max training samples (unaugmented)")
+                       help="Max training samples per epoch (unaugmented). This is a per-epoch cap, not total dataset size.")
     parser.add_argument("--max_validation_samples", type=int, default=MAX_VALIDATION_SAMPLES, 
                        help="Max validation samples (unaugmented)")
     parser.add_argument("--min_mini_epochs_per_epoch", type=int, default=MIN_MINI_EPOCHS_PER_EPOCH,
@@ -268,16 +273,16 @@ Examples:
 
     # Handle current best model option
     resume_from = None
-    if args.use_current_best_model:
+    if args.use_best_model:
         try:
             from hex_ai.inference.model_config import get_model_path
-            resume_from = get_model_path("current_best")
-            print(f"Using current best model: {resume_from}")
+            resume_from = get_model_path("best")
+            print(f"Using best model: {resume_from}")
         except ImportError:
             print("ERROR: Could not import hex_ai.inference.model_config")
             sys.exit(1)
         except Exception as e:
-            print(f"ERROR: Could not get current best model path: {e}")
+            print(f"ERROR: Could not get best model path: {e}")
             sys.exit(1)
 
     # Validate resume arguments
@@ -327,6 +332,12 @@ Examples:
     results_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Starting hyperparameter sweep with random seed: {args.random_seed}")
+    print(f"Per-epoch training cap (--max_samples): {args.max_samples:,} unaugmented samples")
+    if args.max_samples == MAX_SAMPLES:
+        print(
+            f"NOTE: Using default --max_samples={MAX_SAMPLES:,}. "
+            "Increase this if you want each epoch to cover more of the available shard data."
+        )
 
     start_time = time.time()
     results = None
@@ -345,7 +356,16 @@ Examples:
             target_samples_per_mini_epoch=args.target_samples_per_mini_epoch
         )
         
-        print(f"Mini-epochs: {args.max_samples // args.target_samples_per_mini_epoch} target, {args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch} range, {mini_epoch_samples:,} samples each")
+        target_mini_epochs = args.max_samples // args.target_samples_per_mini_epoch
+        actual_mini_epochs = max(
+            args.min_mini_epochs_per_epoch,
+            min(args.max_mini_epochs_per_epoch, target_mini_epochs)
+        )
+        print(
+            f"Mini-epochs per epoch: {actual_mini_epochs} "
+            f"(target={target_mini_epochs}, bounds={args.min_mini_epochs_per_epoch}-{args.max_mini_epochs_per_epoch}), "
+            f"{mini_epoch_samples:,} samples each"
+        )
         
         # Run hyperparameter tuning
         results = run_hyperparameter_tuning_current_data(

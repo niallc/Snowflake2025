@@ -131,7 +131,7 @@ Recommended values:
 
 ### Unit Tests
 ```bash
-PYTHONPATH=. pytest tests/test_batched_mcts.py -v
+pytest tests/test_batched_mcts.py -v
 ```
 
 ### Performance Tests

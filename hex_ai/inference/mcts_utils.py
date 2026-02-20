@@ -7,10 +7,10 @@ separate from general value processing utilities.
 
 import math
 import numpy as np
-import torch
 from typing import List, Tuple, Dict, Any, Optional
 
 from hex_ai.utils.format_conversion import rowcol_to_trmph
+from hex_ai.utils.temperature import calculate_mcts_root_temperature
 
 # =============================
 # MCTS Tree Analysis Utilities
@@ -19,24 +19,130 @@ from hex_ai.utils.format_conversion import rowcol_to_trmph
 # Threshold for detailed exploration tracking (when simulations <= this value)
 DETAILED_EXPLORATION_THRESHOLD = 47
 
+
+def _validate_board_size_value(board_size, *, source: str) -> int:
+    """Validate board-size values used in runtime MCTS conversions/decisions."""
+    if isinstance(board_size, bool):
+        raise TypeError(f"{source} must be an integer, got bool")
+    try:
+        size = int(board_size)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{source} must be an integer, got {type(board_size)}") from exc
+    if size <= 0:
+        raise ValueError(f"{source} must be positive, got {size}")
+    return size
+
+
+def _get_board_size_from_state(state) -> int:
+    """Infer board size from a game state tensor for explicit move conversion validation."""
+    if state is None:
+        raise ValueError("state cannot be None")
+    board_tensor = state.get_board_tensor()
+    if not hasattr(board_tensor, "shape") or len(board_tensor.shape) < 2:
+        raise ValueError(f"Invalid board tensor shape: {getattr(board_tensor, 'shape', None)}")
+    board_rows = _validate_board_size_value(board_tensor.shape[-2], source="state board tensor rows")
+    board_cols = _validate_board_size_value(board_tensor.shape[-1], source="state board tensor cols")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {board_rows}x{board_cols}")
+    return board_cols
+
+
+def _get_board_size_from_node(node) -> int:
+    """Read board size from node runtime metadata and validate it."""
+    if not hasattr(node, "board_size"):
+        raise AttributeError("MCTS node missing required board_size attribute")
+    return _validate_board_size_value(getattr(node, "board_size"), source="node.board_size")
+
+
+def _assert_matching_board_sizes(state_board_size: int, node_board_size: int) -> None:
+    """Fail fast when state-derived and node-derived board sizes disagree."""
+    if state_board_size != node_board_size:
+        raise ValueError(
+            "Board size mismatch between state and node: "
+            f"{state_board_size} vs {node_board_size}"
+        )
+
+
+def _require_tree_data_signed_value(tree_data: dict, *, key: str) -> float:
+    """Require a signed tree-data field and normalize it to float in [-1, 1]."""
+    if not isinstance(tree_data, dict):
+        raise TypeError(f"tree_data must be dict, got {type(tree_data)}")
+    if key not in tree_data:
+        raise KeyError(f"tree_data missing required key '{key}'")
+
+    value = tree_data[key]
+    if isinstance(value, bool):
+        raise TypeError(f"tree_data['{key}'] must be numeric, got bool")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"tree_data['{key}'] must be numeric, "
+            f"got {type(tree_data[key])}"
+        ) from exc
+    if not math.isfinite(value):
+        raise ValueError(
+            f"tree_data['{key}'] must be finite, "
+            f"got {value}"
+        )
+    if not -1.0 <= value <= 1.0:
+        raise ValueError(
+            f"tree_data['{key}'] must be in [-1, 1], "
+            f"got {value}"
+        )
+
+    return value
+
+
+def _signed_value_to_checked_probability(v_signed: float, *, source_key: str) -> float:
+    """Convert a validated signed value to probability and assert [0, 1] bounds."""
+    from hex_ai.value_utils import signed_to_prob
+
+    p_prob = signed_to_prob(v_signed)
+    if not 0.0 <= p_prob <= 1.0:
+        raise ValueError(
+            f"Converted probability from tree_data['{source_key}'] is outside [0, 1], "
+            f"got {p_prob} from signed value {v_signed}"
+        )
+    return p_prob
+
+
+def validate_required_win_probability_tree_data_fields(tree_data: dict) -> None:
+    """Fail fast if tree_data is missing required win-probability signed fields."""
+    _require_tree_data_signed_value(tree_data, key="v_ptm_ref_signed_root")
+    _require_tree_data_signed_value(tree_data, key="v_ptm_ref_signed_best_child")
+
+
 def compute_win_probability_from_tree_data(tree_data: dict) -> float:
     """
-    Compute win probability for the current player based on tree data.
-    
-    Args:
-        tree_data: Dictionary containing MCTS tree analysis data
-        
-    Returns:
-        Win probability for current player (0.0 to 1.0)
+    Compute root win probability for the current player from required tree-data fields.
+
+    Required contract:
+        - tree_data["v_ptm_ref_signed_root"] exists
+        - value is numeric, finite, and in [-1, 1]
     """
-    v_ptm_ref_signed_root = tree_data.get("v_ptm_ref_signed_root", 0.0)
-    
-    # Convert signed value to probability only at the edge (for external API)
-    # Root value is already in player-to-move reference frame from backpropagation
-    # +1 = current player wins, -1 = current player loses, 0 = neutral
-    from hex_ai.value_utils import signed_to_prob
-    p_ptm_prob_root = signed_to_prob(v_ptm_ref_signed_root)  # current player win probability
-    return p_ptm_prob_root
+    v_ptm_ref_signed_root = _require_tree_data_signed_value(
+        tree_data, key="v_ptm_ref_signed_root"
+    )
+    return _signed_value_to_checked_probability(
+        v_ptm_ref_signed_root, source_key="v_ptm_ref_signed_root"
+    )
+
+
+def compute_best_child_win_probability_from_tree_data(tree_data: dict) -> float:
+    """
+    Compute best-child win probability for the current player from required tree-data fields.
+
+    Required contract:
+        - tree_data["v_ptm_ref_signed_best_child"] exists
+        - value is numeric, finite, and in [-1, 1]
+    """
+    v_ptm_ref_signed_best_child = _require_tree_data_signed_value(
+        tree_data, key="v_ptm_ref_signed_best_child"
+    )
+    return _signed_value_to_checked_probability(
+        v_ptm_ref_signed_best_child, source_key="v_ptm_ref_signed_best_child"
+    )
 
 
 def extract_principal_variation_from_tree(root_node, max_length: int = 10) -> List[Tuple[int, int]]:
@@ -121,7 +227,7 @@ def should_enable_detailed_exploration(num_simulations: int) -> bool:
         num_simulations: Number of simulations to be performed
         
     Returns:
-        True if detailed exploration should be enabled (≤10 simulations)
+        True if detailed exploration should be enabled (<= threshold simulations)
     """
     return num_simulations <= DETAILED_EXPLORATION_THRESHOLD
 
@@ -144,17 +250,19 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: List[float]
         Dictionary containing exploration step information
     """
     # Get move coordinates
+    board_size = _get_board_size_from_node(node)
+    _assert_matching_board_sizes(_get_board_size_from_state(node.state), board_size)
     move_coords = node.legal_moves[action_idx]
     # Convert numpy coordinates to Python tuples for JSON serialization
     move_coords_python = (int(move_coords[0]), int(move_coords[1]))
-    move_str = f"{chr(97 + move_coords[1])}{move_coords[0] + 1}"
+    move_str = rowcol_to_trmph(int(move_coords[0]), int(move_coords[1]), board_size)
     
     # Get top PUCT scores for this node
     top_scores = []
     for i, score in enumerate(puct_scores):
         if i < len(node.legal_moves):
             move = node.legal_moves[i]
-            move_name = f"{chr(97 + move[1])}{move[0] + 1}"
+            move_name = rowcol_to_trmph(int(move[0]), int(move[1]), board_size)
             
             # Ensure all numeric values are finite for JSON serialization
             safe_score = float(score) if math.isfinite(float(score)) else 0.0
@@ -178,7 +286,7 @@ def create_exploration_step_info(node, action_idx: int, puct_scores: List[float]
         'depth': int(depth),
         'node_hash': int(node.state_hash),  # Convert to Python int
         'to_play': int(node.to_play.value),  # Convert to Python int
-        'legal_moves': [f"{chr(97 + int(m[1]))}{int(m[0]) + 1}" for m in node.legal_moves],
+        'legal_moves': [rowcol_to_trmph(int(m[0]), int(m[1]), board_size) for m in node.legal_moves],
         'top_puct_scores': top_scores[:5],  # Top 5 scores
         'selected_action': int(action_idx),
         'selected_move': move_str,
@@ -266,6 +374,8 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         }
 
     # Get visit counts and convert to TRMPH format
+    board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(_get_board_size_from_state(root_node.state), board_size)
     visit_counts = {}
     mcts_probabilities = {}
     total_visits = int(np.sum(root_node.N))
@@ -274,7 +384,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
     if total_visits == 0 and hasattr(root_node, 'terminal_moves') and any(root_node.terminal_moves):
         # This is a terminal move shortcut case - provide meaningful data
         for i, (row, col) in enumerate(root_node.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
             if root_node.terminal_moves[i]:
                 # Terminal move gets 100% probability and 1 visit
                 visit_counts[move_trmph] = 1
@@ -287,7 +397,7 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
     else:
         # Normal MCTS case - use actual visit counts
         for i, (row, col) in enumerate(root_node.legal_moves):
-            move_trmph = f"{chr(ord('a') + col)}{row + 1}"
+            move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
             visits = int(root_node.N[i])
             visit_counts[move_trmph] = visits
             
@@ -336,6 +446,9 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         "max_depth": max_depth,
         "principal_variation": principal_variation
     }
+
+    # Fail fast if required win-probability fields are missing or malformed.
+    validate_required_win_probability_tree_data_fields(result)
     
     # Add move probabilities if provided
     if move_probs is not None:
@@ -350,7 +463,8 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
 
 def _convert_moves_to_trmph_dict(
     legal_moves: List[Tuple[int, int]], 
-    values: np.ndarray
+    values: np.ndarray,
+    board_size: int,
 ) -> Dict[str, float]:
     """
     Core utility to convert move data to TRMPH format dictionary.
@@ -362,9 +476,15 @@ def _convert_moves_to_trmph_dict(
     Returns:
         Dictionary mapping TRMPH move strings to values
     """
+    if len(legal_moves) != len(values):
+        raise ValueError(
+            f"Length mismatch for move/value conversion: "
+            f"{len(legal_moves)} legal moves vs {len(values)} values"
+        )
+
     result = {}
     for i, (row, col) in enumerate(legal_moves):
-        move_trmph = rowcol_to_trmph(row, col)
+        move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
         result[move_trmph] = float(values[i])
     
     return result
@@ -373,8 +493,9 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     """
     Calculate temperature-scaled probabilities from visit counts (for PUCT mode).
     
-    This is the same logic used in MCTS move selection, extracted
-    into a reusable utility for debugging and analysis purposes.
+    This shares the same root-temperature schedule as MCTS move selection.
+    For very low temperatures, this returns normalized visit counts for
+    reporting while move selection itself is deterministic.
     
     Args:
         root_node: MCTS root node containing visit counts
@@ -386,19 +507,22 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
     """
     counts = root_node.N.astype(np.float64)
     total_visits = counts.sum()
+    board_size = _get_board_size_from_state(root_state)
+    node_board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(board_size, node_board_size)
     
     if total_visits <= 0:
         raise RuntimeError(f"No visits recorded during MCTS search. Need to debug how this happens.")
     
-    # Calculate temperature with decay
+    # Use the canonical non-Gumbel root temperature helper.
     move_count = len(root_state.move_history)
-    temp = _calculate_root_temperature(move_count, cfg)
+    temp = calculate_mcts_root_temperature(move_count=move_count, cfg=cfg, board_size=board_size)
     
     if temp <= cfg.temperature_deterministic_cutoff:
-        # Deterministic selection - use raw visit counts
+        # Deterministic selection path - expose normalized visit counts for reporting
         probs = counts / total_visits
     else:
-        # Apply temperature scaling using the same logic as move selection
+        # Apply the same top-k filtering and temperature transform used in move sampling
         try:
             # Apply top-k filtering if configured
             if cfg.visit_sampling_top_k > 0 and len(counts) > cfg.visit_sampling_top_k:
@@ -413,13 +537,13 @@ def calculate_visit_count_probs(root_node, root_state, cfg) -> Dict[str, float]:
             if np.isfinite(pi).all() and np.sum(pi) > 0:
                 probs = pi / np.sum(pi)
             else:
-                # Fall back to raw probabilities
+                # Fall back to raw probabilities for stable reporting output.
                 probs = counts / total_visits
         except (OverflowError, ValueError):
-            # Fall back to raw probabilities
+            # Fall back to raw probabilities for stable reporting output.
             probs = counts / total_visits
     
-    return _convert_moves_to_trmph_dict(root_node.legal_moves, probs)
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, probs, board_size)
 
 def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[str, float]:
     """
@@ -439,6 +563,9 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     """
     # Get policy logits and legal mask using the same shared utility as Gumbel
     policy_logits_full, legal_mask = mcts_instance._get_policy_logits_and_legal_mask(root_state, root_node.legal_indices)
+    board_size = _get_board_size_from_state(root_state)
+    node_board_size = _get_board_size_from_node(root_node)
+    _assert_matching_board_sizes(board_size, node_board_size)
     
     # Convert to probabilities using the same method as Gumbel
     priors_full = mcts_instance._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
@@ -446,7 +573,7 @@ def calculate_policy_probs(root_node, root_state, cfg, mcts_instance) -> Dict[st
     # Extract probabilities for legal moves only
     legal_probs = np.array([priors_full[tensor_idx] for tensor_idx in root_node.legal_indices])
     
-    return _convert_moves_to_trmph_dict(root_node.legal_moves, legal_probs)
+    return _convert_moves_to_trmph_dict(root_node.legal_moves, legal_probs, board_size)
 
 
 
@@ -492,28 +619,3 @@ def select_move_index(counts: np.ndarray, temp: float, cfg) -> int:
             # Fall back to deterministic selection if temperature scaling fails
             print(f"Warning: Temperature scaling failed with temp={temp}, falling back to deterministic selection. Error: {e}")
             return int(np.argmax(counts))
-
-
-def _calculate_root_temperature(move_count: int, cfg) -> float:
-    """
-    Calculate the root temperature based on move count and configuration.
-    
-    This is a helper function that encapsulates the temperature decay logic.
-    """
-    if cfg.temperature_decay_type == 'exponential':
-        # Exponential decay: temp = start * (end/start)^(move_count/decay_moves)
-        if cfg.temperature_start <= 0 or cfg.temperature_end <= 0:
-            return cfg.temperature_start
-        decay_factor = cfg.temperature_end / cfg.temperature_start
-        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
-        return cfg.temperature_start * (decay_factor ** progress)
-    elif cfg.temperature_decay_type == 'step':
-        # Step decay: use thresholds and values
-        for threshold, value in zip(cfg.temperature_step_thresholds, cfg.temperature_step_values):
-            if move_count < threshold:
-                return value
-        return cfg.temperature_end
-    else:
-        # Linear decay or unknown type - fall back to linear
-        progress = min(move_count / cfg.temperature_decay_moves, 1.0)
-        return cfg.temperature_start + (cfg.temperature_end - cfg.temperature_start) * progress

@@ -51,7 +51,7 @@ def main():
 
 if __name__ == "__main__":
     # source hex_ai_env/bin/activate
-    # PYTHONPATH=. python scripts/simple_inference_cli.py \
+    # python scripts/simple_inference_cli.py \
     #   --trmph "https://trmph.com/hex/board#13,g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7" \
     #   --model_dir "checkpoints/hyperparameter_tuning/pipeline_20250805_162626/pipeline_sweep_exp0__99914b_20250805_162626" \
     #   --model_file "epoch4_mini32.pt.gz" \

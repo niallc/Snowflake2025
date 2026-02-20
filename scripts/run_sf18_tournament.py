@@ -11,7 +11,7 @@ This script communicates with it via HTTP API calls.
 Examples:
 
 1. Compare SF25 models against SF18 with default settings:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
+   python scripts/run_sf18_tournament.py \
      --model-files=epoch11_mini15.pt.gz,epoch16_mini23.pt.gz \
      --model-dirs=checkpoints/dir1,checkpoints/dir2 \
      --strategies=mcts,mcts \
@@ -19,8 +19,8 @@ Examples:
      --num-openings=100
 
 2. Use specific SF18 difficulty and server URL:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
-     --models=current_best,model1 \
+   python scripts/run_sf18_tournament.py \
+     --models=best \
      --strategies=mcts,mcts \
      --mcts-sims=100,100 \
      --sf18-difficulty=8 \
@@ -28,8 +28,8 @@ Examples:
      --num-openings=50
 
 3. Use custom opening file:
-   PYTHONPATH=. python scripts/run_sf18_tournament.py \
-     --models=current_best \
+   python scripts/run_sf18_tournament.py \
+     --models=best \
      --strategies=mcts \
      --mcts-sims=30 \
      --opening-file=data/deterministic_openings.txt \
@@ -37,33 +37,28 @@ Examples:
 """
 
 import argparse
-import itertools
 import json
 import logging
 import os
-import random
 import sys
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
-import numpy as np
-
 from hex_ai.config import (
-    BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
+    BOARD_SIZE,
+    DEFAULT_BATCH_CAP,
+    DEFAULT_C_PUCT,
+    TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
+    TRMPH_PREFIX,
 )
 from hex_ai.enums import Player, Winner
-from hex_ai.inference.game_engine import HexGameState, apply_move_to_state
+from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
-from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
-from hex_ai.config import DEFAULT_BATCH_CAP, DEFAULT_C_PUCT
-from hex_ai.utils.format_conversion import (
-    rowcol_to_trmph, trmph_to_moves
-)
-from hex_ai.data_processing import parse_trmph_line_flexible
+from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.deterministic_tournament_utils import (
@@ -71,20 +66,15 @@ from hex_ai.utils.deterministic_tournament_utils import (
     save_opening_positions,
     setup_strategy_pair_files,
     create_play_config_for_pair,
-    GameDuplicateTracker,
-    play_strategy_pair_games,
-    report_strategy_pair_results
 )
 from hex_ai.utils.random_utils import set_deterministic_seeds
-from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
-    play_deterministic_game,
-    extract_openings_from_trmph_file,
+    OpeningPosition,
     find_trmph_files,
     generate_diverse_openings,
-    run_round_robin_tournament,
-    DeterministicTournamentResult
+    load_openings_from_file,
+    select_random_openings,
 )
 
 # Configure logging
@@ -99,38 +89,7 @@ DEFAULT_VERBOSE = 1
 DEFAULT_SF18_DIFFICULTY = 9
 DEFAULT_SF18_SERVER_URL = "http://localhost:8088"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
-TRMPH_FILE_PATTERN = "*.trmph"
 OUTPUT_DIR_PREFIX = "data/tournament_play/sf18_vs_sf25/sf18_tournament_"
-
-
-class OpeningPosition:
-    """Represents an opening position with moves and metadata."""
-    
-    def __init__(self, moves: List[Tuple[int, int]], source_game: str = "", 
-                 opening_length: int = DEFAULT_OPENING_LENGTH):
-        self.moves = moves
-        self.source_game = source_game
-        self.opening_length = opening_length
-    
-    def get_state(self, board_size: int = BOARD_SIZE) -> HexGameState:
-        """Create a game state from this opening position."""
-        # Initialize empty board
-        board = np.full((board_size, board_size), EMPTY_PIECE, dtype='U1')
-        state = HexGameState(board=board, _current_player=Player.BLUE)
-        
-        # Apply the opening moves
-        for row, col in self.moves:
-            state = apply_move_to_state(state, row, col)
-        
-        return state
-    
-    def get_trmph_string(self, board_size: int = BOARD_SIZE) -> str:
-        """Get TRMPH representation of the opening moves."""
-        trmph_moves = ''.join([rowcol_to_trmph(r, c, board_size) for r, c in self.moves])
-        return f"{TRMPH_PREFIX}{trmph_moves}"
-    
-    def __str__(self) -> str:
-        return f"Opening({len(self.moves)} moves from {self.source_game})"
 
 
 class SF18TournamentResult:
@@ -147,7 +106,14 @@ class SF18TournamentResult:
             self.results[(model, sf18_difficulty)] = {
                 'sf25_wins': 0,
                 'sf18_wins': 0,
-                'total_games': 0
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,  # Openings where SF25 won both games
+                'openings_sf18_won_both': 0,  # Openings where SF18 won both games
+                'openings_split': 0  # Openings where each won one game
             }
     
     def record_game(self, sf25_model: str, winner: str, game_data: Dict[str, Any]):
@@ -158,21 +124,69 @@ class SF18TournamentResult:
             self.results[key] = {
                 'sf25_wins': 0,
                 'sf18_wins': 0,
-                'total_games': 0
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,
+                'openings_sf18_won_both': 0,
+                'openings_split': 0
             }
         
         self.results[key]['total_games'] += 1
         
+        # Track overall wins
         if winner == 'sf25':
             self.results[key]['sf25_wins'] += 1
         elif winner == 'sf18':
             self.results[key]['sf18_wins'] += 1
+        
+        # Track color-specific wins
+        winner_color = game_data.get('winner', 'unknown')
+        if winner == 'sf25':
+            if winner_color == 'blue':
+                self.results[key]['sf25_wins_as_blue'] += 1
+            elif winner_color == 'red':
+                self.results[key]['sf25_wins_as_red'] += 1
+        elif winner == 'sf18':
+            if winner_color == 'blue':
+                self.results[key]['sf18_wins_as_blue'] += 1
+            elif winner_color == 'red':
+                self.results[key]['sf18_wins_as_red'] += 1
         
         self.game_results.append({
             'sf25_model': sf25_model,
             'winner': winner,
             'game_data': game_data
         })
+    
+    def record_opening_results(self, sf25_model: str, opening_idx: int, 
+                              sf25_won_first: bool, sf25_won_second: bool):
+        """Record the results for both games of an opening."""
+        key = (sf25_model, self.sf18_difficulty)
+        
+        if key not in self.results:
+            self.results[key] = {
+                'sf25_wins': 0,
+                'sf18_wins': 0,
+                'total_games': 0,
+                'sf25_wins_as_blue': 0,
+                'sf25_wins_as_red': 0,
+                'sf18_wins_as_blue': 0,
+                'sf18_wins_as_red': 0,
+                'openings_sf25_won_both': 0,
+                'openings_sf18_won_both': 0,
+                'openings_split': 0
+            }
+        
+        # Track opening-level results
+        if sf25_won_first and sf25_won_second:
+            self.results[key]['openings_sf25_won_both'] += 1
+        elif not sf25_won_first and not sf25_won_second:
+            self.results[key]['openings_sf18_won_both'] += 1
+        else:
+            self.results[key]['openings_split'] += 1
     
     def get_summary(self) -> Dict[str, Any]:
         """Get tournament summary."""
@@ -189,7 +203,8 @@ class SF18TournamentResult:
                     'sf25_wins': stats['sf25_wins'],
                     'sf18_wins': stats['sf18_wins'],
                     'total_games': stats['total_games'],
-                    'sf25_win_rate': win_rate
+                    'sf25_win_rate': win_rate,
+                    'sf25_win_percentage': win_rate * 100
                 }
         
         return summary
@@ -210,97 +225,29 @@ class SF18TournamentResult:
                 print(f"  SF25 Wins: {stats['sf25_wins']}")
                 print(f"  SF18 Wins: {stats['sf18_wins']}")
                 print(f"  Total Games: {stats['total_games']}")
-                print(f"  SF25 Win Rate: {win_rate:.3f}")
+                print(f"  SF25 Win Rate: {win_rate*100:.1f}%")
                 print()
+                
+                # Color-specific breakdown
+                print(f"  Color-specific wins:")
+                print(f"    SF25 as Blue: {stats['sf25_wins_as_blue']}")
+                print(f"    SF25 as Red: {stats['sf25_wins_as_red']}")
+                print(f"    SF18 as Blue: {stats['sf18_wins_as_blue']}")
+                print(f"    SF18 as Red: {stats['sf18_wins_as_red']}")
+                print()
+                
+                # Opening-level results
+                total_openings = (stats['openings_sf25_won_both'] + 
+                                stats['openings_sf18_won_both'] + 
+                                stats['openings_split'])
+                if total_openings > 0:
+                    print(f"  Opening-level results (out of {total_openings} openings):")
+                    print(f"    Openings SF25 won both ways: {stats['openings_sf25_won_both']}")
+                    print(f"    Openings SF18 won both ways: {stats['openings_sf18_won_both']}")
+                    print(f"    Openings split (1-1): {stats['openings_split']}")
+                    print()
         
         print("="*60)
-
-
-def load_openings_from_file(file_path: str, opening_length: int = DEFAULT_OPENING_LENGTH) -> List[OpeningPosition]:
-    """
-    Load opening positions from a file.
-    
-    Expected format: One TRMPH string per line, optionally with winner indicator.
-    Examples:
-        #13,a1b2c3d4e5f6g7
-        #13,a1b2c3d4e5f6g7 b
-        #13,a1b2c3d4e5f6g7 r
-    
-    Args:
-        file_path: Path to file containing opening positions
-        opening_length: Number of moves per opening (will truncate if longer)
-    
-    Returns:
-        List of OpeningPosition objects
-    
-    Raises:
-        ValueError: If file format is invalid or moves are malformed
-    """
-    openings = []
-    
-    with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            
-            # Parse TRMPH string
-            try:
-                # Extract moves (remove winner indicator if present)
-                if line.endswith(f' {TRMPH_BLUE_WIN}') or line.endswith(f' {TRMPH_RED_WIN}'):
-                    moves_str = line[:-2]
-                else:
-                    moves_str = line
-                
-                # Validate TRMPH format
-                if not moves_str.startswith(TRMPH_PREFIX):
-                    raise ValueError(f"Line {line_num}: Expected TRMPH format starting with '{TRMPH_PREFIX}'")
-                
-                # Parse moves using centralized utility
-                moves = trmph_to_moves(moves_str, BOARD_SIZE)
-                
-                # Truncate to opening length if necessary
-                if len(moves) >= opening_length:
-                    opening_moves = moves[:opening_length]
-                    source_game = f"{os.path.basename(file_path)}:line{line_num}"
-                    openings.append(OpeningPosition(opening_moves, source_game, opening_length))
-                else:
-                    logger.warning(f"Line {line_num} has only {len(moves)} moves, need {opening_length}")
-                
-            except Exception as e:
-                raise ValueError(f"Error parsing line {line_num} in {file_path}: {e}")
-    
-    if not openings:
-        raise ValueError(f"No valid openings found in {file_path}")
-    
-    return openings
-
-
-def select_random_openings(openings: List[OpeningPosition], num_openings: int, seed: Optional[int] = None) -> List[OpeningPosition]:
-    """
-    Randomly select a subset of unique openings from the available pool.
-    
-    Args:
-        openings: List of all available opening positions (assumed to be unique)
-        num_openings: Number of openings to select
-        seed: Optional random seed for reproducible selection
-    
-    Returns:
-        List of randomly selected unique OpeningPosition objects
-    """
-    if seed is not None:
-        random.seed(seed)
-    
-    if num_openings >= len(openings):
-        logger.info(f"Requested {num_openings} openings, returning all {len(openings)} available")
-        return openings.copy()
-    
-    # Randomly sample without replacement
-    selected_indices = random.sample(range(len(openings)), num_openings)
-    selected_openings = [openings[i] for i in selected_indices]
-    
-    logger.info(f"Randomly selected {len(selected_openings)} unique openings from pool of {len(openings)}")
-    return selected_openings
 
 
 def play_sf18_vs_sf25_game(
@@ -537,6 +484,10 @@ def run_sf18_tournament(
             result.record_game(strategy_config.name, winner_1, result_1)
             result.record_game(strategy_config.name, winner_2, result_2)
             
+            # Record opening-level results
+            result.record_opening_results(strategy_config.name, opening_idx, 
+                                        winner_1 == "sf25", winner_2 == "sf25")
+            
             # Log TRMPH results
             append_trmph_winner_line(result_1['trmph_str'], result_1['winner'][0], actual_trmph_file)
             append_trmph_winner_line(result_2['trmph_str'], result_2['winner'][0], actual_trmph_file)
@@ -566,16 +517,16 @@ Examples:
   %(prog)s --model-files=epoch11_mini15.pt.gz,epoch16_mini23.pt.gz --model-dirs=checkpoints/dir1,checkpoints/dir2 --strategies=mcts,mcts --mcts-sims=30,30 --num-openings=100
   
   # Use specific SF18 difficulty and server URL
-  %(prog)s --models=current_best,model1 --strategies=mcts,mcts --mcts-sims=100,100 --sf18-difficulty=8 --sf18-server-url=http://localhost:8088 --num-openings=50
+  %(prog)s --models=best --strategies=mcts,mcts --mcts-sims=100,100 --sf18-difficulty=8 --sf18-server-url=http://localhost:8088 --num-openings=50
   
   # Use custom opening file
-  %(prog)s --models=current_best --strategies=mcts --mcts-sims=30 --opening-file=data/deterministic_openings.txt --sf18-difficulty=9
+  %(prog)s --models=best --strategies=mcts --mcts-sims=30 --opening-file=data/deterministic_openings.txt --sf18-difficulty=9
         """
     )
     
     # SF25 model arguments (reused from run_tournament.py)
     parser.add_argument('--models', type=str,
-                       help='Comma-separated list of model registry names (e.g., "current_best,model1,model2")')
+                       help='Comma-separated list of model registry names (e.g., "best,model2")')
     parser.add_argument('--model-files', type=str,
                        help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz")')
     parser.add_argument('--model-dirs', type=str,
@@ -729,7 +680,6 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             num_games=args.num_openings,
             board_size=13,
-            random_seed=args.seed,
             pie_rule=False
         )
         
@@ -879,11 +829,33 @@ def main():
     print(f"SF25 Models: {len(strategy_configs)}")
     for config in strategy_configs:
         print(f"  - {config.name}")
+    print("SF25 Strategy configurations:")
+    for config in strategy_configs:
+        details = [
+            f"type={config.strategy_type}",
+            f"temperature={config.temperature}",
+        ]
+        if config.strategy_type == "mcts":
+            details.append(f"sims={config.config.get('mcts_sims')}")
+            details.append(f"c_puct={config.config.get('mcts_c_puct')}")
+            details.append(f"batch_size={config.config.get('batch_size')}")
+            details.append(f"gumbel={config.config.get('enable_gumbel_root_selection', False)}")
+            if config.config.get('enable_gumbel_root_selection', False):
+                if config.config.get('gumbel_sim_threshold') is not None:
+                    details.append(f"gumbel_sim_threshold={config.config.get('gumbel_sim_threshold')}")
+                if config.config.get('gumbel_candidate_power_scale') is not None:
+                    details.append(f"gumbel_power_scale={config.config.get('gumbel_candidate_power_scale')}")
+                if config.config.get('gumbel_candidate_power_rate') is not None:
+                    details.append(f"gumbel_power_rate={config.config.get('gumbel_candidate_power_rate')}")
+                if config.config.get('gumbel_candidate_power_offset') is not None:
+                    details.append(f"gumbel_power_offset={config.config.get('gumbel_candidate_power_offset')}")
+        print(f"  - {config.name}: {', '.join(details)}")
     print(f"SF18 Difficulty: {args.sf18_difficulty}")
     print(f"SF18 Server: {args.sf18_server_url}")
     print(f"Number of openings: {len(openings)}")
     print(f"Opening length: {args.opening_length}")
     print(f"Temperature: {args.temperature}")
+    print(f"Early termination threshold (MCTS): {TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD}")
     print(f"Random seed: {args.seed}")
     print("="*60)
     print()

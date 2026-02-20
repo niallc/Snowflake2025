@@ -22,6 +22,8 @@ from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.value_utils import validate_trmph_winner
 
+DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
+
 
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
@@ -31,7 +33,11 @@ class SelfPlayEngine:
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
-                 command_line: str = None):
+                 confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+                 command_line: str = None,
+                 mcts_profile: bool = False,
+                 mcts_profile_every: int = 10,
+                 mcts_profile_max_calls: int = 50):
         
         # Generate a unique run seed based on current time
         self.run_seed = int(time.time() * 1000000) % (2**32)
@@ -54,6 +60,7 @@ class SelfPlayEngine:
             mcts_sims: Number of MCTS simulations per move
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
+            confidence_termination_threshold: Early-termination confidence threshold
         """
         self.model_path = model_path
         self.batch_size = batch_size
@@ -68,7 +75,12 @@ class SelfPlayEngine:
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
+        self.confidence_termination_threshold = confidence_termination_threshold
         self.command_line = command_line
+        self.mcts_profile = mcts_profile
+        self.mcts_profile_every = mcts_profile_every
+        self.mcts_profile_max_calls = mcts_profile_max_calls
+        self._mcts_profile_calls = 0
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -80,7 +92,8 @@ class SelfPlayEngine:
         # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
-            confidence_termination_threshold=0.85,  # Aggressive confidence termination for speed
+            # Aggressive confidence termination for speed.
+            confidence_termination_threshold=self.confidence_termination_threshold,
             cache_size=self.cache_size,  # Use same cache size as SimpleModelInference
             c_puct=self.c_puct,  # Use specified PUCT exploration constant
             enable_gumbel_root_selection=self.enable_gumbel  # Enable/disable Gumbel root selection
@@ -113,6 +126,7 @@ class SelfPlayEngine:
                 "MCTS simulations": mcts_sims,
                 "C_PUCT": c_puct,
                 "Gumbel root selection": enable_gumbel,
+                "Early termination threshold": confidence_termination_threshold,
                 "Temperature": temperature,
             }
             write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
@@ -128,6 +142,7 @@ class SelfPlayEngine:
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
             print(f"  C_PUCT: {c_puct}")
             print(f"  Gumbel root selection: {enable_gumbel}")
+            print(f"  Early termination threshold: {confidence_termination_threshold}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
@@ -192,6 +207,37 @@ class SelfPlayEngine:
             start_time = time.perf_counter()
             mcts_result = mcts.run(state)
             search_time = time.perf_counter() - start_time
+
+            if self.mcts_profile and self._mcts_profile_calls < self.mcts_profile_max_calls:
+                self._mcts_profile_calls += 1
+                if (self._mcts_profile_calls % self.mcts_profile_every) == 0:
+                    try:
+                        stats = mcts_result.stats or {}
+                        h2d_ms = float(stats.get("h2d_ms", 0.0))
+                        forward_ms = float(stats.get("forward_ms", 0.0))
+                        d2h_ms = float(stats.get("d2h_ms", 0.0))
+                        nn_ms = h2d_ms + forward_ms + d2h_ms
+                        cpu_ms = 0.0
+                        for k in ("select_ms", "encode_ms", "stack_ms", "expand_ms", "backprop_ms", "cache_lookup_ms", "state_creation_ms"):
+                            cpu_ms += float(stats.get(k, 0.0))
+                        total_ms = nn_ms + cpu_ms
+                        nn_pct = (nn_ms / total_ms * 100.0) if total_ms > 0 else 0.0
+                        batch_sizes = stats.get("batch_sizes", []) or []
+                        try:
+                            bs = [float(x) for x in batch_sizes]
+                        except Exception:
+                            bs = []
+                        avg_batch = (sum(bs) / max(1, len(bs))) if bs else 0.0
+                        device = stats.get("device", None)
+                        device_s = str(device) if device is not None else "unknown"
+                        print(
+                            f"[MCTS_PROFILE] device={device_s} move={len(state.move_history)} "
+                            f"batches={int(stats.get('batch_count', 0))} avg_batch={avg_batch:.1f} "
+                            f"NN_ms={nn_ms:.1f} CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f} "
+                            f"search_time_s={search_time:.3f}"
+                        )
+                    except Exception as e:
+                        print(f"[MCTS_PROFILE] failed to summarize stats: {e}")
             
             # Get the best move from the result
             move = mcts_result.move
@@ -315,7 +361,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         
@@ -370,7 +416,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         
@@ -420,7 +466,7 @@ class SelfPlayEngine:
                 elapsed = time.time() - start_time
                 games_per_sec = (i + 1) / elapsed
                 if self.verbose >= 1:
-                    print(f"\nGenerated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
+                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
             elif self.verbose >= 1:
                 print(".", end="", flush=True)  # Progress dot for each game
         

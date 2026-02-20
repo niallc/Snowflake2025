@@ -1,6 +1,59 @@
+/* CSS Variables for Light/Dark Theme */
+:root {
+  /* Light theme (default) */
+  --bg-primary: #f8f8fa;
+  --bg-secondary: #fff;
+  --bg-tertiary: #f8f8fa;
+  --bg-quaternary: #f4f8ff;
+  --text-primary: #2a3a4a;
+  --text-secondary: #666;
+  --text-tertiary: #888;
+  --border-primary: #e0e0e0;
+  --border-secondary: #dde6f7;
+  --border-tertiary: #ccc;
+  --button-bg: #bbeeee;
+  --button-bg-hover: #8bd6d6;
+  --button-primary-bg: #0099ff;
+  --button-primary-bg-hover: #0077cc;
+  --button-secondary-bg: #6c757d;
+  --button-secondary-bg-hover: #5a6268;
+  --input-bg: #fff;
+  --input-border: #ccc;
+  --modal-bg: #fff;
+  --modal-overlay: rgba(0, 0, 0, 0.5);
+  --debug-bg: #fff;
+  --status-bg: #f4f4f4;
+}
+
+/* Dark theme */
+[data-theme="dark"] {
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #2d2d2d;
+  --bg-tertiary: #3a3a3a;
+  --bg-quaternary: #2a3a4a;
+  --text-primary: #e0e0e0;
+  --text-secondary: #b0b0b0;
+  --text-tertiary: #888;
+  --border-primary: #4a4a4a;
+  --border-secondary: #5a5a5a;
+  --border-tertiary: #666;
+  --button-bg: #4a4a4a;
+  --button-bg-hover: #5a5a5a;
+  --button-primary-bg: #0066cc;
+  --button-primary-bg-hover: #004499;
+  --button-secondary-bg: #555;
+  --button-secondary-bg-hover: #666;
+  --input-bg: #3a3a3a;
+  --input-border: #666;
+  --modal-bg: #2d2d2d;
+  --modal-overlay: rgba(0, 0, 0, 0.8);
+  --debug-bg: #3a3a3a;
+  --status-bg: #4a4a4a;
+}
+
 .player-settings {
-  background: #f4f8ff;
-  border: 1px solid #dde6f7;
+  background: var(--bg-quaternary);
+  border: 1px solid var(--border-secondary);
   border-radius: 8px;
   padding: 10px 16px 10px 16px;
   margin-bottom: 12px;
@@ -17,26 +70,28 @@
 
 body {
   font-family: 'Segoe UI', Arial, sans-serif;
-  background: #f8f8fa; /* 🎨 OUTERMOST BACKGROUND - Light gray that extends to all edges */
+  background: var(--bg-primary);
+  color: var(--text-primary);
   margin: 0;
   padding: 0;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 #app-container {
   max-width: 900px;
   margin: 20px auto; /* Reduced from 30px */
-  background: #fff; /* 🎨 MAIN CONTENT BOX - White rounded container that holds everything */
+  background: var(--bg-secondary);
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.08);
   padding: 20px 24px 28px 24px; /* Reduced top and bottom padding */
+  transition: background-color 0.3s ease;
 }
 
 #board-section {
   margin-bottom: 24px; /* Reduced from 32px */
   padding-bottom: 12px; /* Reduced from 16px */
-  border-bottom: 2px solid #e0e0e0;
-  /* background: #f8f8fa; */ /* 🎨 ORIGINAL: No background color */
-  /* 🎨 BOARD SECTION - Contains the entire board area (title, board, controls) - currently no background */
+  border-bottom: 2px solid var(--border-primary);
+  transition: border-color 0.3s ease;
 }
 
 #config-section {
@@ -47,14 +102,16 @@ h1 {
   text-align: center;
   margin-top: 0;
   margin-bottom: 8px; /* Reduced from default */
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 1.8em; /* Reduced from default */
+  transition: color 0.3s ease;
 }
 
 h3 {
   margin: 0 0 12px 0;
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 1.1em;
+  transition: color 0.3s ease;
 }
 
 #status-line {
@@ -66,11 +123,12 @@ h3 {
 
 /* Control Panels */
 .control-panel {
-  background: #f8f8fa; /* 🎨 CONTROL PANEL BACKGROUND - Light gray background for: Model Selection, Computer Move Settings, Debug & Diagnostics, Apply TRMPH Sequence */
-  border: 1px solid #e0e0e0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 /* Remove border between TRMPH sequence and next section */
@@ -79,29 +137,61 @@ h3 {
   margin-bottom: 8px; /* Reduced spacing */
 }
 
-.model-row, .computer-move-row, .search-width-row, .temperature-row, .auto-step-row, .search-method-row, .mcts-row, .gumbel-row, .policy-row {
+.model-row, .computer-move-row, .search-width-row, .temperature-row, .auto-step-row, .search-method-row, .mcts-row, .gumbel-row, .policy-row, .fixed-tree-row, .fixed-tree-temperature-row {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
 }
 
-.model-row:last-child, .computer-move-row:last-child, .search-width-row:last-child, .temperature-row:last-child, .auto-step-row:last-child, .search-method-row:last-child, .mcts-row:last-child, .gumbel-row:last-child, .policy-row:last-child {
+.model-row:last-child, .computer-move-row:last-child, .search-width-row:last-child, .temperature-row:last-child, .auto-step-row:last-child, .search-method-row:last-child, .mcts-row:last-child, .gumbel-row:last-child, .policy-row:last-child, .fixed-tree-row:last-child, .fixed-tree-temperature-row:last-child {
   margin-bottom: 0;
 }
 
-.model-row label, .computer-move-row label, .search-width-row label, .temperature-row label, .auto-step-row label, .search-method-row label, .mcts-row label, .gumbel-row label, .policy-row label {
+.model-row label, .computer-move-row label, .search-width-row label, .temperature-row label, .auto-step-row label, .search-method-row label, .mcts-row label, .gumbel-row label, .policy-row label, .fixed-tree-row label, .fixed-tree-temperature-row label {
   min-width: 120px;
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
+}
+
+.heatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.heatmap-row:last-child {
+  margin-bottom: 0;
+}
+
+.heatmap-row label {
+  min-width: 120px;
+  font-weight: 500;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
+}
+
+.heatmap-status {
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+.heatmap-legend {
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: var(--text-secondary);
 }
 
 select, input[type="number"], input[type="text"] {
   padding: 6px 8px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   font-size: 0.9em;
-  background: #fff;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 select:focus, input:focus {
@@ -117,14 +207,15 @@ input[type="checkbox"] {
 }
 
 .btn-primary {
-  background: #0099ff !important;
+  background: var(--button-primary-bg) !important;
   color: white !important;
   font-weight: 500;
   padding: 8px 16px !important;
+  transition: background-color 0.3s ease;
 }
 
 .btn-primary:hover {
-  background: #0077cc !important;
+  background: var(--button-primary-bg-hover) !important;
 }
 
 .btn-primary:disabled {
@@ -133,8 +224,9 @@ input[type="checkbox"] {
 }
 
 small {
-  color: #666;
+  color: var(--text-secondary);
   font-size: 0.8em;
+  transition: color 0.3s ease;
 }
 
 #board-container {
@@ -144,6 +236,37 @@ small {
   margin-bottom: 12px; /* Reduced from 18px */
   /* background: #f0f0f0; */ /* 🎨 ORIGINAL: No background color */
   /* 🎨 BOARD CONTAINER - Controls the area around the game board (side panels) */
+}
+
+#board-container svg polygon.heatmap-scored {
+  stroke-width: 2.5;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #946018;
+  stroke-dasharray: 6 4;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #257f53;
+  stroke-dasharray: none;
+}
+
+#board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #6c778f;
+  stroke-dasharray: 2.5 3.5;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #e7b65f;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #71e2a1;
+}
+
+[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #b6c2df;
 }
 
 #controls {
@@ -157,7 +280,8 @@ small {
 #controls label {
   margin: 0;
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
 }
 
 #controls input[type="checkbox"] {
@@ -175,36 +299,40 @@ small {
 }
 
 button {
-  background: #bbeeee;
+  background: var(--button-bg);
   border: none;
   border-radius: 6px;
   padding: 7px 16px;
   font-size: 1em;
   cursor: pointer;
-  transition: background 0.2s;
+  color: var(--text-primary);
+  transition: background 0.3s ease, color 0.3s ease;
 }
 button:hover {
-  background: #8bd6d6;
+  background: var(--button-bg-hover);
 }
 
 #trmph-string {
   font-family: monospace;
   font-size: 1em;
-  background: #f4f4f4;
-  border: 1px solid #ccc;
+  background: var(--status-bg);
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   padding: 2px 6px;
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 /* Debug Panel Styles */
 .debug-panel {
-  background: #f8f8fa; /* 🎨 DEBUG PANEL BACKGROUND - Light gray background for "Debug Information" section (different from .control-panel) */
-  border: 1px solid #e0e0e0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
   padding: 16px;
   margin-top: 16px;
   max-height: 600px;
   overflow-y: auto;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .debug-row {
@@ -221,21 +349,23 @@ button:hover {
 .debug-row label {
   min-width: 120px;
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
 }
 
 .btn-secondary {
-  background: #6c757d;
+  background: var(--button-secondary-bg);
   color: white;
   border: none;
   padding: 6px 12px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
+  transition: background-color 0.3s ease;
 }
 
 .btn-secondary:hover {
-  background: #5a6268;
+  background: var(--button-secondary-bg-hover);
 }
 
 #debug-content {
@@ -243,12 +373,14 @@ button:hover {
   font-size: 0.85em;
   line-height: 1.4;
   white-space: pre-wrap;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: var(--debug-bg);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   padding: 12px;
   max-height: 1500px;
   overflow-y: auto;
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .debug-section {
@@ -297,12 +429,13 @@ button:hover {
   top: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: var(--modal-overlay);
   backdrop-filter: blur(2px);
+  transition: background-color 0.3s ease;
 }
 
 .modal-content {
-  background-color: #fff;
+  background-color: var(--modal-bg);
   margin: 5% auto;
   padding: 0;
   border-radius: 12px;
@@ -312,6 +445,7 @@ button:hover {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
+  transition: background-color 0.3s ease;
 }
 
 .modal-header {
@@ -319,14 +453,16 @@ button:hover {
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #f8f8fa;
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
   border-radius: 12px 12px 0 0;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .modal-header h3 {
   margin: 0;
-  color: #2a3a4a;
+  color: var(--text-primary);
+  transition: color 0.3s ease;
 }
 
 .close {
@@ -349,12 +485,13 @@ button:hover {
 
 .modal-footer {
   padding: 16px 24px;
-  border-top: 1px solid #e0e0e0;
-  background: #f8f8fa;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
   border-radius: 0 0 12px 12px;
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .browser-section {
@@ -367,10 +504,11 @@ button:hover {
 
 .browser-section h4 {
   margin: 0 0 12px 0;
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 1em;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--border-primary);
   padding-bottom: 8px;
+  transition: color 0.3s ease, border-color 0.3s ease;
 }
 
 .search-controls, .directory-controls {
@@ -382,24 +520,28 @@ button:hover {
 .search-controls input {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   font-size: 0.9em;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .model-list {
   max-height: 200px;
   overflow-y: auto;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
-  background: #fff;
+  background: var(--bg-secondary);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .model-item {
   padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border-primary);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 .model-item:last-child {
@@ -407,11 +549,11 @@ button:hover {
 }
 
 .model-item:hover {
-  background-color: #f4f8ff;
+  background-color: var(--bg-quaternary);
 }
 
 .model-item.selected {
-  background-color: #e7fcfc;
+  background-color: var(--bg-quaternary);
   border-left: 3px solid #8bd6d6;
 }
 
@@ -424,20 +566,23 @@ button:hover {
 
 .model-item-name {
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 0.9em;
+  transition: color 0.3s ease;
 }
 
 .model-item-size {
   font-size: 0.8em;
-  color: #666;
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
 }
 
 .model-item-path {
   font-size: 0.8em;
-  color: #888;
+  color: var(--text-tertiary);
   font-family: monospace;
   word-break: break-all;
+  transition: color 0.3s ease;
 }
 
 .model-item-epoch {
@@ -452,8 +597,9 @@ button:hover {
 .empty-list {
   padding: 16px;
   text-align: center;
-  color: #666;
+  color: var(--text-secondary);
   font-style: italic;
+  transition: color 0.3s ease;
 }
 
 /* Update existing model-row to accommodate browse buttons */
@@ -496,18 +642,22 @@ button:hover {
 .trmph-input-row label {
   display: block;
   font-weight: 500;
-  color: #2a3a4a;
+  color: var(--text-primary);
   margin-bottom: 4px; /* Reduced from 6px */
+  transition: color 0.3s ease;
 }
 
 .trmph-input-row textarea {
   width: 100%;
   padding: 8px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--input-border);
   border-radius: 4px;
   font-family: monospace;
   font-size: 0.9em;
   resize: vertical;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .trmph-input-row textarea:focus {
@@ -585,15 +735,17 @@ button:hover {
 #detailed-exploration {
   margin-top: 20px;
   padding: 16px;
-  background: #f9f9f9;
-  border: 1px solid #e0e0e0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 #detailed-exploration h4 {
   margin: 0 0 12px 0;
-  color: #2a3a4a;
+  color: var(--text-primary);
   font-size: 1.0em;
+  transition: color 0.3s ease;
 }
 
 #exploration-content {
@@ -601,12 +753,14 @@ button:hover {
   font-size: 0.85em;
   line-height: 1.4;
   white-space: pre-wrap;
-  background: #fff;
+  background: var(--debug-bg);
   padding: 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   max-height: 2400px;
   overflow-y: auto;
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .exploration-step {
@@ -651,4 +805,17 @@ button:hover {
 .user-modified:focus {
   border-color: #ff6b35 !important;
   box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3) !important;
+}
+
+/* Dark mode user-modified styling */
+[data-theme="dark"] .user-modified {
+  border: 2px solid #ff6b35 !important;
+  background-color: #4a2a1a !important; /* Dark orange background */
+  box-shadow: 0 0 0 1px rgba(255, 107, 53, 0.3) !important;
+  color: var(--text-primary) !important; /* Ensure text is visible */
+}
+
+[data-theme="dark"] .user-modified:focus {
+  border-color: #ff6b35 !important;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.4) !important;
 }

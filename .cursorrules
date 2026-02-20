@@ -5,7 +5,9 @@
 **ALWAYS run these commands first:**
 ```bash
 source hex_ai_env/bin/activate
-export PYTHONPATH=.
+# Recommended (once per venv):
+pip install -r requirements.txt
+pip install -e .
 ```
 
 **Or use the setup script:**
@@ -15,14 +17,14 @@ export PYTHONPATH=.
 
 **Then validate the environment:**
 ```bash
-python scripts/validate_environment.py
+python -c "import hex_ai"
 ```
 
 ## Principles
 1. Strongly to fail fast and catch bugs. Avoid fallback mechanisms -- these can hide problems, producing silent failures.
 2. Be very careful about memory usage when handling the data. A common pattern is for coding agents ot try to read in all of the data to calculate things. *NEVER READ IN LARGE AMOUNTS OF DATA at once*.
 3. Avoid duplicating code and forking the code path unnecessarily. Use existing utilities. When we update, clean up old code paths.
-4. Use `PYTHONPATH=.` for portability, rather than absolute paths
+4. Prefer standard packaging (`pip install -e .`) over `PYTHONPATH` hacks
 5. Do not try to write your own hex games, ask me for game sequences that achieve certain goals. In trmph format here are some sequences that you can use:
  - A finished game where BLUE has won: g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
  - A finished game where RED has won: a1g1a7g2b7g3c7g4d7g5e7g6f7g8h7g9i7g10j7g11k7g12l7g13m7g7
@@ -39,9 +41,15 @@ python scripts/validate_environment.py
  - If running code to check that it works, but mindful of how computationally intensive it is! Creating more than 3 games takes time, generating move with more than e.g. 100 MCTS simulations per move takes time.
   - Don't aim to maintain backward compatibility or build compatibility layers for out of date interfaces. Instead build single clean code paths. If in doubt, STOP and explain the issue, then we can decide how to resolve call-sites with different patterns, or similar issues.
 
+## Git and Version Control Rules
+1. **NEVER run git write operations: commit, git push, git rebase, or any git commands that modify repository history**.
+2. When debugging issues, use `git show`, `git diff`, and `git log` to INVESTIGATE only
+3. If the user mentions checking previous commits, that means READING them for comparison, not CHECKING THEM OUT or REVERTING
+4. Read-only git commands (show, diff, log, status) are fine.
+
 For more on the environment:
 1. See `AGENT_GUIDANCE.md` for more setup instructions
-2. Run `python scripts/validate_environment.py` to check setup
+2. Check imports: `python -c "import hex_ai"`
 3. **Understand structure**: Review `scripts/agent_setup.py` for project overview
 
 ## 📁 Project Structure
@@ -70,7 +78,7 @@ import hex_ai  # This automatically validates environment
 
 **The validation checks:**
 - Virtual environment is activated (`hex_ai_env`)
-- PYTHONPATH includes project root (accepts `PYTHONPATH=.`)
+- Repo is importable (typically via editable install)
 
 **No manual validation calls needed** - it's handled automatically in `hex_ai/__init__.py`
 
@@ -82,9 +90,9 @@ from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 ```
 
 ### Testing
-Tests must be run with PYTHONPATH set:
+After editable install, tests can be run without `PYTHONPATH`:
 ```bash
-PYTHONPATH=. pytest tests/
+pytest tests/
 ```
 
 ## 📝 Code Style Guidelines

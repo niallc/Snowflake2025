@@ -28,7 +28,10 @@ from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.value_utils import ValuePredictor, red_ref_signed_to_ptm_ref_signed, policy_logits_to_probs
 from hex_ai.utils.format_conversion import trmph_to_moves, rowcol_to_trmph
 from hex_ai.utils.state_utils import board_key
-from hex_ai.config import BOARD_SIZE, DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_END
+from hex_ai.config import (
+    BOARD_SIZE, DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_END, DEFAULT_MCTS_SIMS,
+    DEFAULT_C_PUCT, DEFAULT_BATCH_CAP
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +112,10 @@ class EvaluatorConfig:
     use_mcts: bool = True  # True = MCTS-based evaluation, False = neural network only
     
     # MCTS parameters
-    mcts_sims: int = 200
-    mcts_c_puct: float = 3.0
+    mcts_sims: int = DEFAULT_MCTS_SIMS
+    mcts_c_puct: float = DEFAULT_C_PUCT
     mcts_batch_cap: Optional[int] = None
-    enable_gumbel_root: bool = False
+    enable_gumbel_root: bool = True
     
     # Aggregation parameters
     aggregation: AggregationMethod = AggregationMethod.MEAN
@@ -251,7 +254,7 @@ class StrengthEvaluator:
         return BaselineMCTSConfig(
             sims=self.cfg.mcts_sims,
             c_puct=self.cfg.mcts_c_puct,
-            batch_cap=self.cfg.mcts_batch_cap if self.cfg.mcts_batch_cap is not None else 100,
+            batch_cap=self.cfg.mcts_batch_cap if self.cfg.mcts_batch_cap is not None else DEFAULT_BATCH_CAP,
             add_root_noise=False,  # Deterministic for analysis
             temperature_start=DEFAULT_TEMPERATURE_END,  # Very low temperature for deterministic play
             temperature_end=DEFAULT_TEMPERATURE_END,

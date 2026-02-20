@@ -159,7 +159,7 @@ class TestTRMPHProcessor:
         assert results[0]['stats']['examples_generated'] == 0
     
     def test_process_game_with_duplicate_moves(self):
-        """Test processing a game with duplicate moves (should be invalid)."""
+        """Test processing a game with duplicate moves (should be skipped)."""
         content = f"#13,a1a1b2c3 {TRMPH_BLUE_WIN}\n"  # Duplicate move 'a1'
         self.create_test_trmph_file("duplicate_moves.trmph", content)
         
@@ -171,10 +171,11 @@ class TestTRMPHProcessor:
         
         results = processor.process_all_files()
         
-        # Should handle gracefully due to remove_repeated_moves
+        # Should skip game with duplicate moves entirely
         assert len(results) == 1
         assert results[0]['success']
-        assert results[0]['stats']['valid_games'] == 1
+        assert results[0]['stats']['valid_games'] == 0
+        assert results[0]['stats']['duplicate_move_games'] == 1
         assert results[0]['stats']['skipped_games'] == 0
     
     def test_process_mixed_valid_invalid_games(self):
@@ -194,8 +195,9 @@ class TestTRMPHProcessor:
         
         assert len(results) == 1
         assert results[0]['success']
-        assert results[0]['stats']['valid_games'] == 3
-        assert results[0]['stats']['skipped_games'] == 0  # Duplicate moves are handled gracefully
+        assert results[0]['stats']['valid_games'] == 2  # Only 2 valid games (duplicate move game is skipped)
+        assert results[0]['stats']['duplicate_move_games'] == 1  # 1 game skipped due to duplicate moves
+        assert results[0]['stats']['skipped_games'] == 0
         assert results[0]['stats']['all_games'] == 3
     
     def test_output_file_creation(self):

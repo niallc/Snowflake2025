@@ -68,8 +68,7 @@ def find_trmph_files(source_dirs: List[Path]) -> List[Tuple[Path, Path]]:
     
     for source_dir in source_dirs:
         if not source_dir.exists():
-            logger.warning(f"Source directory {source_dir} does not exist, skipping")
-            continue
+            raise FileNotFoundError(f"Source directory {source_dir} does not exist - this is likely a configuration error")
             
         # Find all .trmph files recursively
         trmph_files = list(source_dir.rglob("*.trmph"))
@@ -512,24 +511,24 @@ def assign_value_sample_tiers(total_positions: int) -> List[int]:
     return result
 
 
-def remove_repeated_moves(moves: List[str]) -> List[str]:
+def remove_repeated_moves(moves: List[str]) -> Optional[List[str]]:
     """
-    Remove repeated moves and all subsequent moves from the game.
+    Check for repeated moves in the game.
     
     Args:
         moves: List of TRMPH moves
         
     Returns:
-        Cleaned list of moves with no repetitions
+        Cleaned list of moves with no repetitions, or None if duplicates were found
     """
     seen_moves = set()
     clean_moves = []
     
     for move in moves:
         if move in seen_moves:
-            # Found repeated move - discard this and all subsequent moves
-            logger.debug(f"Repeated move {move} found, discarding game from this point")
-            break
+            # Found repeated move - skip this game entirely
+            logger.warning(f"Duplicate move '{move}' found in game, skipping entire game")
+            return None
         seen_moves.add(move)
         clean_moves.append(move)
     
@@ -667,13 +666,17 @@ def extract_training_examples_with_selector_from_game(
     position_selector: str = "all",
     include_trmph: bool = False,
     shuffle_positions: bool = True
-) -> list:
+) -> tuple[list, Optional[str]]:
     """
     Extract training examples with a selector for position type: 'all', 'final', or 'penultimate'.
     """
     try:
         bare_moves = strip_trmph_preamble(trmph_text)
         moves = remove_repeated_moves(split_trmph_moves(bare_moves))
+        if moves is None:
+            # Game had duplicate moves - skip entirely
+            logger.warning(f"Game skipped due to duplicate moves: {trmph_text[:50]}...")
+            return [], "duplicate_moves"
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
         total_positions = len(moves) + 1
@@ -725,7 +728,7 @@ def extract_training_examples_with_selector_from_game(
                 'metadata': metadata
             }
             training_examples.append(example)
-        return training_examples
+        return training_examples, None
     except Exception as e:
         logger.error(f"Failed to extract training examples from game {trmph_text[:50]}...: {e}")
         raise ValueError(f"Failed to process game: {e}")

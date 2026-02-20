@@ -39,7 +39,7 @@ def main():
     """Run example commands."""
     
     # Set up environment
-    env_cmd = "source hex_ai_env/bin/activate && export PYTHONPATH=."
+    env_cmd = "source hex_ai_env/bin/activate"
     
     print("SF18 vs SF25 Tournament Examples")
     print("=" * 60)
@@ -49,7 +49,7 @@ def main():
     print()
     
     # Example 1: Basic tournament with model registry
-    cmd1 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=current_best --strategies=mcts --mcts-sims=30 --num-openings=10 --sf18-difficulty=9"
+    cmd1 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=best --strategies=mcts --mcts-sims=30 --num-openings=10 --sf18-difficulty=9"
     run_command(cmd1, "Basic tournament using model registry")
     
     # Example 2: Tournament with direct model files
@@ -57,15 +57,15 @@ def main():
     run_command(cmd2, "Tournament with multiple models using direct file paths")
     
     # Example 3: Tournament with custom opening file
-    cmd3 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=current_best --strategies=mcts --mcts-sims=50 --opening-file=data/deterministic_openings.txt --sf18-difficulty=9"
+    cmd3 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=best --strategies=mcts --mcts-sims=50 --opening-file=data/deterministic_openings.txt --sf18-difficulty=9"
     run_command(cmd3, "Tournament using custom opening file")
     
     # Example 4: Tournament with different SF18 server
-    cmd4 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=current_best --strategies=mcts --mcts-sims=30 --num-openings=10 --sf18-difficulty=7 --sf18-server-url=http://localhost:8089"
+    cmd4 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=best --strategies=mcts --mcts-sims=30 --num-openings=10 --sf18-difficulty=7 --sf18-server-url=http://localhost:8089"
     run_command(cmd4, "Tournament with custom SF18 server URL")
     
     # Example 5: Tournament with Gumbel AlphaZero
-    cmd5 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=current_best --strategies=mcts --mcts-sims=100 --enable-gumbel=true --gumbel-sim-threshold=200 --num-openings=15 --sf18-difficulty=9"
+    cmd5 = f"{env_cmd} && python scripts/run_sf18_tournament.py --models=best --strategies=mcts --mcts-sims=100 --enable-gumbel=true --gumbel-sim-threshold=200 --num-openings=15 --sf18-difficulty=9"
     run_command(cmd5, "Tournament with Gumbel AlphaZero enabled")
     
     print(f"\n{'='*60}")

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snowflake 25</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Game Board Section -->
+    <div id="board-section">
+      <h1>Snowflake 25</h1>
+      <div id="instruction-text">For an even game: avoid purple hexes on move 1. Purple hexes give an easier game.</div>
+      <div id="status-line"></div>
+      <div id="board-container">
+        <div id="pie-rule-player" class="pie-rule-overlay pie-rule-player pie-rule-hidden" aria-hidden="true">
+          <span class="pie-rule-player-title">Player:</span>
+          <span id="pie-rule-player-color" class="pie-rule-player-color">Red</span>
+        </div>
+        <div id="pie-rule-badge" class="pie-rule-overlay pie-rule-hidden" title="Pie rule enabled">🥧</div>
+        <a id="pie-rule-label" class="pie-rule-overlay pie-rule-hidden" href="/rules.html#pie-rule" title="Read pie rule details">Pie rule enabled</a>
+        <div id="swap-flash" class="swap-flash-overlay" aria-hidden="true">Move swapped!</div>
+      </div>
+      
+      <!-- Game Controls -->
+      <div id="controls">
+        <button id="undo-btn">Undo</button>
+        <button id="redo-btn">Redo</button>
+        <button id="computer-move-btn" class="btn-primary">Computer Move</button>
+        <button id="reset-btn">New Game</button>
+        <button id="rules-btn" class="rules-button" onclick="window.location.href='/rules.html'">Rules</button>
+        <button id="dark-mode-toggle" class="btn-secondary" title="Toggle dark mode">🌙 Dark</button>
+      </div>
+    </div>
+    
+    <!-- Settings Section -->
+    <div id="settings-section">
+      <!-- Difficulty Selection -->
+      <div id="difficulty-controls" class="control-panel">
+        <h3>Difficulty</h3>
+        <div class="difficulty-row">
+          <label for="difficulty-preset">Preset:</label>
+          <select id="difficulty-preset">
+            <option value="900">Medium (ELO 900)</option>
+          </select>
+        </div>
+        <div class="difficulty-row">
+          <label for="elo-slider">Custom ELO:</label>
+          <input id="elo-slider" type="range" step="1">
+          <span id="elo-display"></span>
+        </div>
+      </div>
+
+      <div id="board-size-controls" class="control-panel">
+        <h3>Board Size</h3>
+        <div class="difficulty-row">
+          <label for="board-size-select">Play Area:</label>
+          <select id="board-size-select">
+            <option value="13">13x13</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- Player Settings -->
+      <div id="player-controls" class="control-panel">
+        <h3>Players</h3>
+        <div class="player-row">
+          <label for="blue-computer">Blue (Computer):</label>
+          <input id="blue-computer" type="checkbox">
+        </div>
+        <div class="player-row">
+          <label for="red-computer">Red (Computer):</label>
+          <input id="red-computer" type="checkbox" checked>
+        </div>
+      </div>
+
+      <div id="pie-rule-controls" class="control-panel">
+        <h3>Pie Rule</h3>
+        <div class="player-row">
+          <label for="pie-rule-enabled">Enabled:</label>
+          <input id="pie-rule-enabled" type="checkbox" checked>
+          <span id="pie-rule-status" class="heatmap-status">Enabled</span>
+        </div>
+      </div>
+
+      <div id="heatmap-controls" class="control-panel">
+        <h3>Board Heatmap</h3>
+        <div class="heatmap-row">
+          <label for="heatmap-enabled">Show:</label>
+          <input id="heatmap-enabled" type="checkbox">
+          <span id="heatmap-status" class="heatmap-status">Off</span>
+        </div>
+        <div class="heatmap-row">
+          <label for="heatmap-opacity">Opacity:</label>
+          <input id="heatmap-opacity" type="range" min="0.20" max="0.90" step="0.05" value="0.62">
+          <span id="heatmap-opacity-value">62%</span>
+        </div>
+        <div class="heatmap-row">
+          <label for="heatmap-scope">Candidates:</label>
+          <select id="heatmap-scope">
+            <option value="policy_top_k">Top-K Policy</option>
+            <option value="all_legal">All Legal Moves</option>
+          </select>
+          <label for="heatmap-top-k">K:</label>
+          <input id="heatmap-top-k" type="number" min="1" max="169" step="1" value="12">
+          <button id="heatmap-refresh" class="btn-secondary">Analyze</button>
+        </div>
+        <div id="heatmap-legend" class="heatmap-legend">
+          Dashed amber = below 50%, solid green = above 50%, dotted slate = near-even
+        </div>
+      </div>
+      
+      
+      <!-- Game Sequence -->
+      <div id="trmph-controls" class="control-panel">
+        <h3>Game Sequence</h3>
+        <div class="trmph-row">
+          <label for="trmph-display">Current Game:</label>
+          <input id="trmph-display" type="text" readonly placeholder="Game sequence will appear here...">
+          <button id="copy-trmph">Copy</button>
+        </div>
+        <div class="trmph-row">
+          <label for="trmph-input">Apply Sequence:</label>
+          <input id="trmph-input" type="text" placeholder="Enter TRMPH moves (e.g., a1b2c3)...">
+          <button id="apply-trmph">Apply</button>
+        </div>
+        <div id="trmph-error" class="error-message" style="display: none;"></div>
+      </div>
+    </div>
+  </div>
+  <div id="cookie-consent-banner" class="cookie-consent-banner" hidden role="region" aria-label="Cookie notice">
+    <p>
+      We use one optional cookie for basic usage analytics (rough active-user counts).
+      No ads or cross-site tracking.
+      <a href="/static/privacy.html" target="_blank" rel="noopener">Privacy summary</a>
+    </p>
+    <div class="cookie-consent-actions">
+      <button id="cookie-consent-accept" class="btn-primary">Accept</button>
+      <button id="cookie-consent-decline" class="btn-secondary">Decline</button>
+    </div>
+  </div>
+  <script src="/shared/board_heatmap.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

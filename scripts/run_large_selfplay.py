@@ -15,7 +15,10 @@ from datetime import datetime
 
 from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.inference.model_config import get_model_path
-from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
+from hex_ai.selfplay.selfplay_engine import (
+    DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+    SelfPlayEngine,
+)
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
 from hex_ai.utils.tournament_logging import get_command_line
@@ -28,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate large-scale self-play games")
     parser.add_argument('--num_games', type=int, default=1000, help='Number of games to generate')
     parser.add_argument('--model_path', type=str, 
-                       default=get_model_path("current_best"),
+                       default=get_model_path("best"),
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
@@ -51,8 +54,16 @@ def main():
                        help='Save games incrementally to avoid data loss')
     parser.add_argument('--no_batched_inference', action='store_true',
                        help='Disable batched inference (use individual calls)')
-    parser.add_argument('--progress_interval', type=int, default=10, 
+    parser.add_argument('--progress_interval', type=int, default=20, 
                        help='How often to print progress updates')
+
+    # Lightweight MCTS timing profiler (GPU vs CPU breakdown)
+    parser.add_argument('--mcts-profile', action='store_true',
+                       help='Print lightweight MCTS timing breakdown every N calls (GPU vs CPU time).')
+    parser.add_argument('--mcts-profile-every', type=int, default=10,
+                       help='Print MCTS profile once every N MCTS move selections (default: 10).')
+    parser.add_argument('--mcts-profile-max-calls', type=int, default=50,
+                       help='Maximum number of MCTS move selections to profile (default: 50).')
     
     args = parser.parse_args()
     
@@ -80,7 +91,6 @@ def main():
         num_games=args.num_games,
         strategy_config={"mcts_sims": args.mcts_sims, "c_puct": args.c_puct},
         temperatures=args.temperature,
-        random_seed=0,  # Selfplay doesn't use a fixed seed
         pie_rule=False,  # Not applicable to selfplay
         opening_strategy=args.opening_strategy,
         batch_size=args.batch_size,
@@ -89,6 +99,7 @@ def main():
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
+        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
         temperature_end=args.temperature_end,
         no_batched_inference=args.no_batched_inference,
         output_dir=args.output_dir
@@ -138,7 +149,11 @@ def main():
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
-        command_line=command_line
+        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+        command_line=command_line,
+        mcts_profile=args.mcts_profile,
+        mcts_profile_every=args.mcts_profile_every,
+        mcts_profile_max_calls=args.mcts_profile_max_calls,
     )
     
     start_time = time.time()

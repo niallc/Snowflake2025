@@ -14,6 +14,8 @@ logs/
 Trash/
 temp/
 write_ups/
+tests/
+
 
 
 # Niall's file patterns to ignore
@@ -41,7 +43,7 @@ scripts/evaluate_game_strength.py
 scripts/example_strength_evaluation.py
 
 tests/test_winner_to_color_failfast.py
-
+docs/MathsJam 2025, Snowflake, Hex, AlphaGo - Google Slides.pdf
 
 # VSCode
 .vscode/
@@ -263,6 +265,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+.cursor/
 
 # Marimo
 marimo/_static/

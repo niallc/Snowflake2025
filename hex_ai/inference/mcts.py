@@ -41,24 +41,20 @@
 from __future__ import annotations
 
 import math
-import time
-import random
 import numpy as np
 import torch
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
-from hex_ai.value_utils import player_to_winner, red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, signed_to_prob, distance_to_leaf
+from hex_ai.value_utils import red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, distance_to_leaf
 from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
     extract_principal_variation_from_tree,
     calculate_tree_statistics,
     format_mcts_tree_data_for_api,
     should_enable_detailed_exploration,
-    create_exploration_step_info,
     add_detailed_exploration_to_tree_data,
     calculate_visit_count_probs,
     calculate_policy_probs,
@@ -68,54 +64,31 @@ from hex_ai.inference.game_engine import HexGameState, HexGameEngine
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.utils.perf import PERF
 from hex_ai.utils.math_utils import softmax_np
-from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size as move_to_index, tensor_to_rowcol as index_to_move
-from hex_ai.utils.temperature import calculate_temperature_decay
-from hex_ai.utils.state_utils import board_key, validate_move_coordinates, is_valid_move_coordinates
-from hex_ai.utils.timing import MCTSTimingTracker
-from hex_ai.utils.gumbel_utils import gumbel_alpha_zero_root_batched
-from hex_ai.config import (
-    BOARD_SIZE as CFG_BOARD_SIZE, 
-    POLICY_OUTPUT_SIZE as CFG_POLICY_OUTPUT_SIZE, 
-    DEFAULT_BATCH_CAP, 
-    DEFAULT_C_PUCT, 
-    DEFAULT_GUMBEL_SIM_THRESHOLD,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
-    DEFAULT_GUMBEL_CANDIDATE_MIN,
-    DEFAULT_GUMBEL_CANDIDATE_MAX,
-    DEFAULT_GUMBEL_C_VISIT,
-    DEFAULT_MCTS_DIRICHLET_ALPHA,
-    DEFAULT_GUMBEL_C_SCALE,
-    DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
-    DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL
+from hex_ai.utils.format_conversion import (
+    rowcol_to_tensor_with_size as move_to_index,
+    rowcol_to_trmph,
 )
-from hex_ai.value_utils import ValuePredictor, winner_to_color
+from hex_ai.utils.temperature import calculate_mcts_root_temperature
+from hex_ai.utils.state_utils import board_key, validate_move_coordinates
+from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
+from hex_ai.utils.timing import MCTSTimingTracker
+from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
+from hex_ai.inference.mcts_gumbel import MCTSGumbelMixin
+from hex_ai.inference.mcts_support import (
+    AlgorithmTerminationInfo,
+    MCTSResult,
+    MCTSStatsBuilder,
+    TerminalMoveDetector,
+    AlgorithmTerminationChecker,
+)
+from hex_ai.value_utils import winner_to_color
 
 # ---- MCTS Constants ----
-# Temperature comparison threshold for move selection
-TEMPERATURE_COMPARISON_THRESHOLD = 0.02  # Use deterministic selection for very low temperatures
-
 # Principal variation extraction limit
 PRINCIPAL_VARIATION_MAX_LENGTH = 11
 
 # PUCT calculation threshold for avoiding division by zero
 PUCT_CALCULATION_THRESHOLD = 1e-9
-
-# Default confidence-based termination threshold (distance from neutral for signed values)
-DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD = 0.9
-
-# Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
-TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.95
-
-# Default terminal move boost factor
-DEFAULT_TERMINAL_MOVE_BOOST = 2.0
-
-
-# Default depth discount factor
-DEFAULT_DEPTH_DISCOUNT_FACTOR = 0.97
-
-
 
 # ---- MCTS Invariant Wrappers ----
 def q_from_w_n(w: float, n: int) -> float:
@@ -175,386 +148,22 @@ def safe_puct_denominator(n_sum: float) -> bool:
     return n_sum > PUCT_CALCULATION_THRESHOLD
 
 
-# Default cache size for LRU eviction
-DEFAULT_CACHE_SIZE = 100000  # 100k entries
+def board_size_from_state(state: HexGameState) -> int:
+    """Extract and validate board size from a game state tensor."""
+    if state is None:
+        raise ValueError("State cannot be None")
+    board_tensor = state.get_board_tensor()
+    if not hasattr(board_tensor, "shape") or len(board_tensor.shape) < 2:
+        raise ValueError(f"Invalid board tensor shape: {getattr(board_tensor, 'shape', None)}")
 
-# Default Dirichlet noise parameters
-DEFAULT_DIRICHLET_EPS = 0.25
+    board_rows = int(board_tensor.shape[-2])
+    board_cols = int(board_tensor.shape[-1])
+    if board_rows <= 0 or board_cols <= 0:
+        raise ValueError(f"Board tensor dimensions must be positive, got {board_rows}x{board_cols}")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {board_rows}x{board_cols}")
+    return board_cols
 
-# Default temperature parameters
-DEFAULT_TEMPERATURE_START = 1.0
-DEFAULT_TEMPERATURE_END = 0.1
-DEFAULT_TEMPERATURE_DECAY_TYPE = "exponential"
-DEFAULT_TEMPERATURE_DECAY_MOVES = 50
-
-# Default terminal detection parameters
-DEFAULT_TERMINAL_DETECTION_MAX_DEPTH = 3
-DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION = 2  # Multiplier for board size
-
-# Default Gumbel temperature control parameters
-DEFAULT_GUMBEL_TEMPERATURE_ENABLED = True
-DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF = 0.02
-
-# Default top-k filtering for visit count sampling
-DEFAULT_VISIT_SAMPLING_TOP_K = 5
-
-# ------------------ Terminal Move Detector ------------------
-class TerminalMoveDetector:
-    """Centralized terminal move detection with consistent behavior."""
-    
-    def __init__(self, max_detection_depth: int = 3):
-        self.max_detection_depth = max_detection_depth
-    
-    def should_detect_terminal_moves(self, node: MCTSNode) -> bool:
-        """Determine if terminal moves should be detected for this node."""
-        # Only detect at shallow depths
-        if node.depth > self.max_detection_depth:
-            return False
-        
-        # Only detect after minimum move count (impossible to win before BS * 2 - 1, unlikely before BS * 3)
-        min_move_count = CFG_BOARD_SIZE * DEFAULT_MIN_MOVES_FOR_TERMINAL_DETECTION - 2
-        if len(node.state.move_history) < min_move_count:
-            return False
-        
-        # Don't detect if already done
-        if node._terminal_moves_detected:
-            return False
-        
-        return True
-    
-    def detect_terminal_moves(self, node: MCTSNode, board_size: int) -> bool:
-        """
-        Detect terminal moves for a given node.
-
-        This method uses the underlying game logic to check, for each legal move,
-        whether it results in an immediate win for the current player. It provides
-        a definitive proof of a win, rather than relying on heuristics or neural
-        network evaluations.
-
-        Returns:
-            bool: True if any terminal (winning) moves are found, False otherwise.
-        """
-        if not self.should_detect_terminal_moves(node):
-            return False
-        
-        # Reset terminal moves
-        node.terminal_moves = [False] * len(node.legal_moves)
-        
-        # Check each legal move
-        for i, (row, col) in enumerate(node.legal_moves):
-            try:
-                new_state = node.state.make_move(row, col)
-                if new_state.game_over and new_state.winner == player_to_winner(node.to_play):
-                    node.terminal_moves[i] = True
-            except Exception:
-                pass
-        
-        node._terminal_moves_detected = True
-        return any(node.terminal_moves)
-    
-    def get_terminal_move(self, node: MCTSNode) -> Optional[Tuple[int, int]]:
-        """Get the first terminal move if any exist."""
-        if not node._terminal_moves_detected:
-            return None
-        
-        for i, is_terminal in enumerate(node.terminal_moves):
-            if is_terminal:
-                return node.legal_moves[i]
-        return None
-
-# ------------------ Algorithm Termination Info ------------------
-@dataclass
-class AlgorithmTerminationInfo:
-    """Simple info about algorithm termination."""
-    reason: str  # "terminal_move" or "neural_network_confidence"
-    move: Optional[Tuple[int, int]]  # The move to play (None for NN confidence)
-    win_prob: float  # Win probability
-
-# ------------------ MCTS Result ------------------
-@dataclass(frozen=True)
-class MCTSResult:
-    """Complete result of an MCTS search."""
-    move: Tuple[int, int]  # The selected move
-    stats: Dict[str, Any]  # Performance statistics
-    tree_data: Dict[str, Any]  # Tree information for analysis
-    root_node: MCTSNode  # The search tree root (for advanced use cases)
-    algorithm_termination_info: Optional[AlgorithmTerminationInfo]  # Algorithm termination details
-    win_probability: float  # Win probability for current player
-
-# ------------------ Stats Builder ------------------
-class MCTSStatsBuilder:
-    """Centralized stats creation with consistent structure."""
-    
-    def __init__(self, cache_hits: int, cache_misses: int):
-        self.cache_hits = cache_hits
-        self.cache_misses = cache_misses
-    
-    def create_base_stats(self) -> Dict[str, Any]:
-        """Create base stats structure with all common fields."""
-        return {
-            "encode_ms": 0.0, "stack_ms": 0.0, "h2d_ms": 0.0, "forward_ms": 0.0,
-            "pure_forward_ms": 0.0, "sync_ms": 0.0, "d2h_ms": 0.0, "expand_ms": 0.0,
-            "backprop_ms": 0.0, "select_ms": 0.0, "cache_lookup_ms": 0.0, "state_creation_ms": 0.0,
-            "batch_count": 0, "batch_sizes": [], "forward_ms_list": [],
-            "select_times": [], "cache_hit_times": [], "cache_miss_times": [],
-            "median_forward_ms_ex_warm": 0.0, "p90_forward_ms_ex_warm": 0.0,
-            "median_select_ms": 0.0, "median_cache_hit_ms": 0.0, "median_cache_miss_ms": 0.0,
-            "cache_hits": self.cache_hits, "cache_misses": self.cache_misses,
-        }
-    
-    def create_algorithm_termination_stats(self, termination_info: Optional[AlgorithmTerminationInfo] = None) -> Dict[str, Any]:
-        """Create stats for algorithm termination cases."""
-        stats = self.create_base_stats()
-        stats.update({
-            "total_simulations": 0, "simulations_per_second": 0.0,
-            "algorithm_termination_occurred": True,
-            "algorithm_termination_reason": termination_info.reason if termination_info else "unknown"
-        })
-        return stats
-    
-    def create_final_stats(self, timing_stats: Dict[str, Any], total_simulations: int, 
-                          total_search_time: float) -> Dict[str, Any]:
-        """Create final stats for completed MCTS runs."""
-        stats = self.create_base_stats()
-        stats.update(timing_stats)
-        stats.update({
-            "total_simulations": total_simulations,
-            "simulations_per_second": total_simulations / total_search_time if total_search_time > 0 else 0.0,
-            "algorithm_termination_occurred": False,
-            "algorithm_termination_reason": "none"
-        })
-        return stats
-
-# ------------------ Algorithm Termination Checker ------------------
-class AlgorithmTerminationChecker:
-    """Centralized algorithm termination checking with simple priority order."""
-    
-    def __init__(self, cfg: BaselineMCTSConfig, terminal_detector: TerminalMoveDetector):
-        self.cfg = cfg
-        self.terminal_detector = terminal_detector
-    
-    def should_terminate_early(self, root: MCTSNode, board_size: int, verbose: int, eval_cache: Dict[int, Tuple[np.ndarray, float]], root_is_expanded: bool = False) -> Optional[AlgorithmTerminationInfo]:
-        """
-        Check if we should terminate early. Returns None if we should continue with MCTS.
-        Returns EarlyTerminationInfo if we should terminate.
-        
-        Args:
-            root: The root node to check
-            board_size: Board size for terminal move detection
-            verbose: Verbosity level
-            eval_cache: Evaluation cache for neural network confidence
-            root_is_expanded: Whether the root node has been expanded (affects confidence checking)
-        """
-        # 1. Check for terminal moves (highest priority) - works regardless of expansion
-        if self.cfg.enable_terminal_move_detection:
-            if self.terminal_detector.detect_terminal_moves(root, board_size):
-                terminal_move = self.terminal_detector.get_terminal_move(root)
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Found terminal move: {terminal_move}")
-                return AlgorithmTerminationInfo(
-                    reason="terminal_move",
-                    move=terminal_move,
-                    win_prob=1.0  # Guaranteed win
-                )
-        
-        # 2. Check neural network confidence (requires root expansion)
-        if self.cfg.enable_confidence_termination and root_is_expanded and not root.is_terminal:
-            signed_value = self._get_root_signed_value(root, eval_cache)
-            if self._is_position_clearly_decided(signed_value):
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Confidence-based termination (signed value: {signed_value:.3f})")
-                return AlgorithmTerminationInfo(
-                    reason="neural_network_confidence",
-                    move=None,  # Will use top policy move
-                    win_prob=signed_value
-                )
-        
-        return None  # Continue with MCTS
-    
-    def _get_root_signed_value(self, root: MCTSNode, eval_cache: OrderedDict[int, Tuple[np.ndarray, float]]) -> float:
-        """Get signed value for current player from neural network (edge conversion)."""
-        cached = eval_cache.get(root.state_hash)
-        if cached is None:
-            raise RuntimeError(f"Root state not found in cache: {root.state_hash}")
-        _, value_signed = cached
-        
-        # Validate that the cached value is in the expected signed range
-        if not -1.1 <= value_signed <= 1.1:
-            raise ValueError(f"Neural network output {value_signed} is outside expected signed range [-1, 1]. "
-                           f"This suggests a mismatch between probability and signed value semantics.")
-        
-        # Convert signed value to player-to-move reference frame for confidence termination
-        # value_signed is the tanh-activated output in [-1,1] range in Red's reference frame
-        v_red_ref_signed = float(value_signed)
-        # Flip to player-to-move reference frame: if RED to move keep v_red_ref_signed, if BLUE to move flip to -v_red_ref_signed
-        v_ptm_ref_signed = red_ref_signed_to_ptm_ref_signed(v_red_ref_signed, root.to_play)
-        # Return signed value directly (no conversion to probability needed)
-        return v_ptm_ref_signed
-    
-    def _is_position_clearly_decided(self, signed_value: float) -> bool:
-        """Check if position is clearly won or lost using signed values."""
-        # signed_value is in [-1, 1] range in player-to-move reference frame
-        # Check if position is clearly won (> threshold) or clearly lost (< -threshold)
-        return (signed_value >= self.cfg.confidence_termination_threshold or 
-                signed_value <= -self.cfg.confidence_termination_threshold)
-
-# ------------------ Config ------------------
-@dataclass
-class BaselineMCTSConfig:
-    sims: int = 200
-    batch_cap: int = DEFAULT_BATCH_CAP
-    c_puct: float = DEFAULT_C_PUCT
-    cache_size: int = DEFAULT_CACHE_SIZE
-    dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
-    dirichlet_eps: float = DEFAULT_DIRICHLET_EPS
-    add_root_noise: bool = False
-    # Temperature scaling parameters (always used)
-    temperature_start: float = DEFAULT_TEMPERATURE_START  # Starting temperature
-    temperature_end: float = DEFAULT_TEMPERATURE_END  # Final temperature (minimum)
-    temperature_decay_type: str = DEFAULT_TEMPERATURE_DECAY_TYPE  # "linear", "exponential", "step", "game_progress"
-    temperature_decay_moves: int = DEFAULT_TEMPERATURE_DECAY_MOVES  # Number of moves for decay (for linear/exponential)
-    temperature_step_thresholds: List[int] = field(default_factory=lambda: [10, 25, 50])  # Move thresholds for step decay
-    temperature_step_values: List[float] = field(default_factory=lambda: [0.8, 0.5, 0.2])  # Temperature values for step decay
-    # Terminal move detection parameters
-    enable_terminal_move_detection: bool = DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION  # Enable immediate terminal move detection
-    terminal_detection_max_depth: int = DEFAULT_TERMINAL_DETECTION_MAX_DEPTH  # Maximum depth for terminal move detection
-    
-    terminal_move_boost: float = DEFAULT_TERMINAL_MOVE_BOOST  # Boost factor for terminal moves in PUCT calculation
-    
-    # New terminal move handling
-    prefer_immediate_terminal: bool = True  # Force immediate terminal wins deterministically
-    terminal_win_score_bonus: float = 0.25  # Small score bonus for terminal moves (only used if prefer_immediate_terminal=False)
-    
-    # Adaptive batch selection for low simulation counts
-    adaptive_distinct_target: bool = False  # Make distinct_target adaptive at low sims
-    distinct_target_min: int = 8  # Minimum distinct target
-    distinct_target_max: int = 16  # Maximum distinct target
-    # Note: Pre-check only happens after move BOARD_SIZE * 3 (minimum moves needed for a win)
-    # Randomness should be controlled externally
-
-    # Confidence-based termination parameters
-    enable_confidence_termination: bool = False
-    confidence_termination_threshold: float = DEFAULT_CONFIDENCE_TERMINATION_THRESHOLD  # Distance from neutral (0) for termination
-    
-    # Depth-based discounting parameters
-    enable_depth_discounting: bool = True
-    depth_discount_factor: float = DEFAULT_DEPTH_DISCOUNT_FACTOR
-    
-    # Top-k filtering for visit count sampling
-    visit_sampling_top_k: int = DEFAULT_VISIT_SAMPLING_TOP_K  # Only consider top-k most visited moves for sampling
-    
-    # Gumbel-AlphaZero root selection parameters
-    enable_gumbel_root_selection: bool = True  # Enable Gumbel-AlphaZero root selection
-    gumbel_sim_threshold: int = DEFAULT_GUMBEL_SIM_THRESHOLD  # Use Gumbel selection when sims <= this threshold
-    gumbel_c_visit: float = DEFAULT_GUMBEL_C_VISIT  # Gumbel-AlphaZero c_visit parameter
-    gumbel_c_scale: float = DEFAULT_GUMBEL_C_SCALE  # Gumbel-AlphaZero c_scale parameter
-    gumbel_m_candidates: Optional[int] = None  # Number of candidates to consider (None for auto)
-    
-    # Gumbel candidate scaling parameters (power-law scaling)
-    gumbel_candidate_power_scale: float = DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE  # Scale factor for power-law candidate scaling
-    gumbel_candidate_power_rate: float = DEFAULT_GUMBEL_CANDIDATE_POWER_RATE  # Rate (exponent) for power-law candidate scaling
-    gumbel_candidate_power_offset: float = DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET  # Offset for power-law candidate scaling
-    gumbel_candidate_min: int = DEFAULT_GUMBEL_CANDIDATE_MIN  # Minimum number of candidates
-    gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
-    # Gumbel ranking stabilization parameters
-    gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
-    # NOTE: Gumbel now validates legal actions and crashes on illegal forced actions instead of falling back to PUCT
-    # This exposes desync bugs between the action list and root state rather than masking them
-    
-    # Gumbel temperature control parameters
-    gumbel_temperature_enabled: bool = DEFAULT_GUMBEL_TEMPERATURE_ENABLED  # Enable temperature control in Gumbel
-    temperature_deterministic_cutoff: float = DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF  # Cutoff for vanilla MCTS
-    gumbel_temperature_deterministic_cutoff: float = -1.0  # Disable cutoff for Gumbel
-    
-    # Batch flushing control parameters
-    # DESIGN: Fixed values for consistent performance across simulation counts
-    # The original dynamic logic caused performance drops at higher simulation counts
-    # due to inconsistent batch flushing behavior as the tree became more explored.
-    distinct_target: int = 32  # Target number of distinct leaves before flushing batch (fixed for consistency)
-    enable_low_distinct_ratio_flush: bool = False  # Disabled by default to prevent performance drops
-
-    # This makes actual terminal wins (immediate wins) even more attractive than
-    # neural network evaluations, encouraging the algorithm to find and prefer them.
-    
-    def __post_init__(self):
-        """Validate configuration parameters after initialization."""
-        if self.sims <= 0:
-            raise ValueError(f"sims must be positive, got {self.sims}")
-        if self.batch_cap <= 0:
-            raise ValueError(f"batch_cap must be positive, got {self.batch_cap}")
-        if self.c_puct <= 0:
-            raise ValueError(f"c_puct must be positive, got {self.c_puct}")
-        if self.cache_size <= 0:
-            raise ValueError(f"cache_size must be positive, got {self.cache_size}")
-        if self.dirichlet_alpha <= 0:
-            raise ValueError(f"dirichlet_alpha must be positive, got {self.dirichlet_alpha}")
-        if not 0 <= self.dirichlet_eps <= 1:
-            raise ValueError(f"dirichlet_eps must be between 0 and 1, got {self.dirichlet_eps}")
-        if self.temperature_start <= 0:
-            raise ValueError(f"temperature_start must be positive, got {self.temperature_start}")
-        if self.temperature_end <= 0:
-            raise ValueError(f"temperature_end must be positive, got {self.temperature_end}")
-        if self.temperature_start < self.temperature_end:
-            raise ValueError(f"temperature_start ({self.temperature_start}) must be >= temperature_end ({self.temperature_end})")
-        if self.temperature_decay_moves <= 0:
-            raise ValueError(f"temperature_decay_moves must be positive, got {self.temperature_decay_moves}")
-        if self.terminal_move_boost < 0:
-            raise ValueError(f"terminal_move_boost must be non-negative, got {self.terminal_move_boost}")
-        if self.terminal_detection_max_depth < 0:
-            raise ValueError(f"terminal_detection_max_depth must be non-negative, got {self.terminal_detection_max_depth}")
-        if not 0 <= self.confidence_termination_threshold <= 1:
-            raise ValueError(f"confidence_termination_threshold must be between 0 and 1 (represents distance from neutral), got {self.confidence_termination_threshold}")
-        if not 0 < self.depth_discount_factor <= 1:
-            raise ValueError(f"depth_discount_factor must be between 0 and 1, got {self.depth_discount_factor}")
-        
-        # Validate batch flushing parameters
-        if self.distinct_target <= 0:
-            raise ValueError(f"distinct_target must be positive, got {self.distinct_target}")
-        if self.distinct_target > self.batch_cap:
-            raise ValueError(f"distinct_target ({self.distinct_target}) cannot exceed batch_cap ({self.batch_cap})")
-        
-        # Validate new adaptive batch parameters
-        if self.distinct_target_min <= 0:
-            raise ValueError(f"distinct_target_min must be positive, got {self.distinct_target_min}")
-        if self.distinct_target_max <= 0:
-            raise ValueError(f"distinct_target_max must be positive, got {self.distinct_target_max}")
-        if self.distinct_target_min > self.distinct_target_max:
-            raise ValueError(f"distinct_target_min ({self.distinct_target_min}) cannot exceed distinct_target_max ({self.distinct_target_max})")
-
-        # Validate Gumbel-AlphaZero parameters
-        if self.gumbel_sim_threshold <= 0:
-            raise ValueError(f"gumbel_sim_threshold must be positive, got {self.gumbel_sim_threshold}")
-        if self.gumbel_c_visit <= 0:
-            raise ValueError(f"gumbel_c_visit must be positive, got {self.gumbel_c_visit}")
-        if self.gumbel_c_scale <= 0:
-            raise ValueError(f"gumbel_c_scale must be positive, got {self.gumbel_c_scale}")
-        if self.gumbel_m_candidates is not None and self.gumbel_m_candidates <= 0:
-            raise ValueError(f"gumbel_m_candidates must be positive, got {self.gumbel_m_candidates}")
-        
-        # Validate Gumbel candidate scaling parameters
-        if self.gumbel_candidate_power_scale <= 0.0:
-            raise ValueError(f"gumbel_candidate_power_scale must be > 0.0, got {self.gumbel_candidate_power_scale}")
-        if self.gumbel_candidate_power_rate <= 0.0:
-            raise ValueError(f"gumbel_candidate_power_rate must be > 0.0, got {self.gumbel_candidate_power_rate}")
-        if self.gumbel_candidate_min <= 0:
-            raise ValueError(f"gumbel_candidate_min must be positive, got {self.gumbel_candidate_min}")
-        if self.gumbel_candidate_max <= 0:
-            raise ValueError(f"gumbel_candidate_max must be positive, got {self.gumbel_candidate_max}")
-        if self.gumbel_candidate_min > self.gumbel_candidate_max:
-            raise ValueError(f"gumbel_candidate_min ({self.gumbel_candidate_min}) cannot exceed gumbel_candidate_max ({self.gumbel_candidate_max})")
-        
-        # Validate Gumbel temperature control parameters
-        if self.temperature_deterministic_cutoff <= 0:
-            raise ValueError(f"temperature_deterministic_cutoff must be positive, got {self.temperature_deterministic_cutoff}")
-        
-        # Validate temperature step parameters if using step decay
-        if self.temperature_decay_type == "step":
-            if len(self.temperature_step_thresholds) != len(self.temperature_step_values):
-                raise ValueError("temperature_step_thresholds and temperature_step_values must have the same length")
-            if not all(t >= 0 for t in self.temperature_step_thresholds):
-                raise ValueError("All temperature_step_thresholds must be non-negative")
-            if not all(0 < v <= 1 for v in self.temperature_step_values):
-                raise ValueError("All temperature_step_values must be between 0 and 1")
 
 # ------------------ Data structures ------------------
 
@@ -562,16 +171,28 @@ class MCTSNode:
     __slots__ = (
         "state", "to_play", "legal_moves", "legal_indices",
         "children", "N", "W", "Q", "P", "is_expanded",
+        "board_size",
         "state_hash", "is_terminal", "winner", "winner_str", "terminal_moves",
         "_terminal_moves_detected", "depth"
     )
     def __init__(self, state: HexGameState, board_size: int):
         if state is None:
             raise ValueError("State cannot be None")
+        if isinstance(board_size, bool):
+            raise TypeError("Board size must be an integer, got bool")
         if board_size <= 0:
             raise ValueError(f"Board size must be positive, got {board_size}")
+
+        state_board_size = board_size_from_state(state)
+        if int(board_size) != state_board_size:
+            raise ValueError(
+                "Board size mismatch between node argument and state tensor: "
+                f"{board_size} vs {state_board_size}"
+            )
+        board_size = state_board_size
         
         self.state: HexGameState = state
+        self.board_size: int = board_size
         self.to_play: Player = state.current_player_enum
         # Legal moves
         self.legal_moves: List[Tuple[int,int]] = state.get_legal_moves()
@@ -599,7 +220,7 @@ class MCTSNode:
 
 # ------------------ Core MCTS ------------------
 
-class BaselineMCTS:
+class BaselineMCTS(MCTSGumbelMixin):
     def __init__(self, engine: HexGameEngine, model: ModelWrapper, cfg: BaselineMCTSConfig):
         if engine is None:
             raise ValueError("Engine cannot be None")
@@ -649,23 +270,15 @@ class BaselineMCTS:
 
     def _enable_detailed_exploration_if_needed(self, num_simulations: int) -> None:
         """Enable detailed exploration tracking if simulation count is below threshold."""
-        self.detailed_exploration_enabled = should_enable_detailed_exploration(num_simulations)
+        verbose_level = int(getattr(self, "verbose", 0))
+        self.detailed_exploration_enabled = (
+            should_enable_detailed_exploration(num_simulations)
+            and verbose_level >= 2
+        )
         self.exploration_trace = []
         self.simulation_count = 0
-        if self.detailed_exploration_enabled and hasattr(self, 'verbose') and self.verbose >= 2:
+        if self.detailed_exploration_enabled and verbose_level >= 2:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
-
-    def _record_exploration_step(self, node: MCTSNode, action_idx: int, puct_scores: List[float],
-                                selected_action: int, depth: int, simulation_num: int, 
-                                path_to_node: List[str] = None) -> None:
-        """Record a single exploration step for detailed analysis."""
-        if not self.detailed_exploration_enabled:
-            return
-        
-        step_info = create_exploration_step_info(
-            node, action_idx, puct_scores, selected_action, depth, simulation_num, path_to_node
-        )
-        self.exploration_trace.append(step_info)
 
     def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
         """Record the start of a descent."""
@@ -847,87 +460,24 @@ class BaselineMCTS:
             ValueError: If root_state is None or invalid
             RuntimeError: If the game state is terminal
         """
-        if root_state is None:
-            raise ValueError("root_state cannot be None")
-        if root_state.game_over:
-            raise RuntimeError("Cannot run MCTS on a terminal game state")
-        if verbose < 0:
-            raise ValueError(f"verbose must be non-negative, got {verbose}")
-        
-        # Enable detailed exploration tracking if needed
-        self._enable_detailed_exploration_if_needed(self.cfg.sims)
-        self.verbose = verbose
-        
-        # Prepare root node
-        root = self._prepare_root_node(root_state, verbose)
-        
-        # Check for algorithm termination opportunities
-        termination_info = self._check_algorithm_termination(root, verbose)
-        if termination_info:
-            # Handle algorithm termination
-            move = self._get_algorithm_termination_move(root, termination_info, verbose)
-            tree_data = self.get_tree_data(root)
-            win_probability = termination_info.win_prob
-            
-            # Attach metrics for algorithm termination cases too
-            stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
-            total_time = 0.0  # Algorithm termination has minimal time
-            stats["unique_evals_total"] = int(self._unique_evals_total)
-            stats["effective_sims_total"] = int(self._effective_sims_total)
-            stats["unique_evals_per_sec"] = 0.0  # No meaningful time for algorithm termination
-            stats["effective_sims_per_sec"] = 0.0
-            
-            return MCTSResult(
-                move=move,
-                stats=stats,
-                tree_data=tree_data,
-                root_node=root,
-                algorithm_termination_info=termination_info,
-                win_probability=win_probability
-            )
-        
-        # Run main simulation loop
+        self._validate_run_inputs(root_state, verbose)
+        self._reset_run_state(verbose)
+
+        root = self._prepare_root_node(root_state, verbose, expand_root=False)
+
+        maybe_terminated = self._termination_result_if_any(root, verbose)
+        if maybe_terminated is not None:
+            return maybe_terminated
+
+        self._expand_root_for_search(root, root_state)
+
+        maybe_terminated = self._termination_result_if_any(root, verbose)
+        if maybe_terminated is not None:
+            return maybe_terminated
+
         timing_stats = self._run_simulation_loop(root, verbose)
-        # Attach metrics (don't rely on TimingTracker internals)
-        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
-        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
-        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
-        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
-        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
-        
-        # Compute results directly
-        move, move_probs = self._compute_move(root, root_state, verbose)
-        tree_data = self.get_tree_data(root, move_probs)
-        win_probability = self.get_win_probability(root, root_state)
-        
-        # Create base stats
-        stats = self._get_stats_builder().create_final_stats(
-            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
-        )
-        
-        # Add Gumbel-specific performance metrics if available
-        if hasattr(self, '_gumbel_nn_calls_per_move'):
-            # Use actual MCTS metrics for distinct leaves evaluation
-            actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
-            stats.update({
-                "gumbel_nn_calls_per_move": self._gumbel_nn_calls_per_move,
-                "gumbel_total_leaves_evaluated": self._gumbel_total_leaves_evaluated,
-                "gumbel_distinct_leaves_evaluated": actual_distinct_leaves,
-                "gumbel_candidates_m": self._gumbel_candidates_m,
-                "gumbel_rounds_R": self._gumbel_rounds_R,
-                "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
-                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
-                "gumbel_timing_breakdown": getattr(self, '_gumbel_timing_breakdown', {})
-            })
-        
-        return MCTSResult(
-            move=move,
-            stats=stats,
-            tree_data=tree_data,
-            root_node=root,
-            algorithm_termination_info=None,
-            win_probability=win_probability
-        )
+        self._annotate_search_timing_stats(timing_stats)
+        return self._build_completed_search_result(root, root_state, timing_stats, verbose)
 
     # ---------- Data Access (Getters) ----------
     
@@ -967,18 +517,17 @@ class BaselineMCTS:
         """Get tree traversal statistics."""
         return calculate_tree_statistics(root)
 
-    def _prepare_root_node(self, root_state: HexGameState, verbose: int) -> MCTSNode:
+    def _prepare_root_node(self, root_state: HexGameState, verbose: int, expand_root: bool = True) -> MCTSNode:
         """Prepare and initialize the root node for MCTS search."""
-        board_tensor = root_state.get_board_tensor()
-        board_size = int(board_tensor.shape[-1])
+        board_size = board_size_from_state(root_state)
         root = MCTSNode(root_state, board_size)
         
         # Expand root if not terminal
-        if not root.is_terminal and not root.is_expanded:
+        if expand_root and not root.is_terminal and not root.is_expanded:
             self._expand_root_node(root, board_size)
         
         # Apply root noise if configured (every move for standard AlphaZero behavior)
-        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
+        if expand_root and self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
             self._apply_root_noise(root)
         
         return root
@@ -1009,189 +558,193 @@ class BaselineMCTS:
 
     def _check_algorithm_termination(self, root: MCTSNode, verbose: int) -> Optional[AlgorithmTerminationInfo]:
         """Check if MCTS should terminate early."""
-        board_size = int(root.state.get_board_tensor().shape[-1])
-        
         # Single call with root_is_expanded flag - handles both terminal moves and confidence checking
         termination_info = self.algorithm_termination_checker.should_terminate_early(
-            root, board_size, verbose, self.eval_cache, root_is_expanded=root.is_expanded
+            root, verbose, self.eval_cache, root_is_expanded=root.is_expanded
         )
         
         return termination_info
+
+    def _build_algorithm_termination_result(
+        self,
+        root: MCTSNode,
+        termination_info: AlgorithmTerminationInfo,
+        verbose: int
+    ) -> MCTSResult:
+        """Build a complete MCTSResult for algorithm-termination exits."""
+        move = self._get_algorithm_termination_move(root, termination_info, verbose)
+        tree_data = self.get_tree_data(root)
+        win_probability = termination_info.win_probability
+
+        # Attach metrics for algorithm termination cases too.
+        stats = self._get_stats_builder().create_algorithm_termination_stats(termination_info)
+        stats["unique_evals_total"] = int(self._unique_evals_total)
+        stats["effective_sims_total"] = int(self._effective_sims_total)
+        stats["unique_evals_per_sec"] = 0.0
+        stats["effective_sims_per_sec"] = 0.0
+
+        return MCTSResult(
+            move=move,
+            stats=stats,
+            tree_data=tree_data,
+            root_node=root,
+            algorithm_termination_info=termination_info,
+            win_probability=win_probability
+        )
 
     def _run_simulation_loop(self, root: MCTSNode, verbose: int) -> Dict[str, Any]:
         """Run the main MCTS simulation loop with batching."""
         timing_tracker = MCTSTimingTracker()
         sims_remaining = self.cfg.sims
-        
-        # Check if we should use Gumbel-AlphaZero root selection
-        use_gumbel = (self.cfg.enable_gumbel_root_selection and 
-                     sims_remaining <= self.cfg.gumbel_sim_threshold and
-                     root.is_expanded and not root.is_terminal)
-        
-        # DEBUG: Print Gumbel decision
-        # print(f"GUMBEL DEBUG: enable_gumbel={self.cfg.enable_gumbel_root_selection}, sims={sims_remaining}, threshold={self.cfg.gumbel_sim_threshold}, expanded={root.is_expanded}, terminal={root.is_terminal}, use_gumbel={use_gumbel}")
-        
-        if use_gumbel:
+
+        if self._should_use_gumbel_root_selection(root, sims_remaining):
             if verbose >= 5:
                 print(f"Using Gumbel-AlphaZero root selection for {sims_remaining} simulations")
             return self._run_gumbel_root_selection(root, sims_remaining, timing_tracker, verbose)
-        
-        # Standard MCTS simulation loop
+
+        self._run_standard_simulation_loop(root, sims_remaining, timing_tracker)
+        return timing_tracker.get_final_stats()
+
+    def _should_use_gumbel_root_selection(self, root: MCTSNode, sims_remaining: int) -> bool:
+        """Return whether search should route through Gumbel-AlphaZero root selection."""
+        return (
+            self.cfg.enable_gumbel_root_selection
+            and sims_remaining <= self.cfg.gumbel_sim_threshold
+            and root.is_expanded
+            and not root.is_terminal
+        )
+
+    def _run_standard_simulation_loop(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        timing_tracker: MCTSTimingTracker,
+    ) -> None:
+        """Execute the default batched select/eval/backprop loop."""
         while sims_remaining > 0:
-            # Select leaves for this batch
             leaves, paths = self._select_leaves_batch(root, sims_remaining, timing_tracker)
-            
-            # Process leaves (expand and backpropagate)
             batch_simulations = self._process_leaves_batch(leaves, paths, timing_tracker, root)
+            if batch_simulations <= 0:
+                raise ValueError(
+                    "Zero-progress standard simulation batch in _run_standard_simulation_loop. "
+                    f"sims_remaining={sims_remaining}, batch_simulations={batch_simulations}, "
+                    f"selected_leaves={len(leaves)}, selected_paths={len(paths)}"
+                )
+            if batch_simulations > sims_remaining:
+                raise ValueError(
+                    "Over-progress standard simulation batch in _run_standard_simulation_loop. "
+                    f"sims_remaining={sims_remaining}, batch_simulations={batch_simulations}, "
+                    f"selected_leaves={len(leaves)}, selected_paths={len(paths)}"
+                )
             sims_remaining -= batch_simulations
             self._effective_sims_total += batch_simulations
-        
-        return timing_tracker.get_final_stats()
 
-    def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int, 
-                                 timing_tracker: MCTSTimingTracker, verbose: int) -> Dict[str, Any]:
-        """
-        Run Gumbel-AlphaZero root selection for small simulation budgets.
-        
-        This method uses the batched Gumbel implementation that reuses the existing
-        MCTS batching infrastructure for maximum efficiency.
-        """
-        timing_tracker.start_timing("gumbel_selection")
-        
-        # Time the policy logits retrieval
-        timing_tracker.start_timing("gumbel_policy_retrieval")
-        
-        # Get full tensor policy logits from neural network evaluation
-        # We need the full tensor (169 positions) with illegal actions masked as -inf
-        board_size = int(root.state.get_board_tensor().shape[-1])
-        action_size = board_size * board_size
-        
-        # Get policy logits and legal mask using shared utility
-        policy_logits_full, legal_mask = self._get_policy_logits_and_legal_mask(root.state, root.legal_indices)
-        
-        timing_tracker.end_timing("gumbel_policy_retrieval")
-        
-        # Time the Gumbel algorithm execution
-        timing_tracker.start_timing("gumbel_algorithm")
-        
-        # Compute shared values once using helper methods
-        move_idx = len(root.state.move_history)
-        tau = self._root_temperature(move_idx) if self.cfg.gumbel_temperature_enabled else 1.0
-        
-        # Get priors WITHOUT Dirichlet noise for Gumbel
-        # Gumbel has its own inherent randomness, so we don't add artificial Dirichlet noise
-        # From the Gumbel paper:
-        # In general, we use hyperparameters consistent with the newest MuZero experiments (Schrittwieser
-        # et al., 2021). MuZero’s pseudocode is available thanks to Schrittwieser et al. (2020). Gumbel
-        # MuZero does not need to set the Dirichlet noise hyperparameters, because Gumbel MuZero does
-        # not use Dirichlet noise.
-        priors_full = self._root_priors_from_logits(policy_logits_full, legal_mask, apply_dirichlet=False)
-        
-        # TODO: TEMPORARY - Use separate cutoff for Gumbel to allow algorithm to run
-        # Deterministic cutoff for Gumbel (separate from vanilla MCTS)
-        # print(f"GUMBEL TEMPERATURE CHECK: tau={tau:.6f}, cutoff={self.cfg.gumbel_temperature_deterministic_cutoff:.6f}")
-        if tau <= self.cfg.gumbel_temperature_deterministic_cutoff:
-            # Pick argmax over priors among legal actions
-            selected_tensor_action = int(np.argmax(np.where(legal_mask, priors_full, -np.inf)))
-            selected_action = root.legal_indices.index(selected_tensor_action)
-            self._gumbel_selected_action = selected_action
-            if verbose >= 4:
-                print(f"Gumbel root: move={move_idx}, tau={tau:.3f}, deterministic wrt Dirichlet noise")
-            return timing_tracker.get_final_stats()
-        
-        # Create helper functions for Q and N value access
-        def q_of_child(action: int) -> float:
-            """Get normalized Q-value for child action (action is tensor index)."""
-            # Map tensor index to legal move index
-            legal_move_idx = root.legal_indices.index(action)
-            if root.N[legal_move_idx] == 0:
-                return 0.5  # Neutral value for unvisited actions
-            # Normalize Q-value from [-1,1] to [0,1] range
-            q_raw = root.Q[legal_move_idx]
-            return (q_raw + 1.0) / 2.0
-        
-        def n_of_child(action: int) -> int:
-            """Get visit count for child action (action is tensor index)."""
-            # Map tensor index to legal move index
-            legal_move_idx = root.legal_indices.index(action)
-            return root.N[legal_move_idx]
-        
-        # Get legal action indices (these are tensor indices, not legal move indices)
-        legal_actions = root.legal_indices.copy()
-        
-        # Pass log-priors and temperature to Gumbel
-        logits_for_gumbel = np.log(np.clip(priors_full, 1e-12, 1.0))
-        
-        # DEBUG: Log Gumbel call parameters
-        if tau <= 0.1 and verbose >= 5:
-            print(f"MCTS GUMBEL CALL DEBUG:")
-            print(f"  Temperature: {tau}")
-            print(f"  Total sims: {total_sims}")
-            print(f"  Legal actions: {len(legal_actions)}")
-            print(f"  Logits range: [{np.min(logits_for_gumbel):.3f}, {np.max(logits_for_gumbel):.3f}]")
-            print(f"  Top policy action: {int(np.argmax(logits_for_gumbel))}")
-        
-        # Run batched Gumbel-AlphaZero selection with temperature
-        # print(f"ABOUT TO CALL GUMBEL: total_sims={total_sims}, legal_actions={len(legal_actions)}")
-        selected_tensor_action, gumbel_metrics = gumbel_alpha_zero_root_batched(
-            mcts=self,
-            root=root,
-            policy_logits=logits_for_gumbel,
-            total_sims=total_sims,
-            legal_actions=legal_actions,
-            q_of_child=q_of_child,
-            n_of_child=n_of_child,
-            m=self.cfg.gumbel_m_candidates,
-            c_visit=self.cfg.gumbel_c_visit,
-            c_scale=self.cfg.gumbel_c_scale,
-            temperature=tau,
-            verbose=verbose,
-            candidate_power_scale=self.cfg.gumbel_candidate_power_scale,
-            candidate_power_rate=self.cfg.gumbel_candidate_power_rate,
-            candidate_power_offset=self.cfg.gumbel_candidate_power_offset,
-            candidate_min=self.cfg.gumbel_candidate_min,
-            candidate_max=self.cfg.gumbel_candidate_max,
-            use_gumbel_in_final_eval=self.cfg.gumbel_use_gumbel_in_final_eval,
-            eval_mode=False  # MCTS is not evaluation mode by default
+    def _validate_run_inputs(self, root_state: HexGameState, verbose: int) -> None:
+        """Validate top-level MCTS run arguments."""
+        if root_state is None:
+            raise ValueError("root_state cannot be None")
+        if root_state.game_over:
+            raise RuntimeError("Cannot run MCTS on a terminal game state")
+        if verbose < 0:
+            raise ValueError(f"verbose must be non-negative, got {verbose}")
+
+    def _reset_run_state(self, verbose: int) -> None:
+        """Reset per-run state (especially Gumbel diagnostics) before search."""
+        # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
+        self.verbose = int(verbose)
+        self._used_gumbel_root_selection = False
+        self._gumbel_selected_action = None
+        self._gumbel_selected_tensor_action = None
+        self._gumbel_final_rank_top_move_trmph = None
+        self._gumbel_final_rank_top5 = None
+        self._gumbel_v_pi_01 = None
+        self._gumbel_nn_calls_per_move = 0
+        self._gumbel_total_leaves_evaluated = 0
+        self._gumbel_distinct_leaves_evaluated = 0
+        self._gumbel_candidates_m = 0
+        self._gumbel_rounds_R = 0
+        self._gumbel_timing_breakdown = {}
+        self._enable_detailed_exploration_if_needed(self.cfg.sims)
+
+    def _termination_result_if_any(self, root: MCTSNode, verbose: int) -> Optional[MCTSResult]:
+        """Run algorithm-termination checks and build a result if search should stop."""
+        termination_info = self._check_algorithm_termination(root, verbose)
+        if termination_info is None:
+            return None
+        return self._build_algorithm_termination_result(root, termination_info, verbose)
+
+    def _expand_root_for_search(self, root: MCTSNode, root_state: HexGameState) -> None:
+        """Expand root (and apply root noise) for full search when needed."""
+        board_size = board_size_from_state(root_state)
+        if board_size != root.board_size:
+            raise ValueError(
+                "Root board size mismatch between root node and root_state: "
+                f"{root.board_size} vs {board_size}"
+            )
+        if not root.is_terminal and not root.is_expanded:
+            self._expand_root_node(root, board_size)
+        if self.cfg.add_root_noise and not root.is_terminal and root.is_expanded:
+            self._apply_root_noise(root)
+
+    def _annotate_search_timing_stats(self, timing_stats: Dict[str, Any]) -> None:
+        """Attach aggregate search metrics derived from timing data."""
+        total_time = float(timing_stats.get("total_search_time", 0.0)) or 1e-9
+        timing_stats["unique_evals_total"] = int(self._unique_evals_total)
+        timing_stats["effective_sims_total"] = int(self._effective_sims_total)
+        timing_stats["unique_evals_per_sec"] = self._unique_evals_total / total_time
+        timing_stats["effective_sims_per_sec"] = self._effective_sims_total / total_time
+
+    def _build_completed_search_result(
+        self,
+        root: MCTSNode,
+        root_state: HexGameState,
+        timing_stats: Dict[str, Any],
+        verbose: int
+    ) -> MCTSResult:
+        """Build final result payload for a completed non-terminated MCTS search."""
+        move, move_probs = self._compute_move(root, root_state, verbose)
+        tree_data = self.get_tree_data(root, move_probs)
+        win_probability = compute_win_probability_from_tree_data(tree_data)
+
+        stats = self._get_stats_builder().create_final_stats(
+            timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
         )
-        
-        # Record Gumbel performance metrics
-        self._gumbel_nn_calls_per_move = gumbel_metrics["nn_calls_per_move"]
-        self._gumbel_total_leaves_evaluated = gumbel_metrics["total_leaves_evaluated"]
-        # For distinct leaves, we'll use the final MCTS metrics since individual batch stats don't include this
-        self._gumbel_distinct_leaves_evaluated = 0  # Will be updated later with final MCTS metrics
-        self._gumbel_candidates_m = gumbel_metrics["candidates_m"]
-        self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
-        # Record detailed timing breakdown
-        self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
-        
-        # Optional verbose logging
-        if verbose >= 4:
-            print(f"Gumbel root: move={move_idx}, tau={tau:.3f}")
-        
-        timing_tracker.end_timing("gumbel_algorithm")
-        
-        # Time the final conversion
-        timing_tracker.start_timing("gumbel_final_conversion")
-        
-        # Convert tensor index back to legal move index for MCTS
-        selected_action = root.legal_indices.index(selected_tensor_action)
-        
-        timing_tracker.end_timing("gumbel_final_conversion")
-        timing_tracker.end_timing("gumbel_selection")
-        
-        if verbose >= 2:
-            print(f"Gumbel selection completed. Selected tensor action {selected_tensor_action} "
-                  f"-> legal action {selected_action} ({root.legal_moves[selected_action]})")
-        
-        # Store the Gumbel-selected action for later use
-        self._gumbel_selected_action = selected_action
-        
-        return timing_tracker.get_final_stats()
 
-    def _root_temperature(self, move_idx: int) -> float:
+        if getattr(self, "_used_gumbel_root_selection", False):
+            # Use actual MCTS metrics for distinct leaves evaluation.
+            actual_distinct_leaves = timing_stats.get("unique_evals_total", 0)
+            stats.update({
+                "gumbel_nn_calls_per_move": self._gumbel_nn_calls_per_move,
+                "gumbel_total_leaves_evaluated": self._gumbel_total_leaves_evaluated,
+                "gumbel_distinct_leaves_evaluated": actual_distinct_leaves,
+                "gumbel_candidates_m": self._gumbel_candidates_m,
+                "gumbel_rounds_R": self._gumbel_rounds_R,
+                "gumbel_avg_nn_batch_size": self._gumbel_total_leaves_evaluated / max(1, self._gumbel_nn_calls_per_move),
+                "gumbel_leaves_distinct_ratio": actual_distinct_leaves / max(1, self._gumbel_total_leaves_evaluated),
+                "gumbel_timing_breakdown": getattr(self, "_gumbel_timing_breakdown", {}),
+                # Debug/inspection fields (small and safe to serialize).
+                "gumbel_selected_tensor_action": self._gumbel_selected_tensor_action,
+                "gumbel_final_rank_top_move": self._gumbel_final_rank_top_move_trmph,
+                "gumbel_v_pi_01": self._gumbel_v_pi_01,
+                "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
+            })
+
+        return MCTSResult(
+            move=move,
+            stats=stats,
+            tree_data=tree_data,
+            root_node=root,
+            algorithm_termination_info=None,
+            win_probability=win_probability
+        )
+
+    def _root_temperature(self, move_idx: int, board_size: int) -> float:
         """
-        Compute temperature for root node based on move index and configuration.
+        Compute root temperature for visit-count move selection.
+
+        This temperature is used when selecting from root visit counts in the
+        non-Gumbel path. Gumbel root selection is validated separately and uses
+        a fixed temperature contract.
         
         Args:
             move_idx: Current move index (0-based)
@@ -1199,15 +752,7 @@ class BaselineMCTS:
         Returns:
             Temperature value for this move
         """
-        return calculate_temperature_decay(
-            temperature_start=self.cfg.temperature_start,
-            temperature_end=self.cfg.temperature_end,
-            temperature_decay_type=self.cfg.temperature_decay_type,
-            temperature_decay_moves=self.cfg.temperature_decay_moves,
-            temperature_step_thresholds=self.cfg.temperature_step_thresholds,
-            temperature_step_values=self.cfg.temperature_step_values,
-            move_count=move_idx,
-        )
+        return calculate_mcts_root_temperature(move_count=move_idx, cfg=self.cfg, board_size=board_size)
 
     def _get_policy_logits_and_legal_mask(self, root_state: HexGameState, legal_indices: List[int]) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -1222,7 +767,7 @@ class BaselineMCTS:
         Returns:
             Tuple of (policy_logits_full, legal_mask)
         """
-        board_size = int(root_state.get_board_tensor().shape[-1])
+        board_size = board_size_from_state(root_state)
         action_size = board_size * board_size
         
         # Create legal mask
@@ -1276,6 +821,253 @@ class BaselineMCTS:
         
         return probs
 
+    def _compute_leaf_batch_targets(
+        self,
+        root: MCTSNode,
+        sims_remaining: int,
+        forced_root_actions: Optional[List[int]]
+    ) -> Tuple[int, Deque[int], int, int, bool]:
+        """Compute selection budget and batch targets for one leaf-selection pass."""
+        board_size = root.board_size
+        legal_count = len(root.legal_moves)
+        root_total_N = int(np.sum(root.N))
+
+        # Early-phase smaller batches (until a few backprops happen).
+        warmup_cap = 16
+        is_early = root_total_N < 64
+        general_select_budget = min(self.cfg.batch_cap, sims_remaining)
+        effective_select_budget = min(general_select_budget, warmup_cap) if is_early else general_select_budget
+
+        # Never try to collect more distinct leaves than legal root moves or sims left.
+        effective_distinct_target = min(
+            int(self.cfg.distinct_target),
+            effective_select_budget,
+            legal_count,
+            max(1, sims_remaining)
+        )
+
+        if forced_root_actions is not None:
+            force_q: Deque[int] = deque(forced_root_actions)
+            select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
+        else:
+            force_q = deque()
+            select_budget = int(effective_select_budget)
+
+        if self.cfg.adaptive_distinct_target:
+            # Encourage earlier backprops at low sims; keep batches tidy.
+            guess = max(1, sims_remaining // 8)
+            distinct_target = int(max(self.cfg.distinct_target_min,
+                                      min(self.cfg.distinct_target_max, guess)))
+        else:
+            distinct_target = max(1, int(effective_distinct_target))
+
+        use_root_reservation = (root_total_N < 64)
+        return board_size, force_q, select_budget, distinct_target, use_root_reservation
+
+    def _should_flush_selected_batch(self, total_leaves: int, distinct_count: int, distinct_target: int) -> Optional[str]:
+        """Return flush reason when a batch should be processed immediately."""
+        if distinct_count >= distinct_target:
+            return "distinct_target_reached"
+        if self.cfg.enable_low_distinct_ratio_flush and total_leaves >= 16 and distinct_count / max(1, total_leaves) < 0.5:
+            return "low_distinct_ratio"
+        return None
+
+    def _resolve_child_index_for_descent(
+        self,
+        node: MCTSNode,
+        root: MCTSNode,
+        forced_a_full: Optional[int],
+        use_root_reservation: bool,
+        used_root_actions: Set[int],
+        root_legal_action_to_local_idx: Optional[Dict[int, int]] = None,
+        root_legal_set: Optional[Set[int]] = None,
+    ) -> int:
+        """Select child index for one descent step, handling forced root actions and reservations."""
+        if node is root and forced_a_full is not None:
+            forced_action = int(forced_a_full)
+            if root_legal_action_to_local_idx is not None and root_legal_set is not None:
+                if forced_action not in root_legal_set:
+                    raise ValueError(
+                        "Forced-root legality contract violated at _resolve_child_index_for_descent. "
+                        f"Illegal forced action {forced_action}. "
+                        f"Current root legal_indices ({len(node.legal_indices)}): {node.legal_indices}"
+                    )
+                return root_legal_action_to_local_idx[forced_action]
+
+            # Safety fallback for non-forced paths that do not precompute root lookup tables.
+            if forced_action not in node.legal_indices:
+                raise ValueError(
+                    "Forced-root legality contract violated at _resolve_child_index_for_descent. "
+                    f"Illegal forced action {forced_action}. "
+                    f"Current root legal_indices ({len(node.legal_indices)}): {node.legal_indices}"
+                )
+            return node.legal_indices.index(forced_action)
+
+        if node is root and use_root_reservation:
+            return self._select_child_puct(node, node.depth, used_root_actions)
+        return self._select_child_puct(node, node.depth)
+
+    def _realize_child_node_if_needed(
+        self,
+        node: MCTSNode,
+        loc_idx: int,
+        board_size: int,
+        timing_tracker: MCTSTimingTracker,
+    ) -> MCTSNode:
+        """Create and attach child node if it does not exist yet."""
+        child = node.children[loc_idx]
+        if child is not None:
+            return child
+
+        timing_tracker.start_timing("state_creation")
+        (r, c) = node.legal_moves[loc_idx]
+        timing_tracker.start_timing("make_move")
+        child_state = node.state.make_move(r, c)
+        timing_tracker.end_timing("make_move")
+        child = MCTSNode(child_state, board_size)
+        child.depth = node.depth + 1
+        timing_tracker.end_timing("state_creation")
+        node.children[loc_idx] = child
+
+        if self.detailed_exploration_enabled:
+            move_str = rowcol_to_trmph(r, c, board_size)
+            self._record_node_realized(child.depth, move_str, child.state_hash)
+        return child
+
+    def _build_root_pv_hint(self, root: MCTSNode) -> Optional[List[str]]:
+        """Build a short principal-variation hint for detailed exploration traces."""
+        if not root.is_expanded or len(root.children) == 0:
+            return None
+
+        board_size = root.board_size
+        pv_moves: List[str] = []
+        current = root
+        for _ in range(3):
+            if not current.is_expanded or len(current.children) == 0:
+                break
+            best_child_idx = int(np.argmax(current.N))
+            if best_child_idx >= len(current.legal_moves):
+                break
+            r, c = current.legal_moves[best_child_idx]
+            pv_moves.append(rowcol_to_trmph(r, c, board_size))
+            current = current.children[best_child_idx]
+            if current is None:
+                break
+        return pv_moves if pv_moves else None
+
+    def _record_forced_root_action_if_needed(self, root: MCTSNode, forced_a_full: Optional[int]) -> None:
+        """Record forced-root selection diagnostics for detailed exploration traces."""
+        if not self.detailed_exploration_enabled or forced_a_full is None:
+            return
+        legal_at_root = forced_a_full in root.legal_indices
+        self._record_forced_root_action(self.simulation_count, forced_a_full, legal_at_root)
+
+    def _try_collect_leaf(
+        self,
+        node: MCTSNode,
+        path: List[Tuple[MCTSNode, int]],
+        leaves: List[MCTSNode],
+        paths: List[List[Tuple[MCTSNode, int]]],
+        distinct_hashes: Set[int],
+        distinct_target: int,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Try to collect `node` as a leaf.
+
+        Returns:
+            Tuple of (leaf_was_collected, flush_reason_if_any).
+        """
+        if node.is_terminal:
+            leaves.append(node)
+            paths.append(path.copy())
+            if self.detailed_exploration_enabled:
+                self._record_leaf_selected(
+                    node.depth, node.state_hash, "terminal",
+                    len(leaves), len(distinct_hashes), distinct_target
+                )
+            return True, None
+
+        if not node.is_expanded:
+            leaves.append(node)
+            paths.append(path)
+            if node.state_hash not in self.eval_cache and not node.is_terminal:
+                distinct_hashes.add(node.state_hash)
+
+            if self.detailed_exploration_enabled:
+                self._record_leaf_selected(
+                    node.depth, node.state_hash, "unexpanded",
+                    len(leaves), len(distinct_hashes), distinct_target
+                )
+
+            flush_reason = self._should_flush_selected_batch(len(leaves), len(distinct_hashes), distinct_target)
+            return True, flush_reason
+
+        return False, None
+
+    def _record_descent_start_if_needed(
+        self,
+        root: MCTSNode,
+        forced_root_actions: Optional[List[int]]
+    ) -> None:
+        """Record per-descent summary diagnostics when detailed exploration is enabled."""
+        if not self.detailed_exploration_enabled:
+            return
+        root_visits = int(np.sum(root.N)) if root.N is not None else 0
+        gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
+        pv_hint = self._build_root_pv_hint(root)
+        self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
+
+    def _perform_leaf_selection_descent(
+        self,
+        root: MCTSNode,
+        board_size: int,
+        distinct_target: int,
+        use_root_reservation: bool,
+        used_root_actions: Set[int],
+        force_q: Deque[int],
+        leaves: List[MCTSNode],
+        paths: List[List[Tuple[MCTSNode, int]]],
+        distinct_hashes: Set[int],
+        timing_tracker: MCTSTimingTracker,
+        root_legal_action_to_local_idx: Optional[Dict[int, int]],
+        root_legal_set: Optional[Set[int]],
+    ) -> Optional[str]:
+        """
+        Execute a single root-to-leaf descent and collect one leaf when found.
+
+        Returns:
+            Flush reason when selection should end immediately, otherwise None.
+        """
+        node = root
+        path: List[Tuple[MCTSNode, int]] = []
+
+        # Pop forced root action for this descent when in Gumbel forced mode.
+        forced_a_full = force_q.popleft() if force_q else None
+        self._record_forced_root_action_if_needed(node, forced_a_full)
+
+        while True:
+            leaf_collected, flush_reason = self._try_collect_leaf(
+                node, path, leaves, paths, distinct_hashes, distinct_target
+            )
+            if leaf_collected:
+                return flush_reason
+
+            loc_idx = self._resolve_child_index_for_descent(
+                node,
+                root,
+                forced_a_full,
+                use_root_reservation,
+                used_root_actions,
+                root_legal_action_to_local_idx,
+                root_legal_set,
+            )
+            path.append((node, loc_idx))
+
+            if node is root and use_root_reservation:
+                used_root_actions.add(loc_idx)
+
+            node = self._realize_child_node_if_needed(node, loc_idx, board_size, timing_tracker)
+
 
     def _select_leaves_batch(
         self,
@@ -1303,54 +1095,28 @@ class BaselineMCTS:
         leaves: List[MCTSNode] = []
         paths: List[List[Tuple[MCTSNode, int]]] = []
 
-        board_size = int(root.state.get_board_tensor().shape[-1])
-
-        # Handle early exploration at the root:
-        legal_count = len(root.legal_moves)
-        root_total_N = int(np.sum(root.N))
-
-        # 1) Early-phase smaller batches (until a few backprops happen)
-        warmup_cap = 16                      # conservative early cap
-        is_early = root_total_N < 64         # ~ first few backprops at root
-        general_select_budget = min(self.cfg.batch_cap, sims_remaining)
-        effective_select_budget = min(general_select_budget, warmup_cap) if is_early else general_select_budget
-        # 2) Never try to collect more distinct leaves than there are legal root moves or sims left
-        effective_distinct_target = min(
-            int(self.cfg.distinct_target),
-            effective_select_budget,
-            legal_count,
-            max(1, sims_remaining)
+        board_size, force_q, select_budget, distinct_target, use_root_reservation = self._compute_leaf_batch_targets(
+            root, sims_remaining, forced_root_actions
         )
-
-        # If caller supplies forced actions (likely as part of Gumbel), we must collect exactly that many leaves for this batch
-        if forced_root_actions is not None:
-            force_q = deque(forced_root_actions)
-            select_budget = min(self.cfg.batch_cap, len(forced_root_actions))
-        else:
-            # Non-Gumbel code path
-            force_q = deque()
-            # select_budget = min(self.cfg.batch_cap, sims_remaining)
-            select_budget = int(effective_select_budget)
-
-        # Use adaptive distinct target for low simulation counts
-        if self.cfg.adaptive_distinct_target:
-            # Encourage earlier backprops at low sims; keep batches tidy.
-            # Example heuristic: ~1/8th of remaining sims, clamped to [min, max].
-            guess = max(1, sims_remaining // 8)
-            distinct_target = int(max(self.cfg.distinct_target_min,
-                                      min(self.cfg.distinct_target_max, guess)))
-        else:
-            # distinct_target = int(self.cfg.distinct_target)
-            # distinct_target = max(1, min(distinct_target, select_budget))  # <- clamp
-            distinct_target = max(1, int(effective_distinct_target))
 
         # Track distinct (uncached+unexpanded) leaf hashes this batch
         distinct_hashes: Set[int] = set()
 
         # Root-only batch-local "reservation" for early phase
         # This prevents overexploration of top policy moves before any backpropagations occur
-        use_root_reservation = (root_total_N < 64)  # only early phase
         used_root_actions: Set[int] = set()  # tracks root actions used in this batch
+        root_legal_action_to_local_idx: Optional[Dict[int, int]] = None
+        root_legal_set: Optional[Set[int]] = None
+        if forced_root_actions is not None:
+            root_legal_set = set(root.legal_indices)
+            if len(root_legal_set) != len(root.legal_indices):
+                raise ValueError(
+                    "Forced-root legality contract violated at _select_leaves_batch. "
+                    f"Duplicate entries in root legal_indices ({len(root.legal_indices)}): {root.legal_indices}"
+                )
+            root_legal_action_to_local_idx = {
+                int(action): idx for idx, action in enumerate(root.legal_indices)
+            }
 
         # Cheap guardrail on selection work
         max_selection_descents = max(select_budget * 4, 64)  # 4x is a good default
@@ -1358,144 +1124,34 @@ class BaselineMCTS:
 
         while len(leaves) < select_budget and descents < max_selection_descents:
             descents += 1
-
-            node = root
-            path: List[Tuple[MCTSNode, int]] = []
-                    
-            # Gumbel specific code path: Pop the forced action for THIS descent (if any)
-            forced_a_full = force_q.popleft() if force_q else None
-            
-            # Record forced root action for detailed exploration
-            if self.detailed_exploration_enabled and forced_a_full is not None:
-                legal_at_root = forced_a_full in node.legal_indices
-                self._record_forced_root_action(self.simulation_count, forced_a_full, legal_at_root)
-
-            while True:
-                if node.is_terminal:
-                    leaves.append(node)
-                    paths.append(path.copy())
-                    
-                    # Record leaf selection for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        self._record_leaf_selected(
-                            node.depth, node.state_hash, "terminal", 
-                            len(leaves), len(distinct_hashes), distinct_target
-                        )
-                    
-                    break
-                if not node.is_expanded:
-                    leaves.append(node)
-                    paths.append(path)
-
-                    # Only count toward distinct if this state actually needs eval
-                    if node.state_hash not in self.eval_cache and not node.is_terminal:
-                        distinct_hashes.add(node.state_hash)
-
-                    # Record leaf selection for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        self._record_leaf_selected(
-                            node.depth, node.state_hash, "unexpanded", 
-                            len(leaves), len(distinct_hashes), distinct_target
-                        )
-
-                    # Batch flushing logic: determine when to call the neural network
-                    # U = number of distinct (uncached) leaves that need NN evaluation
-                    # T = total number of leaves collected so far
-                    U = len(distinct_hashes)
+            flush_reason = self._perform_leaf_selection_descent(
+                root=root,
+                board_size=board_size,
+                distinct_target=distinct_target,
+                use_root_reservation=use_root_reservation,
+                used_root_actions=used_root_actions,
+                force_q=force_q,
+                leaves=leaves,
+                paths=paths,
+                distinct_hashes=distinct_hashes,
+                timing_tracker=timing_tracker,
+                root_legal_action_to_local_idx=root_legal_action_to_local_idx,
+                root_legal_set=root_legal_set,
+            )
+            # Forced-root execution must honor explicit action budgets exactly.
+            # Do not early-flush on distinct-target heuristics in that mode.
+            if flush_reason is not None and forced_root_actions is None:
+                if self.detailed_exploration_enabled:
                     T = len(leaves)
-                    
-                    # Primary flush condition: enough distinct leaves for efficient NN batch
-                    if U >= distinct_target:
-                        if self.detailed_exploration_enabled:
-                            self._record_batch_flush("distinct_target_reached", T, U, distinct_target, select_budget)
-                        timing_tracker.end_timing("select")
-                        return leaves, paths
-                    
-                    # Secondary flush condition: low distinct ratio (disabled by default)
-                    # This was causing performance drops at higher simulation counts
-                    if self.cfg.enable_low_distinct_ratio_flush and T >= 16 and U / max(1, T) < 0.5:
-                        if self.detailed_exploration_enabled:
-                            self._record_batch_flush("low_distinct_ratio", T, U, distinct_target, select_budget)
-                        timing_tracker.end_timing("select")
-                        return leaves, paths
-                    break
+                    U = len(distinct_hashes)
+                    self._record_batch_flush(flush_reason, T, U, distinct_target, select_budget)
+                timing_tracker.end_timing("select")
+                return leaves, paths
 
-                # Choose child
-                # First check for Gumbel-specific forced action
-                if node is root and forced_a_full is not None:
-                    # Map full action index -> local child idx
-                    # (legal_indices aligns with stats arrays)
-                    try:
-                        # Fast path: vectorized search
-                        li = np.asarray(node.legal_indices)
-                        loc_idx = int(np.where(li == forced_a_full)[0][0])
-                    except Exception:
-                        # Fallback if forced action is illegal: normal PUCT
-                        loc_idx = self._select_child_puct(node, node.depth)
-                else:
-                    # Non-Gumbel code path with root reservation logic
-                    if node is root and use_root_reservation:
-                        loc_idx = self._select_child_puct(node, node.depth, used_root_actions)
-                    else:
-                        loc_idx = self._select_child_puct(node, node.depth)
-
-                path.append((node, loc_idx))
-                
-                # Track root action usage for reservation mechanism
-                if node is root and use_root_reservation:
-                    used_root_actions.add(loc_idx)
-                
-                child = node.children[loc_idx]
-
-                if child is None:
-                    timing_tracker.start_timing("state_creation")
-                    (r, c) = node.legal_moves[loc_idx]
-                    timing_tracker.start_timing("make_move")
-                    child_state = node.state.make_move(r, c)
-                    timing_tracker.end_timing("make_move")
-                    child = MCTSNode(child_state, board_size)
-                    child.depth = node.depth + 1
-                    timing_tracker.end_timing("state_creation")
-                    node.children[loc_idx] = child
-                    
-                    # Record node realization for detailed exploration
-                    if self.detailed_exploration_enabled:
-                        r, c = node.legal_moves[loc_idx]
-                        move_str = f"{chr(97 + c)}{r + 1}"
-                        self._record_node_realized(child.depth, move_str, child.state_hash)
-
-                node = child
-
-            # Record descent start for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root visit count
-                root_visits = int(np.sum(root.N)) if root.N is not None else 0
-                # Check if Gumbel is forcing actions
-                gumbel_forced = forced_root_actions is not None and len(forced_root_actions) > 0
-                # Get PV hint (first 2-3 moves)
-                pv_hint = None
-                if root.is_expanded and len(root.children) > 0:
-                    pv_moves = []
-                    current = root
-                    for _ in range(3):  # Get up to 3 moves
-                        if current.is_expanded and len(current.children) > 0:
-                            best_child_idx = int(np.argmax(current.N))
-                            if best_child_idx < len(current.legal_moves):
-                                r, c = current.legal_moves[best_child_idx]
-                                # TODO: Investigate why we have this literal '97' (should we use move_to_index?)
-                                pv_moves.append(f"{chr(97 + c)}{r + 1}")
-                                current = current.children[best_child_idx]
-                                if current is None:
-                                    break
-                        else:
-                            break
-                    if pv_moves:
-                        pv_hint = pv_moves
-                
-                self._record_descent_start(self.simulation_count, root_visits, gumbel_forced, pv_hint)
-                # Outer budget guard (kept from original)
-                if len(leaves) >= select_budget:
-                    break
+            self._record_descent_start_if_needed(root, forced_root_actions)
+            # Outer budget guard (kept from original)
+            if len(leaves) >= select_budget:
+                break
 
         # Record budget_full batch flush for detailed exploration
         if self.detailed_exploration_enabled:
@@ -1506,21 +1162,65 @@ class BaselineMCTS:
 
     def _run_forced_root_batch(self, root: MCTSNode, actions: List[int], timing_tracker: MCTSTimingTracker) -> int:
         """Run exactly len(actions) simulations, forcing each root action once, using the batched pipeline."""
+        expected_simulations = len(actions)
+        if expected_simulations == 0:
+            return 0
+
         leaves, paths = self._select_leaves_batch(root, sims_remaining=len(actions),
                                                   timing_tracker=timing_tracker,
                                                   forced_root_actions=actions)
-        return self._process_leaves_batch(leaves, paths, timing_tracker, root)
+        if len(leaves) != expected_simulations:
+            raise ValueError(
+                "Forced-root simulation contract violated at _run_forced_root_batch. "
+                f"Requested {expected_simulations} forced actions but selected {len(leaves)} leaves."
+            )
+
+        simulations_completed = self._process_leaves_batch(leaves, paths, timing_tracker, root)
+        if simulations_completed != expected_simulations:
+            raise ValueError(
+                "Forced-root simulation contract violated at _run_forced_root_batch. "
+                f"Requested {expected_simulations} forced actions but completed {simulations_completed} simulations."
+            )
+        return simulations_completed
 
     def run_forced_root_actions(self, root: MCTSNode, actions: List[int], verbose: int = 0) -> Dict[str, Any]:
         """Public entry-point used by Gumbel root coordinator; respects batch_cap internally."""
+        normalized_actions = assert_actions_subset_of_legal(
+            actions=actions,
+            legal_actions=root.legal_indices,
+            context="run_forced_root_actions:entry",
+            contract_name="Forced-root legality contract",
+            actions_label="Forced actions",
+            legal_label="Current root legal_indices",
+        )
+
         timing_tracker = MCTSTimingTracker()
         i = 0
-        while i < len(actions):
-            j = min(i + self.cfg.batch_cap, len(actions))
-            sims_done = self._run_forced_root_batch(root, actions[i:j], timing_tracker)
+        simulations_completed_total = 0
+        while i < len(normalized_actions):
+            j = min(i + self.cfg.batch_cap, len(normalized_actions))
+            batch_actions = normalized_actions[i:j]
+            sims_done = self._run_forced_root_batch(root, batch_actions, timing_tracker)
+            expected_batch = len(batch_actions)
+            if sims_done != expected_batch:
+                raise ValueError(
+                    "Forced-root simulation contract violated at run_forced_root_actions. "
+                    f"Requested {expected_batch} actions in batch [{i}:{j}] but completed {sims_done} simulations."
+                )
             self._effective_sims_total += sims_done
+            simulations_completed_total += sims_done
             i = j
-        return timing_tracker.get_final_stats()
+        expected_total = len(normalized_actions)
+        if simulations_completed_total != expected_total:
+            raise ValueError(
+                "Forced-root simulation contract violated at run_forced_root_actions. "
+                f"Requested {expected_total} total actions but completed {simulations_completed_total} simulations."
+            )
+
+        timing_stats = timing_tracker.get_final_stats()
+        timing_stats["simulations_completed"] = int(simulations_completed_total)
+        timing_stats["simulations_requested"] = int(expected_total)
+        return timing_stats
 
     def _process_leaves_batch(self, leaves: List[MCTSNode], paths: List[List[Tuple[MCTSNode, int]]], 
                             timing_tracker: MCTSTimingTracker, root: MCTSNode) -> int:
@@ -1549,6 +1249,86 @@ class BaselineMCTS:
 
         return simulations_completed
 
+    def _leaf_requires_evaluation(self, leaf: MCTSNode) -> bool:
+        """Return whether a leaf still requires NN evaluation for expansion."""
+        return not leaf.is_terminal and not leaf.is_expanded
+
+    def _lookup_leaf_cache_timed(
+        self,
+        leaf: MCTSNode,
+        timing_tracker: MCTSTimingTracker
+    ) -> Optional[Tuple[np.ndarray, float]]:
+        """Lookup leaf evaluation in cache with timing instrumentation."""
+        timing_tracker.start_timing("cache_lookup")
+        cached = self._get_from_cache(leaf.state_hash)
+        timing_tracker.end_timing("cache_lookup")
+        return cached
+
+    def _record_nn_eval_start_if_needed(
+        self,
+        leaves: List[MCTSNode],
+        need_eval_idxs: List[int],
+        encodings: List[torch.Tensor]
+    ) -> None:
+        """Record NN evaluation start event for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        cache_hits_in_batch = 0
+        for leaf_idx in need_eval_idxs:
+            if leaves[leaf_idx].state_hash in self.eval_cache:
+                cache_hits_in_batch += 1
+
+        self._record_nn_eval_start(
+            len(leaves), len(need_eval_idxs), len(encodings), cache_hits_in_batch
+        )
+
+    def _record_nn_eval_done_if_needed(
+        self,
+        policy_cpu: torch.Tensor,
+        value_cpu: torch.Tensor,
+        tm: Dict[str, Any],
+        effective_batch_size: int
+    ) -> None:
+        """Record NN evaluation completion event for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        values = [float(v.item()) for v in value_cpu]
+        value_range = [min(values), max(values)]
+
+        mean_entropy = 0.0
+        if len(policy_cpu) > 0:
+            entropies = []
+            for pol in policy_cpu:
+                pol_np = pol.numpy()
+                pol_probs = softmax_np(pol_np)
+                entropy = -np.sum(pol_probs * np.log(pol_probs + 1e-8))
+                entropies.append(entropy)
+            mean_entropy = float(np.mean(entropies))
+
+        time_ms = tm.get("forward_ms", 0.0)
+        self._record_nn_eval_done(
+            effective_batch_size, value_range, mean_entropy, time_ms
+        )
+
+    def _cache_and_expand_evaluated_leaves(
+        self,
+        policy_cpu: torch.Tensor,
+        value_cpu: torch.Tensor,
+        need_eval_idxs: List[int],
+        leaves: List[MCTSNode],
+        board_size: int,
+        action_size: int
+    ) -> None:
+        """Write NN outputs to cache and expand corresponding leaves."""
+        for j, leaf_idx in enumerate(need_eval_idxs):
+            leaf = leaves[leaf_idx]
+            policy_np = policy_cpu[j].numpy()
+            value_signed = float(value_cpu[j].item())
+            self._put_in_cache(leaf.state_hash, policy_np, value_signed)
+            self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
+
     def _prepare_leaf_evaluations(
         self,
         leaves: List[MCTSNode],
@@ -1571,14 +1351,10 @@ class BaselineMCTS:
         seen_uncached: Set[int] = set()
 
         for i, leaf in enumerate(leaves):
-            # Skip leaves that don't need eval
-            if leaf.is_terminal or leaf.is_expanded:
+            if not self._leaf_requires_evaluation(leaf):
                 continue
 
-            # Cached?
-            timing_tracker.start_timing("cache_lookup")
-            cached = self._get_from_cache(leaf.state_hash)
-            timing_tracker.end_timing("cache_lookup")
+            cached = self._lookup_leaf_cache_timed(leaf, timing_tracker)
 
             if cached is not None:
                 self.cache_hits += 1
@@ -1586,15 +1362,12 @@ class BaselineMCTS:
                 cached_expansions.append((i, policy_np, value_signed))
                 continue
 
-            # Uncached → only encode the first occurrence of this state in the batch
             if leaf.state_hash in seen_uncached:
-                # Another copy will piggy-back on the first result via eval_cache.
                 continue
             seen_uncached.add(leaf.state_hash)
 
             self.cache_misses += 1
-            enc = leaf.state.get_board_tensor().to(dtype=torch.float32)
-            encodings.append(enc)
+            encodings.append(leaf.state.get_board_tensor().to(dtype=torch.float32))
             need_eval_idxs.append(i)
 
         timing_tracker.end_timing("encode")
@@ -1606,19 +1379,9 @@ class BaselineMCTS:
         """Run neural network inference on a batch of leaves."""
         if not encodings:
             return
-        
-        # Record NN eval start for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Calculate cache hits for this batch
-            cache_hits_in_batch = 0
-            for leaf_idx in need_eval_idxs:
-                if leaves[leaf_idx].state_hash in self.eval_cache:
-                    cache_hits_in_batch += 1
-            
-            self._record_nn_eval_start(
-                len(leaves), len(need_eval_idxs), len(encodings), cache_hits_in_batch
-            )
-        
+
+        self._record_nn_eval_start_if_needed(leaves, need_eval_idxs, encodings)
+
         batch_tensor = torch.stack(encodings, dim=0)
         board_size = int(batch_tensor.shape[-1])
         action_size = board_size * board_size
@@ -1629,41 +1392,22 @@ class BaselineMCTS:
         # Record performance metrics
         self._record_eval_perf(tm, is_first=(timing_tracker.batch_count == 0))
         timing_tracker.record_batch_metrics(tm)
-        
-        # Record NN eval done for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Calculate value range and policy entropy
-            values = [float(v.item()) for v in value_cpu]
-            value_range = [min(values), max(values)]
-            
-            # Calculate mean policy entropy
-            mean_entropy = 0.0
-            if len(policy_cpu) > 0:
-                entropies = []
-                for pol in policy_cpu:
-                    pol_np = pol.numpy()
-                    # Convert to probabilities and calculate entropy
-                    pol_probs = softmax_np(pol_np)
-                    entropy = -np.sum(pol_probs * np.log(pol_probs + 1e-8))
-                    entropies.append(entropy)
-                mean_entropy = float(np.mean(entropies))
-            
-            # Get inference time
-            time_ms = tm.get("forward_ms", 0.0)
-            
-            self._record_nn_eval_done(
-                len(need_eval_idxs), value_range, mean_entropy, time_ms
-            )
-        
-        # Cache results and expand nodes
-        for j, leaf_idx in enumerate(need_eval_idxs):
-            leaf = leaves[leaf_idx]
-            pol = policy_cpu[j].numpy()
-            val_signed = float(value_cpu[j].item())  # tanh-activated output in [-1,1] range
-            
-            # Cache CPU-native results
-            self._put_in_cache(leaf.state_hash, pol, val_signed)
-            self._expand_node_from_policy(leaf, pol, board_size, action_size)
+
+        self._record_nn_eval_done_if_needed(
+            policy_cpu=policy_cpu,
+            value_cpu=value_cpu,
+            tm=tm,
+            effective_batch_size=len(need_eval_idxs),
+        )
+
+        self._cache_and_expand_evaluated_leaves(
+            policy_cpu=policy_cpu,
+            value_cpu=value_cpu,
+            need_eval_idxs=need_eval_idxs,
+            leaves=leaves,
+            board_size=board_size,
+            action_size=action_size,
+        )
 
     def _expand_cached_leaves(self, cached_expansions: List[Tuple[int, np.ndarray, float]], 
                             leaves: List[MCTSNode], timing_tracker: MCTSTimingTracker):
@@ -1672,11 +1416,16 @@ class BaselineMCTS:
             return
         
         timing_tracker.start_timing("expand")
-        board_size = int(leaves[0].state.get_board_tensor().shape[-1])
+        board_size = leaves[0].board_size
         action_size = board_size * board_size
         
         for (leaf_idx, policy_np, _) in cached_expansions:
             leaf = leaves[leaf_idx]
+            if leaf.board_size != board_size:
+                raise ValueError(
+                    "Mixed board sizes detected in cached leaf expansion batch: "
+                    f"{leaf.board_size} vs {board_size}"
+                )
             if not leaf.is_expanded and not leaf.is_terminal:
                 self._expand_node_from_policy(leaf, policy_np, board_size, action_size)
         
@@ -1689,42 +1438,47 @@ class BaselineMCTS:
         
         simulations_completed = 0
         for leaf, path in zip(leaves, paths):
-            # Increment simulation counter for detailed tracking
+            root_q_before = 0.0
             if self.detailed_exploration_enabled:
                 self.simulation_count += 1
-            
-            # Record backprop update for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root Q before backprop
-                root = path[0][0] if path else None
-                root_q_before = 0.0
-                if root and root.is_expanded and len(root.Q) > 0:
-                    root_q_before = float(np.max(root.Q))
-            
-            # Determine signed value for this leaf (always in Red's reference frame: +1 = Red win, -1 = Blue win)
-            if leaf.is_terminal:
-                v_red_signed = self._get_terminal_value(leaf)
-            else:
-                v_red_signed = self._get_neural_network_value(leaf)
-            
-            # Backpropagate Red's signed value along path (will be flipped to player-to-move reference frame during backprop)
+                root_q_before = self._capture_root_q_snapshot(path)
+
+            v_red_signed = self._leaf_value_signed_red_ref(leaf)
             self._backpropagate_path(path, v_red_signed, leaf.depth)
-            
-            # Record backprop update for detailed exploration
-            if self.detailed_exploration_enabled:
-                # Get root Q after backprop
-                root_q_after = 0.0
-                if root and root.is_expanded and len(root.Q) > 0:
-                    root_q_after = float(np.max(root.Q))
-                
-                self._record_backprop_update(
-                    len(path), root_q_before, root_q_after
-                )
-            
+
+            self._record_backprop_update_if_needed(path, root_q_before)
             simulations_completed += 1
         
         timing_tracker.end_timing("backprop")
         return simulations_completed
+
+    def _leaf_value_signed_red_ref(self, leaf: MCTSNode) -> float:
+        """Return leaf value in Red's reference frame."""
+        if leaf.is_terminal:
+            return self._get_terminal_value(leaf)
+        return self._get_neural_network_value(leaf)
+
+    def _capture_root_q_snapshot(self, path: List[Tuple[MCTSNode, int]]) -> float:
+        """Capture root max-Q for detailed backprop traces."""
+        if not path:
+            return 0.0
+
+        root = path[0][0]
+        if root.is_expanded and len(root.Q) > 0:
+            return float(np.max(root.Q))
+        return 0.0
+
+    def _record_backprop_update_if_needed(
+        self,
+        path: List[Tuple[MCTSNode, int]],
+        root_q_before: float,
+    ) -> None:
+        """Record detailed backprop diagnostics when enabled."""
+        if not self.detailed_exploration_enabled:
+            return
+
+        root_q_after = self._capture_root_q_snapshot(path)
+        self._record_backprop_update(len(path), root_q_before, root_q_after)
 
     def _get_terminal_value(self, leaf: MCTSNode) -> float:
         """Get signed value for a terminal leaf in Red's reference frame: +1 = Red win, -1 = Blue win."""
@@ -1780,55 +1534,88 @@ class BaselineMCTS:
             best_move_idx = int(np.argmax(root.P))
             best_move = root.legal_moves[best_move_idx]
             if verbose >= 2:
-                print(f"🎮 MCTS: Using top policy move (confidence-based termination, win prob: {termination_info.win_prob:.3f}): {best_move}")
+                print(
+                    "🎮 MCTS: Using top policy move "
+                    f"(confidence-based termination, win probability: {termination_info.win_probability:.3f}): "
+                    f"{best_move}"
+                )
             return best_move
         else:
             raise ValueError(f"Unknown algorithm termination reason: {termination_info.reason}")
 
-    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
-        """Compute the selected move from the root node."""
-        # Check if Gumbel selection was used and return the selected action
-        if hasattr(self, '_gumbel_selected_action'):
-            selected_action = self._gumbel_selected_action
-            selected_move = root.legal_moves[selected_action]
-            if verbose >= 2:
-                print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
-            # For Gumbel selection, use policy probabilities (not temperature-scaled visit counts)
-            # since Gumbel doesn't use visit counts for selection
-            move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
-            return selected_move, move_probs
-        
-        # Check if a terminal move was found during pre-check
-        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
-            terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
-            if terminal_indices:
-                terminal_move = root.legal_moves[terminal_indices[0]]
-                if verbose >= 2:
-                    print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
-                # For terminal moves, create temperature-scaled probabilities from visit counts
-                move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
-                return terminal_move, move_probs
+    def _compute_move_from_gumbel_if_used(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Optional[Tuple[Tuple[int, int], Dict[str, float]]]:
+        """Return move/probs if Gumbel root selection already picked the move."""
+        if not getattr(self, "_used_gumbel_root_selection", False):
+            return None
 
-        # Use visit counts accumulated during run()
+        selected_action = self._gumbel_selected_action
+        if selected_action is None:
+            raise RuntimeError("Gumbel root selection marked as used, but no selected action was recorded.")
+
+        selected_move = root.legal_moves[selected_action]
+        if verbose >= 2:
+            print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
+
+        move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
+        return selected_move, move_probs
+
+    def _compute_move_from_terminal_detection_if_any(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Optional[Tuple[Tuple[int, int], Dict[str, float]]]:
+        """Return move/probs when a terminal root move has been pre-detected."""
+        if not self.cfg.enable_terminal_move_detection:
+            return None
+        if not any(root.terminal_moves):
+            return None
+
+        terminal_indices = [i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal]
+        if not terminal_indices:
+            return None
+
+        terminal_move = root.legal_moves[terminal_indices[0]]
+        if verbose >= 2:
+            print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
+        move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
+        return terminal_move, move_probs
+
+    def _compute_move_from_visit_counts(
+        self, root: MCTSNode, root_state: HexGameState, verbose: int
+    ) -> Tuple[Tuple[int, int], Dict[str, float]]:
+        """Select move from visit counts with configured temperature sampling."""
         counts = root.N.astype(np.float64)
         if counts.sum() <= 0:
-            raise RuntimeError(f"No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
+            raise RuntimeError("No visits recorded during MCTS search. This indicates a bug in the search algorithm.")
 
-        # Calculate temperature with decay using helper method
         move_count = len(root_state.move_history)
-        temp = self._root_temperature(move_count)
-        
-        # Log effective temperature and top-k filtering if verbose
+        state_board_size = board_size_from_state(root_state)
+        if state_board_size != root.board_size:
+            raise ValueError(
+                "Root board size mismatch between root node and root_state during move selection: "
+                f"{root.board_size} vs {state_board_size}"
+            )
+        temp = self._root_temperature(move_count, root.board_size)
+
         if verbose >= 4:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
-        
-        # Create temperature-scaled probabilities from visit counts (for debugging/analysis)
+
         move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
-        
-        # Select move using the same logic as the utility function
         a_idx = select_move_index(counts, temp, self.cfg)
         return root.legal_moves[a_idx], move_probs
+
+    def _compute_move(self, root: MCTSNode, root_state: HexGameState, verbose: int) -> Tuple[Tuple[int, int], Dict[str, float]]:
+        """Compute the selected move from the root node."""
+        gumbel_result = self._compute_move_from_gumbel_if_used(root, root_state, verbose)
+        if gumbel_result is not None:
+            return gumbel_result
+
+        terminal_result = self._compute_move_from_terminal_detection_if_any(root, root_state, verbose)
+        if terminal_result is not None:
+            return terminal_result
+
+        return self._compute_move_from_visit_counts(root, root_state, verbose)
 
 
     # ---------- Internal Implementation ----------
@@ -1895,36 +1682,86 @@ class BaselineMCTS:
                 prior_mass_top3, value_signed_red_ref
             )
 
+    def _detect_terminal_moves_if_enabled(self, node: MCTSNode) -> None:
+        """Populate node terminal-move flags when terminal detection is enabled."""
+        if self.cfg.enable_terminal_move_detection:
+            self.terminal_detector.detect_terminal_moves(node)
+
+    def _forced_terminal_child_index(self, node: MCTSNode) -> Optional[int]:
+        """Return forced terminal child index when immediate-terminal preference is active."""
+        if not self.cfg.enable_terminal_move_detection:
+            return None
+        if not self.cfg.prefer_immediate_terminal:
+            return None
+        if not any(node.terminal_moves):
+            return None
+        terminal_idxs = [i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal]
+        return int(max(terminal_idxs, key=lambda i: float(node.P[i])))
+
+    def _compute_puct_u_values(self, node: MCTSNode, n_sum_adjusted: float) -> np.ndarray:
+        """Compute PUCT exploration term U with optional terminal-move boosting."""
+        u_values = self.cfg.c_puct * node.P * math.sqrt(n_sum_adjusted) / (1.0 + node.N)
+        if self.cfg.enable_terminal_move_detection:
+            for i, is_terminal in enumerate(node.terminal_moves):
+                if is_terminal:
+                    u_values[i] += self.cfg.terminal_move_boost
+        return u_values
+
+    def _apply_root_reservation_mask(self, scores: np.ndarray, used_root_actions: Optional[Set[int]]) -> np.ndarray:
+        """Mask already-reserved root actions so current batch explores distinct root choices."""
+        if used_root_actions is None or len(used_root_actions) == 0:
+            return scores
+        mask = np.zeros_like(scores, dtype=bool)
+        for action_idx in used_root_actions:
+            if 0 <= action_idx < len(scores):
+                mask[action_idx] = True
+        return np.where(mask, -np.inf, scores)
+
+    def _record_forced_terminal_selection_if_needed(self, current_depth: int) -> None:
+        """Record detailed trace event for forced terminal selection."""
+        if not self.detailed_exploration_enabled:
+            return
+        self._record_select_action(
+            current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+            terminal_flag_for_child=True, note="forced_terminal_win"
+        )
+
+    def _record_selected_puct_action_if_needed(
+        self,
+        node: MCTSNode,
+        selected_idx: int,
+        u_values: np.ndarray,
+        score_values: np.ndarray,
+        n_sum_adjusted: float,
+        current_depth: int
+    ) -> None:
+        """Record selected PUCT action details for detailed exploration traces."""
+        if not self.detailed_exploration_enabled:
+            return
+        q = float(node.Q[selected_idx])
+        p = float(node.P[selected_idx])
+        n = int(node.N[selected_idx])
+        u = float(u_values[selected_idx])
+        score_val = float(score_values[selected_idx])
+        terminal_flag = bool(selected_idx < len(node.terminal_moves) and node.terminal_moves[selected_idx])
+        self._record_select_action(
+            current_depth, n_sum_adjusted, q, p, n, u, score_val, terminal_flag
+        )
+
     def _select_child_puct(self, node: MCTSNode, current_depth: int = 0, used_root_actions: Optional[Set[int]] = None) -> int:
         """Return index into node.legal_moves of the action maximizing PUCT score."""
         # PUCT: U = c_puct * P * sqrt(sum(N)) / (1 + N)
         # score = Q + U
-        
-        # Detect terminal moves if enabled and appropriate
-        if self.cfg.enable_terminal_move_detection:
-            self.terminal_detector.detect_terminal_moves(node, int(node.state.get_board_tensor().shape[-1]))
-        
-        # If configured, force-pick an immediate terminal win regardless of N_sum
-        if (self.cfg.enable_terminal_move_detection 
-            and self.cfg.prefer_immediate_terminal 
-            and any(node.terminal_moves)):
-            terminal_idxs = [i for i, t in enumerate(node.terminal_moves) if t]
-            best = max(terminal_idxs, key=lambda i: float(node.P[i]))  # tie-break by prior
-            result = int(best)
-            # Record select action for detailed exploration (forced terminal win)
-            if self.detailed_exploration_enabled:
-                self._record_select_action(
-                    current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                    terminal_flag_for_child=True, note="forced_terminal_win"
-                )
-            return result
-        
-        # Start timing PUCT calculation
-        t_puct_start = time.perf_counter()
-        
+
+        self._detect_terminal_moves_if_enabled(node)
+        forced_terminal_idx = self._forced_terminal_child_index(node)
+        if forced_terminal_idx is not None:
+            self._record_forced_terminal_selection_if_needed(current_depth)
+            return forced_terminal_idx
+
         N_sum_adjusted = 1.0 + np.sum(node.N, dtype=np.float64)
         if not safe_puct_denominator(N_sum_adjusted):
-            raise RuntimeError(f"N_sum is 0, which should never happen. Need to debug how this happens.")
+            raise RuntimeError("N_sum is 0, which should never happen. Need to debug how this happens.")
 
         # Record select action for detailed exploration (degenerate case)
         if self.detailed_exploration_enabled:
@@ -1932,52 +1769,12 @@ class BaselineMCTS:
                 current_depth, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
                 note="standard_puct_selection"
             )
-        
-        U = self.cfg.c_puct * node.P * math.sqrt(N_sum_adjusted) / (1.0 + node.N)
-        
-        # Apply terminal move detection modifications
-        if self.cfg.enable_terminal_move_detection:
-            for i, is_terminal in enumerate(node.terminal_moves):
-                if is_terminal:
-                    # Boost terminal moves
-                    U[i] += self.cfg.terminal_move_boost
-        
+
+        U = self._compute_puct_u_values(node, N_sum_adjusted)
         score = node.Q + U
-        
-        # Apply root reservation mechanism if provided
-        if used_root_actions is not None and len(used_root_actions) > 0:
-            # Set scores of already-chosen root actions to -inf
-            mask = np.zeros_like(score, dtype=bool)
-            for j in used_root_actions:
-                if j < len(score):  # safety check
-                    mask[j] = True
-            score = np.where(mask, -np.inf, score)
-        
+        score = self._apply_root_reservation_mask(score, used_root_actions)
         result = int(np.argmax(score))
-        
-        # Record select action for detailed exploration
-        if self.detailed_exploration_enabled:
-            # Get the selected child's values
-            q = float(node.Q[result])
-            p = float(node.P[result])
-            n = int(node.N[result])
-            u = float(U[result])
-            score_val = float(score[result])
-            terminal_flag = node.terminal_moves[result] if hasattr(node, 'terminal_moves') and len(node.terminal_moves) > result else False
-            
-            self._record_select_action(
-                current_depth, N_sum_adjusted, q, p, n, u, score_val, terminal_flag
-            )
-        
-        # End timing PUCT calculation
-        t_puct_end = time.perf_counter()
-        puct_time_ms = (t_puct_end - t_puct_start) * 1000.0
-        
-        # Store timing info for later reporting
-        if not hasattr(self, '_puct_calc_times'):
-            self._puct_calc_times = []
-        self._puct_calc_times.append(puct_time_ms)
-        
+        self._record_selected_puct_action_if_needed(node, result, U, score, N_sum_adjusted, current_depth)
         return result
 
     def clear_cache(self) -> None:
@@ -2047,119 +1844,10 @@ class BaselineMCTS:
             "cache_utilization": len(self.eval_cache) / self.cfg.cache_size
         }
 
-
-def create_mcts_config(
-    config_type: str = "tournament",
-    sims: Optional[int] = None,
-    confidence_termination_threshold: Optional[float] = None,
-    cache_size: Optional[int] = None,
-    **kwargs
-) -> BaselineMCTSConfig:
-    """
-    Create an MCTS configuration with preset defaults for different use cases.
-    
-    Args:
-        config_type: Type of configuration ("tournament", "selfplay", "fast_selfplay")
-        sims: Number of simulations (overrides preset default)
-        confidence_termination_threshold: Distance from neutral for confidence termination (overrides preset default)
-        cache_size: Cache size for MCTS evaluation cache (overrides preset default)
-        **kwargs: Additional parameters to override in the configuration
-        
-    Returns:
-        BaselineMCTSConfig with appropriate settings for the specified use case
-    """
-    # Define preset configurations
-    presets = {
-        "tournament": {
-            "sims": 200,
-            "confidence_termination_threshold": TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
-            "temperature_start": 1.0,
-            "temperature_end": 1.0,  # Fixed: No temperature decay in tournaments
-            "add_root_noise": True,
-        },
-        "selfplay": {
-            "sims": 500,
-            "confidence_termination_threshold": 0.85,
-            "temperature_start": 0.5,
-            "temperature_end": 0.01,
-            "add_root_noise": True,  # Enable for exploration in self-play
-        },
-        "fast_selfplay": {
-            "sims": 200,
-            "confidence_termination_threshold": 0.8,
-            "temperature_start": 0.5,
-            "temperature_end": 0.01,
-            "add_root_noise": True,
-        }
-    }
-    
-    if config_type not in presets:
-        raise ValueError(f"Unknown config_type: {config_type}. Must be one of {list(presets.keys())}")
-    
-    # Start with preset configuration
-    config_params = presets[config_type].copy()
-    
-    # Override with provided parameters
-    if sims is not None:
-        config_params["sims"] = sims
-    if confidence_termination_threshold is not None:
-        config_params["confidence_termination_threshold"] = confidence_termination_threshold
-    if cache_size is not None:
-        config_params["cache_size"] = cache_size
-    
-    # Override with any additional kwargs
-    config_params.update(kwargs)
-    
-    # Add common parameters that are the same across all presets
-    # Only set defaults for parameters that weren't provided in kwargs
-    common_params = {
-        "batch_cap": DEFAULT_BATCH_CAP,
-        "dirichlet_alpha": DEFAULT_MCTS_DIRICHLET_ALPHA,
-        "dirichlet_eps": DEFAULT_DIRICHLET_EPS,
-        "temperature_decay_type": DEFAULT_TEMPERATURE_DECAY_TYPE,
-        "temperature_decay_moves": DEFAULT_TEMPERATURE_DECAY_MOVES,
-        # Terminal move detection (always enabled)
-        "enable_terminal_move_detection": DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION,
-        "terminal_move_boost": DEFAULT_TERMINAL_MOVE_BOOST,
-        "terminal_detection_max_depth": DEFAULT_TERMINAL_DETECTION_MAX_DEPTH,
-        # New terminal move handling
-        "prefer_immediate_terminal": True,
-        "terminal_win_score_bonus": 0.25,
-        # Adaptive batch selection
-        "adaptive_distinct_target": False,
-        "distinct_target_min": 8,
-        "distinct_target_max": 16,
-        # Confidence-based termination (always enabled)
-        "enable_confidence_termination": True,
-        # Depth-based discounting to encourage shorter wins
-        "enable_depth_discounting": True,
-        "depth_discount_factor": DEFAULT_DEPTH_DISCOUNT_FACTOR,
-        # Gumbel temperature control (always enabled)
-        "gumbel_temperature_enabled": DEFAULT_GUMBEL_TEMPERATURE_ENABLED,
-        "temperature_deterministic_cutoff": DEFAULT_TEMPERATURE_DETERMINISTIC_CUTOFF,
-        "gumbel_temperature_deterministic_cutoff": -1.0,  # Disable cutoff for Gumbel
-        # Batch flushing control (fixed for consistent performance)
-        "distinct_target": 32,  # Fixed distinct target for consistent batch behavior
-        "enable_low_distinct_ratio_flush": False,  # Disabled to maintain consistent batch sizes
-    }
-    
-    # Only set parameters if not already provided in kwargs
-    if "c_puct" not in config_params:
-        common_params["c_puct"] = DEFAULT_C_PUCT
-    if "dirichlet_alpha" not in config_params:
-        common_params["dirichlet_alpha"] = DEFAULT_MCTS_DIRICHLET_ALPHA
-    if "dirichlet_eps" not in config_params:
-        common_params["dirichlet_eps"] = DEFAULT_DIRICHLET_EPS
-    
-    config_params.update(common_params)
-    
-    return BaselineMCTSConfig(**config_params)
-
-
-
-
-def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: Optional[BaselineMCTSConfig] = None, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
+def run_mcts_move(engine: HexGameEngine, model: ModelWrapper, state: HexGameState, cfg: BaselineMCTSConfig, verbose: int = 0) -> Tuple[Tuple[int,int], Dict[str, Any], Dict[str, Any], Optional[AlgorithmTerminationInfo]]:
     """Run MCTS for one move and return (row,col), stats, tree_data, algorithm_termination_info."""
+    if cfg is None:
+        raise ValueError("cfg must be provided")
     mcts = BaselineMCTS(engine, model, cfg)
     result = mcts.run(state, verbose=verbose)
     return result.move, result.stats, result.tree_data, result.algorithm_termination_info

@@ -36,7 +36,7 @@ from .config import (
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
-from hex_ai.data_pipeline import discover_processed_files
+from hex_ai.data_pipeline import discover_training_data_files_all
 from hex_ai.training_utils import get_device, TrainingUtilities
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
@@ -1211,6 +1211,9 @@ class Trainer:
         else:
             # Save as uncompressed file
             torch.save(checkpoint, path)
+        
+        # Explicitly release memory to prevent accumulation
+        del checkpoint
     
     def load_checkpoint(self, path: Path, override_checkpoint_hyperparameters: bool = False):
         """
@@ -1239,14 +1242,14 @@ class Trainer:
         if override_checkpoint_hyperparameters:
             print("Changing learning rate in load_checkpoint...", end="")
             logger.warning("Overriding checkpoint hyperparameters - optimizer state will be reset")
-            logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
+            # logger.info(f"Using hyperparameter learning rate: {self.original_learning_rate}")
             logger.info(f"Using hyperparameter value_learning_rate_factor: {self.value_learning_rate_factor}")
             logger.info(f"Using hyperparameter value_weight_decay_factor: {self.value_weight_decay_factor}")
             # Don't load optimizer state - let it use current hyperparameters
             # Get the actual learning rate from the optimizer to confirm
             actual_lr = self.optimizer.param_groups[0]['lr']
             actual_value_lr = self.optimizer.param_groups[-1]['lr']  # Value head is typically the last group
-            print(f"Learning rate now {actual_lr:.6f} (value head: {actual_value_lr:.6f}).")
+            print(f"Value learning rate (read from optimizer) now {actual_lr:.6f} (value head: {actual_value_lr:.6f}).")
         else:
             # Load optimizer state (preserves checkpoint hyperparameters)
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -1254,27 +1257,13 @@ class Trainer:
         
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
+        
+        # Explicitly release memory to prevent accumulation
+        del checkpoint
+        import gc
+        gc.collect()  # Force garbage collection
 
 
-    def _cleanup_old_checkpoints(self, save_path: Path, max_checkpoints: int, compress_checkpoints: bool):
-        # Find all checkpoint files except best_model.pt
-        all_ckpts = [f for f in os.listdir(save_path) if re.match(r"epoch\d+_mini\d+\.pt", f)]
-        # Extract epoch numbers
-        epoch_nums = []
-        for fname in all_ckpts:
-            m = re.match(r"epoch(\d+)_mini(\d+)\.pt", fname)
-            if m:
-                epoch_nums.append((int(m.group(1)), fname))
-        if not epoch_nums:
-            return
-        max_epoch = max(e for e, _ in epoch_nums)
-        keep_epochs = TrainingUtilities.get_checkpoints_to_keep(max_epoch, max_checkpoints)
-        for e, fname in epoch_nums:
-            if e not in keep_epochs:
-                try:
-                    os.remove(os.path.join(save_path, fname))
-                except Exception:
-                    pass
 
 
 
@@ -1309,14 +1298,6 @@ class Trainer:
             # Store both values for logging
             if pre_clip_gradient_norm is not None and post_clip_gradient_norm is not None:
                 state['gradient_norms'].append(post_clip_gradient_norm)  # Use post-clip for statistics
-                # Store both values for debugging
-                if not hasattr(self, 'gradient_clipping_debug'):
-                    self.gradient_clipping_debug = []
-                self.gradient_clipping_debug.append({
-                    'pre_clip': pre_clip_gradient_norm,
-                    'post_clip': post_clip_gradient_norm,
-                    'clipped': pre_clip_gradient_norm > post_clip_gradient_norm
-                })
 
     def _handle_progress_logging(self, batch_idx: int, epoch: int, mini_epoch: int, state: Dict) -> None:
         """Handle progress logging for the current batch."""
@@ -1431,7 +1412,7 @@ class Trainer:
         boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
         
         # Forward pass with mixed precision
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         with self.mixed_precision.autocast_context():
             policy_pred, value_pred = self.model(boards, move_stage)
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)

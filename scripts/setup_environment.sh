@@ -1,6 +1,6 @@
 #!/bin/bash
 # Setup script for Snowflake2025 development environment
-# Run this script to activate the virtual environment and set PYTHONPATH
+# Run this script to activate the virtual environment and ensure editable install
 
 set -e  # Exit on any error
 
@@ -17,21 +17,21 @@ fi
 echo "📦 Activating virtual environment..."
 source hex_ai_env/bin/activate
 
-# Set PYTHONPATH
-echo "🔗 Setting PYTHONPATH=."
-export PYTHONPATH=.
+# Ensure editable install is present (recommended)
+echo "🔗 Ensuring editable install (pip install -e .) ..."
+python -c "import hex_ai" >/dev/null 2>&1 || pip install -e .
 
-# Validate environment
-echo "✅ Validating environment..."
-python scripts/validate_environment.py
+# Validate import
+echo "✅ Validating import..."
+python -c "import hex_ai; print('hex_ai import OK')"
 
 echo ""
 echo "🎉 Environment setup complete!"
 echo ""
 echo "You can now run commands like:"
 echo "  python scripts/process_all_trmph.py"
-echo "  python -m pytest tests/"
+echo "  pytest tests/"
 echo "  python scripts/hyperparam_sweep.py"
 echo ""
 echo "To use this environment in a new shell, run:"
-echo "  source hex_ai_env/bin/activate && export PYTHONPATH=." 
+echo "  source hex_ai_env/bin/activate"

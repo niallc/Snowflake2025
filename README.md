@@ -24,9 +24,14 @@ pip install -r requirements.txt
 # Optional: Check what devices are available
 python scripts/check_device.py
 
-# Set up environment
-export PYTHONPATH=.
+# Install this repo as an editable package (recommended)
+# This makes `import hex_ai` work without PYTHONPATH hacks.
+pip install -e .
 ```
+
+> **Windows users**: For a detailed walkthrough that covers installing prerequisites (Git, Python, Build Tools), creating a
+> PowerShell virtual environment, installing the correct PyTorch wheel, and checking out the `oct10` branch, see
+> [`docs/windows_setup.md`](docs/windows_setup.md).
 
 ### 3. Create Required Directories
 ```bash
@@ -54,7 +59,7 @@ If you're a coding agent working on this project:
 
 **⚠️ IMPORTANT**: This project requires:
 - Virtual environment: `hex_ai_env`
-- PYTHONPATH: `export PYTHONPATH=.`
+- Editable install: `pip install -e .`
 - Never skip environment checks in code!
 
 ## Main Entry Points
@@ -63,7 +68,7 @@ If you're a coding agent working on this project:
 Play against trained models in your browser:
 ```bash
 source hex_ai_env/bin/activate
-PYTHONPATH=. python -m hex_ai.web.app --port 5001
+python -m hex_ai.web.app --port 5001
 ```
 Then open http://localhost:5001 in your browser.
 
@@ -71,7 +76,7 @@ Then open http://localhost:5001 in your browser.
 The main training pipeline handles data collection, preprocessing, and model training:
 ```bash
 source hex_ai_env/bin/activate
-PYTHONPATH=. python scripts/training_pipeline.py \
+python scripts/training_pipeline.py \
   --use-current-best-model \
   --no-selfplay \
   --raw-trmph-data-dirs data/sf25/oct6 data/sf25/oct7 \
@@ -86,7 +91,7 @@ PYTHONPATH=. python scripts/training_pipeline.py \
 
 For already processed data, use:
 ```bash
-PYTHONPATH=. python scripts/training_pipeline.py \
+python scripts/training_pipeline.py \
   --use-current-best-model \
   --no-preprocessing --no-trmph-processing --no-shuffling \
   --processed-data-dirs data/processed/sf18_shuffled
@@ -124,17 +129,17 @@ Snowflake2025/
 
 ## Running Tests
 
-To run tests that import from the `hex_ai` package, you must set the `PYTHONPATH` to the project root. This ensures that imports like `from hex_ai...` work correctly.
+If you installed the repo in editable mode (`pip install -e .`), you can run tests without setting `PYTHONPATH`.
 
 ```bash
 source hex_ai_env/bin/activate
-PYTHONPATH=. pytest tests/
+pytest tests/
 ```
 
 Or for a specific test file:
 
 ```bash
-PYTHONPATH=. pytest tests/test_streaming_augmented_processed_dataset.py
+pytest tests/test_streaming_augmented_processed_dataset.py
 ```
 
 Run these commands from the project root directory.
@@ -163,8 +168,8 @@ python scripts/setup_directories.py
 # Ensure virtual environment is activated
 source hex_ai_env/bin/activate
 
-# Ensure PYTHONPATH is set
-export PYTHONPATH=.
+# Ensure editable install is present (one-time per venv)
+pip install -e .
 
 # Validate environment
 python scripts/validate_environment.py

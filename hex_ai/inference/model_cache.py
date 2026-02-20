@@ -100,5 +100,10 @@ def get_temporary_models_for_match(checkpoint_paths: list, verbose: int = 1) -> 
 
 def create_temporary_model_cache(checkpoint_paths: list, verbose: int = 1) -> TemporaryModelCache:
     """Create a temporary model cache for a match."""
+    # Memory note:
+    # - This builds fresh SimpleModelInference instances (one per path) for the match.
+    # - Each instance can hold a large inference LRU cache (default cache_size=30k) and model weights.
+    # - If these instances linger across matches (unexpected references), memory can climb rapidly.
+    # - Even if they are freed, CUDA/MPS allocators may keep memory reserved rather than returning it to the OS.
     temporary_models = get_temporary_models_for_match(checkpoint_paths, verbose)
     return TemporaryModelCache(temporary_models)
