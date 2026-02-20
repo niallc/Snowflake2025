@@ -287,27 +287,31 @@ def _attach_inline_heatmap_if_requested(
     if not inline_heatmap_options.get("enabled"):
         return
 
-    heatmap_state = state
-    if heatmap_state is None:
-        new_trmph = result.get("new_trmph")
-        if not isinstance(new_trmph, str):
-            app.logger.warning(
-                "Skipping inline move heatmap attachment: result missing new_trmph"
+    try:
+        heatmap_state = state
+        if heatmap_state is None:
+            new_trmph = result.get("new_trmph")
+            if not isinstance(new_trmph, str):
+                app.logger.warning(
+                    "Skipping inline move heatmap attachment: result missing new_trmph"
+                )
+                return
+            heatmap_state = create_game_state_from_trmph(
+                new_trmph,
+                context="for inline move heatmap",
             )
-            return
-        heatmap_state = create_game_state_from_trmph(
-            new_trmph,
-            context="for inline move heatmap",
-        )
 
-    maybe_attach_inline_move_heatmap(
-        result=result,
-        state=heatmap_state,
-        model_id=model_id,
-        heatmap_options=inline_heatmap_options,
-        model_getter=get_model,
-        logger=app.logger,
-    )
+        maybe_attach_inline_move_heatmap(
+            result=result,
+            state=heatmap_state,
+            model_id=model_id,
+            heatmap_options=inline_heatmap_options,
+            model_getter=get_model,
+            logger=app.logger,
+        )
+    except Exception as exc:
+        app.logger.warning("Inline move heatmap attachment failed: %s", exc)
+        result["move_heatmap_error"] = "Failed to compute move heatmap"
 
 
 def _load_model_or_error(model_id):
@@ -884,7 +888,9 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             search_widths=search_widths,
             temperature=temperature,
             batch_size=1000,
-            enable_early_termination=True,
+            # Interactive fixed-tree should run the requested tree search rather
+            # than short-circuiting to a policy-only pick from value confidence.
+            enable_early_termination=False,
             early_termination_threshold=0.95,
         )
         app.logger.info(f"Fixed tree config created: {search_config}")
@@ -950,6 +956,7 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
                 "tree_data": search_result.tree_data,
             },
         )
+        _sanitize_numeric_debug_fields(result_data)
 
         total_wall_time = time.time() - total_start_time
         post_search_time = total_wall_time - search_time
