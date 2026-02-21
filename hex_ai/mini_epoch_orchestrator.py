@@ -1,5 +1,6 @@
 import logging
 import sys
+import numpy as np
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.memory_profiler import get_profiler, write_epoch_summary
 from hex_ai.memory_leak_diagnostics import get_diagnostics
@@ -114,7 +115,15 @@ class MiniEpochOrchestrator:
         _seen.add(obj_id)
 
         size = sys.getsizeof(obj)
-        if hasattr(obj, 'nbytes'):
+        if isinstance(obj, np.ndarray):
+            # For owning arrays, sys.getsizeof already includes the data buffer.
+            # Only add nbytes for non-owning views where payload memory is external.
+            try:
+                if not obj.flags['OWNDATA']:
+                    size += int(obj.nbytes)
+            except Exception:
+                pass
+        elif hasattr(obj, 'nbytes'):
             try:
                 size += int(obj.nbytes)
             except Exception:
