@@ -176,14 +176,6 @@ MIN_DISPLAY_BOARD_SIZE = 2
 DEFAULT_DISPLAY_BOARD_SIZE = BOARD_SIZE
 DISPLAY_BOARD_SIZE_OPTIONS = list(range(BOARD_SIZE, MIN_DISPLAY_BOARD_SIZE - 1, -1))
 
-# Cookie-backed user settings (per-browser preference defaults).
-USER_SETTINGS_COOKIE_NAME = os.getenv("SF25_USER_SETTINGS_COOKIE_NAME", "sf25_user_settings")
-USER_SETTINGS_COOKIE_DAYS = int(os.getenv("SF25_USER_SETTINGS_COOKIE_DAYS", "365"))
-DEFAULT_COLOR_SCHEME = "default"
-COLOR_SCHEME_OPTIONS = (
-    {"value": "default", "label": "Default (more options soon)"},
-)
-
 # Derived from legacy_code/FileConversion.py and existing rules.html guidance.
 # Values are bare TRMPH move strings (no "#13," prefix).
 TRMPH_BOARD_SHARE_BASE_URL = "https://trmph.com/hex/board"
@@ -996,81 +988,6 @@ def validate_elo_rating(value):
     return core_validate_elo_rating(value, min_elo=MIN_ELO, max_elo=MAX_ELO)
 
 
-def get_default_user_settings() -> dict:
-    """Return default user settings used when no settings cookie is present."""
-    return {
-        "preferred_board_size": DEFAULT_DISPLAY_BOARD_SIZE,
-        "preferred_elo": DEFAULT_ELO,
-        "color_scheme": DEFAULT_COLOR_SCHEME,
-    }
-
-
-def validate_color_scheme(value) -> str:
-    """Validate color scheme preference."""
-    if value is None:
-        return DEFAULT_COLOR_SCHEME
-    if not isinstance(value, str):
-        raise ValueError("color_scheme must be a string")
-    normalized = value.strip().lower()
-    allowed_values = {option["value"] for option in COLOR_SCHEME_OPTIONS}
-    if normalized not in allowed_values:
-        allowed = ", ".join(sorted(allowed_values))
-        raise ValueError(f"color_scheme must be one of: {allowed}")
-    return normalized
-
-
-def _normalize_user_settings_patch(payload, *, reject_unexpected: bool) -> dict:
-    """Validate and normalize a partial user-settings payload."""
-    if not isinstance(payload, dict):
-        raise ValueError("Settings payload must be a JSON object")
-
-    allowed_keys = {"preferred_board_size", "preferred_elo", "color_scheme"}
-    if reject_unexpected:
-        unexpected = sorted(set(payload.keys()) - allowed_keys)
-        if unexpected:
-            raise ValueError(f"Unknown settings fields: {', '.join(unexpected)}")
-
-    patch = {}
-    if "preferred_board_size" in payload:
-        patch["preferred_board_size"] = validate_display_board_size(payload["preferred_board_size"])
-    if "preferred_elo" in payload:
-        patch["preferred_elo"] = validate_elo_rating(payload["preferred_elo"])
-    if "color_scheme" in payload:
-        patch["color_scheme"] = validate_color_scheme(payload["color_scheme"])
-    return patch
-
-
-def get_user_settings_from_cookie() -> dict:
-    """Load user settings from cookie and merge with defaults."""
-    settings = get_default_user_settings()
-    raw_cookie = request.cookies.get(USER_SETTINGS_COOKIE_NAME)
-    if not raw_cookie:
-        return settings
-
-    try:
-        parsed = json.loads(raw_cookie)
-        patch = _normalize_user_settings_patch(parsed, reject_unexpected=False)
-        settings.update(patch)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        app.logger.warning("Ignoring invalid user settings cookie: %s", exc)
-    return settings
-
-
-def attach_user_settings_cookie(response, settings: dict):
-    """Attach validated user settings cookie to a response."""
-    max_age = USER_SETTINGS_COOKIE_DAYS * 24 * 3600
-    encoded_settings = json.dumps(settings, separators=(",", ":"), ensure_ascii=True)
-    response.set_cookie(
-        USER_SETTINGS_COOKIE_NAME,
-        encoded_settings,
-        max_age=max_age,
-        httponly=True,
-        samesite="Lax",
-        secure=_is_request_secure(),
-    )
-    return response
-
-
 def validate_boolean_flag(value, field_name):
     """Validate and normalize a boolean feature flag from JSON input."""
     return core_validate_boolean_flag(value, field_name)
@@ -1215,7 +1132,6 @@ ENDPOINT_COSTS = {
     'api_apply_trmph_sequence': 5.0, # Batch operation (10 burst calls)
     'api_mcts_move': 2,            # Expensive MCTS (4 burst calls, 2/sec sustained)
     'api_constants': 0.1,            # Constants endpoint (very cheap)
-    'api_user_settings': 0.2,        # Lightweight cookie-backed settings
     'api_move_heatmap': 8.0,         # Heavy batch of value inferences
 }
 
@@ -1759,50 +1675,10 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
 # API ROUTES
 # =============================================================================
 
-@app.route("/api/user_settings", methods=["GET", "POST"])
-@rate_limit(ENDPOINT_COSTS['api_user_settings'])
-def api_user_settings():
-    """Read or update cookie-backed user settings."""
-    if request.method == "GET":
-        settings = get_user_settings_from_cookie()
-        return jsonify({
-            "settings": settings,
-            "default_settings": get_default_user_settings(),
-            "display_board_size_options": DISPLAY_BOARD_SIZE_OPTIONS,
-            "elo_config": {
-                "min_elo": MIN_ELO,
-                "max_elo": MAX_ELO,
-                "default_elo": DEFAULT_ELO,
-            },
-            "color_scheme_options": list(COLOR_SCHEME_OPTIONS),
-        })
-
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Request body must be valid JSON"}), 400
-    if not isinstance(data, dict):
-        return jsonify({"error": "Settings payload must be a JSON object"}), 400
-
-    try:
-        patch = _normalize_user_settings_patch(data, reject_unexpected=True)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    if not patch:
-        return jsonify({"error": "No settings fields provided"}), 400
-
-    settings = get_user_settings_from_cookie()
-    settings.update(patch)
-    response = jsonify({"settings": settings})
-    attach_user_settings_cookie(response, settings)
-    return response
-
-
 @app.route("/api/constants", methods=["GET"])
 @rate_limit(ENDPOINT_COSTS['api_constants'])
 def api_constants():
     """Return game constants for frontend use."""
-    user_settings = get_user_settings_from_cookie()
     return jsonify({
         "BOARD_SIZE": BOARD_SIZE,
         "TRMPH_BOARD_SHARE_BASE_URL": TRMPH_BOARD_SHARE_BASE_URL,
@@ -1820,7 +1696,7 @@ def api_constants():
             "RED": TRMPH_RED_WIN
         },
         "DISPLAY_BOARD_SIZE_OPTIONS": DISPLAY_BOARD_SIZE_OPTIONS,
-        "DEFAULT_DISPLAY_BOARD_SIZE": user_settings["preferred_board_size"],
+        "DEFAULT_DISPLAY_BOARD_SIZE": DEFAULT_DISPLAY_BOARD_SIZE,
         "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
         "VIRTUAL_BOARD_PREFILL_MOVES": VIRTUAL_BOARD_PREFILL_MOVES,
         "DEFAULT_PIE_RULE_ENABLED": DEFAULT_PIE_RULE_ENABLED,
@@ -1828,10 +1704,8 @@ def api_constants():
         "ELO_CONFIG": {
             "MIN_ELO": MIN_ELO,
             "MAX_ELO": MAX_ELO,
-            "DEFAULT_ELO": user_settings["preferred_elo"]
+            "DEFAULT_ELO": DEFAULT_ELO
         },
-        "USER_SETTINGS": user_settings,
-        "COLOR_SCHEME_OPTIONS": list(COLOR_SCHEME_OPTIONS),
     })
 
 

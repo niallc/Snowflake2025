@@ -13,6 +13,12 @@ class UserSettingsPage {
             preferred_elo: 600,
             color_scheme: 'default',
         };
+        this.colorSchemeOptions = [{ value: 'default', label: 'Default (options coming soon)' }];
+        this.storageKeys = {
+            preferredBoardSize: 'hex_ai_display_board_size',
+            preferredElo: 'hex_ai_preferred_elo',
+            colorScheme: 'hex_ai_color_scheme',
+        };
     }
 
     init() {
@@ -35,7 +41,7 @@ class UserSettingsPage {
             this.updateEloDisplay();
         });
 
-        this.loadSettings();
+        this.loadSettingsFromConfig();
     }
 
     setStatus(message, type = 'info') {
@@ -90,34 +96,61 @@ class UserSettingsPage {
         };
     }
 
-    async loadSettings() {
+    getValidatedStoredSettings(boardOptions, minElo, maxElo) {
+        const validBoardSizes = new Set(boardOptions);
+        const storedBoardSize = parseInt(localStorage.getItem(this.storageKeys.preferredBoardSize), 10);
+        const storedElo = parseInt(localStorage.getItem(this.storageKeys.preferredElo), 10);
+        const storedColorScheme = localStorage.getItem(this.storageKeys.colorScheme);
+        const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
+
+        return {
+            preferred_board_size: validBoardSizes.has(storedBoardSize)
+                ? storedBoardSize
+                : this.defaultSettings.preferred_board_size,
+            preferred_elo: Number.isFinite(storedElo) && storedElo >= minElo && storedElo <= maxElo
+                ? storedElo
+                : this.defaultSettings.preferred_elo,
+            color_scheme: allowedSchemes.has(storedColorScheme)
+                ? storedColorScheme
+                : this.defaultSettings.color_scheme,
+        };
+    }
+
+    async loadSettingsFromConfig() {
         this.setStatus('Loading settings...');
         try {
-            const response = await fetch('/api/user_settings', { method: 'GET' });
+            const response = await fetch('/api/constants', { method: 'GET' });
             if (!response.ok) {
                 throw new Error(`Failed to load settings (${response.status})`);
             }
 
             const payload = await response.json();
-            const boardOptions = Array.isArray(payload.display_board_size_options)
-                ? payload.display_board_size_options
+            const boardOptions = Array.isArray(payload.DISPLAY_BOARD_SIZE_OPTIONS)
+                ? payload.DISPLAY_BOARD_SIZE_OPTIONS
                 : [13];
-            const colorOptions = Array.isArray(payload.color_scheme_options)
-                ? payload.color_scheme_options
-                : [{ value: 'default', label: 'Default' }];
-            const eloConfig = payload.elo_config || {};
-            const minElo = Number.isFinite(parseInt(eloConfig.min_elo, 10))
-                ? parseInt(eloConfig.min_elo, 10)
+            const eloConfig = payload.ELO_CONFIG || {};
+            const minElo = Number.isFinite(parseInt(eloConfig.MIN_ELO, 10))
+                ? parseInt(eloConfig.MIN_ELO, 10)
                 : 1;
-            const maxElo = Number.isFinite(parseInt(eloConfig.max_elo, 10))
-                ? parseInt(eloConfig.max_elo, 10)
+            const maxElo = Number.isFinite(parseInt(eloConfig.MAX_ELO, 10))
+                ? parseInt(eloConfig.MAX_ELO, 10)
                 : 2350;
+            const defaultBoardSize = Number.isFinite(parseInt(payload.DEFAULT_DISPLAY_BOARD_SIZE, 10))
+                ? parseInt(payload.DEFAULT_DISPLAY_BOARD_SIZE, 10)
+                : boardOptions[0];
+            const defaultElo = Number.isFinite(parseInt(eloConfig.DEFAULT_ELO, 10))
+                ? parseInt(eloConfig.DEFAULT_ELO, 10)
+                : 600;
 
-            this.defaultSettings = payload.default_settings || this.defaultSettings;
-            const settings = payload.settings || this.defaultSettings;
+            this.defaultSettings = {
+                preferred_board_size: defaultBoardSize,
+                preferred_elo: defaultElo,
+                color_scheme: 'default',
+            };
+            const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
             this.populateBoardSizeOptions(boardOptions);
-            this.populateColorSchemeOptions(colorOptions);
+            this.populateColorSchemeOptions(this.colorSchemeOptions);
             this.eloSlider.min = String(minElo);
             this.eloSlider.max = String(maxElo);
             this.applySettingsToForm(settings);
@@ -125,24 +158,24 @@ class UserSettingsPage {
             this.setStatus('Settings loaded.');
         } catch (error) {
             console.error(error);
-            this.setStatus('Could not load settings. Please refresh and try again.', 'error');
+            // Fall back to local-only defaults if constants endpoint is unavailable.
+            const fallbackBoardOptions = [13];
+            this.populateBoardSizeOptions(fallbackBoardOptions);
+            this.populateColorSchemeOptions(this.colorSchemeOptions);
+            this.eloSlider.min = '1';
+            this.eloSlider.max = '2350';
+            this.applySettingsToForm(this.defaultSettings);
+            this.setStatus('Could not load server defaults. Using local fallback values.', 'error');
         }
     }
 
     async saveSettings(settings) {
         this.setStatus('Saving settings...');
         try {
-            const response = await fetch('/api/user_settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(settings),
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                const message = payload && payload.error ? payload.error : `Save failed (${response.status})`;
-                throw new Error(message);
-            }
-            this.applySettingsToForm(payload.settings || settings);
+            localStorage.setItem(this.storageKeys.preferredBoardSize, String(settings.preferred_board_size));
+            localStorage.setItem(this.storageKeys.preferredElo, String(settings.preferred_elo));
+            localStorage.setItem(this.storageKeys.colorScheme, String(settings.color_scheme));
+            this.applySettingsToForm(settings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {
             console.error(error);

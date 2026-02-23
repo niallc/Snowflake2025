@@ -147,7 +147,7 @@ class HexGame {
             this.currentElo = parseInt(e.target.value);
             this.eloSlider.value = this.currentElo;
             this.eloDisplay.textContent = this.currentElo;
-            this.persistUserSettings({ preferred_elo: this.currentElo });
+            localStorage.setItem('hex_ai_preferred_elo', String(this.currentElo));
         });
 
         if (this.boardSizeSelect) {
@@ -157,7 +157,7 @@ class HexGame {
                     return;
                 }
                 this.displayBoardSize = selected;
-                await this.persistUserSettings({ preferred_board_size: selected });
+                localStorage.setItem('hex_ai_display_board_size', String(selected));
                 this.configureHeatmapTopKBounds();
                 this.clearHeatmapData();
                 this.updateHeatmapControls();
@@ -173,7 +173,7 @@ class HexGame {
         });
 
         this.eloSlider.addEventListener('change', () => {
-            this.persistUserSettings({ preferred_elo: this.currentElo });
+            localStorage.setItem('hex_ai_preferred_elo', String(this.currentElo));
         });
 
         this.blueComputerCheck.addEventListener('change', (e) => {
@@ -816,30 +816,6 @@ class HexGame {
         return this.displayBoardSize;
     }
 
-    async persistUserSettings(patch) {
-        if (!patch || typeof patch !== 'object') {
-            return;
-        }
-
-        try {
-            const response = await fetch('/api/user_settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(patch),
-            });
-
-            if (!response.ok) {
-                const payload = await response.json().catch(() => ({}));
-                const message = payload && payload.error
-                    ? payload.error
-                    : `Failed to persist settings (${response.status})`;
-                throw new Error(message);
-            }
-        } catch (error) {
-            console.warn('Unable to persist user settings:', error);
-        }
-    }
-
     async loadGameConstants() {
         try {
             const response = await fetch('/api/constants');
@@ -872,10 +848,11 @@ class HexGame {
             const backendDefaultDisplaySize = Number.isFinite(parseInt(data.DEFAULT_DISPLAY_BOARD_SIZE, 10))
                 ? parseInt(data.DEFAULT_DISPLAY_BOARD_SIZE, 10)
                 : this.boardSize;
+            const savedDisplaySize = parseInt(localStorage.getItem('hex_ai_display_board_size'), 10);
             const validSizes = new Set(this.displayBoardSizeOptions);
-            this.displayBoardSize = validSizes.has(backendDefaultDisplaySize)
-                ? backendDefaultDisplaySize
-                : this.boardSize;
+            this.displayBoardSize = validSizes.has(savedDisplaySize)
+                ? savedDisplaySize
+                : backendDefaultDisplaySize;
             if (!validSizes.has(this.displayBoardSize)) {
                 this.displayBoardSize = this.boardSize;
             }
@@ -886,7 +863,11 @@ class HexGame {
             // Load ELO configuration from backend
             this.minElo = data.ELO_CONFIG.MIN_ELO;
             this.maxElo = data.ELO_CONFIG.MAX_ELO;
-            this.currentElo = data.ELO_CONFIG.DEFAULT_ELO;
+            const backendDefaultElo = data.ELO_CONFIG.DEFAULT_ELO;
+            const savedElo = parseInt(localStorage.getItem('hex_ai_preferred_elo'), 10);
+            this.currentElo = Number.isFinite(savedElo) && savedElo >= this.minElo && savedElo <= this.maxElo
+                ? savedElo
+                : backendDefaultElo;
             this.configureHeatmapTopKBounds();
 
             const backendPieDefault = typeof data.DEFAULT_PIE_RULE_ENABLED === 'boolean'

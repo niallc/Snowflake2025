@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Snowflake 25 Privacy Summary</title>
+  <title>Snowflake 25 Privacy and Data Use</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-      max-width: 760px;
+      max-width: 860px;
       margin: 24px auto;
       padding: 0 16px 24px;
       line-height: 1.45;
@@ -23,28 +23,76 @@
       border-radius: 10px;
       padding: 16px;
     }
+    h2 {
+      margin-top: 22px;
+      margin-bottom: 8px;
+    }
+    p {
+      margin: 10px 0;
+    }
     ul {
       margin-top: 8px;
+    }
+    li {
+      margin-bottom: 6px;
     }
     code {
       background: #f0f3f7;
       padding: 1px 4px;
       border-radius: 4px;
     }
+    .muted {
+      color: #555;
+    }
   </style>
 </head>
 <body>
-  <h1>Privacy Summary</h1>
+  <h1>Privacy and Data Use</h1>
   <div class="card">
-    <p>This site uses a small analytics cookie only if you accept.</p>
+    <p>I want to use basic analytics info to get a sense of how many people are using this page, and how much.</p>
+    <p class="muted">This page explains what is stored in your browser and what is logged on the server.</p>
+
+    <h2>Browser Storage Used by This Site</h2>
     <ul>
-      <li>Cookie name: <code>sf25_cookie_consent</code> to remember your choice.</li>
-      <li>If accepted, the server may set a random analytics client ID cookie (<code>sf25_cid</code>).</li>
-      <li>Purpose: rough usage counts, reliability monitoring, and product improvement.</li>
-      <li>No advertising cookies and no cross-site tracking.</li>
-      <li>By default, IP addresses are not recorded in analytics logs.</li>
-      <li>If your hosting proxy provides it, analytics may include a coarse two-letter country code (for example, <code>US</code>).</li>
+      <li><strong>Consent cookie:</strong> <code>sf25_cookie_consent</code> stores whether you accepted or declined analytics cookies.</li>
+      <li><strong>Optional analytics cookie:</strong> <code>sf25_cid</code> is a random client ID used only when analytics consent is accepted.</li>
+      <li><strong>Local storage preferences (on your device):</strong>
+        <code>hex_ai_display_board_size</code>,
+        <code>hex_ai_preferred_elo</code>,
+        <code>hex_ai_dark_mode</code>,
+        <code>hex_ai_pie_rule_enabled</code>,
+        <code>hex_ai_color_scheme</code>.
+      </li>
     </ul>
+
+    <h2>What Analytics Logs Contain</h2>
+    <ul>
+      <li>Timestamp, path, endpoint, method, status code, and request duration.</li>
+      <li>The random analytics client ID (if consented) and a hashed user-agent value.</li>
+      <li>Game/session usage metadata such as TRMPH move count/length and short-term request-sequence continuity metrics.</li>
+      <li>A coarse country code only if provided by hosting proxy headers (for example <code>US</code>).</li>
+      <li>Analytics are written to monthly server log files under <code>logs/web_usage_YYYY_MM.jsonl</code>.</li>
+    </ul>
+
+    <h2>IP Address Handling</h2>
+    <ul>
+      <li>Default setup: raw IP addresses are not stored in analytics logs.</li>
+      <li>Server configuration can optionally include hashed IP or raw IP for operations/debugging needs.</li>
+    </ul>
+
+    <h2>What This Site Does Not Do</h2>
+    <ul>
+      <li>No advertising cookies.</li>
+      <li>No cross-site tracking.</li>
+      <li>No data sale.</li>
+    </ul>
+
+    <h2>Your Choices</h2>
+    <ul>
+      <li>You can accept or decline optional analytics cookies in the cookie banner.</li>
+      <li>You can clear cookies/local storage in your browser to remove saved consent and preference data.</li>
+    </ul>
+
     <p><a href="/">Back to game</a></p>
   </div>
 </body>
