@@ -503,6 +503,71 @@ button:hover {
   margin-top: 0;
 }
 
+.settings-page #app-container.settings-container {
+  max-width: 700px;
+  margin: 20px auto;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  padding: 20px 24px 28px 24px;
+}
+
+.settings-header {
+  margin-bottom: 16px;
+}
+
+.settings-meta {
+  margin: 0 0 10px 0;
+  color: var(--text-secondary);
+}
+
+.settings-back-link {
+  display: inline-block;
+  color: var(--button-primary-bg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-back-link:hover {
+  text-decoration: underline;
+}
+
+.settings-help {
+  margin: 10px 0 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-status {
+  min-height: 1.5em;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
+.settings-status.status-error {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+.settings-status.status-success {
+  color: #155724;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .settings-page #app-container.settings-container {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 12px;
+  }
+}
+
 .control-panel {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);

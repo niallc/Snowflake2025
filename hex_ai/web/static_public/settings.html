@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snowflake 25 Settings</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="settings-page">
+  <div id="app-container" class="settings-container">
+    <div class="settings-header">
+      <h1>Settings</h1>
+      <p class="settings-meta">Preferences are saved in a browser cookie for this site.</p>
+      <a href="/" class="settings-back-link">Back to Game</a>
+    </div>
+
+    <div id="settings-status" class="settings-status" role="status" aria-live="polite"></div>
+
+    <form id="user-settings-form">
+      <div class="control-panel">
+        <h3>Preferred Board Size</h3>
+        <div class="difficulty-row">
+          <label for="preferred-board-size">Play Area:</label>
+          <select id="preferred-board-size" required></select>
+        </div>
+      </div>
+
+      <div class="control-panel">
+        <h3>Preferred Difficulty (ELO)</h3>
+        <div class="difficulty-row">
+          <label for="preferred-elo">ELO:</label>
+          <input id="preferred-elo" type="range" step="1" required>
+          <span id="preferred-elo-display"></span>
+        </div>
+      </div>
+
+      <div class="control-panel">
+        <h3>Color Scheme</h3>
+        <div class="difficulty-row">
+          <label for="color-scheme">Theme:</label>
+          <select id="color-scheme" required></select>
+        </div>
+        <p class="settings-help">More color themes can be added here later without changing the cookie format.</p>
+      </div>
+
+      <div class="settings-actions">
+        <button type="submit" class="btn-primary">Save Settings</button>
+        <button id="reset-defaults-btn" type="button" class="btn-secondary">Reset Defaults</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="/static/settings.js"></script>
+</body>
+</html>
