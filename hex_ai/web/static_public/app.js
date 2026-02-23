@@ -17,6 +17,7 @@ class HexGame {
         this.isLoading = false;
         this.isInitialLoad = true; // Track if this is the initial page load
         this.darkMode = false; // Dark mode state
+        this.colorScheme = 'wood';
         this.heatmapEnabled = false;
         this.heatmapLoading = false;
         this.heatmapError = null;
@@ -57,8 +58,9 @@ class HexGame {
         this.initializeElements();
         this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
         this.setupEventListeners();
-        this.loadGameConstants();
         this.initializeDarkMode();
+        this.initializeColorScheme();
+        this.loadGameConstants();
         this.updateHeatmapControls();
         this.updatePieRuleUi();
     }
@@ -264,13 +266,7 @@ class HexGame {
 
     toggleDarkMode() {
         this.darkMode = !this.darkMode;
-
-        // Update the data-theme attribute on the document
-        if (this.darkMode) {
-            document.documentElement.setAttribute('data-theme', 'dark');
-        } else {
-            document.documentElement.removeAttribute('data-theme');
-        }
+        this.applyDarkModeAttribute();
 
         // Update the toggle button text and icon
         if (this.darkMode) {
@@ -299,13 +295,7 @@ class HexGame {
             // Default to light mode instead of following system preference
             this.darkMode = false;
         }
-
-        // Apply the theme
-        if (this.darkMode) {
-            document.documentElement.setAttribute('data-theme', 'dark');
-        } else {
-            document.documentElement.removeAttribute('data-theme');
-        }
+        this.applyDarkModeAttribute();
 
         // Update the toggle button
         if (this.darkMode) {
@@ -317,15 +307,48 @@ class HexGame {
         }
     }
 
+    applyDarkModeAttribute() {
+        if (this.darkMode) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            return;
+        }
+        document.documentElement.removeAttribute('data-theme');
+    }
+
+    normalizeColorScheme(rawScheme) {
+        if (rawScheme === 'classic' || rawScheme === 'wood') {
+            return rawScheme;
+        }
+        // Migrate legacy placeholder value to the new default.
+        if (rawScheme === 'default') {
+            return 'wood';
+        }
+        return 'wood';
+    }
+
+    initializeColorScheme() {
+        const storedScheme = localStorage.getItem('hex_ai_color_scheme');
+        this.colorScheme = this.normalizeColorScheme(storedScheme);
+        document.documentElement.setAttribute('data-color-scheme', this.colorScheme);
+
+        if (storedScheme !== this.colorScheme) {
+            localStorage.setItem('hex_ai_color_scheme', this.colorScheme);
+        }
+    }
+
     // =============================================================================
-    // COLOR PALETTES FOR DARK MODE
+    // COLOR PALETTES
     // =============================================================================
 
     getColors() {
-        return this.darkMode ? this.DARK_COLORS : this.LIGHT_COLORS;
+        const selectedScheme = this.normalizeColorScheme(this.colorScheme);
+        if (selectedScheme === 'classic') {
+            return this.darkMode ? this.DARK_COLORS_CLASSIC : this.LIGHT_COLORS_CLASSIC;
+        }
+        return this.darkMode ? this.DARK_COLORS_WOOD : this.LIGHT_COLORS_WOOD;
     }
 
-    get LIGHT_COLORS() {
+    get LIGHT_COLORS_CLASSIC() {
         return {
             WHITE: '#fff',
             LIGHT_GRAY: '#f8f8fa',
@@ -353,7 +376,7 @@ class HexGame {
         };
     }
 
-    get DARK_COLORS() {
+    get DARK_COLORS_CLASSIC() {
         return {
             WHITE: '#2d2d2d',
             LIGHT_GRAY: '#1a1a1a',
@@ -378,6 +401,62 @@ class HexGame {
             DARK_RED: '#ff4444',            // ⭐ SAME BRIGHT RED as light theme
             VERY_DARK_RED: '#ff4444',       // ⭐ SAME BRIGHT RED as light theme
             DARKER_RED: '#cc3300',          // ⭐ DARKER RED for last moves
+        };
+    }
+
+    get LIGHT_COLORS_WOOD() {
+        return {
+            WHITE: '#fffdf8',
+            LIGHT_GRAY: '#f4ecde',
+            MEDIUM_GRAY: '#b18a5e',
+            DARK_GRAY: '#2b1d10',
+
+            // Board colors
+            EMPTY_HEX_GRAY: '#c89f6c',
+            GRID_WHITE: '#9f7647',
+            BOARD_BACKGROUND: '#7b4e2a',
+
+            // Blue player -> black pieces
+            LIGHT_BLUE: '#57422a',
+            MEDIUM_BLUE: '#3d2d1d',
+            DARK_BLUE: '#161311',
+            VERY_DARK_BLUE: '#0e0c0b',
+            DARKER_BLUE: '#000000',
+
+            // Red player -> white pieces
+            LIGHT_RED: '#f8f1de',
+            MEDIUM_RED: '#f0e5cd',
+            DARK_RED: '#f6f1e5',
+            VERY_DARK_RED: '#fff9ec',
+            DARKER_RED: '#dcd5c7',
+        };
+    }
+
+    get DARK_COLORS_WOOD() {
+        return {
+            WHITE: '#2f261e',
+            LIGHT_GRAY: '#1f1711',
+            MEDIUM_GRAY: '#785734',
+            DARK_GRAY: '#f2e8dc',
+
+            // Board colors
+            EMPTY_HEX_GRAY: '#8a6038',
+            GRID_WHITE: '#6e4a2a',
+            BOARD_BACKGROUND: '#5b381d',
+
+            // Blue player -> black pieces
+            LIGHT_BLUE: '#3f2f21',
+            MEDIUM_BLUE: '#2f2318',
+            DARK_BLUE: '#0f0d0b',
+            VERY_DARK_BLUE: '#000000',
+            DARKER_BLUE: '#000000',
+
+            // Red player -> white pieces
+            LIGHT_RED: '#d8c9b2',
+            MEDIUM_RED: '#e5d6bf',
+            DARK_RED: '#f2ede1',
+            VERY_DARK_RED: '#fff8ea',
+            DARKER_RED: '#e3dacb',
         };
     }
 

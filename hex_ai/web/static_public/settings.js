@@ -11,13 +11,17 @@ class UserSettingsPage {
         this.defaultSettings = {
             preferred_board_size: 13,
             preferred_elo: 600,
-            color_scheme: 'default',
+            color_scheme: 'wood',
         };
-        this.colorSchemeOptions = [{ value: 'default', label: 'Default (options coming soon)' }];
+        this.colorSchemeOptions = [
+            { value: 'wood', label: 'Wood Board (Black/White Pieces)' },
+            { value: 'classic', label: 'Classic (Blue/Red Pieces)' },
+        ];
         this.storageKeys = {
             preferredBoardSize: 'hex_ai_display_board_size',
             preferredElo: 'hex_ai_preferred_elo',
             colorScheme: 'hex_ai_color_scheme',
+            darkMode: 'hex_ai_dark_mode',
         };
     }
 
@@ -26,6 +30,8 @@ class UserSettingsPage {
             console.error('Settings page is missing required elements');
             return;
         }
+
+        this.applySavedDarkModePreference();
 
         this.form.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -39,6 +45,12 @@ class UserSettingsPage {
 
         this.eloSlider.addEventListener('input', () => {
             this.updateEloDisplay();
+        });
+
+        window.addEventListener('storage', (event) => {
+            if (event.key === this.storageKeys.darkMode) {
+                this.applySavedDarkModePreference();
+            }
         });
 
         this.loadSettingsFromConfig();
@@ -84,7 +96,7 @@ class UserSettingsPage {
     applySettingsToForm(settings) {
         this.boardSizeSelect.value = String(settings.preferred_board_size);
         this.eloSlider.value = String(settings.preferred_elo);
-        this.colorSchemeSelect.value = settings.color_scheme;
+        this.colorSchemeSelect.value = this.normalizeColorScheme(settings.color_scheme);
         this.updateEloDisplay();
     }
 
@@ -92,15 +104,32 @@ class UserSettingsPage {
         return {
             preferred_board_size: parseInt(this.boardSizeSelect.value, 10),
             preferred_elo: parseInt(this.eloSlider.value, 10),
-            color_scheme: this.colorSchemeSelect.value,
+            color_scheme: this.normalizeColorScheme(this.colorSchemeSelect.value),
         };
+    }
+
+    normalizeColorScheme(rawValue) {
+        if (rawValue === 'default') {
+            return 'wood';
+        }
+        const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
+        return allowedSchemes.has(rawValue) ? rawValue : this.defaultSettings.color_scheme;
+    }
+
+    applySavedDarkModePreference() {
+        const savedDarkMode = localStorage.getItem(this.storageKeys.darkMode);
+        if (savedDarkMode === 'true') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+            document.documentElement.removeAttribute('data-theme');
+        }
     }
 
     getValidatedStoredSettings(boardOptions, minElo, maxElo) {
         const validBoardSizes = new Set(boardOptions);
         const storedBoardSize = parseInt(localStorage.getItem(this.storageKeys.preferredBoardSize), 10);
         const storedElo = parseInt(localStorage.getItem(this.storageKeys.preferredElo), 10);
-        const storedColorScheme = localStorage.getItem(this.storageKeys.colorScheme);
+        const storedColorScheme = this.normalizeColorScheme(localStorage.getItem(this.storageKeys.colorScheme));
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
 
         return {
@@ -145,7 +174,7 @@ class UserSettingsPage {
             this.defaultSettings = {
                 preferred_board_size: defaultBoardSize,
                 preferred_elo: defaultElo,
-                color_scheme: 'default',
+                color_scheme: 'wood',
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
@@ -172,10 +201,16 @@ class UserSettingsPage {
     async saveSettings(settings) {
         this.setStatus('Saving settings...');
         try {
-            localStorage.setItem(this.storageKeys.preferredBoardSize, String(settings.preferred_board_size));
-            localStorage.setItem(this.storageKeys.preferredElo, String(settings.preferred_elo));
-            localStorage.setItem(this.storageKeys.colorScheme, String(settings.color_scheme));
-            this.applySettingsToForm(settings);
+            const normalizedSettings = {
+                preferred_board_size: settings.preferred_board_size,
+                preferred_elo: settings.preferred_elo,
+                color_scheme: this.normalizeColorScheme(settings.color_scheme),
+            };
+
+            localStorage.setItem(this.storageKeys.preferredBoardSize, String(normalizedSettings.preferred_board_size));
+            localStorage.setItem(this.storageKeys.preferredElo, String(normalizedSettings.preferred_elo));
+            localStorage.setItem(this.storageKeys.colorScheme, String(normalizedSettings.color_scheme));
+            this.applySettingsToForm(normalizedSettings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {
             console.error(error);
