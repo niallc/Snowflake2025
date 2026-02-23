@@ -12,7 +12,7 @@ Results are written to temp/memoryProfile/ for analysis.
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 from collections import deque
 import numpy as np
@@ -59,7 +59,22 @@ class MemoryLeakDiagnostics:
                 f.write(f"Session timestamp: {self.session_timestamp}\n")
                 f.write(f"Started: {datetime.now().isoformat()}\n\n")
     
-    def check_array_sharing(self, example: Dict, shard_data: Dict, shard_path: str) -> bool:
+    def _extract_example_fields(self, example: Any):
+        """
+        Extract board/policy from either dict examples or compact tuple examples.
+        """
+        if isinstance(example, tuple):
+            # Compact pool format: (board, policy, value, player_to_move)
+            board = example[0] if len(example) > 0 else None
+            policy = example[1] if len(example) > 1 else None
+            return board, policy
+
+        if isinstance(example, dict):
+            return example.get('board'), example.get('policy')
+
+        return None, None
+
+    def check_array_sharing(self, example: Any, shard_data: Dict, shard_path: str) -> bool:
         """
         Check if position arrays share memory with shard data (memory leak indicator).
         
@@ -78,21 +93,25 @@ class MemoryLeakDiagnostics:
         if not self.enabled:
             return False
         
-        if not example or 'board' not in example:
+        if not example:
+            return False
+        
+        example_board, example_policy = self._extract_example_fields(example)
+        if example_board is None:
             return False
         
         if 'examples' not in shard_data or not shard_data['examples']:
             return False
         
         # Check if board array shares memory address with original
-        example_board_id = id(example['board'])
+        example_board_id = id(example_board)
         shard_board_id = id(shard_data['examples'][0]['board'])
         
         if example_board_id == shard_board_id:
             self.array_sharing_detected = True
             # Track this shared array for memory estimation
             self.shared_array_ids[example_board_id] = {
-                'size_bytes': example['board'].nbytes,
+                'size_bytes': example_board.nbytes,
                 'shard_path': str(shard_path),
                 'array_type': 'board'
             }
@@ -101,7 +120,7 @@ class MemoryLeakDiagnostics:
                 f"Position arrays share memory with shard data!\n"
                 f"  Shard: {shard_path}\n"
                 f"  Board array ID: {example_board_id}\n"
-                f"  Array size: {example['board'].nbytes / (1024*1024):.2f} MB\n"
+                f"  Array size: {example_board.nbytes / (1024*1024):.2f} MB\n"
                 f"  This prevents shard data from being freed.\n"
                 f"  FIX: Copy arrays when adding positions to pool."
             )
@@ -111,7 +130,6 @@ class MemoryLeakDiagnostics:
         # NOTE: Policy can be None for terminal positions (final moves with no next move).
         # This is expected and valid - about 1% of examples have None policy.
         # If policy is None, there's no array to check for memory sharing, so we skip.
-        example_policy = example.get('policy')
         if example_policy is None:
             return False  # No array to check - this is expected for terminal positions
         
@@ -220,7 +238,7 @@ class MemoryLeakDiagnostics:
                         f"  This is ~{pool_size * 3 / 1024 / 1024:.1f} GB in position dicts alone."
                     )
     
-    def estimate_shared_array_memory(self, position_pool: List[Dict]) -> Dict:
+    def estimate_shared_array_memory(self, position_pool: List[Any]) -> Dict:
         """
         Scan position pool to estimate memory from shared arrays.
         
@@ -244,8 +262,9 @@ class MemoryLeakDiagnostics:
         total_memory_bytes = 0
         
         for position in position_pool:
-            board_id = id(position.get('board')) if position.get('board') is not None else None
-            policy_id = id(position.get('policy')) if position.get('policy') is not None else None
+            board, policy = self._extract_example_fields(position)
+            board_id = id(board) if board is not None else None
+            policy_id = id(policy) if policy is not None else None
             
             if board_id and board_id in self.shared_array_ids:
                 shared_count += 1
@@ -253,7 +272,7 @@ class MemoryLeakDiagnostics:
             
             if policy_id and policy_id in self.shared_array_ids:
                 shared_count += 1
-                if position.get('policy') is not None:
+                if policy is not None:
                     total_memory_bytes += self.shared_array_ids[policy_id]['size_bytes']
         
         return {
@@ -343,4 +362,3 @@ def stop_diagnostics():
     if _global_diagnostics is not None:
         _global_diagnostics.write_summary()
         _global_diagnostics = None
-

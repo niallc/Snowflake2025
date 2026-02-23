@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union, Any
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from time import sleep
 import psutil
@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
 # TODO: Refine ths as I doubt the actual validation gets nearly this big
 MAX_VALIDATION_MEMORY_GB = 9.0
+
+# Compact in-memory representation for pooled training/validation examples:
+# (board, policy, value, player_to_move)
+PositionPoolEntry = Tuple[Any, Any, Any, Any]
 
 
 def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:
@@ -186,7 +190,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.policy_shape = (BOARD_SIZE * BOARD_SIZE,)
         
         # Position pool and shard management
-        self.position_pool: List[Dict] = []
+        self.position_pool = deque()
         self.shard_queues: List[List[Path]] = []  # One queue per directory
         # Track loaded shard counts per directory for proportional loading.
         # Using counts avoids storing one path string per loaded shard.
@@ -370,7 +374,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.loaded_shard_counts = [0] * len(self.data_dirs)
             
             # Clear position pool
-            self.position_pool = []
+            self.position_pool = deque()
             
             # Shuffle shard queues for this epoch (using same random seed for reproducibility)
             for queue in self.shard_queues:
@@ -531,7 +535,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
                            f"estimated {estimated_final_memory_gb:.2f}GB memory usage")
 
-    def _create_compact_position_example(self, example: Dict, copy_arrays: bool) -> Dict:
+    def _create_compact_position_example(self, example: Dict, copy_arrays: bool) -> PositionPoolEntry:
         """
         Build a compact in-memory training example.
 
@@ -546,12 +550,12 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         if copy_arrays and isinstance(policy, np.ndarray):
             policy = policy.copy()
 
-        return {
-            'board': board,
-            'policy': policy,
-            'value': example.get('value'),
-            'player_to_move': example.get('player_to_move'),
-        }
+        return (
+            board,
+            policy,
+            example.get('value'),
+            example.get('player_to_move'),
+        )
     
     def _monitor_memory(self) -> bool:
         """
@@ -615,7 +619,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             
             # Yield positions from pool
             if self.position_pool:
-                position = self.position_pool.pop(0)  # Remove from front of pool
+                position = self.position_pool.popleft()
                 yield self._process_position(position)
                 self.total_positions_yielded += 1
                 
@@ -741,7 +745,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         # Shuffle the entire pool after refilling
         if positions_added > 0:
-            random.shuffle(self.position_pool)
+            shuffled_pool = list(self.position_pool)
+            random.shuffle(shuffled_pool)
+            self.position_pool = deque(shuffled_pool)
             if self.verbose >= 3:
                 self.logger.info(f"Shuffled pool after adding {positions_added:,} positions "
                                f"(total pool size: {len(self.position_pool):,})")
@@ -798,12 +804,16 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         max_deficit_idx = max(range(len(deficits)), key=lambda i: deficits[i])
         return available_dirs[max_deficit_idx]
     
-    def _process_position(self, position: Dict):
+    def _process_position(self, position: PositionPoolEntry):
         """Process a single position (augmentation, tensor conversion, etc.)."""
-        board = position['board']
-        policy = position['policy']
-        value = position['value']
-        player_to_move = position.get('player_to_move', None)
+        # Prefer compact tuple representation; keep dict fallback for safety.
+        if isinstance(position, tuple):
+            board, policy, value, player_to_move = position
+        else:
+            board = position['board']
+            policy = position['policy']
+            value = position['value']
+            player_to_move = position.get('player_to_move', None)
         
         # Convert integer player_to_move to Player enum if needed (for backward compatibility)
         if player_to_move is not None and isinstance(player_to_move, int):

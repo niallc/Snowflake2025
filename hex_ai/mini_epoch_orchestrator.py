@@ -1,5 +1,6 @@
 import logging
 import sys
+from itertools import islice
 import numpy as np
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.memory_profiler import get_profiler, write_epoch_summary
@@ -99,7 +100,7 @@ class MiniEpochOrchestrator:
         if not values:
             return 0.0
         sample_count = min(len(values), max_samples)
-        sample = values[:sample_count]
+        sample = list(islice(values, sample_count))
         total = 0
         for item in sample:
             total += self._estimate_object_bytes(item, max_depth=3)
