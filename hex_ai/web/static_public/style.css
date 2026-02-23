@@ -447,6 +447,18 @@ h1 {
   stroke-width: 3;
 }
 
+[data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #b8484f;
+}
+
+[data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #2f8f61;
+}
+
+[data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #7584ad;
+}
+
 /* Dark mode hover effects */
 [data-theme="dark"] #board-container svg polygon:hover:not(.heatmap-scored) {
   stroke-width: 2;
@@ -468,6 +480,18 @@ h1 {
 
 [data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-even {
   stroke: #b6c2df;
+}
+
+[data-theme="dark"][data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-below {
+  stroke: #dc7b7e;
+}
+
+[data-theme="dark"][data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-above {
+  stroke: #6ad19b;
+}
+
+[data-theme="dark"][data-color-scheme="wood"] #board-container svg polygon.heatmap-scored.heatmap-even {
+  stroke: #a8b7df;
 }
 
 /* Purple shading for central hexes on empty board */

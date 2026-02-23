@@ -98,6 +98,7 @@ class HexGame {
         this.heatmapOpacityInput = document.getElementById('heatmap-opacity');
         this.heatmapOpacityValue = document.getElementById('heatmap-opacity-value');
         this.heatmapStatus = document.getElementById('heatmap-status');
+        this.heatmapLegend = document.getElementById('heatmap-legend');
         this.heatmapScopeSelect = document.getElementById('heatmap-scope');
         this.heatmapTopKInput = document.getElementById('heatmap-top-k');
         this.heatmapRefreshBtn = document.getElementById('heatmap-refresh');
@@ -337,6 +338,7 @@ class HexGame {
         this.colorScheme = this.normalizeColorScheme(storedScheme);
         document.documentElement.setAttribute('data-color-scheme', this.colorScheme);
         this.updatePlayerTerminologyUi();
+        this.updateHeatmapLegendText();
 
         if (storedScheme !== this.colorScheme) {
             localStorage.setItem('hex_ai_color_scheme', this.colorScheme);
@@ -381,6 +383,17 @@ class HexGame {
         if (this.redPlayerLabel) {
             this.redPlayerLabel.textContent = names.red;
         }
+    }
+
+    updateHeatmapLegendText() {
+        if (!this.heatmapLegend) {
+            return;
+        }
+        if (this.normalizeColorScheme(this.colorScheme) === 'wood') {
+            this.heatmapLegend.textContent = 'Dashed red = below 50%, solid green = above 50%, dotted slate = near-even';
+            return;
+        }
+        this.heatmapLegend.textContent = 'Dashed amber = below 50%, solid green = above 50%, dotted slate = near-even';
     }
 
     // =============================================================================
@@ -552,6 +565,7 @@ class HexGame {
             return window.HexHeatmap.scoreToColor(score, {
                 alpha: this.heatmapOpacity,
                 darkMode: this.darkMode,
+                colorScheme: this.normalizeColorScheme(this.colorScheme),
                 baseColor: fallback,
                 fallback
             });

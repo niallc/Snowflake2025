@@ -184,17 +184,35 @@
       return options.fallback || 'rgb(128, 128, 128)';
     }
 
-    const palette = options.darkMode
-      ? {
-          low: '#d09138',
-          mid: '#6b7292',
-          high: '#46c985',
-        }
-      : {
-          low: '#b87418',
-          mid: '#8a93b0',
-          high: '#1f9f60',
-        };
+    const isWoodScheme = options.colorScheme === 'wood';
+    const palette = isWoodScheme
+      ? (
+          options.darkMode
+            ? {
+                // Red -> cool slate -> green for wood mode (avoids muddy browns).
+                low: '#de6f72',
+                mid: '#8f9dc0',
+                high: '#5fc88e',
+              }
+            : {
+                low: '#bf4c53',
+                mid: '#7f8db6',
+                high: '#2f9965',
+              }
+        )
+      : (
+          options.darkMode
+            ? {
+                low: '#d09138',
+                mid: '#6b7292',
+                high: '#46c985',
+              }
+            : {
+                low: '#b87418',
+                mid: '#8a93b0',
+                high: '#1f9f60',
+              }
+        );
 
     const normalized = emphasizeScoreAroundMidpoint(score, options);
     const alpha = clamp(
