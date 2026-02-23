@@ -86,6 +86,8 @@ class HexGame {
         this.eloDisplay = document.getElementById('elo-display');
         this.blueComputerCheck = document.getElementById('blue-computer');
         this.redComputerCheck = document.getElementById('red-computer');
+        this.bluePlayerLabel = document.getElementById('blue-player-label');
+        this.redPlayerLabel = document.getElementById('red-player-label');
         this.trmphDisplay = document.getElementById('trmph-display');
         this.trmphInput = document.getElementById('trmph-input');
         this.copyTrmphBtn = document.getElementById('copy-trmph');
@@ -334,6 +336,7 @@ class HexGame {
         const storedScheme = localStorage.getItem('hex_ai_color_scheme');
         this.colorScheme = this.normalizeColorScheme(storedScheme);
         document.documentElement.setAttribute('data-color-scheme', this.colorScheme);
+        this.updatePlayerTerminologyUi();
 
         if (storedScheme !== this.colorScheme) {
             localStorage.setItem('hex_ai_color_scheme', this.colorScheme);
@@ -356,6 +359,28 @@ class HexGame {
 
     isDiscPieceStyle() {
         return this.normalizePieceStyle(this.pieceStyle) === 'disc';
+    }
+
+    getPlayerDisplayNames() {
+        if (this.normalizeColorScheme(this.colorScheme) === 'wood') {
+            return { blue: 'Black', red: 'White' };
+        }
+        return { blue: 'Blue', red: 'Red' };
+    }
+
+    getPlayerDisplayName(side) {
+        const names = this.getPlayerDisplayNames();
+        return side === 'blue' ? names.blue : names.red;
+    }
+
+    updatePlayerTerminologyUi() {
+        const names = this.getPlayerDisplayNames();
+        if (this.bluePlayerLabel) {
+            this.bluePlayerLabel.textContent = names.blue;
+        }
+        if (this.redPlayerLabel) {
+            this.redPlayerLabel.textContent = names.red;
+        }
     }
 
     // =============================================================================
@@ -434,9 +459,9 @@ class HexGame {
             DARK_GRAY: '#2f2012',
 
             // Board colors
-            EMPTY_HEX_GRAY: '#eed8ad',
+            EMPTY_HEX_GRAY: '#a58852', // '#eed8ad',
             GRID_WHITE: '#d3ad78',
-            BOARD_BACKGROUND: '#debe88',
+            BOARD_BACKGROUND: '#debe88', // or if lighter, maybe: '#f7dda4',
 
             // Blue player -> black pieces
             LIGHT_BLUE: '#5e4a32',
@@ -686,6 +711,7 @@ class HexGame {
     }
 
     getHumanPlayerDisplayState() {
+        const names = this.getPlayerDisplayNames();
         if (!this.blueComputer && !this.redComputer) {
             return { label: 'Both', className: 'pie-rule-player-both' };
         }
@@ -694,10 +720,10 @@ class HexGame {
         }
 
         if (!this.blueComputer && this.redComputer) {
-            return { label: 'Blue', className: 'pie-rule-player-blue' };
+            return { label: names.blue, className: 'pie-rule-player-blue' };
         }
         if (this.blueComputer && !this.redComputer) {
-            return { label: 'Red', className: 'pie-rule-player-red' };
+            return { label: names.red, className: 'pie-rule-player-red' };
         }
 
         let moveCount = 0;
@@ -709,8 +735,8 @@ class HexGame {
             }
         }
         return moveCount % 2 === 0
-            ? { label: 'Blue', className: 'pie-rule-player-blue' }
-            : { label: 'Red', className: 'pie-rule-player-red' };
+            ? { label: names.blue, className: 'pie-rule-player-blue' }
+            : { label: names.red, className: 'pie-rule-player-red' };
     }
 
     applyPieRuleStateFromResponse(data, announceSwap = false) {
@@ -1640,7 +1666,7 @@ class HexGame {
         const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
         hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
         hex.setAttribute('fill', fill);
-        hex.setAttribute('stroke', '#ddd');
+        hex.setAttribute('stroke', '#555555'); // '#ddd'
         hex.setAttribute('stroke-width', '1');
 
         // Apply purple shading if needed
@@ -1844,6 +1870,10 @@ class HexGame {
 
     showGameOver(winner) {
         this.computerMoveBtn.disabled = true;
+        if (winner === 'blue' || winner === 'red') {
+            this.showSuccess(`${this.getPlayerDisplayName(winner)} wins!`);
+            return;
+        }
         this.showSuccess(`${winner.toUpperCase()} wins!`);
     }
 

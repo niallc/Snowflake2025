@@ -139,8 +139,8 @@
       <h2>🎯 Object of the Game</h2>
       <p>Hex is a strategy game where both players try to connect opposite sides of the board.</p>
       <ul>
-        <li><strong>Blue</strong> connects top to bottom.</li>
-        <li><strong>Red</strong> connects left to right.</li>
+        <li><strong><span data-player-side="blue">Blue</span></strong> connects top to bottom.</li>
+        <li><strong><span data-player-side="red">Red</span></strong> connects left to right.</li>
         <li>First player to form an unbroken chain wins.</li>
       </ul>
     </div>
@@ -148,7 +148,7 @@
     <div class="rules-section">
       <h2>📋 Basic Rules</h2>
       <h3>1. Taking Turns</h3>
-      <p>Players alternate placing one stone at a time. Blue always moves first.</p>
+      <p>Players alternate placing one stone at a time. <span data-player-side="blue">Blue</span> always moves first.</p>
 
       <h3>2. Placing Stones</h3>
       <p>Click or tap an empty hex to place your stone. Stones cannot be moved or removed.</p>
@@ -178,8 +178,8 @@
       <h2>🥧 Pie Rule (Swap)</h2>
       <p>The pie rule balances first-move advantage.</p>
       <ul>
-        <li>Blue places the first stone.</li>
-        <li>Red can continue as Red or swap sides with Blue.</li>
+        <li><span data-player-side="blue">Blue</span> places the first stone.</li>
+        <li><span data-player-side="red">Red</span> can continue as <span data-player-side="red">Red</span> or swap sides with <span data-player-side="blue">Blue</span>.</li>
         <li>When enabled in Snowflake 25, the AI can make this swap decision on move 1.</li>
       </ul>
       <p>If a swap happens, no new stone is placed. Only side assignment changes.</p>
@@ -213,7 +213,7 @@
       <p>Enable the heatmap to visualize move quality for the current player. You can inspect top-K candidates or all legal moves.</p>
 
       <h3>Player Toggles</h3>
-      <p>Choose whether Blue and/or Red are controlled by the computer. This supports human vs AI, AI vs AI, or local analysis.</p>
+      <p>Choose whether <span data-player-side="blue">Blue</span> and/or <span data-player-side="red">Red</span> are controlled by the computer. This supports human vs AI, AI vs AI, or local analysis.</p>
 
       <h3>Game Sequence (TRMPH)</h3>
       <p>Copy the current move sequence or paste one to jump to a position directly.</p>
@@ -223,5 +223,21 @@
       <a href="/" class="back-button">← Back to Game</a>
     </div>
   </div>
+  <script>
+    (function () {
+      const storedColorScheme = localStorage.getItem('hex_ai_color_scheme');
+      const colorScheme = storedColorScheme === 'classic' ? 'classic' : 'wood';
+      const playerNames = colorScheme === 'wood'
+        ? { blue: 'Black', red: 'White' }
+        : { blue: 'Blue', red: 'Red' };
+
+      document.querySelectorAll('[data-player-side]').forEach((element) => {
+        const side = element.getAttribute('data-player-side');
+        if (side === 'blue' || side === 'red') {
+          element.textContent = playerNames[side];
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -205,20 +205,34 @@ h1 {
 }
 
 [data-color-scheme="wood"] .pie-rule-player-red {
-  color: #f6f0e2;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  color: #fff7e8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 [data-color-scheme="wood"] .pie-rule-player-blue {
-  color: #1b140d;
+  color: #20150c;
 }
 
 [data-color-scheme="wood"] .pie-rule-player-both {
   color: #9a6f3c;
 }
 
+[data-color-scheme="wood"] .pie-rule-player {
+  background: rgba(90, 62, 34, 0.86);
+  border-color: rgba(244, 223, 186, 0.28);
+}
+
+[data-color-scheme="wood"] .pie-rule-player-title {
+  color: #eddfc8;
+}
+
 [data-color-scheme="wood"] .pie-rule-link-sub {
   color: #5f3918;
+}
+
+[data-theme="dark"][data-color-scheme="wood"] .pie-rule-player {
+  background: rgba(45, 29, 15, 0.92);
+  border-color: rgba(241, 219, 181, 0.24);
 }
 
 [data-theme="dark"][data-color-scheme="wood"] .pie-rule-link-sub {
