@@ -6,27 +6,34 @@ class UserSettingsPage {
         this.eloSlider = document.getElementById('preferred-elo');
         this.eloDisplay = document.getElementById('preferred-elo-display');
         this.colorSchemeSelect = document.getElementById('color-scheme');
+        this.pieceStyleSelect = document.getElementById('piece-style');
         this.resetDefaultsBtn = document.getElementById('reset-defaults-btn');
 
         this.defaultSettings = {
             preferred_board_size: 13,
             preferred_elo: 600,
             color_scheme: 'wood',
+            piece_style: 'hex_fill',
         };
         this.colorSchemeOptions = [
-            { value: 'wood', label: 'Wood Board (Black/White Pieces)' },
+            { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
             { value: 'classic', label: 'Classic (Blue/Red Pieces)' },
+        ];
+        this.pieceStyleOptions = [
+            { value: 'hex_fill', label: 'Fill Hexagons' },
+            { value: 'disc', label: 'Disc Pieces in Hexagons' },
         ];
         this.storageKeys = {
             preferredBoardSize: 'hex_ai_display_board_size',
             preferredElo: 'hex_ai_preferred_elo',
             colorScheme: 'hex_ai_color_scheme',
+            pieceStyle: 'hex_ai_piece_style',
             darkMode: 'hex_ai_dark_mode',
         };
     }
 
     init() {
-        if (!this.form || !this.boardSizeSelect || !this.eloSlider || !this.colorSchemeSelect) {
+        if (!this.form || !this.boardSizeSelect || !this.eloSlider || !this.colorSchemeSelect || !this.pieceStyleSelect) {
             console.error('Settings page is missing required elements');
             return;
         }
@@ -93,10 +100,21 @@ class UserSettingsPage {
         }
     }
 
+    populatePieceStyleOptions(options) {
+        this.pieceStyleSelect.innerHTML = '';
+        for (const optionData of options) {
+            const option = document.createElement('option');
+            option.value = optionData.value;
+            option.textContent = optionData.label;
+            this.pieceStyleSelect.appendChild(option);
+        }
+    }
+
     applySettingsToForm(settings) {
         this.boardSizeSelect.value = String(settings.preferred_board_size);
         this.eloSlider.value = String(settings.preferred_elo);
         this.colorSchemeSelect.value = this.normalizeColorScheme(settings.color_scheme);
+        this.pieceStyleSelect.value = this.normalizePieceStyle(settings.piece_style);
         this.updateEloDisplay();
     }
 
@@ -105,6 +123,7 @@ class UserSettingsPage {
             preferred_board_size: parseInt(this.boardSizeSelect.value, 10),
             preferred_elo: parseInt(this.eloSlider.value, 10),
             color_scheme: this.normalizeColorScheme(this.colorSchemeSelect.value),
+            piece_style: this.normalizePieceStyle(this.pieceStyleSelect.value),
         };
     }
 
@@ -114,6 +133,11 @@ class UserSettingsPage {
         }
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
         return allowedSchemes.has(rawValue) ? rawValue : this.defaultSettings.color_scheme;
+    }
+
+    normalizePieceStyle(rawValue) {
+        const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
+        return allowedStyles.has(rawValue) ? rawValue : this.defaultSettings.piece_style;
     }
 
     applySavedDarkModePreference() {
@@ -130,7 +154,9 @@ class UserSettingsPage {
         const storedBoardSize = parseInt(localStorage.getItem(this.storageKeys.preferredBoardSize), 10);
         const storedElo = parseInt(localStorage.getItem(this.storageKeys.preferredElo), 10);
         const storedColorScheme = this.normalizeColorScheme(localStorage.getItem(this.storageKeys.colorScheme));
+        const storedPieceStyle = this.normalizePieceStyle(localStorage.getItem(this.storageKeys.pieceStyle));
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
+        const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
 
         return {
             preferred_board_size: validBoardSizes.has(storedBoardSize)
@@ -142,6 +168,9 @@ class UserSettingsPage {
             color_scheme: allowedSchemes.has(storedColorScheme)
                 ? storedColorScheme
                 : this.defaultSettings.color_scheme,
+            piece_style: allowedStyles.has(storedPieceStyle)
+                ? storedPieceStyle
+                : this.defaultSettings.piece_style,
         };
     }
 
@@ -175,11 +204,13 @@ class UserSettingsPage {
                 preferred_board_size: defaultBoardSize,
                 preferred_elo: defaultElo,
                 color_scheme: 'wood',
+                piece_style: 'hex_fill',
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
             this.populateBoardSizeOptions(boardOptions);
             this.populateColorSchemeOptions(this.colorSchemeOptions);
+            this.populatePieceStyleOptions(this.pieceStyleOptions);
             this.eloSlider.min = String(minElo);
             this.eloSlider.max = String(maxElo);
             this.applySettingsToForm(settings);
@@ -191,6 +222,7 @@ class UserSettingsPage {
             const fallbackBoardOptions = [13];
             this.populateBoardSizeOptions(fallbackBoardOptions);
             this.populateColorSchemeOptions(this.colorSchemeOptions);
+            this.populatePieceStyleOptions(this.pieceStyleOptions);
             this.eloSlider.min = '1';
             this.eloSlider.max = '2350';
             this.applySettingsToForm(this.defaultSettings);
@@ -205,11 +237,13 @@ class UserSettingsPage {
                 preferred_board_size: settings.preferred_board_size,
                 preferred_elo: settings.preferred_elo,
                 color_scheme: this.normalizeColorScheme(settings.color_scheme),
+                piece_style: this.normalizePieceStyle(settings.piece_style),
             };
 
             localStorage.setItem(this.storageKeys.preferredBoardSize, String(normalizedSettings.preferred_board_size));
             localStorage.setItem(this.storageKeys.preferredElo, String(normalizedSettings.preferred_elo));
             localStorage.setItem(this.storageKeys.colorScheme, String(normalizedSettings.color_scheme));
+            localStorage.setItem(this.storageKeys.pieceStyle, String(normalizedSettings.piece_style));
             this.applySettingsToForm(normalizedSettings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {

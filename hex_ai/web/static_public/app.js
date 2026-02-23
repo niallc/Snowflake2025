@@ -18,6 +18,7 @@ class HexGame {
         this.isInitialLoad = true; // Track if this is the initial page load
         this.darkMode = false; // Dark mode state
         this.colorScheme = 'wood';
+        this.pieceStyle = 'hex_fill';
         this.heatmapEnabled = false;
         this.heatmapLoading = false;
         this.heatmapError = null;
@@ -39,6 +40,7 @@ class HexGame {
         // Track previous board state for efficient updates
         this.previousBoard = null;
         this.hexElements = new Map(); // Cache hex elements by position
+        this.pieceElements = new Map(); // Cache disc-style piece elements by position
 
         // Difficulty levels will be loaded from backend in loadGameConstants()
         this.difficultyLevels = null;
@@ -60,6 +62,7 @@ class HexGame {
         this.setupEventListeners();
         this.initializeDarkMode();
         this.initializeColorScheme();
+        this.initializePieceStyle();
         this.loadGameConstants();
         this.updateHeatmapControls();
         this.updatePieRuleUi();
@@ -278,7 +281,8 @@ class HexGame {
         }
 
         // Redraw the board with new colors
-        if (this.svg) {
+        if (this.svg && Array.isArray(this.previousBoard)) {
+            this.clearBoard();
             this.drawHexBoard(this.previousBoard);
         }
 
@@ -334,6 +338,24 @@ class HexGame {
         if (storedScheme !== this.colorScheme) {
             localStorage.setItem('hex_ai_color_scheme', this.colorScheme);
         }
+    }
+
+    normalizePieceStyle(rawStyle) {
+        return rawStyle === 'disc' ? 'disc' : 'hex_fill';
+    }
+
+    initializePieceStyle() {
+        const storedPieceStyle = localStorage.getItem('hex_ai_piece_style');
+        this.pieceStyle = this.normalizePieceStyle(storedPieceStyle);
+        document.documentElement.setAttribute('data-piece-style', this.pieceStyle);
+
+        if (storedPieceStyle !== this.pieceStyle) {
+            localStorage.setItem('hex_ai_piece_style', this.pieceStyle);
+        }
+    }
+
+    isDiscPieceStyle() {
+        return this.normalizePieceStyle(this.pieceStyle) === 'disc';
     }
 
     // =============================================================================
@@ -406,57 +428,57 @@ class HexGame {
 
     get LIGHT_COLORS_WOOD() {
         return {
-            WHITE: '#fffdf8',
-            LIGHT_GRAY: '#f4ecde',
-            MEDIUM_GRAY: '#b18a5e',
-            DARK_GRAY: '#2b1d10',
+            WHITE: '#fffdf7',
+            LIGHT_GRAY: '#f7efd9',
+            MEDIUM_GRAY: '#c39a67',
+            DARK_GRAY: '#2f2012',
 
             // Board colors
-            EMPTY_HEX_GRAY: '#c89f6c',
-            GRID_WHITE: '#9f7647',
-            BOARD_BACKGROUND: '#7b4e2a',
+            EMPTY_HEX_GRAY: '#eed8ad',
+            GRID_WHITE: '#d3ad78',
+            BOARD_BACKGROUND: '#debe88',
 
             // Blue player -> black pieces
-            LIGHT_BLUE: '#57422a',
-            MEDIUM_BLUE: '#3d2d1d',
-            DARK_BLUE: '#161311',
-            VERY_DARK_BLUE: '#0e0c0b',
+            LIGHT_BLUE: '#5e4a32',
+            MEDIUM_BLUE: '#463626',
+            DARK_BLUE: '#171412',
+            VERY_DARK_BLUE: '#0f0d0b',
             DARKER_BLUE: '#000000',
 
             // Red player -> white pieces
-            LIGHT_RED: '#f8f1de',
-            MEDIUM_RED: '#f0e5cd',
-            DARK_RED: '#f6f1e5',
-            VERY_DARK_RED: '#fff9ec',
-            DARKER_RED: '#dcd5c7',
+            LIGHT_RED: '#f9f1dd',
+            MEDIUM_RED: '#f4e8cf',
+            DARK_RED: '#f7f2e6',
+            VERY_DARK_RED: '#fffaf0',
+            DARKER_RED: '#dfd5c2',
         };
     }
 
     get DARK_COLORS_WOOD() {
         return {
-            WHITE: '#2f261e',
-            LIGHT_GRAY: '#1f1711',
-            MEDIUM_GRAY: '#785734',
-            DARK_GRAY: '#f2e8dc',
+            WHITE: '#362b20',
+            LIGHT_GRAY: '#241a12',
+            MEDIUM_GRAY: '#90683d',
+            DARK_GRAY: '#f4e8d8',
 
             // Board colors
-            EMPTY_HEX_GRAY: '#8a6038',
-            GRID_WHITE: '#6e4a2a',
-            BOARD_BACKGROUND: '#5b381d',
+            EMPTY_HEX_GRAY: '#ab8150',
+            GRID_WHITE: '#8d6839',
+            BOARD_BACKGROUND: '#7e5e35',
 
             // Blue player -> black pieces
-            LIGHT_BLUE: '#3f2f21',
-            MEDIUM_BLUE: '#2f2318',
-            DARK_BLUE: '#0f0d0b',
+            LIGHT_BLUE: '#4d3825',
+            MEDIUM_BLUE: '#362819',
+            DARK_BLUE: '#12100e',
             VERY_DARK_BLUE: '#000000',
             DARKER_BLUE: '#000000',
 
             // Red player -> white pieces
-            LIGHT_RED: '#d8c9b2',
-            MEDIUM_RED: '#e5d6bf',
-            DARK_RED: '#f2ede1',
-            VERY_DARK_RED: '#fff8ea',
-            DARKER_RED: '#e3dacb',
+            LIGHT_RED: '#dfcfb4',
+            MEDIUM_RED: '#eadcc4',
+            DARK_RED: '#f4efe1',
+            VERY_DARK_RED: '#fff9ee',
+            DARKER_RED: '#e4d9c7',
         };
     }
 
@@ -1007,6 +1029,7 @@ class HexGame {
             this.isInitialLoad = false; // Mark that this is no longer initial load
             this.previousBoard = null; // Clear board cache
             this.hexElements.clear(); // Clear hex cache
+            this.pieceElements.clear(); // Clear disc piece cache
             this.updateTrmphDisplay();
             await this.loadGameState(false, 'reset'); // Don't auto-move after reset
 
@@ -1044,6 +1067,7 @@ class HexGame {
             // Clear cache for undo to ensure clean state
             this.previousBoard = null;
             this.hexElements.clear();
+            this.pieceElements.clear();
 
             await this.loadGameStateWithoutAutoMove('undo');
 
@@ -1244,6 +1268,7 @@ class HexGame {
         // Clear existing board
         this.svg.innerHTML = '';
         this.hexElements.clear();
+        this.pieceElements.clear();
     }
 
     updateBoardIncremental(newBoard) {
@@ -1270,10 +1295,10 @@ class HexGame {
     updateHex(row, col, newValue) {
         const key = `${row},${col}`;
         let hexElement = this.hexElements.get(key);
+        const { x, y } = this.hexCenter(row, col, 18);
 
         if (!hexElement) {
             // Create new hex if it doesn't exist (shouldn't happen in normal flow)
-            const { x, y } = this.hexCenter(row, col, 18);
             hexElement = this.makeHex(x, y, 18, this.getHexColor(newValue, row, col), false);
             hexElement.setAttribute('data-row', row);
             hexElement.setAttribute('data-col', col);
@@ -1294,12 +1319,18 @@ class HexGame {
                 }
             }, 50);
         }
+
+        this.updatePieceDisc(row, col, newValue, x, y, 18);
     }
 
     getHexColor(cellValue, row = null, col = null) {
         const colors = this.getColors();
-        if (cellValue === this.pieceValues.BLUE) return colors.DARK_BLUE;
-        if (cellValue === this.pieceValues.RED) return colors.DARK_RED;
+        if (cellValue === this.pieceValues.BLUE) {
+            return this.isDiscPieceStyle() ? colors.EMPTY_HEX_GRAY : colors.DARK_BLUE;
+        }
+        if (cellValue === this.pieceValues.RED) {
+            return this.isDiscPieceStyle() ? colors.EMPTY_HEX_GRAY : colors.DARK_RED;
+        }
         if (row !== null && col !== null) {
             const score = this.getHeatmapScoreForMove(row, col);
             if (Number.isFinite(score)) {
@@ -1307,6 +1338,68 @@ class HexGame {
             }
         }
         return colors.EMPTY_HEX_GRAY; // Empty hex color
+    }
+
+    getDiscStyle(cellValue) {
+        const colors = this.getColors();
+        const currentColorScheme = this.normalizeColorScheme(this.colorScheme);
+
+        if (cellValue === this.pieceValues.BLUE) {
+            return {
+                fill: colors.DARK_BLUE,
+                stroke: currentColorScheme === 'wood' ? '#3f3227' : '#0064af',
+            };
+        }
+        if (cellValue === this.pieceValues.RED) {
+            return {
+                fill: colors.DARK_RED,
+                stroke: currentColorScheme === 'wood' ? '#9f8f78' : '#952500',
+            };
+        }
+        return null;
+    }
+
+    makePieceDisc(cx, cy, r, style) {
+        const disc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        disc.setAttribute('cx', String(cx));
+        disc.setAttribute('cy', String(cy));
+        disc.setAttribute('r', String(r * 0.62));
+        disc.setAttribute('fill', style.fill);
+        disc.setAttribute('stroke', style.stroke);
+        disc.setAttribute('stroke-width', '1.6');
+        disc.style.pointerEvents = 'none';
+        return disc;
+    }
+
+    updatePieceDisc(row, col, cellValue, cx, cy, hexRadius) {
+        const key = `${row},${col}`;
+        const existingDisc = this.pieceElements.get(key);
+
+        if (!this.isDiscPieceStyle() || cellValue === this.pieceValues.EMPTY) {
+            if (existingDisc) {
+                existingDisc.remove();
+                this.pieceElements.delete(key);
+            }
+            return;
+        }
+
+        const discStyle = this.getDiscStyle(cellValue);
+        if (!discStyle) {
+            return;
+        }
+
+        if (!existingDisc) {
+            const created = this.makePieceDisc(cx, cy, hexRadius, discStyle);
+            this.svg.appendChild(created);
+            this.pieceElements.set(key, created);
+            return;
+        }
+
+        existingDisc.setAttribute('cx', String(cx));
+        existingDisc.setAttribute('cy', String(cy));
+        existingDisc.setAttribute('r', String(hexRadius * 0.62));
+        existingDisc.setAttribute('fill', discStyle.fill);
+        existingDisc.setAttribute('stroke', discStyle.stroke);
     }
 
     shouldShadeHex(row, col) {
@@ -1477,6 +1570,8 @@ class HexGame {
                 // Cache the hex element
                 const key = `${row},${col}`;
                 this.hexElements.set(key, hex);
+
+                this.updatePieceDisc(row, col, cell, x, y, HEX_RADIUS);
             }
         }
     }
@@ -1823,6 +1918,7 @@ class HexGame {
             // Clear cache for redo to ensure clean state
             this.previousBoard = null;
             this.hexElements.clear();
+            this.pieceElements.clear();
 
             await this.loadGameStateWithoutAutoMove('redo');
 

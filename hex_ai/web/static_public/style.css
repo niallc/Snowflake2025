@@ -25,6 +25,7 @@
   --modal-overlay: rgba(0, 0, 0, 0.5);
   --debug-bg: #fff;
   --status-bg: #f4f4f4;
+  --board-region-bg: transparent;
 }
 
 /* Dark theme */
@@ -51,6 +52,7 @@
   --modal-overlay: rgba(0, 0, 0, 0.8);
   --debug-bg: #3a3a3a;
   --status-bg: #4a4a4a;
+  --board-region-bg: transparent;
 }
 
 /* Base Styles */
@@ -125,6 +127,17 @@ h1 {
   min-width: 250px;
   overflow: hidden;
   transform-origin: center;
+  background: var(--board-region-bg);
+  border-radius: 12px;
+  transition: background-color 0.3s ease;
+}
+
+[data-color-scheme="wood"] {
+  --board-region-bg: rgba(201, 157, 92, 0.11);
+}
+
+[data-theme="dark"][data-color-scheme="wood"] {
+  --board-region-bg: rgba(206, 168, 108, 0.08);
 }
 
 .pie-rule-overlay {
