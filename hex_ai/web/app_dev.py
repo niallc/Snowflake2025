@@ -112,6 +112,8 @@ def preload_default_models():
 # Preload models on startup
 preload_default_models()
 
+DEFAULT_PIE_RULE_ENABLED = True
+
 # --- Input Validation ---
 def validate_trmph_input(trmph):
     """Validate TRMPH format."""
@@ -126,6 +128,7 @@ def validate_api_input(data, required_fields=None, optional_fields=None, *, reje
         logger=app.logger,
         reject_unexpected=reject_unexpected,
         trmph_validator=validate_trmph_input,
+        boolean_fields={"pie_rule_enabled"},
     )
 
 # --- Model Management ---
@@ -207,6 +210,104 @@ def clear_model_wrapper_cache():
 def create_game_state_from_trmph(trmph, context=""):
     """Create game state from normalized TRMPH input."""
     return core_create_game_state_from_trmph_input(trmph, context=context)
+
+
+def _safe_count_trmph_moves(trmph_text):
+    try:
+        return fc.count_trmph_moves(trmph_text)
+    except Exception:
+        return None
+
+
+def _is_pie_rule_opening_window(state, trmph, pie_rule_enabled):
+    """True when pie-rule opening selection should run for this position."""
+    if not pie_rule_enabled:
+        return False
+    if state.game_over:
+        return False
+    if _safe_count_trmph_moves(trmph) != 0:
+        return False
+    return state.current_player_enum == Player.BLUE
+
+
+def _select_pie_rule_balanced_opening_move(state, trmph, model_id, pie_rule_enabled):
+    """Pick legal opening move with value estimate closest to 50%."""
+    if not _is_pie_rule_opening_window(state, trmph, pie_rule_enabled):
+        return None
+
+    model = get_model(model_id)
+    heatmap = build_policy_value_heatmap(
+        state=state,
+        model=model,
+        selection_mode="all_legal",
+        top_k=None,
+        policy_temperature=1.0,
+    )
+
+    best_move = None
+    best_opening_prob = None
+    best_distance = None
+    for move, score in sorted(heatmap.scores.items()):
+        opening_win_prob = float(score)
+        distance = abs(opening_win_prob - 0.5)
+        if (
+            best_move is None
+            or distance < (best_distance - 1e-12)
+            or (abs(distance - best_distance) <= 1e-12 and move < best_move)
+        ):
+            best_move = move
+            best_opening_prob = opening_win_prob
+            best_distance = distance
+
+    if best_move is None:
+        return None
+
+    return {
+        "move": best_move,
+        "opening_win_probability": best_opening_prob,
+        "distance_to_even": best_distance,
+    }
+
+
+def _build_pie_rule_balanced_opening_response(
+    *,
+    state,
+    selected_move_trmph,
+    opening_win_probability,
+    distance_to_even,
+    model_id,
+    num_simulations,
+    exploration_constant,
+    temperature,
+    temperature_end,
+    enable_gumbel,
+    gumbel_max_sims,
+):
+    """Build move response for pie-rule balanced opening without running MCTS."""
+    new_state = _apply_selected_move(state, selected_move_trmph)
+    result = build_engine_move_response(
+        new_state,
+        new_trmph=new_state.to_trmph(),
+        move_made=selected_move_trmph,
+        additional_fields={
+            "pie_rule_enabled": True,
+            "pie_rule_action": "balanced_opening",
+            "pie_rule_opening_move": selected_move_trmph,
+            "pie_rule_opening_win_probability": opening_win_probability,
+            "pie_rule_opening_distance_to_even": distance_to_even,
+        },
+    )
+    result["mcts_config"] = {
+        "model": model_id,
+        "num_simulations": num_simulations,
+        "exploration_constant": exploration_constant,
+        "temperature": temperature,
+        "temperature_end": temperature_end,
+        "enable_gumbel": enable_gumbel,
+        "gumbel_max_sims": gumbel_max_sims,
+        "algorithm": "mcts",
+    }
+    return result
 
 
 def build_game_response(state, model_id, temperature, trmph_for_inference=None, additional_fields=None):
@@ -1608,6 +1709,7 @@ def api_mcts_move():
             "verbose",
             "enable_gumbel",
             "gumbel_max_sims",
+            "pie_rule_enabled",
         ],
     )
     if error_response:
@@ -1631,8 +1733,52 @@ def api_mcts_move():
         ), 400
     enable_gumbel = validated_data.get("enable_gumbel", True)
     gumbel_max_sims = validated_data.get("gumbel_max_sims", 500)
+    pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
     
     app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
+
+    opening_choice = None
+    opening_state = None
+    try:
+        opening_state = create_game_state_from_trmph(
+            trmph,
+            context="for pie-rule balanced opening",
+        )
+        opening_choice = _select_pie_rule_balanced_opening_move(
+            opening_state,
+            trmph,
+            model_id,
+            pie_rule_enabled,
+        )
+    except Exception as e:
+        app.logger.warning("Pie-rule opening selection failed; falling back to MCTS: %s", e)
+
+    if opening_choice:
+        app.logger.info(
+            "Pie-rule opening selected (MCTS bypass) move=%s opening_p=%.4f distance_to_even=%.4f",
+            opening_choice["move"],
+            opening_choice["opening_win_probability"],
+            opening_choice["distance_to_even"],
+        )
+        result = _build_pie_rule_balanced_opening_response(
+            state=opening_state,
+            selected_move_trmph=opening_choice["move"],
+            opening_win_probability=opening_choice["opening_win_probability"],
+            distance_to_even=opening_choice["distance_to_even"],
+            model_id=model_id,
+            num_simulations=num_simulations,
+            exploration_constant=exploration_constant,
+            temperature=temperature,
+            temperature_end=temperature_end,
+            enable_gumbel=enable_gumbel,
+            gumbel_max_sims=gumbel_max_sims,
+        )
+        _attach_inline_heatmap_if_requested(
+            result=result,
+            inline_heatmap_options=inline_heatmap_options,
+            model_id=model_id,
+        )
+        return jsonify(result), 200
     
     result = make_mcts_move(
         trmph,

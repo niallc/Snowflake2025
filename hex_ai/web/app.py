@@ -525,6 +525,24 @@ def _is_pie_rule_swap_window(state: HexGameState, trmph: str, pie_rule_enabled: 
     return True
 
 
+def _is_pie_rule_opening_window(
+    state: HexGameState,
+    trmph: str,
+    pie_rule_enabled: bool,
+) -> bool:
+    """Check whether pie-rule balanced-opening selection should be evaluated."""
+    if not pie_rule_enabled:
+        return False
+    if state.game_over:
+        return False
+    move_count = _safe_count_trmph_moves(trmph)
+    if move_count != 0:
+        return False
+    if state.current_player_enum != Player.BLUE:
+        return False
+    return True
+
+
 def evaluate_pie_rule_swap_decision(
     trmph: str,
     display_board_size: int,
@@ -582,6 +600,74 @@ def evaluate_pie_rule_swap_decision(
     }
 
 
+def evaluate_pie_rule_balanced_opening_move(
+    trmph: str,
+    display_board_size: int,
+    model_id: str,
+    pie_rule_enabled: bool,
+    state: HexGameState = None,
+):
+    """Select opening move with value estimate closest to 50% when pie rule is active."""
+    if state is None:
+        move_count = _safe_count_trmph_moves(trmph)
+        if move_count != 0:
+            return None
+        state = create_game_state_from_trmph(
+            trmph,
+            display_board_size=display_board_size,
+            context="for pie-rule balanced opening",
+        )
+
+    if not _is_pie_rule_opening_window(state, trmph, pie_rule_enabled):
+        return None
+
+    scores, cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
+    legal_moves = sorted(fc.rowcol_to_trmph(row, col) for row, col in state.get_legal_moves())
+
+    best_move = None
+    best_opening_prob = None
+    best_distance = None
+
+    for move in legal_moves:
+        opening_win_prob = scores.get(move)
+        if opening_win_prob is None:
+            continue
+
+        opening_win_prob = float(opening_win_prob)
+        distance = abs(opening_win_prob - 0.5)
+
+        if (
+            best_move is None
+            or distance < (best_distance - 1e-12)
+            or (abs(distance - best_distance) <= 1e-12 and move < best_move)
+        ):
+            best_move = move
+            best_opening_prob = opening_win_prob
+            best_distance = distance
+
+    if best_move is None:
+        app.logger.warning(
+            "Pie-rule opening: no scored legal moves for model=%s display=%s",
+            model_id,
+            display_board_size,
+        )
+        return None
+
+    return {
+        "move": best_move,
+        "opening_win_probability": best_opening_prob,
+        "distance_to_even": best_distance,
+        "model_id": model_id,
+        "cache_hit": bool(cache_meta.get("cache_hit", False)),
+        "cache_model_path": cache_meta.get("model_path"),
+        "cache_model_epoch": cache_meta.get("epoch"),
+        "cache_model_mini": cache_meta.get("mini"),
+        "opening_score_remap_applied": bool(
+            cache_meta.get("opening_score_remap_applied", False)
+        ),
+    }
+
+
 def build_pie_rule_response_fields(
     trmph: str,
     state: HexGameState,
@@ -618,6 +704,56 @@ def build_pie_rule_response_fields(
         }
     )
     return response
+
+
+def _build_pie_rule_opening_move_response(
+    state,
+    trmph,
+    display_board_size,
+    pie_rule_enabled,
+    opening_choice,
+    model_id,
+    mcts_config,
+    inline_heatmap_options,
+):
+    """Build a response payload for pie-rule balanced opening move outcomes."""
+    selected_move_trmph = opening_choice["move"]
+    new_state = apply_move_to_state_trmph(state, selected_move_trmph)
+    result = build_move_response(
+        new_state,
+        display_board_size=display_board_size,
+        move_made=selected_move_trmph,
+        additional_fields={
+            **build_pie_rule_response_fields(
+                trmph=trmph,
+                state=state,
+                pie_rule_enabled=pie_rule_enabled,
+                pie_rule_action="balanced_opening",
+            ),
+            "pie_rule_opening_move": selected_move_trmph,
+            "pie_rule_opening_win_probability": opening_choice[
+                "opening_win_probability"
+            ],
+            "pie_rule_opening_distance_to_even": opening_choice["distance_to_even"],
+            "pie_rule_opening_model_id": opening_choice["model_id"],
+            "pie_rule_opening_cache_hit": opening_choice["cache_hit"],
+            "pie_rule_opening_cache_model_epoch": opening_choice["cache_model_epoch"],
+            "pie_rule_opening_cache_model_mini": opening_choice["cache_model_mini"],
+            "pie_rule_opening_score_remap_applied": opening_choice[
+                "opening_score_remap_applied"
+            ],
+        },
+    )
+    result["mcts_config"] = mcts_config
+    maybe_attach_inline_move_heatmap(
+        result=result,
+        state=new_state,
+        model_id=model_id,
+        heatmap_options=inline_heatmap_options,
+        model_getter=get_model,
+        logger=app.logger,
+    )
+    return result
 
 
 def _build_mcts_config_response_fields(difficulty_params, temperature_end=None):
@@ -2021,6 +2157,61 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
         difficulty_params = get_difficulty_parameters(elo_rating)
         temperature = difficulty_params["temperature"]
         model_id = difficulty_params["model"]
+        opening_choice = evaluate_pie_rule_balanced_opening_move(
+            trmph=trmph,
+            display_board_size=display_board_size,
+            model_id=model_id,
+            pie_rule_enabled=pie_rule_enabled,
+            state=state,
+        )
+        if opening_choice:
+            app.logger.info(
+                "Pie-rule opening selected (policy path) move=%s opening_p=%.4f distance_to_even=%.4f",
+                opening_choice["move"],
+                opening_choice["opening_win_probability"],
+                opening_choice["distance_to_even"],
+            )
+            result = _build_pie_rule_opening_move_response(
+                state=state,
+                trmph=trmph,
+                display_board_size=display_board_size,
+                pie_rule_enabled=pie_rule_enabled,
+                opening_choice=opening_choice,
+                model_id=model_id,
+                mcts_config=_build_mcts_config_response_fields(
+                    difficulty_params,
+                    temperature_end=temperature,
+                ),
+                inline_heatmap_options=inline_heatmap_options,
+            )
+            _log_usage_event_with_trmph_context(
+                "policy_move",
+                trmph,
+                status=200,
+                success=True,
+                reason="pie_rule_balanced_opening",
+                elo_rating=elo_rating,
+                algorithm=difficulty_params["algorithm"],
+                model_id=model_id,
+                temperature=temperature,
+                num_simulations=difficulty_params["num_simulations"],
+                exploration_constant=difficulty_params["exploration_constant"],
+                enable_gumbel=difficulty_params["enable_gumbel"],
+                gumbel_max_sims=difficulty_params.get("gumbel_max_sims", 0),
+                move_made=opening_choice["move"],
+                pie_rule_enabled=pie_rule_enabled,
+                pie_rule_action="balanced_opening",
+                pie_rule_opening_move=opening_choice["move"],
+                pie_rule_opening_win_probability=opening_choice[
+                    "opening_win_probability"
+                ],
+                pie_rule_opening_distance_to_even=opening_choice["distance_to_even"],
+                pie_rule_opening_cache_hit=opening_choice["cache_hit"],
+                display_board_size=display_board_size,
+                moves_requested=1,
+                **_build_heatmap_analytics_fields(inline_heatmap_options),
+            )
+            return jsonify(result)
         pie_decision = evaluate_pie_rule_swap_decision(
             trmph=trmph,
             display_board_size=display_board_size,
@@ -2245,6 +2436,59 @@ def api_mcts_move():
             display_board_size=display_board_size,
             context="for mcts move",
         )
+        opening_choice = evaluate_pie_rule_balanced_opening_move(
+            trmph=trmph,
+            display_board_size=display_board_size,
+            model_id=difficulty_params["model"],
+            pie_rule_enabled=pie_rule_enabled,
+            state=state,
+        )
+        if opening_choice:
+            app.logger.info(
+                "Pie-rule opening selected (MCTS bypass) move=%s opening_p=%.4f distance_to_even=%.4f",
+                opening_choice["move"],
+                opening_choice["opening_win_probability"],
+                opening_choice["distance_to_even"],
+            )
+            result = _build_pie_rule_opening_move_response(
+                state=state,
+                trmph=trmph,
+                display_board_size=display_board_size,
+                pie_rule_enabled=pie_rule_enabled,
+                opening_choice=opening_choice,
+                model_id=difficulty_params["model"],
+                mcts_config=_build_mcts_config_response_fields(difficulty_params),
+                inline_heatmap_options=inline_heatmap_options,
+            )
+            _log_usage_event_with_trmph_context(
+                "mcts_move",
+                trmph,
+                status=200,
+                success=True,
+                reason="pie_rule_balanced_opening",
+                elo_rating=elo_rating,
+                algorithm=difficulty_params["algorithm"],
+                model_id=difficulty_params["model"],
+                temperature=difficulty_params["temperature"],
+                temperature_end=difficulty_params["temperature_end"],
+                num_simulations=difficulty_params["num_simulations"],
+                exploration_constant=difficulty_params["exploration_constant"],
+                enable_gumbel=difficulty_params["enable_gumbel"],
+                gumbel_max_sims=difficulty_params["gumbel_max_sims"],
+                move_made=opening_choice["move"],
+                pie_rule_enabled=pie_rule_enabled,
+                pie_rule_action="balanced_opening",
+                pie_rule_opening_move=opening_choice["move"],
+                pie_rule_opening_win_probability=opening_choice[
+                    "opening_win_probability"
+                ],
+                pie_rule_opening_distance_to_even=opening_choice["distance_to_even"],
+                pie_rule_opening_cache_hit=opening_choice["cache_hit"],
+                display_board_size=display_board_size,
+                moves_requested=1,
+                **_build_heatmap_analytics_fields(inline_heatmap_options),
+            )
+            return jsonify(result)
         pie_decision = evaluate_pie_rule_swap_decision(
             trmph=trmph,
             display_board_size=display_board_size,
