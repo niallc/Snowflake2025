@@ -226,10 +226,23 @@
   <script>
     (function () {
       const storedColorScheme = localStorage.getItem('hex_ai_color_scheme');
-      const colorScheme = storedColorScheme === 'classic' ? 'classic' : 'wood';
-      const playerNames = colorScheme === 'wood'
-        ? { blue: 'Black', red: 'White' }
-        : { blue: 'Blue', red: 'Red' };
+      const normalizeColorScheme = (rawScheme) => {
+        if (rawScheme === 'wood' || rawScheme === 'classic' || rawScheme === 'classic_blue_first') {
+          return rawScheme;
+        }
+        if (rawScheme === 'default') {
+          return 'wood';
+        }
+        return 'wood';
+      };
+
+      const colorScheme = normalizeColorScheme(storedColorScheme);
+      let playerNames = { blue: 'Blue', red: 'Red' };
+      if (colorScheme === 'wood') {
+        playerNames = { blue: 'Black', red: 'White' };
+      } else if (colorScheme === 'classic') {
+        playerNames = { blue: 'Red', red: 'Blue' };
+      }
 
       document.querySelectorAll('[data-player-side]').forEach((element) => {
         const side = element.getAttribute('data-player-side');

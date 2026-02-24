@@ -17,7 +17,8 @@ class UserSettingsPage {
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
-            { value: 'classic', label: 'Classic (Blue/Red Pieces)' },
+            { value: 'classic', label: 'Red / Blue (Red Goes First)' },
+            { value: 'classic_blue_first', label: 'Blue / Red (Blue Goes First)' },
         ];
         this.pieceStyleOptions = [
             { value: 'disc', label: 'Disc Pieces in Hexagons' },

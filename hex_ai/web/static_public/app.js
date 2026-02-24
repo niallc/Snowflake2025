@@ -328,7 +328,7 @@ class HexGame {
     }
 
     normalizeColorScheme(rawScheme) {
-        if (rawScheme === 'classic' || rawScheme === 'wood') {
+        if (rawScheme === 'classic' || rawScheme === 'classic_blue_first' || rawScheme === 'wood') {
             return rawScheme;
         }
         // Migrate legacy placeholder value to the new default.
@@ -369,11 +369,31 @@ class HexGame {
         return this.normalizePieceStyle(this.pieceStyle) === 'disc';
     }
 
+    getDisplayColorKeyForInternalSide(side) {
+        const normalizedScheme = this.normalizeColorScheme(this.colorScheme);
+        if (normalizedScheme === 'classic') {
+            if (side === 'blue') {
+                return 'red';
+            }
+            if (side === 'red') {
+                return 'blue';
+            }
+        }
+        return side === 'red' ? 'red' : 'blue';
+    }
+
+    getPieRulePlayerClassName(side) {
+        const displayColor = this.getDisplayColorKeyForInternalSide(side);
+        return displayColor === 'red' ? 'pie-rule-player-red' : 'pie-rule-player-blue';
+    }
+
     getPlayerDisplayNames() {
         if (this.normalizeColorScheme(this.colorScheme) === 'wood') {
             return { blue: 'Black', red: 'White' };
         }
-        return { blue: 'Blue', red: 'Red' };
+        const blueName = this.getDisplayColorKeyForInternalSide('blue') === 'red' ? 'Red' : 'Blue';
+        const redName = this.getDisplayColorKeyForInternalSide('red') === 'red' ? 'Red' : 'Blue';
+        return { blue: blueName, red: redName };
     }
 
     getPlayerDisplayName(side) {
@@ -413,15 +433,29 @@ class HexGame {
             const trimmed = typeof raw === 'string' ? raw.trim() : '';
             return trimmed || fallback;
         };
+        const blueDisplayColor = this.getDisplayColorKeyForInternalSide('blue');
+        const redDisplayColor = this.getDisplayColorKeyForInternalSide('red');
+        const readPieceToken = (displayColor, variant, fallback = '') => {
+            return readToken(`--board-piece-${displayColor}-${variant}`, fallback);
+        };
+        const readEdgeToken = (displayColor, fallback = '') => {
+            return readToken(`--board-edge-${displayColor}`, fallback);
+        };
+        const fillFallbackForDisplayColor = (displayColor) => {
+            return displayColor === 'red' ? '#ff4444' : '#0099ff';
+        };
+        const strokeFallbackForDisplayColor = (displayColor) => {
+            return displayColor === 'red' ? '#952500' : '#0064af';
+        };
         this.themeColors = {
             EMPTY_HEX_GRAY: readToken('--board-cell-empty', '#f0f0f0'),
             BOARD_BACKGROUND: readToken('--board-bg', '#f8f8fa'),
-            DARK_BLUE: readToken('--board-piece-blue-fill', '#0099ff'),
-            DARK_RED: readToken('--board-piece-red-fill', '#ff4444'),
-            VERY_DARK_BLUE: readToken('--board-edge-blue', '#0099ff'),
-            VERY_DARK_RED: readToken('--board-edge-red', '#ff4444'),
-            DISC_BLUE_STROKE: readToken('--board-piece-blue-stroke', '#0064af'),
-            DISC_RED_STROKE: readToken('--board-piece-red-stroke', '#952500'),
+            DARK_BLUE: readPieceToken(blueDisplayColor, 'fill', fillFallbackForDisplayColor(blueDisplayColor)),
+            DARK_RED: readPieceToken(redDisplayColor, 'fill', fillFallbackForDisplayColor(redDisplayColor)),
+            VERY_DARK_BLUE: readEdgeToken(blueDisplayColor, fillFallbackForDisplayColor(blueDisplayColor)),
+            VERY_DARK_RED: readEdgeToken(redDisplayColor, fillFallbackForDisplayColor(redDisplayColor)),
+            DISC_BLUE_STROKE: readPieceToken(blueDisplayColor, 'stroke', strokeFallbackForDisplayColor(blueDisplayColor)),
+            DISC_RED_STROKE: readPieceToken(redDisplayColor, 'stroke', strokeFallbackForDisplayColor(redDisplayColor)),
             HEX_STROKE: readToken('--board-cell-stroke', '#555555'),
             STATUS_ERROR: readToken('--status-error-text', '#dc3545'),
             STATUS_SUCCESS: readToken('--status-success-text', '#28a745'),
@@ -715,10 +749,10 @@ class HexGame {
         }
 
         if (!this.blueComputer && this.redComputer) {
-            return { label: names.blue, className: 'pie-rule-player-blue' };
+            return { label: names.blue, className: this.getPieRulePlayerClassName('blue') };
         }
         if (this.blueComputer && !this.redComputer) {
-            return { label: names.red, className: 'pie-rule-player-red' };
+            return { label: names.red, className: this.getPieRulePlayerClassName('red') };
         }
 
         let moveCount = 0;
@@ -730,8 +764,8 @@ class HexGame {
             }
         }
         return moveCount % 2 === 0
-            ? { label: names.blue, className: 'pie-rule-player-blue' }
-            : { label: names.red, className: 'pie-rule-player-red' };
+            ? { label: names.blue, className: this.getPieRulePlayerClassName('blue') }
+            : { label: names.red, className: this.getPieRulePlayerClassName('red') };
     }
 
     applyPieRuleStateFromResponse(data, announceSwap = false) {
@@ -1533,7 +1567,7 @@ class HexGame {
         const HEX_RADIUS = 18; // Slightly smaller for mobile
         const BOARD_SIZE = this.validateBoardSize();
 
-        // Math for flat-topped hex grid, blue at top/bottom
+        // Math for flat-topped hex grid. Internal blue side is top/bottom.
         const w = HEX_RADIUS * Math.sqrt(3);
         const h = HEX_RADIUS * 1.5;
 
@@ -1555,7 +1589,7 @@ class HexGame {
         this.svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
         this.svg.style.background = this.getColors().BOARD_BACKGROUND;
 
-        // Draw edge indicators (blue: top/bottom, red: left/right)
+        // Draw edge indicators (internal blue: top/bottom, internal red: left/right).
         this.drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE);
 
         // Check if board is empty (first move)
@@ -1601,7 +1635,7 @@ class HexGame {
     drawEdgeIndicators(svgWidth, svgHeight, HEX_RADIUS, BOARD_SIZE) {
         const colors = this.getColors();
 
-        // Blue edges (top and bottom) - adapted from working dev version
+        // Internal blue edges (top and bottom). Display color depends on selected scheme.
         const w = HEX_RADIUS * Math.sqrt(3);
 
         // Top edge - across the topmost hexes
@@ -1622,7 +1656,7 @@ class HexGame {
         );
         this.svg.appendChild(bottomLine);
 
-        // Red edges (left and right) - using proper edge midpoints
+        // Internal red edges (left and right) using proper edge midpoints.
         const tl = this.hexVertices(this.hexCenter(0, 0, HEX_RADIUS).x, this.hexCenter(0, 0, HEX_RADIUS).y, HEX_RADIUS);
         const bl = this.hexVertices(this.hexCenter(BOARD_SIZE - 1, 0, HEX_RADIUS).x, this.hexCenter(BOARD_SIZE - 1, 0, HEX_RADIUS).y, HEX_RADIUS);
         const tr = this.hexVertices(this.hexCenter(0, BOARD_SIZE - 1, HEX_RADIUS).x, this.hexCenter(0, BOARD_SIZE - 1, HEX_RADIUS).y, HEX_RADIUS);
@@ -1846,7 +1880,7 @@ class HexGame {
 
 
     getCurrentPlayer() {
-        // Simple heuristic: even moves = blue, odd moves = red
+        // Internal turn order: even moves = blue, odd moves = red.
         return this.moveCount % 2 === 0 ? 'blue' : 'red';
     }
 
