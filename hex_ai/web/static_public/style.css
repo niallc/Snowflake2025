@@ -177,7 +177,7 @@
 [data-theme="dark"][data-color-scheme="wood"] {
   --board-region-bg: rgba(206, 168, 108, 0.08);
 
-  --board-bg: #debe8870;
+  --board-bg: #debe8820;
   --board-cell-empty: #9e8049;
   --board-cell-stroke: #5a4938;
   --board-cell-hover-stroke: #c7a36f;
