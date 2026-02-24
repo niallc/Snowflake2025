@@ -683,6 +683,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         mini_epoch_range=mini_epoch_range,
         command_line=command_line,
         run_desc=args.run_desc,
+        seed=args.seed,
         trmph_source=args.trmph_source,
         mps_empty_cache_per_pair=args.mps_empty_cache_per_pair
     )

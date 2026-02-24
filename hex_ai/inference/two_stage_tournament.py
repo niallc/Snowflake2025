@@ -6,21 +6,23 @@ handling checkpoint discovery and strategy configuration.
 """
 
 import json
+import itertools
 import logging
 import os
-import random
+import subprocess
+import sys
+import tempfile
 from datetime import datetime
-from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
-from .game_execution import play_deterministic_game, generate_diverse_openings, find_trmph_files, run_round_robin_tournament
-from .tournament import TournamentPlayConfig
-from hex_ai.config import BOARD_SIZE
-from hex_ai.utils.tournament_logging import write_tournament_trmph_header, append_trmph_winner_line
-from hex_ai.utils.deterministic_tournament_utils import setup_strategy_pair_files
-from hex_ai.inference.model_cache import create_temporary_model_cache
+from .game_execution import (
+    DeterministicTournamentResult,
+    OpeningPosition,
+    find_trmph_files,
+    generate_diverse_openings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class TwoStageTournament:
                  mini_epoch_range: Optional[Tuple[int, int]] = None,
                  command_line: Optional[str] = None,
                  run_desc: Optional[str] = None,
+                 seed: Optional[int] = None,
                  trmph_source: str = "data/sf25/sep28",
                  mps_empty_cache_per_pair: bool = False):
         """
@@ -62,6 +65,7 @@ class TwoStageTournament:
             mini_epoch_range: Optional tuple of (start_mini_epoch, end_mini_epoch) to filter knockout checkpoints (only used with knockout_dir)
             command_line: Command line that was used to run the tournament
             run_desc: Optional description of this tournament run (e.g., "Testing c_scale = 1.5")
+            seed: Optional base seed for deterministic worker execution
             trmph_source: Directory containing TRMPH files for opening generation
         
         Raises:
@@ -92,12 +96,14 @@ class TwoStageTournament:
         self.mini_epoch_range = mini_epoch_range
         self.command_line = command_line
         self.run_desc = run_desc
+        self.seed = seed
         self.trmph_source = trmph_source
         self.mps_empty_cache_per_pair = mps_empty_cache_per_pair
         
         # Tournament state
         self.knockout_winners: List[TournamentParticipant] = []
         self.output_dir: Optional[str] = None
+        self._worker_launch_count = 0
         
         logger.info(f"Initialized two-stage tournament: knockout_dir={knockout_dir}, knockout_participants={len(knockout_participants) if knockout_participants else 0}, top_k={top_k}")
     
@@ -259,18 +265,25 @@ class TwoStageTournament:
             total_games_planned,
         )
         
-        # Run the round-robin tournament using existing infrastructure
-        tournament_result = run_round_robin_tournament(
-            strategy_configs=strategy_configs,
-            openings=openings,
-            temperature=self.knockout_config.get("temperature", 1.0),
-            verbose=1,
-            seed=None,
-            output_dir=self.output_dir,  # Use the same output directory as knockout stage
-            command_line=self.command_line,
-            run_desc=self.run_desc,
-            mps_empty_cache_per_pair=self.mps_empty_cache_per_pair
-        )
+        # Run each pair in a fresh process to bound long-run memory growth.
+        serialized_openings = self._serialize_openings(openings)
+        unique_strategy_names = [config.name for config in strategy_configs]
+        tournament_result = DeterministicTournamentResult(unique_strategy_names)
+
+        for strategy_a, strategy_b in itertools.combinations(strategy_configs, 2):
+            pair_payload = {
+                "strategy_a": self._serialize_strategy_config(strategy_a),
+                "strategy_b": self._serialize_strategy_config(strategy_b),
+                "openings": serialized_openings,
+                "temperature": self.knockout_config.get("temperature", 1.0),
+                "seed": self._next_worker_seed(),
+                "output_dir": self.output_dir,
+                "command_line": self.command_line,
+                "run_desc": self.run_desc,
+                "mps_empty_cache_per_pair": self.mps_empty_cache_per_pair,
+            }
+            pair_result = self._run_tournament_worker("round_robin_pair", pair_payload)
+            self._accumulate_round_robin_pair_result(tournament_result, pair_result)
         
         # Extract ranking from tournament results
         win_rates = tournament_result.win_rates()
@@ -293,6 +306,110 @@ class TwoStageTournament:
             "participant_games": participant_games,
             "participants": [{"name": p.name, "metadata": p.metadata} for p in all_participants]
         }
+
+    def _run_tournament_worker(self, mode: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute one tournament unit in a fresh subprocess and return its JSON summary."""
+        if self.output_dir is None:
+            raise RuntimeError("Output directory must be initialized before launching worker processes.")
+
+        with tempfile.TemporaryDirectory(prefix="tournament_worker_", dir=self.output_dir) as temp_dir:
+            request_path = os.path.join(temp_dir, "request.json")
+            response_path = os.path.join(temp_dir, "response.json")
+
+            with open(request_path, "w") as request_file:
+                json.dump(payload, request_file, default=str)
+
+            command = [
+                sys.executable,
+                "-m",
+                "hex_ai.inference.tournament_worker",
+                "--mode",
+                mode,
+                "--input-json",
+                request_path,
+                "--output-json",
+                response_path,
+            ]
+
+            logger.info("Starting worker for %s", mode)
+            completed = subprocess.run(command, check=False)
+            if completed.returncode != 0:
+                raise RuntimeError(f"Tournament worker failed (mode={mode}, exit_code={completed.returncode}).")
+
+            if not os.path.exists(response_path):
+                raise RuntimeError(f"Tournament worker completed without writing output: {response_path}")
+
+            with open(response_path, "r") as response_file:
+                return json.load(response_file)
+
+    def _next_worker_seed(self) -> Optional[int]:
+        """Return the next deterministic worker seed, or None when no base seed is configured."""
+        if self.seed is None:
+            return None
+
+        next_seed = int(self.seed) + self._worker_launch_count
+        self._worker_launch_count += 1
+        return next_seed
+
+    @staticmethod
+    def _serialize_participant(participant: TournamentParticipant) -> Dict[str, Any]:
+        """Serialize a tournament participant for worker process input."""
+        return {
+            "name": participant.name,
+            "strategy_config": participant.strategy_config,
+            "metadata": participant.metadata,
+        }
+
+    @staticmethod
+    def _serialize_strategy_config(strategy_config) -> Dict[str, Any]:
+        """Serialize a StrategyConfig for worker process input."""
+        return {
+            "name": strategy_config.name,
+            "strategy_type": strategy_config.strategy_type,
+            "config": strategy_config.config,
+            "model_path": strategy_config.model_path,
+            "original_name": strategy_config.original_name,
+            "temperature": strategy_config.temperature,
+        }
+
+    @staticmethod
+    def _serialize_openings(openings: List[OpeningPosition]) -> List[Dict[str, Any]]:
+        """Serialize openings to JSON-friendly dictionaries."""
+        serialized_openings = []
+        for opening in openings:
+            serialized_openings.append(
+                {
+                    "moves": [[int(row), int(col)] for row, col in opening.moves],
+                    "source_game": opening.source_game,
+                    "opening_length": opening.opening_length,
+                }
+            )
+        return serialized_openings
+
+    @staticmethod
+    def _accumulate_round_robin_pair_result(
+        tournament_result: DeterministicTournamentResult,
+        pair_result: Dict[str, Any],
+    ) -> None:
+        """Merge one pair summary from a worker into the in-memory tournament aggregate."""
+        strategy_a = pair_result["strategy_a"]
+        strategy_b = pair_result["strategy_b"]
+        a_vs_b = pair_result["a_vs_b"]
+        b_vs_a = pair_result["b_vs_a"]
+
+        tournament_result.results[strategy_a][strategy_b]["wins"] += int(a_vs_b["wins"])
+        tournament_result.results[strategy_a][strategy_b]["losses"] += int(a_vs_b["losses"])
+        tournament_result.results[strategy_a][strategy_b]["games"] += int(a_vs_b["games"])
+
+        tournament_result.results[strategy_b][strategy_a]["wins"] += int(b_vs_a["wins"])
+        tournament_result.results[strategy_b][strategy_a]["losses"] += int(b_vs_a["losses"])
+        tournament_result.results[strategy_b][strategy_a]["games"] += int(b_vs_a["games"])
+
+        tournament_result.total_games += int(pair_result["total_games"])
+        for strategy_name, timing in pair_result.get("strategy_timings", {}).items():
+            tournament_result.strategy_timings[strategy_name] += float(timing)
+        for strategy_name, move_count in pair_result.get("strategy_move_counts", {}).items():
+            tournament_result.strategy_move_counts[strategy_name] += int(move_count)
     
     def _create_checkpoint_participant(self, checkpoint: CheckpointInfo) -> TournamentParticipant:
         """Create a tournament participant from a checkpoint."""
@@ -321,119 +438,39 @@ class TwoStageTournament:
     def _create_match_executor(self) -> Callable:
         """Create a match executor function for the knockout tournament."""
         def execute_match(p1: TournamentParticipant, p2: TournamentParticipant, games: int) -> MatchResult:
-            """
-            Execute a match between two participants using existing game execution infrastructure.
-            """
-            # logger.info(f"Executing match: {p1.name} vs {p2.name} ({games} games)")
-            
-            # Convert TournamentParticipant to StrategyConfig
-            strategy_a = p1.to_strategy_config()
-            strategy_b = p2.to_strategy_config()
-            
-            # Generate opening positions for this match
+            """Execute one knockout match in a fresh subprocess."""
             openings = self._generate_match_openings(games)
-            
-            # Load models temporarily for this match only
-            match_model_paths = [strategy_a.model_path, strategy_b.model_path]
-            model_cache = create_temporary_model_cache(match_model_paths, verbose=0)
-            
-            # Set up output files for this match
-            trmph_file, csv_file = setup_strategy_pair_files(self.output_dir, strategy_a, strategy_b)
-            
-            # Write TRMPH header
-            play_config = TournamentPlayConfig(
-                temperature=self.knockout_config.get("temperature", 1.0),
-                random_seed=42,  # Fixed seed for reproducibility
-                command_line=self.command_line,
-                run_desc=self.run_desc
-            )
-            pair_model_paths = [strategy_a.model_path, strategy_b.model_path]
-            pair_strategy_configs = [strategy_a, strategy_b]
-            actual_trmph_file = write_tournament_trmph_header(
-                trmph_file, pair_model_paths, games * 2, play_config, BOARD_SIZE, 
-                strategy_configs=pair_strategy_configs
-            )
-            
-            # Track wins for each participant
-            p1_wins = 0
-            p2_wins = 0
-            openings_used = []
-            
-            # Play games
-            for i, opening in enumerate(openings):
-                # Game 1: p1 (Blue) vs p2 (Red)
-                result_1 = play_deterministic_game(
-                    model_cache=model_cache,
-                    strategy_a=strategy_a,
-                    strategy_b=strategy_b,
-                    opening=opening,
-                    temperature=self.knockout_config.get("temperature", 1.0),
-                    verbose=0,
-                    strategy_a_is_blue=True
+            match_payload = {
+                "participant1": self._serialize_participant(p1),
+                "participant2": self._serialize_participant(p2),
+                "games": games,
+                "openings": self._serialize_openings(openings),
+                "knockout_config": self.knockout_config,
+                "seed": self._next_worker_seed(),
+                "output_dir": self.output_dir,
+                "command_line": self.command_line,
+                "run_desc": self.run_desc,
+            }
+            worker_result = self._run_tournament_worker("knockout_match", match_payload)
+
+            expected_total_games = games * 2
+            total_games = int(worker_result["total_games"])
+            if total_games != expected_total_games:
+                raise RuntimeError(
+                    f"Knockout worker returned invalid game count for {p1.name} vs {p2.name}: "
+                    f"expected {expected_total_games}, got {total_games}"
                 )
-                
-                # Stream game 1 to file
-                append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
-                
-                # Game 2: p2 (Blue) vs p1 (Red) 
-                result_2 = play_deterministic_game(
-                    model_cache=model_cache,
-                    strategy_a=strategy_b,
-                    strategy_b=strategy_a,
-                    opening=opening,
-                    temperature=self.knockout_config.get("temperature", 1.0),
-                    verbose=0,
-                    strategy_a_is_blue=True
-                )
-                
-                # Stream game 2 to file
-                append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
-                
-                # Record results
-                openings_used.append(opening.get_trmph_string())
-                
-                # Count wins
-                if result_1['winner_strategy'] == p1.name:
-                    p1_wins += 1
-                else:
-                    p2_wins += 1
-                    
-                if result_2['winner_strategy'] == p1.name:
-                    p1_wins += 1
-                else:
-                    p2_wins += 1
-                
-                # Progress reporting
-                if i % 10 == 0:
-                    print(".", end="", flush=True)
-            
-            # Log match result
-            total_games = games * 2  # Each opening played twice
-            # Use the same tie-breaking logic as MatchResult.winner property
-            if p1_wins > p2_wins:
-                winner_name = p1.name
-            elif p2_wins > p1_wins:
-                winner_name = p2.name
-            else:
-                # Tie: use first participant as winner (deterministic tiebreaker)
-                winner_name = p1.name
-            p1_pct = (p1_wins / total_games) * 100
-            p2_pct = (p2_wins / total_games) * 100
-            print(f" {p1.name}:{p1_wins}/{total_games} ({p1_pct:.1f}%) {p2.name}:{p2_wins}/{total_games} ({p2_pct:.1f}%) -> {winner_name} wins")
-            # logger.info(f"Match complete: {p1.name} vs {p2.name} -> {winner_name} wins ({p1_wins}-{p2_wins})")
-            
-            # Clean up temporary models to free memory
-            # The temporary models will be garbage collected when this function returns
-            # and the temporary_models dict goes out of scope
-            logger.debug(f"Cleaning up temporary models for match: {p1.name} vs {p2.name}")
-            
+
             return MatchResult(
                 participant1=p1,
                 participant2=p2,
-                participant1_wins=p1_wins,
-                participant2_wins=p2_wins,
-                total_games=games * 2,  # Each opening played twice
-                openings_used=openings_used
+                participant1_wins=int(worker_result["participant1_wins"]),
+                participant2_wins=int(worker_result["participant2_wins"]),
+                total_games=total_games,
+                openings_used=worker_result.get(
+                    "openings_used",
+                    [opening.get_trmph_string() for opening in openings],
+                ),
             )
         
         return execute_match
