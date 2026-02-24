@@ -304,7 +304,7 @@ PIE_RULE_FORCE_NO_SWAP_AT = 0.01
 PIE_RULE_FORCE_SWAP_AT = 0.99
 # Weighted opening sampling sharpness for pie-rule first move.
 # Higher => stronger preference for near-50% moves.
-PIE_RULE_OPENING_WEIGHT_EXPONENT = 6.0
+PIE_RULE_OPENING_WEIGHT_EXPONENT = 10.0
 
 _PIE_RULE_OPENING_CACHE = {}
 _PIE_RULE_OPENING_CACHE_LOCK = threading.Lock()
