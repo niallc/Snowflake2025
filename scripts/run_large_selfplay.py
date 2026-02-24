@@ -7,9 +7,11 @@ import argparse
 import numpy as np
 import os
 import random
+import subprocess
 import sys
 import time
 from datetime import datetime
+from typing import Any, Dict, List
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
@@ -23,11 +25,20 @@ from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
 from hex_ai.utils.tournament_logging import get_command_line
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
+from hex_ai.utils.run_state_store import (
+    JsonRunStateStore,
+    RunStateMismatchError,
+    compute_config_fingerprint,
+    utc_now_iso,
+)
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 
 
+DEFAULT_RESTART_STATE_FILENAME = "selfplay_restart_state.json"
+CHUNKED_RUN_TYPE = "selfplay_chunked"
 
-def main():
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate large-scale self-play games")
     parser.add_argument('--num_games', type=int, default=1000, help='Number of games to generate')
     parser.add_argument('--model_path', type=str, 
@@ -56,6 +67,28 @@ def main():
                        help='Disable batched inference (use individual calls)')
     parser.add_argument('--progress_interval', type=int, default=20, 
                        help='How often to print progress updates')
+    parser.add_argument(
+        '--restart-every-games',
+        type=int,
+        default=0,
+        help=(
+            'If >0, run in chunked subprocess mode and restart the Python process '
+            'after every N generated games.'
+        ),
+    )
+    parser.add_argument(
+        '--state-file',
+        type=str,
+        help=(
+            f'Path to JSON run state file for chunked restart mode '
+            f'(default: <output_dir>/{DEFAULT_RESTART_STATE_FILENAME}).'
+        ),
+    )
+    parser.add_argument(
+        '--reset-run-state',
+        action='store_true',
+        help='Delete any existing chunked run state and start from game 0.',
+    )
 
     # Lightweight MCTS timing profiler (GPU vs CPU breakdown)
     parser.add_argument('--mcts-profile', action='store_true',
@@ -64,8 +97,250 @@ def main():
                        help='Print MCTS profile once every N MCTS move selections (default: 10).')
     parser.add_argument('--mcts-profile-max-calls', type=int, default=50,
                        help='Maximum number of MCTS move selections to profile (default: 50).')
-    
-    args = parser.parse_args()
+    parser.add_argument('--internal-chunk-run', action='store_true', help=argparse.SUPPRESS)
+    return parser.parse_args()
+
+
+def _resolve_state_file(args: argparse.Namespace) -> str:
+    if args.state_file:
+        return args.state_file
+    return os.path.join(args.output_dir, DEFAULT_RESTART_STATE_FILENAME)
+
+
+def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
+    return {
+        "num_games_total": args.num_games,
+        "model_path": args.model_path,
+        "output_dir": args.output_dir,
+        "batch_size": args.batch_size,
+        "cache_size": args.cache_size,
+        "mcts_sims": args.mcts_sims,
+        "c_puct": args.c_puct,
+        "disable_gumbel": args.disable_gumbel,
+        "temperature": args.temperature,
+        "temperature_end": args.temperature_end,
+        "opening_strategy": args.opening_strategy,
+        "bad_move_frequency": args.bad_move_frequency,
+        "verbose": args.verbose,
+        "streaming_save": args.streaming_save,
+        "no_batched_inference": args.no_batched_inference,
+        "progress_interval": args.progress_interval,
+        "mcts_profile": args.mcts_profile,
+        "mcts_profile_every": args.mcts_profile_every,
+        "mcts_profile_max_calls": args.mcts_profile_max_calls,
+        "restart_every_games": args.restart_every_games,
+    }
+
+
+def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str]:
+    cmd = [
+        sys.executable,
+        os.path.abspath(__file__),
+        "--num_games",
+        str(chunk_games),
+        "--model_path",
+        args.model_path,
+        "--output_dir",
+        args.output_dir,
+        "--batch_size",
+        str(args.batch_size),
+        "--cache_size",
+        str(args.cache_size),
+        "--mcts_sims",
+        str(args.mcts_sims),
+        "--c-puct",
+        str(args.c_puct),
+        "--temperature",
+        str(args.temperature),
+        "--temperature_end",
+        str(args.temperature_end),
+        "--opening_strategy",
+        args.opening_strategy,
+        "--bad_move_frequency",
+        str(args.bad_move_frequency),
+        "--verbose",
+        str(args.verbose),
+        "--progress_interval",
+        str(args.progress_interval),
+        "--mcts-profile-every",
+        str(args.mcts_profile_every),
+        "--mcts-profile-max-calls",
+        str(args.mcts_profile_max_calls),
+        "--internal-chunk-run",
+    ]
+    if args.disable_gumbel:
+        cmd.append("--disable-gumbel")
+    if args.streaming_save:
+        cmd.append("--streaming_save")
+    if args.no_batched_inference:
+        cmd.append("--no_batched_inference")
+    if args.mcts_profile:
+        cmd.append("--mcts-profile")
+    return cmd
+
+
+def _run_chunked_selfplay(args: argparse.Namespace) -> int:
+    if args.restart_every_games <= 0:
+        raise ValueError("--restart-every-games must be > 0 when chunked mode is enabled")
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    state_file = _resolve_state_file(args)
+    state_store = JsonRunStateStore(state_file)
+
+    if args.reset_run_state:
+        state_store.delete()
+        print(f"Reset run state: {state_file}")
+
+    config_snapshot = _build_chunked_config_snapshot(args)
+    config_fingerprint = compute_config_fingerprint(config_snapshot)
+
+    state = state_store.load()
+    if state is None:
+        state = state_store.create(
+            run_type=CHUNKED_RUN_TYPE,
+            config_snapshot=config_snapshot,
+            progress={
+                "total_games": args.num_games,
+                "games_completed": 0,
+                "chunks_completed": 0,
+                "restart_every_games": args.restart_every_games,
+                "current_chunk": None,
+                "current_chunk_games": None,
+                "current_chunk_started_at": None,
+                "last_chunk_completed_at": None,
+                "last_chunk_games": 0,
+                "last_error": None,
+                "chunk_history": [],
+            },
+            metadata={"output_dir": args.output_dir, "model_path": args.model_path},
+        )
+        print(f"Initialized new run state: {state_file}")
+    else:
+        state_store.assert_compatible(
+            state,
+            run_type=CHUNKED_RUN_TYPE,
+            config_fingerprint=config_fingerprint,
+        )
+        print(f"Resuming existing run state: {state_file}")
+
+    progress = state.get("progress")
+    if not isinstance(progress, dict):
+        raise RuntimeError(f"Invalid run state format in {state_file}: 'progress' must be a dict")
+
+    total_games = int(progress.get("total_games", 0))
+    games_completed = int(progress.get("games_completed", 0))
+    chunks_completed = int(progress.get("chunks_completed", 0))
+
+    if total_games <= 0:
+        raise RuntimeError(f"Invalid total_games in {state_file}: {total_games}")
+    if games_completed < 0 or games_completed > total_games:
+        raise RuntimeError(
+            f"Invalid games_completed in {state_file}: {games_completed} (total_games={total_games})"
+        )
+
+    print(
+        f"Chunked restart mode: total_games={total_games}, restart_every={args.restart_every_games}, "
+        f"completed={games_completed}, completed_chunks={chunks_completed}"
+    )
+
+    if games_completed >= total_games:
+        state["status"] = "completed"
+        state["completed_at"] = state.get("completed_at") or utc_now_iso()
+        state_store.save(state)
+        print("Run already complete according to saved state.")
+        return 0
+
+    try:
+        while games_completed < total_games:
+            remaining_games = total_games - games_completed
+            chunk_games = min(args.restart_every_games, remaining_games)
+            chunk_index = chunks_completed + 1
+            chunk_started_at = utc_now_iso()
+
+            progress["current_chunk"] = chunk_index
+            progress["current_chunk_games"] = chunk_games
+            progress["current_chunk_started_at"] = chunk_started_at
+            state["status"] = "running"
+            state["completed_at"] = None
+            state = state_store.save(state)
+
+            print(
+                f"\n[Chunk {chunk_index}] Starting child process for {chunk_games} games "
+                f"({games_completed}/{total_games} completed so far)"
+            )
+            child_cmd = _build_chunk_command(args, chunk_games)
+            child_result = subprocess.run(child_cmd, check=False)
+
+            if child_result.returncode != 0:
+                progress["current_chunk"] = None
+                progress["current_chunk_games"] = None
+                progress["current_chunk_started_at"] = None
+                progress["last_error"] = (
+                    f"Chunk {chunk_index} failed with exit code {child_result.returncode}"
+                )
+                state["status"] = "failed"
+                state = state_store.save(state)
+                print(
+                    f"Chunk {chunk_index} failed (exit {child_result.returncode}). "
+                    f"Saved progress to {state_file}."
+                )
+                return child_result.returncode
+
+            chunk_completed_at = utc_now_iso()
+            games_completed += chunk_games
+            chunks_completed += 1
+            progress["games_completed"] = games_completed
+            progress["chunks_completed"] = chunks_completed
+            progress["last_chunk_completed_at"] = chunk_completed_at
+            progress["last_chunk_games"] = chunk_games
+            progress["current_chunk"] = None
+            progress["current_chunk_games"] = None
+            progress["current_chunk_started_at"] = None
+            progress["last_error"] = None
+
+            chunk_history = progress.get("chunk_history")
+            if not isinstance(chunk_history, list):
+                raise RuntimeError(
+                    f"Invalid run state format in {state_file}: 'chunk_history' must be a list"
+                )
+            chunk_history.append(
+                {
+                    "chunk_index": chunk_index,
+                    "games_requested": chunk_games,
+                    "started_at": chunk_started_at,
+                    "completed_at": chunk_completed_at,
+                    "exit_code": 0,
+                }
+            )
+
+            if games_completed >= total_games:
+                state["status"] = "completed"
+                state["completed_at"] = chunk_completed_at
+            else:
+                state["status"] = "running"
+                state["completed_at"] = None
+
+            state = state_store.save(state)
+            print(
+                f"[Chunk {chunk_index}] Completed successfully. "
+                f"Progress: {games_completed}/{total_games} games."
+            )
+
+        print(f"\nChunked self-play run completed. State saved to {state_file}.")
+        return 0
+    except KeyboardInterrupt:
+        progress["current_chunk"] = None
+        progress["current_chunk_games"] = None
+        progress["current_chunk_started_at"] = None
+        progress["last_error"] = "Interrupted by user"
+        state["status"] = "interrupted"
+        state["completed_at"] = None
+        state_store.save(state)
+        print(f"\nInterrupted by user. Progress saved to {state_file}.")
+        return 1
+
+
+def _run_single_process(args: argparse.Namespace) -> None:
     
     # Get command line early - crash if not available
     try:
@@ -202,6 +477,24 @@ def main():
     finally:
         # Clean shutdown
         engine.shutdown()
+
+
+def main():
+    args = parse_args()
+
+    if args.num_games <= 0:
+        raise ValueError("--num_games must be > 0")
+    if args.restart_every_games < 0:
+        raise ValueError("--restart-every-games cannot be negative")
+
+    try:
+        if args.restart_every_games > 0 and not args.internal_chunk_run:
+            exit_code = _run_chunked_selfplay(args)
+            sys.exit(exit_code)
+        _run_single_process(args)
+    except RunStateMismatchError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
