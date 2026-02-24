@@ -68,6 +68,7 @@ class HexGame {
         this.loadGameConstants();
         this.updateHeatmapControls();
         this.updatePieRuleUi();
+        this.installDevtoolsThemeApi();
     }
 
     // =============================================================================
@@ -430,6 +431,52 @@ class HexGame {
 
     getColors() {
         return this.themeColors || this.refreshThemeColors();
+    }
+
+    installDevtoolsThemeApi() {
+        if (typeof window === 'undefined') {
+            return;
+        }
+        const self = this;
+        // DevTools convenience hooks for rapid theme iteration.
+        window.hexGame = this;
+        window.hexTheme = {
+            get(name) {
+                const value = getComputedStyle(document.documentElement).getPropertyValue(name);
+                return typeof value === 'string' ? value.trim() : '';
+            },
+            set(name, value, redraw = true) {
+                document.documentElement.style.setProperty(name, value);
+                self.refreshThemeColors();
+                if (redraw) {
+                    self.redrawCurrentBoard();
+                }
+                return this.get(name);
+            },
+            reset(name, redraw = true) {
+                document.documentElement.style.removeProperty(name);
+                self.refreshThemeColors();
+                if (redraw) {
+                    self.redrawCurrentBoard();
+                }
+                return this.get(name);
+            },
+            redraw() {
+                self.refreshThemeColors();
+                self.redrawCurrentBoard();
+            },
+            dump(prefix = '--') {
+                const styles = getComputedStyle(document.documentElement);
+                const tokens = {};
+                for (let i = 0; i < styles.length; i++) {
+                    const name = styles[i];
+                    if (typeof name === 'string' && name.startsWith(prefix)) {
+                        tokens[name] = styles.getPropertyValue(name).trim();
+                    }
+                }
+                return tokens;
+            }
+        };
     }
 
     updateDifficultyPreset() {
