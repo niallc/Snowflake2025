@@ -302,6 +302,9 @@ DEFAULT_PIE_RULE_ENABLED = True
 PIE_RULE_SWAP_ALPHA = 4.0
 PIE_RULE_FORCE_NO_SWAP_AT = 0.01
 PIE_RULE_FORCE_SWAP_AT = 0.99
+# Weighted opening sampling sharpness for pie-rule first move.
+# Higher => stronger preference for near-50% moves.
+PIE_RULE_OPENING_WEIGHT_EXPONENT = 6.0
 
 _PIE_RULE_OPENING_CACHE = {}
 _PIE_RULE_OPENING_CACHE_LOCK = threading.Lock()
@@ -496,6 +499,19 @@ def _pie_rule_swap_probability_from_opening_prob(opening_win_prob: float) -> flo
     return p_alpha / denom
 
 
+def _pie_rule_opening_weight_from_probability(
+    opening_win_prob: float,
+    *,
+    exponent: float = PIE_RULE_OPENING_WEIGHT_EXPONENT,
+) -> float:
+    """Weight for pie-rule opening sampling based on closeness to 50%."""
+    p = max(0.0, min(1.0, float(opening_win_prob)))
+    symmetry_distance = min(p, 1.0 - p)
+    if symmetry_distance <= 0.0:
+        return 0.0
+    return float(symmetry_distance ** exponent)
+
+
 def _get_first_user_move_from_trmph(trmph: str):
     """Return first user-visible move from a user TRMPH string, or None."""
     bare = fc.strip_trmph_preamble((trmph or "").strip())
@@ -607,7 +623,7 @@ def evaluate_pie_rule_balanced_opening_move(
     pie_rule_enabled: bool,
     state: HexGameState = None,
 ):
-    """Select opening move with value estimate closest to 50% when pie rule is active."""
+    """Sample opening move with weights favoring value estimates near 50%."""
     if state is None:
         move_count = _safe_count_trmph_moves(trmph)
         if move_count != 0:
@@ -624,10 +640,8 @@ def evaluate_pie_rule_balanced_opening_move(
     scores, cache_meta = _get_pie_rule_opening_scores(model_id, display_board_size)
     legal_moves = sorted(fc.rowcol_to_trmph(row, col) for row, col in state.get_legal_moves())
 
-    best_move = None
-    best_opening_prob = None
-    best_distance = None
-
+    all_candidates = []
+    weighted_candidates = []
     for move in legal_moves:
         opening_win_prob = scores.get(move)
         if opening_win_prob is None:
@@ -635,17 +649,18 @@ def evaluate_pie_rule_balanced_opening_move(
 
         opening_win_prob = float(opening_win_prob)
         distance = abs(opening_win_prob - 0.5)
+        weight = _pie_rule_opening_weight_from_probability(opening_win_prob)
+        candidate = {
+            "move": move,
+            "opening_win_probability": opening_win_prob,
+            "distance_to_even": distance,
+            "weight": weight,
+        }
+        all_candidates.append(candidate)
+        if weight > 0.0:
+            weighted_candidates.append(candidate)
 
-        if (
-            best_move is None
-            or distance < (best_distance - 1e-12)
-            or (abs(distance - best_distance) <= 1e-12 and move < best_move)
-        ):
-            best_move = move
-            best_opening_prob = opening_win_prob
-            best_distance = distance
-
-    if best_move is None:
+    if not all_candidates:
         app.logger.warning(
             "Pie-rule opening: no scored legal moves for model=%s display=%s",
             model_id,
@@ -653,10 +668,29 @@ def evaluate_pie_rule_balanced_opening_move(
         )
         return None
 
+    if weighted_candidates:
+        selected = random.choices(
+            weighted_candidates,
+            weights=[c["weight"] for c in weighted_candidates],
+            k=1,
+        )[0]
+        sampling_total_weight = float(sum(c["weight"] for c in weighted_candidates))
+        sampling_mode = "weighted"
+    else:
+        selected = random.choice(all_candidates)
+        sampling_total_weight = 0.0
+        sampling_mode = "uniform_zero_weights"
+
     return {
-        "move": best_move,
-        "opening_win_probability": best_opening_prob,
-        "distance_to_even": best_distance,
+        "move": selected["move"],
+        "opening_win_probability": selected["opening_win_probability"],
+        "distance_to_even": selected["distance_to_even"],
+        "weight": selected["weight"],
+        "weight_exponent": PIE_RULE_OPENING_WEIGHT_EXPONENT,
+        "sampling_mode": sampling_mode,
+        "candidate_count": len(all_candidates),
+        "weighted_candidate_count": len(weighted_candidates),
+        "sampling_total_weight": sampling_total_weight,
         "model_id": model_id,
         "cache_hit": bool(cache_meta.get("cache_hit", False)),
         "cache_model_path": cache_meta.get("model_path"),
@@ -735,6 +769,16 @@ def _build_pie_rule_opening_move_response(
                 "opening_win_probability"
             ],
             "pie_rule_opening_distance_to_even": opening_choice["distance_to_even"],
+            "pie_rule_opening_weight": opening_choice["weight"],
+            "pie_rule_opening_weight_exponent": opening_choice["weight_exponent"],
+            "pie_rule_opening_sampling_mode": opening_choice["sampling_mode"],
+            "pie_rule_opening_candidate_count": opening_choice["candidate_count"],
+            "pie_rule_opening_weighted_candidate_count": opening_choice[
+                "weighted_candidate_count"
+            ],
+            "pie_rule_opening_sampling_total_weight": opening_choice[
+                "sampling_total_weight"
+            ],
             "pie_rule_opening_model_id": opening_choice["model_id"],
             "pie_rule_opening_cache_hit": opening_choice["cache_hit"],
             "pie_rule_opening_cache_model_epoch": opening_choice["cache_model_epoch"],
@@ -2166,10 +2210,12 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
         )
         if opening_choice:
             app.logger.info(
-                "Pie-rule opening selected (policy path) move=%s opening_p=%.4f distance_to_even=%.4f",
+                "Pie-rule opening selected (policy path) move=%s opening_p=%.4f distance_to_even=%.4f weight=%.8f mode=%s",
                 opening_choice["move"],
                 opening_choice["opening_win_probability"],
                 opening_choice["distance_to_even"],
+                opening_choice["weight"],
+                opening_choice["sampling_mode"],
             )
             result = _build_pie_rule_opening_move_response(
                 state=state,
@@ -2206,6 +2252,16 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
                     "opening_win_probability"
                 ],
                 pie_rule_opening_distance_to_even=opening_choice["distance_to_even"],
+                pie_rule_opening_weight=opening_choice["weight"],
+                pie_rule_opening_weight_exponent=opening_choice["weight_exponent"],
+                pie_rule_opening_sampling_mode=opening_choice["sampling_mode"],
+                pie_rule_opening_candidate_count=opening_choice["candidate_count"],
+                pie_rule_opening_weighted_candidate_count=opening_choice[
+                    "weighted_candidate_count"
+                ],
+                pie_rule_opening_sampling_total_weight=opening_choice[
+                    "sampling_total_weight"
+                ],
                 pie_rule_opening_cache_hit=opening_choice["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=1,
@@ -2445,10 +2501,12 @@ def api_mcts_move():
         )
         if opening_choice:
             app.logger.info(
-                "Pie-rule opening selected (MCTS bypass) move=%s opening_p=%.4f distance_to_even=%.4f",
+                "Pie-rule opening selected (MCTS bypass) move=%s opening_p=%.4f distance_to_even=%.4f weight=%.8f mode=%s",
                 opening_choice["move"],
                 opening_choice["opening_win_probability"],
                 opening_choice["distance_to_even"],
+                opening_choice["weight"],
+                opening_choice["sampling_mode"],
             )
             result = _build_pie_rule_opening_move_response(
                 state=state,
@@ -2483,6 +2541,16 @@ def api_mcts_move():
                     "opening_win_probability"
                 ],
                 pie_rule_opening_distance_to_even=opening_choice["distance_to_even"],
+                pie_rule_opening_weight=opening_choice["weight"],
+                pie_rule_opening_weight_exponent=opening_choice["weight_exponent"],
+                pie_rule_opening_sampling_mode=opening_choice["sampling_mode"],
+                pie_rule_opening_candidate_count=opening_choice["candidate_count"],
+                pie_rule_opening_weighted_candidate_count=opening_choice[
+                    "weighted_candidate_count"
+                ],
+                pie_rule_opening_sampling_total_weight=opening_choice[
+                    "sampling_total_weight"
+                ],
                 pie_rule_opening_cache_hit=opening_choice["cache_hit"],
                 display_board_size=display_board_size,
                 moves_requested=1,
