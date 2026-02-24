@@ -160,14 +160,20 @@
   --board-piece-red-fill: #f7f2e6;
   --board-piece-red-stroke: #9f8f78;
 
-  --pie-player-red: #fff7e8;
-  --pie-player-red-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  --pie-player-blue: #20150c;
-  --pie-player-both: #9a6f3c;
-  --pie-player-bg: rgba(90, 62, 34, 0.86);
-  --pie-player-border: rgba(244, 223, 186, 0.28);
-  --pie-player-title-color: #eddfc8;
-  --pie-link-sub: #5f3918;
+  --pie-badge-bg: rgba(243, 233, 217, 0.9);
+  --pie-badge-border: rgba(110, 82, 56, 0.36);
+  --pie-player-red: #f7efe2;
+  --pie-player-red-shadow: 0 1px 2px rgba(0, 0, 0, 0.58);
+  --pie-player-blue: #1c130c;
+  --pie-player-both: #d6d9de;
+  --pie-player-none: #d6d9de;
+  --pie-player-bg: rgba(102, 76, 50, 0.9);
+  --pie-player-border: rgba(240, 220, 188, 0.42);
+  --pie-player-title-color: #f1e5d2;
+  --pie-label-bg: rgba(242, 233, 218, 0.95);
+  --pie-label-border: #8e6b48;
+  --pie-label-shadow: rgba(76, 53, 34, 0.25);
+  --pie-link-sub: #5d4330;
 
   --heatmap-band-below-stroke: #b8484f;
   --heatmap-band-above-stroke: #2f8f61;
@@ -188,10 +194,20 @@
   --board-piece-red-fill: #f4efe1;
   --board-piece-red-stroke: #aa9b80;
 
-  --pie-player-bg: rgba(45, 29, 15, 0.92);
-  --pie-player-border: rgba(241, 219, 181, 0.24);
-  --pie-player-title-color: #eddfc8;
-  --pie-link-sub: #e2c596;
+  --pie-badge-bg: rgba(133, 103, 73, 0.9);
+  --pie-badge-border: rgba(236, 214, 181, 0.35);
+  --pie-player-red: #fbf4e7;
+  --pie-player-red-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  --pie-player-blue: #20150d;
+  --pie-player-both: #44515d;
+  --pie-player-none: #44515d;
+  --pie-player-bg: rgba(171, 142, 109, 0.94);
+  --pie-player-border: rgba(58, 40, 25, 0.5);
+  --pie-player-title-color: #4f3825;
+  --pie-label-bg: rgba(122, 93, 67, 0.94);
+  --pie-label-border: #ddc3a0;
+  --pie-label-shadow: rgba(22, 14, 9, 0.45);
+  --pie-link-sub: #f0dfc5;
 
   --heatmap-band-below-stroke: #dc7b7e;
   --heatmap-band-above-stroke: #6ad19b;

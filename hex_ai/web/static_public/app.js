@@ -475,7 +475,7 @@ class HexGame {
         let liveTimerId = null;
         // DevTools convenience hooks for rapid theme iteration.
         window.hexGame = this;
-        window.hexTheme = {
+        const themeApi = {
             get(name) {
                 const value = getComputedStyle(document.documentElement).getPropertyValue(name);
                 return typeof value === 'string' ? value.trim() : '';
@@ -533,6 +533,67 @@ class HexGame {
                 return tokens;
             }
         };
+        const pieTokenNames = [
+            '--pie-badge-bg',
+            '--pie-badge-border',
+            '--pie-player-bg',
+            '--pie-player-border',
+            '--pie-player-title-color',
+            '--pie-player-red',
+            '--pie-player-red-shadow',
+            '--pie-player-blue',
+            '--pie-player-both',
+            '--pie-player-none',
+            '--pie-label-bg',
+            '--pie-label-border',
+            '--pie-label-shadow',
+            '--pie-link-sub',
+        ];
+        themeApi.pie = {
+            tokens: [...pieTokenNames],
+            dump() {
+                const values = {};
+                for (const name of pieTokenNames) {
+                    values[name] = themeApi.get(name);
+                }
+                return values;
+            },
+            set(name, value, redraw = false) {
+                if (!pieTokenNames.includes(name)) {
+                    throw new Error(`Unknown pie token: ${name}`);
+                }
+                return themeApi.set(name, value, redraw);
+            },
+            reset(name = null, redraw = false) {
+                if (name === null) {
+                    for (const tokenName of pieTokenNames) {
+                        themeApi.reset(tokenName, false);
+                    }
+                    if (redraw) {
+                        themeApi.redraw();
+                    }
+                    return this.dump();
+                }
+                if (!pieTokenNames.includes(name)) {
+                    throw new Error(`Unknown pie token: ${name}`);
+                }
+                themeApi.reset(name, redraw);
+                return this.dump();
+            },
+            apply(overrides, redraw = false) {
+                if (!overrides || typeof overrides !== 'object') {
+                    throw new Error('pie.apply(overrides) expects an object map of token values');
+                }
+                for (const [name, value] of Object.entries(overrides)) {
+                    this.set(name, value, false);
+                }
+                if (redraw) {
+                    themeApi.redraw();
+                }
+                return this.dump();
+            }
+        };
+        window.hexTheme = themeApi;
     }
 
     updateDifficultyPreset() {
