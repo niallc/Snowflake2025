@@ -10,6 +10,8 @@ class HexGame {
         this.currentTRMPH = "";
         this.gameHistory = [];
         this.redoHistory = []; // Track undone moves for redo functionality
+        this.maxHistoryEntries = 5000;
+        this.autoMoveTimeoutId = null;
         this.moveCount = 0;
         this.currentElo = null;  // Must be set from backend - fail fast if not
         this.blueComputer = false;
@@ -38,6 +40,10 @@ class HexGame {
         this.pieRuleArmed = true;
         this.sessionStateStorageKey = 'hex_ai_session_state_v1';
         this.sessionStateVersion = 1;
+        this.historyUtils = window.HexHistoryUtils;
+        if (!this.historyUtils) {
+            throw new Error('HexHistoryUtils is required but was not loaded');
+        }
 
         // Track previous board state for efficient updates
         this.previousBoard = null;
@@ -952,6 +958,116 @@ class HexGame {
             .filter((entry) => entry.length > 0);
     }
 
+    dedupeConsecutiveStates(states) {
+        return this.historyUtils.dedupeConsecutive(states, { getKey: (entry) => entry });
+    }
+
+    normalizeHistoryStacks() {
+        const keyOptions = { getKey: (entry) => entry };
+        this.currentTRMPH = typeof this.currentTRMPH === 'string' ? this.currentTRMPH.trim() : '';
+        this.gameHistory = this.historyUtils.dedupeConsecutive(this.sanitizeSessionStateArray(this.gameHistory), keyOptions);
+        this.redoHistory = this.historyUtils.dedupeConsecutive(this.sanitizeSessionStateArray(this.redoHistory), keyOptions);
+
+        if (this.currentTRMPH) {
+            const hasCurrent = this.historyUtils.truncateAfterLastMatch(this.gameHistory, this.currentTRMPH, keyOptions);
+            if (!hasCurrent) {
+                this.historyUtils.pushDistinct(this.gameHistory, this.currentTRMPH, {
+                    ...keyOptions,
+                    maxEntries: this.maxHistoryEntries,
+                });
+            }
+        } else {
+            this.gameHistory = [];
+        }
+
+        if (this.gameHistory.length > this.maxHistoryEntries) {
+            this.gameHistory = this.gameHistory.slice(-this.maxHistoryEntries);
+        }
+    }
+
+    recomputeMoveCountFromCurrentTrmph() {
+        if (!this.currentTRMPH) {
+            this.moveCount = 0;
+            this.pieRuleArmed = true;
+            return;
+        }
+        try {
+            this.moveCount = this.parseTrmphMoves(this.currentTRMPH).length;
+        } catch (_error) {
+            this.moveCount = Number.isFinite(this.moveCount) ? this.moveCount : 0;
+        }
+        if (this.moveCount === 0) {
+            this.pieRuleArmed = true;
+        }
+    }
+
+    recordReachedState(newTrmph, clearRedo = true) {
+        const keyOptions = { getKey: (entry) => entry };
+        this.currentTRMPH = typeof newTrmph === 'string' ? newTrmph.trim() : '';
+        if (this.currentTRMPH) {
+            this.historyUtils.pushDistinct(this.gameHistory, this.currentTRMPH, {
+                ...keyOptions,
+                maxEntries: this.maxHistoryEntries,
+            });
+        } else {
+            this.gameHistory = [];
+        }
+        if (clearRedo) {
+            this.redoHistory = [];
+        }
+        this.normalizeHistoryStacks();
+        this.recomputeMoveCountFromCurrentTrmph();
+    }
+
+    undoHistoryStep() {
+        const keyOptions = { getKey: (entry) => entry };
+        this.normalizeHistoryStacks();
+        if (this.gameHistory.length === 0) {
+            return false;
+        }
+        const currentState = this.gameHistory.pop();
+        if (currentState) {
+            this.historyUtils.pushDistinct(this.redoHistory, currentState, keyOptions);
+        }
+        this.currentTRMPH = this.gameHistory.length > 0 ? this.gameHistory[this.gameHistory.length - 1] : '';
+        this.normalizeHistoryStacks();
+        this.recomputeMoveCountFromCurrentTrmph();
+        return true;
+    }
+
+    redoHistoryStep() {
+        const keyOptions = { getKey: (entry) => entry };
+        this.normalizeHistoryStacks();
+        if (this.redoHistory.length === 0) {
+            return false;
+        }
+        const nextState = this.historyUtils.popLastDistinct(this.redoHistory, this.currentTRMPH, keyOptions);
+        if (nextState === null) {
+            return false;
+        }
+        this.currentTRMPH = nextState;
+        this.historyUtils.pushDistinct(this.gameHistory, nextState, {
+            ...keyOptions,
+            maxEntries: this.maxHistoryEntries,
+        });
+        this.normalizeHistoryStacks();
+        this.recomputeMoveCountFromCurrentTrmph();
+        return true;
+    }
+
+    clearCachedBoardRenderingState() {
+        this.previousBoard = null;
+        this.hexElements.clear();
+        this.pieceElements.clear();
+    }
+
+    cancelScheduledAutoMove() {
+        if (this.autoMoveTimeoutId !== null) {
+            clearTimeout(this.autoMoveTimeoutId);
+            this.autoMoveTimeoutId = null;
+        }
+    }
+
     restoreSessionState(validBoardSizes, minElo, maxElo) {
         const storage = this.getSessionStorage();
         if (!storage) {
@@ -969,7 +1085,6 @@ class HexGame {
             }
 
             const restoredTrmph = typeof snapshot.currentTRMPH === 'string' ? snapshot.currentTRMPH.trim() : '';
-            const restoredMoveCount = restoredTrmph ? this.parseTrmphMoves(restoredTrmph).length : 0;
             const restoredBoardSize = parseInt(snapshot.displayBoardSize, 10);
             const restoredElo = parseInt(snapshot.currentElo, 10);
 
@@ -993,7 +1108,6 @@ class HexGame {
             }
 
             this.currentTRMPH = restoredTrmph;
-            this.moveCount = restoredMoveCount;
 
             let restoredHistory = this.sanitizeSessionStateArray(snapshot.gameHistory);
             if (!restoredTrmph) {
@@ -1003,6 +1117,8 @@ class HexGame {
             }
             this.gameHistory = restoredHistory;
             this.redoHistory = this.sanitizeSessionStateArray(snapshot.redoHistory);
+            this.normalizeHistoryStacks();
+            this.recomputeMoveCountFromCurrentTrmph();
 
             return true;
         } catch (error) {
@@ -1018,22 +1134,16 @@ class HexGame {
             return;
         }
 
-        let normalizedMoveCount = this.moveCount;
-        try {
-            normalizedMoveCount = this.currentTRMPH
-                ? this.parseTrmphMoves(this.currentTRMPH).length
-                : 0;
-        } catch (_error) {
-            normalizedMoveCount = Number.isFinite(this.moveCount) ? this.moveCount : 0;
-        }
+        this.normalizeHistoryStacks();
+        this.recomputeMoveCountFromCurrentTrmph();
 
         const snapshot = {
             version: this.sessionStateVersion,
             updated_at_ms: Date.now(),
             currentTRMPH: this.currentTRMPH,
-            gameHistory: this.sanitizeSessionStateArray(this.gameHistory),
-            redoHistory: this.sanitizeSessionStateArray(this.redoHistory),
-            moveCount: normalizedMoveCount,
+            gameHistory: [...this.gameHistory],
+            redoHistory: [...this.redoHistory],
+            moveCount: this.moveCount,
             displayBoardSize: this.displayBoardSize,
             currentElo: this.currentElo,
             blueComputer: this.blueComputer,
@@ -1282,6 +1392,7 @@ class HexGame {
     }
 
     async resetGame() {
+        this.cancelScheduledAutoMove();
         this.setLoading(true);
         try {
             this.currentTRMPH = "";
@@ -1290,9 +1401,7 @@ class HexGame {
             this.moveCount = 0;
             this.pieRuleArmed = true;
             this.isInitialLoad = false; // Mark that this is no longer initial load
-            this.previousBoard = null; // Clear board cache
-            this.hexElements.clear(); // Clear hex cache
-            this.pieceElements.clear(); // Clear disc piece cache
+            this.clearCachedBoardRenderingState();
             this.updateTrmphDisplay();
             await this.loadGameState(false, 'reset'); // Don't auto-move after reset
 
@@ -1309,29 +1418,17 @@ class HexGame {
     }
 
     async undoMove() {
-        if (this.gameHistory.length === 0) return;
+        if (this.isLoading || this.gameHistory.length === 0) return;
 
+        this.cancelScheduledAutoMove();
         this.setLoading(true);
         try {
-            // Save current TRMPH string (not object) to redo history
-            this.redoHistory.push(this.currentTRMPH);
-
-            // Restore previous state
-            this.gameHistory.pop();
-            this.currentTRMPH = this.gameHistory.length > 0 ?
-                this.gameHistory[this.gameHistory.length - 1] : "";
-
-            // Recalculate moveCount from TRMPH string
-            this.moveCount = this.currentTRMPH ?
-                this.parseTrmphMoves(this.currentTRMPH).length : 0;
-            if (this.moveCount === 0) {
-                this.pieRuleArmed = true;
+            if (!this.undoHistoryStep()) {
+                return;
             }
 
             // Clear cache for undo to ensure clean state
-            this.previousBoard = null;
-            this.hexElements.clear();
-            this.pieceElements.clear();
+            this.clearCachedBoardRenderingState();
 
             await this.loadGameStateWithoutAutoMove('undo');
 
@@ -1351,6 +1448,7 @@ class HexGame {
 
     async makeComputerMove() {
         if (this.isLoading) return;
+        this.autoMoveTimeoutId = null;
 
         // Hide instruction text since computer is making a move
         this.hideInstructionText();
@@ -1388,14 +1486,13 @@ class HexGame {
                     console.log('=====================================');
                 }
 
-                this.currentTRMPH = data.new_trmph;
                 const moveWasPlayed = Boolean(data.move_made);
                 if (moveWasPlayed) {
-                    this.gameHistory.push(this.currentTRMPH);
-                    this.moveCount++;
-
-                    // Clear redo history when new moves are made
-                    this.redoHistory = [];
+                    this.recordReachedState(data.new_trmph, true);
+                } else {
+                    this.currentTRMPH = typeof data.new_trmph === 'string' ? data.new_trmph.trim() : this.currentTRMPH;
+                    this.normalizeHistoryStacks();
+                    this.recomputeMoveCountFromCurrentTrmph();
                 }
                 this.legalMoves = data.legal_moves || [];
 
@@ -1430,7 +1527,11 @@ class HexGame {
     }
 
     scheduleAutoMove() {
-        setTimeout(() => this.makeComputerMove(), 500);
+        this.cancelScheduledAutoMove();
+        this.autoMoveTimeoutId = setTimeout(() => {
+            this.autoMoveTimeoutId = null;
+            void this.makeComputerMove();
+        }, 500);
     }
 
     async loadGameState(autoMove = true, stateReason = 'manual_refresh') {
@@ -1997,6 +2098,7 @@ class HexGame {
             return;
         }
 
+        this.cancelScheduledAutoMove();
         const row = parseInt(e.target.getAttribute('data-row'));
         const col = parseInt(e.target.getAttribute('data-col'));
 
@@ -2034,13 +2136,8 @@ class HexGame {
 
             this.applyPieRuleStateFromResponse(data, false);
 
-            this.currentTRMPH = data.new_trmph;
-            this.gameHistory.push(this.currentTRMPH);
-            this.moveCount++;
+            this.recordReachedState(data.new_trmph, true);
             this.legalMoves = data.legal_moves || [];
-
-            // Clear redo history when new moves are made
-            this.redoHistory = [];
             await this.renderBoardWithHeatmap(data.board);
             this.updateTrmphDisplay();
             this.updateButtonStates();
@@ -2175,25 +2272,17 @@ class HexGame {
 
 
     async redoMove() {
-        if (this.redoHistory.length === 0) return;
+        if (this.isLoading || this.redoHistory.length === 0) return;
 
+        this.cancelScheduledAutoMove();
         this.setLoading(true);
         try {
-            // Save current TRMPH string (not object) to game history
-            this.gameHistory.push(this.currentTRMPH);
-
-            // Restore next state from redo history (already a string)
-            const nextTrmph = this.redoHistory.pop();
-            this.currentTRMPH = nextTrmph;
-
-            // Recalculate moveCount from TRMPH string
-            this.moveCount = this.currentTRMPH ?
-                this.parseTrmphMoves(this.currentTRMPH).length : 0;
+            if (!this.redoHistoryStep()) {
+                return;
+            }
 
             // Clear cache for redo to ensure clean state
-            this.previousBoard = null;
-            this.hexElements.clear();
-            this.pieceElements.clear();
+            this.clearCachedBoardRenderingState();
 
             await this.loadGameStateWithoutAutoMove('redo');
 
@@ -2411,6 +2500,7 @@ class HexGame {
         // Hide instruction text since purple hexes are no longer relevant
         this.hideInstructionText();
 
+        this.cancelScheduledAutoMove();
         this.setLoading(true);
         try {
             const response = await fetch('/api/apply_trmph_sequence', {
@@ -2434,13 +2524,8 @@ class HexGame {
 
             this.applyPieRuleStateFromResponse(data, false);
 
-            this.currentTRMPH = data.new_trmph;
-            this.gameHistory.push(this.currentTRMPH);
-            this.moveCount += data.moves_applied || 0;
+            this.recordReachedState(data.new_trmph, true);
             this.legalMoves = data.legal_moves || [];
-
-            // Clear redo history when new moves are made
-            this.redoHistory = [];
             this.updateTrmphDisplay();
             await this.renderBoardWithHeatmap(data.board);
             this.updateButtonStates();

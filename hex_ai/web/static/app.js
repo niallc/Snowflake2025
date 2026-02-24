@@ -215,6 +215,11 @@ let GAME_CONSTANTS = {
   }
 };
 
+const HISTORY_UTILS = window.HexHistoryUtils;
+if (!HISTORY_UTILS) {
+  throw new Error('HexHistoryUtils is required but was not loaded');
+}
+
 const HEX_RADIUS = 22; // px, radius of each hex (increased from 16 for 1.4x larger board)
 
 // --- Utility: Get per-player settings ---
@@ -1751,18 +1756,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('dark-mode-toggle').addEventListener('click', toggleDarkMode);
 
   document.getElementById('undo-btn').addEventListener('click', () => {
+    pruneTrailingNoOpUndoHistory();
     if (state.move_history.length > 0) {
-      // Save current state to redo history before undoing
-      const currentState = {
-        trmph: state.trmph,
-        board: JSON.parse(JSON.stringify(state.board)),
-        player: state.player,
-        legal_moves: [...state.legal_moves],
-        winner: state.winner,
-        last_move: state.last_move ? [...state.last_move] : null,
-        last_move_player: state.last_move_player
-      };
-      state.redo_history.push(currentState);
+      HISTORY_UTILS.pushDistinct(state.redo_history, cloneCurrentStateSnapshot(), { getKey: getSnapshotHistoryKey });
       
       // Restore previous state
       const previousState = state.move_history.pop();
@@ -1773,21 +1769,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('redo-btn').addEventListener('click', () => {
-    if (state.redo_history.length > 0) {
-      // Save current state to undo history before redoing
-      const currentState = {
-        trmph: state.trmph,
-        board: JSON.parse(JSON.stringify(state.board)),
-        player: state.player,
-        legal_moves: [...state.legal_moves],
-        winner: state.winner,
-        last_move: state.last_move ? [...state.last_move] : null,
-        last_move_player: state.last_move_player
-      };
-      state.move_history.push(currentState);
-      
-      // Restore next state from redo history
-      const nextState = state.redo_history.pop();
+    const nextState = popDistinctRedoState();
+    if (nextState) {
+      HISTORY_UTILS.pushDistinct(state.move_history, cloneCurrentStateSnapshot(), {
+        getKey: getSnapshotHistoryKey,
+        maxEntries: 5000
+      });
       Object.assign(state, nextState);
       updateUI();
       void refreshMoveHeatmap();
@@ -2603,9 +2590,15 @@ function displayDetailedExploration(debugInfo) {
   explorationContent.textContent = renderLegacyDetailedTrace(detailedExploration, trace);
 }
 
-function saveStateForUndo() {
-  // Save current state for undo functionality
-  const stateCopy = {
+function getSnapshotHistoryKey(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return '';
+  }
+  return typeof snapshot.trmph === 'string' ? snapshot.trmph : '';
+}
+
+function cloneCurrentStateSnapshot() {
+  return {
     trmph: state.trmph,
     board: JSON.parse(JSON.stringify(state.board)),
     player: state.player,
@@ -2614,15 +2607,35 @@ function saveStateForUndo() {
     last_move: state.last_move ? [...state.last_move] : null,
     last_move_player: state.last_move_player
   };
-  state.move_history.push(stateCopy);
+}
+
+function pruneTrailingNoOpUndoHistory() {
+  while (
+    state.move_history.length > 0 &&
+    state.move_history[state.move_history.length - 1].trmph === state.trmph
+  ) {
+    state.move_history.pop();
+  }
+}
+
+function popDistinctRedoState() {
+  return HISTORY_UTILS.popLastDistinct(
+    state.redo_history,
+    { trmph: state.trmph },
+    { getKey: getSnapshotHistoryKey }
+  );
+}
+
+function saveStateForUndo() {
+  // Save current state for undo functionality
+  const stateCopy = cloneCurrentStateSnapshot();
+  HISTORY_UTILS.pushDistinct(state.move_history, stateCopy, {
+    getKey: getSnapshotHistoryKey,
+    maxEntries: 5000
+  });
   
   // Clear redo history when new moves are made
   state.redo_history = [];
-  
-  // Keep only last 5,000 moves in history
-  if (state.move_history.length > 5000) {
-    state.move_history.shift();
-  }
 } 
 
 // --- Debug utilities ---
