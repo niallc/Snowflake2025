@@ -80,8 +80,8 @@ def parse_args() -> argparse.Namespace:
         '--state-file',
         type=str,
         help=(
-            f'Path to JSON run state file for chunked restart mode '
-            f'(default: <output_dir>/{DEFAULT_RESTART_STATE_FILENAME}).'
+            'Path to JSON run state file for chunked restart mode '
+            '(default: config-scoped file under <output_dir>).'
         ),
     )
     parser.add_argument(
@@ -105,6 +105,56 @@ def _resolve_state_file(args: argparse.Namespace) -> str:
     if args.state_file:
         return args.state_file
     return os.path.join(args.output_dir, DEFAULT_RESTART_STATE_FILENAME)
+
+
+def _build_scoped_state_file(output_dir: str, config_fingerprint: str) -> str:
+    fingerprint_prefix = config_fingerprint[:12]
+    return os.path.join(
+        output_dir,
+        f"{DEFAULT_RESTART_STATE_FILENAME.removesuffix('.json')}_{fingerprint_prefix}.json",
+    )
+
+
+def _resolve_chunked_state_file(args: argparse.Namespace, config_fingerprint: str) -> str:
+    """
+    Resolve run-state path for chunked mode.
+
+    Behavior:
+    - Explicit --state-file remains authoritative.
+    - Default mode uses a config-scoped state file to support parallel runs.
+    - Legacy default file is auto-resumed if compatible to preserve existing runs.
+    """
+    if args.state_file:
+        return args.state_file
+
+    legacy_default_file = _resolve_state_file(args)
+    scoped_file = _build_scoped_state_file(args.output_dir, config_fingerprint)
+
+    # Prefer scoped file for new runs.
+    if os.path.exists(scoped_file):
+        return scoped_file
+
+    # Backward compatibility: if a legacy default file exists and matches this config,
+    # continue using it so existing runs can resume naturally.
+    if os.path.exists(legacy_default_file):
+        legacy_store = JsonRunStateStore(legacy_default_file)
+        legacy_state = legacy_store.load()
+        if legacy_state is not None:
+            try:
+                legacy_store.assert_compatible(
+                    legacy_state,
+                    run_type=CHUNKED_RUN_TYPE,
+                    config_fingerprint=config_fingerprint,
+                )
+                print(f"Resuming compatible legacy run state: {legacy_default_file}")
+                return legacy_default_file
+            except RunStateMismatchError:
+                print(
+                    "Detected incompatible legacy run state; "
+                    f"starting fresh config-scoped state: {scoped_file}"
+                )
+
+    return scoped_file
 
 
 def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
@@ -184,15 +234,14 @@ def _run_chunked_selfplay(args: argparse.Namespace) -> int:
         raise ValueError("--restart-every-games must be > 0 when chunked mode is enabled")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    state_file = _resolve_state_file(args)
+    config_snapshot = _build_chunked_config_snapshot(args)
+    config_fingerprint = compute_config_fingerprint(config_snapshot)
+    state_file = _resolve_chunked_state_file(args, config_fingerprint)
     state_store = JsonRunStateStore(state_file)
 
     if args.reset_run_state:
         state_store.delete()
         print(f"Reset run state: {state_file}")
-
-    config_snapshot = _build_chunked_config_snapshot(args)
-    config_fingerprint = compute_config_fingerprint(config_snapshot)
 
     state = state_store.load()
     if state is None:
