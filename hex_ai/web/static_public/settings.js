@@ -13,15 +13,15 @@ class UserSettingsPage {
             preferred_board_size: 13,
             preferred_elo: 600,
             color_scheme: 'wood',
-            piece_style: 'hex_fill',
+            piece_style: 'disc',
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
             { value: 'classic', label: 'Classic (Blue/Red Pieces)' },
         ];
         this.pieceStyleOptions = [
-            { value: 'hex_fill', label: 'Fill Hexagons' },
             { value: 'disc', label: 'Disc Pieces in Hexagons' },
+            { value: 'hex_fill', label: 'Fill Hexagons' },
         ];
         this.storageKeys = {
             preferredBoardSize: 'hex_ai_display_board_size',
@@ -204,7 +204,7 @@ class UserSettingsPage {
                 preferred_board_size: defaultBoardSize,
                 preferred_elo: defaultElo,
                 color_scheme: 'wood',
-                piece_style: 'hex_fill',
+                piece_style: 'disc',
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 

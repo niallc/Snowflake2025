@@ -352,7 +352,7 @@ class HexGame {
     }
 
     normalizePieceStyle(rawStyle) {
-        return rawStyle === 'disc' ? 'disc' : 'hex_fill';
+        return rawStyle === 'hex_fill' ? 'hex_fill' : 'disc';
     }
 
     initializePieceStyle() {
@@ -438,6 +438,7 @@ class HexGame {
             return;
         }
         const self = this;
+        let liveTimerId = null;
         // DevTools convenience hooks for rapid theme iteration.
         window.hexGame = this;
         window.hexTheme = {
@@ -464,6 +465,27 @@ class HexGame {
             redraw() {
                 self.refreshThemeColors();
                 self.redrawCurrentBoard();
+            },
+            live(intervalMs = 90) {
+                const numeric = Number(intervalMs);
+                const ms = Number.isFinite(numeric) ? Math.max(16, Math.floor(numeric)) : 90;
+                this.stopLive();
+                liveTimerId = window.setInterval(() => {
+                    self.refreshThemeColors();
+                    self.redrawCurrentBoard();
+                }, ms);
+                return liveTimerId;
+            },
+            stopLive() {
+                if (liveTimerId === null) {
+                    return false;
+                }
+                window.clearInterval(liveTimerId);
+                liveTimerId = null;
+                return true;
+            },
+            isLive() {
+                return liveTimerId !== null;
             },
             dump(prefix = '--') {
                 const styles = getComputedStyle(document.documentElement);
