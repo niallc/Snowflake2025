@@ -195,6 +195,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Track loaded shard counts per directory for proportional loading.
         # Using counts avoids storing one path string per loaded shard.
         self.loaded_shard_counts: List[int] = [0] * len(self.data_dirs)
+        # Track read offsets within the head shard of each directory queue.
+        # Offset is 0 when no partially-consumed shard exists for that directory.
+        self.current_shard_offsets: List[int] = [0] * len(self.data_dirs)
         self.directory_weights: List[float] = []  # Proportional weights for each directory
         
         # Statistics and monitoring
@@ -372,6 +375,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             
             # Clear loaded shard tracking
             self.loaded_shard_counts = [0] * len(self.data_dirs)
+            self.current_shard_offsets = [0] * len(self.data_dirs)
             
             # Clear position pool
             self.position_pool = deque()
@@ -600,8 +604,12 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self._refill_pool()
         
         # Main iteration loop
-        while self.position_pool and (self.max_examples_unaugmented is None or 
-                                    self.total_positions_yielded < self.max_examples_unaugmented):
+        while (
+            self.position_pool or self._has_available_shards()
+        ) and (
+            self.max_examples_unaugmented is None
+            or self.total_positions_yielded < self.max_examples_unaugmented
+        ):
             
             # Check memory limits
             if not self._monitor_memory():
@@ -617,15 +625,17 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         self.logger.info(f"[StreamingMixedShardDataset] No more shards available, continuing with remaining {len(self.position_pool):,} positions")
                         self._shards_exhausted_logged = True
             
+            if not self.position_pool:
+                break
+
             # Yield positions from pool
-            if self.position_pool:
-                position = self.position_pool.popleft()
-                yield self._process_position(position)
-                self.total_positions_yielded += 1
-                
-                # Update batch count (approximate)
-                if self.total_positions_yielded % 256 == 0:
-                        self.approx_batch_count += 1
+            position = self.position_pool.popleft()
+            yield self._process_position(position)
+            self.total_positions_yielded += 1
+            
+            # Update batch count (approximate)
+            if self.total_positions_yielded % 256 == 0:
+                self.approx_batch_count += 1
             
             if self.verbose >= 5:
                 self.logger.info(f"[StreamingMixedShardDataset] Iteration complete: "
@@ -683,6 +693,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             
             # Load next shard from selected directory
             shard_path = self.shard_queues[selected_dir_idx][0]  # Get first shard from queue
+            shard_offset = self.current_shard_offsets[selected_dir_idx]
             
             try:
                 # Load shard data
@@ -698,12 +709,26 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 if not file_examples:
                     self.logger.warning(f"Shard {shard_path} contains no examples, skipping")
                     self.shard_queues[selected_dir_idx].pop(0)  # Remove empty shard
+                    self.current_shard_offsets[selected_dir_idx] = 0
                     continue
+
+                if shard_offset < 0 or shard_offset > len(file_examples):
+                    raise RuntimeError(
+                        f"Invalid shard offset {shard_offset} for shard {shard_path} "
+                        f"with {len(file_examples)} examples"
+                    )
+
+                if shard_offset == len(file_examples):
+                    raise RuntimeError(
+                        f"Inconsistent stream cursor: shard {shard_path} has offset {shard_offset} "
+                        f"equal to shard length {len(file_examples)} but is still queued."
+                    )
                 
                 # Add positions to pool (with explicit copying to break shared array references).
                 # Also drop metadata fields to keep memory overhead lower.
                 first_copy_checked = False  # Track if we've checked the first copy for diagnostics
-                for example in file_examples:
+                shard_positions_added = 0
+                for example in file_examples[shard_offset:]:
                     if positions_added >= positions_needed:
                         break
                     
@@ -717,20 +742,35 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     
                     self.position_pool.append(example_copy)
                     positions_added += 1
-                
-                # Mark shard as loaded and remove from queue
-                self.loaded_shard_counts[selected_dir_idx] += 1
-                self.shard_queues[selected_dir_idx].pop(0)
-                self.total_shards_loaded += 1
-                shards_loaded_this_refill += 1
+                    shard_positions_added += 1
+
+                new_offset = shard_offset + shard_positions_added
+                shard_fully_consumed = new_offset >= len(file_examples)
+
+                if shard_fully_consumed:
+                    self.loaded_shard_counts[selected_dir_idx] += 1
+                    self.shard_queues[selected_dir_idx].pop(0)
+                    self.current_shard_offsets[selected_dir_idx] = 0
+                    self.total_shards_loaded += 1
+                    shards_loaded_this_refill += 1
+                else:
+                    self.current_shard_offsets[selected_dir_idx] = new_offset
                 
                 # Show progress dots for initial pool loading
                 if len(self.position_pool) == 0 and self.verbose and shards_loaded_this_refill % 5 == 0:
                     print(".", end="", flush=True)
                 
                 if self.verbose >= 3:
-                    self.logger.info(f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
-                                   f"(added {min(positions_added, positions_needed)} to pool)")
+                    if shard_fully_consumed:
+                        self.logger.info(
+                            f"Loaded shard {shard_path.name}: {len(file_examples)} examples "
+                            f"(consumed {new_offset}/{len(file_examples)}; shard complete)"
+                        )
+                    else:
+                        self.logger.info(
+                            f"Partially consumed shard {shard_path.name}: "
+                            f"{new_offset}/{len(file_examples)} examples consumed"
+                        )
                 
                 # Explicitly clear shard data to help garbage collection
                 # This ensures the loaded shard data can be freed immediately
@@ -787,10 +827,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         for dir_idx in available_dirs:
             # Count how many shards we've loaded from this directory
             loaded_from_dir = self.loaded_shard_counts[dir_idx]
+            # Treat a partially consumed head shard as progress for balancing.
+            partial_shard_in_progress = 0
+            if self.current_shard_offsets[dir_idx] > 0:
+                partial_shard_in_progress = 1
             total_shards_in_dir = len(self.shard_queues[dir_idx]) + loaded_from_dir
+            effective_loaded = loaded_from_dir + partial_shard_in_progress
             
             if total_shards_in_dir > 0:
-                current_ratio = loaded_from_dir / total_shards_in_dir
+                current_ratio = effective_loaded / total_shards_in_dir
             else:
                 current_ratio = 0.0
             
