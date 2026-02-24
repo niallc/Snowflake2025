@@ -18,7 +18,7 @@ class HexGame {
         this.isInitialLoad = true; // Track if this is the initial page load
         this.darkMode = false; // Dark mode state
         this.colorScheme = 'wood';
-        this.pieceStyle = 'hex_fill';
+        this.pieceStyle = 'disc';
         this.heatmapEnabled = false;
         this.heatmapLoading = false;
         this.heatmapError = null;
@@ -41,6 +41,7 @@ class HexGame {
         this.previousBoard = null;
         this.hexElements = new Map(); // Cache hex elements by position
         this.pieceElements = new Map(); // Cache disc-style piece elements by position
+        this.themeColors = null;
 
         // Difficulty levels will be loaded from backend in loadGameConstants()
         this.difficultyLevels = null;
@@ -63,6 +64,7 @@ class HexGame {
         this.initializeDarkMode();
         this.initializeColorScheme();
         this.initializePieceStyle();
+        this.refreshThemeColors();
         this.loadGameConstants();
         this.updateHeatmapControls();
         this.updatePieRuleUi();
@@ -273,6 +275,7 @@ class HexGame {
     toggleDarkMode() {
         this.darkMode = !this.darkMode;
         this.applyDarkModeAttribute();
+        this.refreshThemeColors();
 
         // Update the toggle button text and icon
         if (this.darkMode) {
@@ -303,6 +306,7 @@ class HexGame {
             this.darkMode = false;
         }
         this.applyDarkModeAttribute();
+        this.refreshThemeColors();
 
         // Update the toggle button
         if (this.darkMode) {
@@ -337,6 +341,7 @@ class HexGame {
         const storedScheme = localStorage.getItem('hex_ai_color_scheme');
         this.colorScheme = this.normalizeColorScheme(storedScheme);
         document.documentElement.setAttribute('data-color-scheme', this.colorScheme);
+        this.refreshThemeColors();
         this.updatePlayerTerminologyUi();
         this.updateHeatmapLegendText();
 
@@ -397,127 +402,34 @@ class HexGame {
     }
 
     // =============================================================================
-    // COLOR PALETTES
+    // COLOR TOKENS
     // =============================================================================
 
+    refreshThemeColors() {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const readToken = (name, fallback = '') => {
+            const raw = rootStyle.getPropertyValue(name);
+            const trimmed = typeof raw === 'string' ? raw.trim() : '';
+            return trimmed || fallback;
+        };
+        this.themeColors = {
+            EMPTY_HEX_GRAY: readToken('--board-cell-empty', '#f0f0f0'),
+            BOARD_BACKGROUND: readToken('--board-bg', '#f8f8fa'),
+            DARK_BLUE: readToken('--board-piece-blue-fill', '#0099ff'),
+            DARK_RED: readToken('--board-piece-red-fill', '#ff4444'),
+            VERY_DARK_BLUE: readToken('--board-edge-blue', '#0099ff'),
+            VERY_DARK_RED: readToken('--board-edge-red', '#ff4444'),
+            DISC_BLUE_STROKE: readToken('--board-piece-blue-stroke', '#0064af'),
+            DISC_RED_STROKE: readToken('--board-piece-red-stroke', '#952500'),
+            HEX_STROKE: readToken('--board-cell-stroke', '#555555'),
+            STATUS_ERROR: readToken('--status-error-text', '#dc3545'),
+            STATUS_SUCCESS: readToken('--status-success-text', '#28a745'),
+        };
+        return this.themeColors;
+    }
+
     getColors() {
-        const selectedScheme = this.normalizeColorScheme(this.colorScheme);
-        if (selectedScheme === 'classic') {
-            return this.darkMode ? this.DARK_COLORS_CLASSIC : this.LIGHT_COLORS_CLASSIC;
-        }
-        return this.darkMode ? this.DARK_COLORS_WOOD : this.LIGHT_COLORS_WOOD;
-    }
-
-    get LIGHT_COLORS_CLASSIC() {
-        return {
-            WHITE: '#fff',
-            LIGHT_GRAY: '#f8f8fa',
-            MEDIUM_GRAY: '#bbb',
-            DARK_GRAY: '#222',
-
-            // Board colors
-            EMPTY_HEX_GRAY: '#f0f0f0',      // ⭐ LIGHT GRAY for empty hexagons
-            GRID_WHITE: '#f8f8fa',          // ⭐ LIGHT GRAY for grid lines between hexagons
-            BOARD_BACKGROUND: '#f8f8fa',     // ⭐ LIGHT GRAY for board background
-
-            // Blue palette - using original bright colors
-            LIGHT_BLUE: '#e7fcfc',
-            MEDIUM_BLUE: '#bbeeee',         // ⭐ LIGHT CYAN - used for grid lines
-            DARK_BLUE: '#0099ff',           // ⭐ ORIGINAL BRIGHT BLUE - used for blue pieces
-            VERY_DARK_BLUE: '#0099ff',      // ⭐ VIVID BLUE - used for edges and winning pieces
-            DARKER_BLUE: '#0066cc',         // ⭐ DARK BLUE - used for last moves
-
-            // Red palette - using original bright colors
-            LIGHT_RED: '#fff4ea',
-            MEDIUM_RED: '#ffe1c8',
-            DARK_RED: '#ff4444',            // ⭐ ORIGINAL BRIGHT RED - used for red pieces
-            VERY_DARK_RED: '#ff4444',       // ⭐ ORIGINAL BRIGHT RED - used for edges and winning pieces
-            DARKER_RED: '#cc3300',          // ⭐ DARK RED - used for last moves
-        };
-    }
-
-    get DARK_COLORS_CLASSIC() {
-        return {
-            WHITE: '#2d2d2d',
-            LIGHT_GRAY: '#1a1a1a',
-            MEDIUM_GRAY: '#666',
-            DARK_GRAY: '#e0e0e0',
-
-            // Board colors
-            EMPTY_HEX_GRAY: '#3a3a3a',      // ⭐ DARK GRAY for empty hexagons
-            GRID_WHITE: '#4a4a4a',          // ⭐ DARK GRAY for grid lines between hexagons
-            BOARD_BACKGROUND: '#232323',     // ⭐ LIGHTER GRAY - halfway between #1a1a1a and #2d2d2d
-
-            // Blue palette - using bright blue for dark theme
-            LIGHT_BLUE: '#1a3a4a',
-            MEDIUM_BLUE: '#2a5a6a',         // ⭐ DARKER CYAN for grid lines
-            DARK_BLUE: '#0099ff',           // ⭐ SAME BRIGHT BLUE as light theme
-            VERY_DARK_BLUE: '#0099ff',      // ⭐ SAME BRIGHT BLUE as light theme
-            DARKER_BLUE: '#0066cc',         // ⭐ DARKER BLUE for last moves
-
-            // Red palette - using bright red for dark theme
-            LIGHT_RED: '#4a2a1a',
-            MEDIUM_RED: '#6a3a2a',
-            DARK_RED: '#ff4444',            // ⭐ SAME BRIGHT RED as light theme
-            VERY_DARK_RED: '#ff4444',       // ⭐ SAME BRIGHT RED as light theme
-            DARKER_RED: '#cc3300',          // ⭐ DARKER RED for last moves
-        };
-    }
-
-    get LIGHT_COLORS_WOOD() {
-        return {
-            WHITE: '#fffdf7',
-            LIGHT_GRAY: '#f7efd9',
-            MEDIUM_GRAY: '#c39a67',
-            DARK_GRAY: '#2f2012',
-
-            // Board colors
-            EMPTY_HEX_GRAY: '#a58852', // '#eed8ad',
-            GRID_WHITE: '#d3ad78',
-            BOARD_BACKGROUND: '#debe88', // or if lighter, maybe: '#f7dda4',
-
-            // Blue player -> black pieces
-            LIGHT_BLUE: '#5e4a32',
-            MEDIUM_BLUE: '#463626',
-            DARK_BLUE: '#171412',
-            VERY_DARK_BLUE: '#0f0d0b',
-            DARKER_BLUE: '#000000',
-
-            // Red player -> white pieces
-            LIGHT_RED: '#f9f1dd',
-            MEDIUM_RED: '#f4e8cf',
-            DARK_RED: '#f7f2e6',
-            VERY_DARK_RED: '#fffaf0',
-            DARKER_RED: '#dfd5c2',
-        };
-    }
-
-    get DARK_COLORS_WOOD() {
-        return {
-            WHITE: '#362b20',
-            LIGHT_GRAY: '#241a12',
-            MEDIUM_GRAY: '#90683d',
-            DARK_GRAY: '#f4e8d8',
-
-            // Board colors
-            EMPTY_HEX_GRAY: '#ab8150',
-            GRID_WHITE: '#8d6839',
-            BOARD_BACKGROUND: '#7e5e35',
-
-            // Blue player -> black pieces
-            LIGHT_BLUE: '#4d3825',
-            MEDIUM_BLUE: '#362819',
-            DARK_BLUE: '#12100e',
-            VERY_DARK_BLUE: '#000000',
-            DARKER_BLUE: '#000000',
-
-            // Red player -> white pieces
-            LIGHT_RED: '#dfcfb4',
-            MEDIUM_RED: '#eadcc4',
-            DARK_RED: '#f4efe1',
-            VERY_DARK_RED: '#fff9ee',
-            DARKER_RED: '#e4d9c7',
-        };
+        return this.themeColors || this.refreshThemeColors();
     }
 
     updateDifficultyPreset() {
@@ -1333,6 +1245,7 @@ class HexGame {
     }
 
     updateHex(row, col, newValue) {
+        this.refreshThemeColors();
         const key = `${row},${col}`;
         let hexElement = this.hexElements.get(key);
         const { x, y } = this.hexCenter(row, col, 18);
@@ -1382,18 +1295,17 @@ class HexGame {
 
     getDiscStyle(cellValue) {
         const colors = this.getColors();
-        const currentColorScheme = this.normalizeColorScheme(this.colorScheme);
 
         if (cellValue === this.pieceValues.BLUE) {
             return {
                 fill: colors.DARK_BLUE,
-                stroke: currentColorScheme === 'wood' ? '#3f3227' : '#0064af',
+                stroke: colors.DISC_BLUE_STROKE,
             };
         }
         if (cellValue === this.pieceValues.RED) {
             return {
                 fill: colors.DARK_RED,
-                stroke: currentColorScheme === 'wood' ? '#9f8f78' : '#952500',
+                stroke: colors.DISC_RED_STROKE,
             };
         }
         return null;
@@ -1546,6 +1458,7 @@ class HexGame {
         ) {
             window.HexHeatmap.tooltip.hide();
         }
+        this.refreshThemeColors();
 
         // Constants for hexagonal board - adapted from working dev version
         const HEX_RADIUS = 18; // Slightly smaller for mobile
@@ -1680,7 +1593,7 @@ class HexGame {
         const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
         hex.setAttribute('points', points.map(p => p.join(',')).join(' '));
         hex.setAttribute('fill', fill);
-        hex.setAttribute('stroke', '#555555'); // '#ddd'
+        hex.setAttribute('stroke', this.getColors().HEX_STROKE);
         hex.setAttribute('stroke-width', '1');
 
         // Apply purple shading if needed
@@ -1912,8 +1825,9 @@ class HexGame {
 
     showError(message) {
         console.error('Game Error:', message);
+        this.refreshThemeColors();
         this.statusLine.textContent = `Error: ${message}`;
-        this.statusLine.style.color = '#dc3545';
+        this.statusLine.style.color = this.getColors().STATUS_ERROR;
         this.statusLine.style.fontWeight = 'bold';
         setTimeout(() => {
             this.statusLine.style.color = '';
@@ -1933,8 +1847,9 @@ class HexGame {
 
     showSuccess(message) {
         console.log('Game Success:', message);
+        this.refreshThemeColors();
         this.statusLine.textContent = message;
-        this.statusLine.style.color = '#28a745';
+        this.statusLine.style.color = this.getColors().STATUS_SUCCESS;
         this.statusLine.style.fontWeight = 'bold';
         setTimeout(() => {
             this.statusLine.style.color = '';

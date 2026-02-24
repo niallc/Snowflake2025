@@ -29,8 +29,9 @@
   }
 
   function interpolateRgb(colorA, colorB, t) {
-    const a = hexToRgb(colorA);
-    const b = hexToRgb(colorB);
+    const fallback = { r: 128, g: 128, b: 128 };
+    const a = colorToRgb(colorA, fallback);
+    const b = colorToRgb(colorB, fallback);
     return {
       r: lerpChannel(a.r, b.r, t),
       g: lerpChannel(a.g, b.g, t),
@@ -64,6 +65,55 @@
       return hexToRgb(trimmed);
     }
     return parseRgbString(trimmed) || fallback;
+  }
+
+  function readCssToken(name, fallback) {
+    if (typeof document === 'undefined' || !document.documentElement) {
+      return fallback;
+    }
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    return trimmed || fallback;
+  }
+
+  let tokenProbeElement = null;
+
+  function ensureTokenProbe() {
+    if (typeof document === 'undefined' || !document.documentElement) {
+      return null;
+    }
+    if (!tokenProbeElement) {
+      tokenProbeElement = document.createElement('div');
+      tokenProbeElement.style.position = 'absolute';
+      tokenProbeElement.style.visibility = 'hidden';
+      tokenProbeElement.style.pointerEvents = 'none';
+      tokenProbeElement.style.width = '0';
+      tokenProbeElement.style.height = '0';
+      tokenProbeElement.style.overflow = 'hidden';
+      document.documentElement.appendChild(tokenProbeElement);
+    }
+    return tokenProbeElement;
+  }
+
+  function resolveCssColorToken(name, fallback, property = 'color') {
+    const probe = ensureTokenProbe();
+    if (!probe) {
+      return fallback;
+    }
+    const cssVar = `var(${name})`;
+    if (property === 'backgroundColor') {
+      probe.style.backgroundColor = cssVar;
+      const resolved = getComputedStyle(probe).backgroundColor;
+      return (typeof resolved === 'string' && resolved.trim()) ? resolved.trim() : fallback;
+    }
+    if (property === 'borderColor') {
+      probe.style.borderColor = cssVar;
+      const resolved = getComputedStyle(probe).borderColor;
+      return (typeof resolved === 'string' && resolved.trim()) ? resolved.trim() : fallback;
+    }
+    probe.style.color = cssVar;
+    const resolved = getComputedStyle(probe).color;
+    return (typeof resolved === 'string' && resolved.trim()) ? resolved.trim() : fallback;
   }
 
   function emphasizeScoreAroundMidpoint(score, options = {}) {
@@ -114,7 +164,7 @@
     tooltipElement.style.pointerEvents = 'none';
     tooltipElement.style.zIndex = '1000';
     tooltipElement.style.border = '1px solid transparent';
-    tooltipElement.style.boxShadow = '0 2px 6px rgba(0,0,0,0.25)';
+    tooltipElement.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.25)';
     applyTooltipTheme(tooltipElement, darkMode);
     return tooltipElement;
   }
@@ -123,15 +173,63 @@
     if (!element) {
       return;
     }
-    if (darkMode) {
-      element.style.background = 'rgba(20, 20, 24, 0.94)';
-      element.style.color = '#f0f3ff';
-      element.style.borderColor = '#5f6b89';
-    } else {
-      element.style.background = 'rgba(18, 22, 28, 0.9)';
-      element.style.color = '#f6fbff';
-      element.style.borderColor = '#7b88a7';
+    const fallbackBackground = darkMode ? 'rgba(20, 20, 24, 0.94)' : 'rgba(18, 22, 28, 0.9)';
+    const fallbackText = darkMode ? '#f0f3ff' : '#f6fbff';
+    const fallbackBorder = darkMode ? '#5f6b89' : '#7b88a7';
+    const fallbackShadow = 'rgba(0, 0, 0, 0.25)';
+    element.style.background = resolveCssColorToken('--heatmap-tooltip-bg', fallbackBackground, 'backgroundColor');
+    element.style.color = resolveCssColorToken('--heatmap-tooltip-text', fallbackText, 'color');
+    element.style.borderColor = resolveCssColorToken('--heatmap-tooltip-border', fallbackBorder, 'borderColor');
+    element.style.boxShadow = `0 2px 6px ${readCssToken('--heatmap-tooltip-shadow', fallbackShadow)}`;
+  }
+
+  function defaultPalette(options = {}) {
+    const isWoodScheme = options.colorScheme === 'wood';
+    if (isWoodScheme) {
+      if (options.darkMode) {
+        return {
+          low: '#de6f72',
+          mid: '#8f9dc0',
+          high: '#5fc88e',
+        };
+      }
+      return {
+        low: '#bf4c53',
+        mid: '#7f8db6',
+        high: '#2f9965',
+      };
     }
+    if (options.darkMode) {
+      return {
+        low: '#d09138',
+        mid: '#6b7292',
+        high: '#46c985',
+      };
+    }
+    return {
+      low: '#b87418',
+      mid: '#8a93b0',
+      high: '#1f9f60',
+    };
+  }
+
+  function resolvePalette(options = {}) {
+    const fallback = defaultPalette(options);
+    const provided = options.palette;
+    if (
+      provided &&
+      typeof provided === 'object' &&
+      typeof provided.low === 'string' &&
+      typeof provided.mid === 'string' &&
+      typeof provided.high === 'string'
+    ) {
+      return provided;
+    }
+    return {
+      low: resolveCssColorToken('--heatmap-low', fallback.low, 'color'),
+      mid: resolveCssColorToken('--heatmap-mid', fallback.mid, 'color'),
+      high: resolveCssColorToken('--heatmap-high', fallback.high, 'color'),
+    };
   }
 
   function positionTooltip(event, options = {}) {
@@ -184,35 +282,7 @@
       return options.fallback || 'rgb(128, 128, 128)';
     }
 
-    const isWoodScheme = options.colorScheme === 'wood';
-    const palette = isWoodScheme
-      ? (
-          options.darkMode
-            ? {
-                // Red -> cool slate -> green for wood mode (avoids muddy browns).
-                low: '#de6f72',
-                mid: '#8f9dc0',
-                high: '#5fc88e',
-              }
-            : {
-                low: '#bf4c53',
-                mid: '#7f8db6',
-                high: '#2f9965',
-              }
-        )
-      : (
-          options.darkMode
-            ? {
-                low: '#d09138',
-                mid: '#6b7292',
-                high: '#46c985',
-              }
-            : {
-                low: '#b87418',
-                mid: '#8a93b0',
-                high: '#1f9f60',
-              }
-        );
+    const palette = resolvePalette(options);
 
     const normalized = emphasizeScoreAroundMidpoint(score, options);
     const alpha = clamp(
