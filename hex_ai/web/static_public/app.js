@@ -36,6 +36,8 @@ class HexGame {
         this.pieRuleCanSwap = false;
         this.pieRuleAction = 'none';
         this.pieRuleArmed = true;
+        this.sessionStateStorageKey = 'hex_ai_session_state_v1';
+        this.sessionStateVersion = 1;
 
         // Track previous board state for efficient updates
         this.previousBoard = null;
@@ -159,6 +161,7 @@ class HexGame {
             this.eloSlider.value = this.currentElo;
             this.eloDisplay.textContent = this.currentElo;
             localStorage.setItem('hex_ai_preferred_elo', String(this.currentElo));
+            this.persistSessionState();
         });
 
         if (this.boardSizeSelect) {
@@ -185,16 +188,19 @@ class HexGame {
 
         this.eloSlider.addEventListener('change', () => {
             localStorage.setItem('hex_ai_preferred_elo', String(this.currentElo));
+            this.persistSessionState();
         });
 
         this.blueComputerCheck.addEventListener('change', (e) => {
             this.blueComputer = e.target.checked;
             this.updatePieRuleUi();
+            this.persistSessionState();
         });
 
         this.redComputerCheck.addEventListener('change', (e) => {
             this.redComputer = e.target.checked;
             this.updatePieRuleUi();
+            this.persistSessionState();
         });
 
         if (this.pieRuleEnabledCheck) {
@@ -202,6 +208,7 @@ class HexGame {
                 this.pieRuleEnabled = e.target.checked;
                 localStorage.setItem('hex_ai_pie_rule_enabled', String(this.pieRuleEnabled));
                 this.updatePieRuleUi();
+                this.persistSessionState();
                 await this.loadGameStateWithoutAutoMove('pie_rule_toggle');
             });
         }
@@ -267,6 +274,10 @@ class HexGame {
                 }
             });
         }
+
+        window.addEventListener('pagehide', () => {
+            this.persistSessionState();
+        });
     }
 
     // =============================================================================
@@ -877,6 +888,10 @@ class HexGame {
         this.blueComputer = this.redComputer;
         this.redComputer = oldBlueComputer;
 
+        this.syncPlayerToggleInputs();
+    }
+
+    syncPlayerToggleInputs() {
         if (this.blueComputerCheck) {
             this.blueComputerCheck.checked = this.blueComputer;
         }
@@ -904,6 +919,133 @@ class HexGame {
         } else {
             const size = this.validateBoardSize();
             this.instructionText.textContent = `Changed board size to ${size}`;
+        }
+    }
+
+    getSessionStorage() {
+        try {
+            return window.sessionStorage;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    clearPersistedSessionState() {
+        const storage = this.getSessionStorage();
+        if (!storage) {
+            return;
+        }
+        try {
+            storage.removeItem(this.sessionStateStorageKey);
+        } catch (_error) {
+            // Ignore browser storage errors; game state remains in memory.
+        }
+    }
+
+    sanitizeSessionStateArray(rawValue) {
+        if (!Array.isArray(rawValue)) {
+            return [];
+        }
+        return rawValue
+            .filter((entry) => typeof entry === 'string')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+    }
+
+    restoreSessionState(validBoardSizes, minElo, maxElo) {
+        const storage = this.getSessionStorage();
+        if (!storage) {
+            return false;
+        }
+        try {
+            const rawSnapshot = storage.getItem(this.sessionStateStorageKey);
+            if (!rawSnapshot) {
+                return false;
+            }
+            const snapshot = JSON.parse(rawSnapshot);
+            if (!snapshot || typeof snapshot !== 'object' || snapshot.version !== this.sessionStateVersion) {
+                this.clearPersistedSessionState();
+                return false;
+            }
+
+            const restoredTrmph = typeof snapshot.currentTRMPH === 'string' ? snapshot.currentTRMPH.trim() : '';
+            const restoredMoveCount = restoredTrmph ? this.parseTrmphMoves(restoredTrmph).length : 0;
+            const restoredBoardSize = parseInt(snapshot.displayBoardSize, 10);
+            const restoredElo = parseInt(snapshot.currentElo, 10);
+
+            if (Number.isFinite(restoredBoardSize) && validBoardSizes.has(restoredBoardSize)) {
+                this.displayBoardSize = restoredBoardSize;
+            }
+            if (Number.isFinite(restoredElo) && restoredElo >= minElo && restoredElo <= maxElo) {
+                this.currentElo = restoredElo;
+            }
+            if (typeof snapshot.blueComputer === 'boolean') {
+                this.blueComputer = snapshot.blueComputer;
+            }
+            if (typeof snapshot.redComputer === 'boolean') {
+                this.redComputer = snapshot.redComputer;
+            }
+            if (typeof snapshot.pieRuleEnabled === 'boolean') {
+                this.pieRuleEnabled = snapshot.pieRuleEnabled;
+            }
+            if (typeof snapshot.pieRuleArmed === 'boolean') {
+                this.pieRuleArmed = snapshot.pieRuleArmed;
+            }
+
+            this.currentTRMPH = restoredTrmph;
+            this.moveCount = restoredMoveCount;
+
+            let restoredHistory = this.sanitizeSessionStateArray(snapshot.gameHistory);
+            if (!restoredTrmph) {
+                restoredHistory = [];
+            } else if (restoredHistory.length === 0 || restoredHistory[restoredHistory.length - 1] !== restoredTrmph) {
+                restoredHistory.push(restoredTrmph);
+            }
+            this.gameHistory = restoredHistory;
+            this.redoHistory = this.sanitizeSessionStateArray(snapshot.redoHistory);
+
+            return true;
+        } catch (error) {
+            console.warn('Ignoring invalid session snapshot:', error);
+            this.clearPersistedSessionState();
+            return false;
+        }
+    }
+
+    persistSessionState() {
+        const storage = this.getSessionStorage();
+        if (!storage) {
+            return;
+        }
+
+        let normalizedMoveCount = this.moveCount;
+        try {
+            normalizedMoveCount = this.currentTRMPH
+                ? this.parseTrmphMoves(this.currentTRMPH).length
+                : 0;
+        } catch (_error) {
+            normalizedMoveCount = Number.isFinite(this.moveCount) ? this.moveCount : 0;
+        }
+
+        const snapshot = {
+            version: this.sessionStateVersion,
+            updated_at_ms: Date.now(),
+            currentTRMPH: this.currentTRMPH,
+            gameHistory: this.sanitizeSessionStateArray(this.gameHistory),
+            redoHistory: this.sanitizeSessionStateArray(this.redoHistory),
+            moveCount: normalizedMoveCount,
+            displayBoardSize: this.displayBoardSize,
+            currentElo: this.currentElo,
+            blueComputer: this.blueComputer,
+            redComputer: this.redComputer,
+            pieRuleEnabled: this.pieRuleEnabled,
+            pieRuleArmed: this.pieRuleArmed,
+        };
+
+        try {
+            storage.setItem(this.sessionStateStorageKey, JSON.stringify(snapshot));
+        } catch (error) {
+            console.warn('Failed to persist session snapshot:', error);
         }
     }
 
@@ -1096,6 +1238,8 @@ class HexGame {
             } else {
                 this.pieRuleEnabled = backendPieDefault;
             }
+            const restoredSession = this.restoreSessionState(validSizes, this.minElo, this.maxElo);
+            this.syncPlayerToggleInputs();
             this.updatePieRuleUi();
 
             // Update slider and display with backend values
@@ -1110,9 +1254,11 @@ class HexGame {
             this.updateInstructionTextForBoardMode();
 
             this.initializeBoard();
-            // Initial load - allow computer auto-move
-            await this.loadGameState(true, 'initial_load');
+            const initialStateReason = restoredSession ? 'session_restore' : 'initial_load';
+            const shouldAutoMove = !restoredSession;
+            await this.loadGameState(shouldAutoMove, initialStateReason);
             this.isInitialLoad = false; // Mark initial load as complete
+            this.persistSessionState();
         } catch (error) {
             console.error('Failed to load game constants:', error);
             this.handleNetworkError(error, 'load game');
@@ -1140,6 +1286,7 @@ class HexGame {
         try {
             this.currentTRMPH = "";
             this.gameHistory = [];
+            this.redoHistory = [];
             this.moveCount = 0;
             this.pieRuleArmed = true;
             this.isInitialLoad = false; // Mark that this is no longer initial load
@@ -1157,6 +1304,7 @@ class HexGame {
         } finally {
             this.setLoading(false);
             this.updateButtonStates();
+            this.persistSessionState();
         }
     }
 
@@ -1191,6 +1339,7 @@ class HexGame {
             if (this.isBoardEmpty(this.previousBoard)) {
                 this.showInstructionText();
             }
+            this.persistSessionState();
         } catch (error) {
             console.error('Failed to undo move:', error);
             this.showError('Failed to undo move.');
@@ -1253,6 +1402,7 @@ class HexGame {
                 await this.renderBoardWithHeatmap(data.board, data.move_heatmap || null);
                 this.updateTrmphDisplay();
                 this.updateButtonStates();
+                this.persistSessionState();
 
                 // Auto-move for computer players
                 if (data.winner) {
@@ -1328,6 +1478,7 @@ class HexGame {
 
             await this.renderBoardWithHeatmap(data.board);
             this.updateTrmphDisplay();
+            this.persistSessionState();
 
             // Handle game over and auto-move logic
             if (data.winner) {
@@ -1893,6 +2044,7 @@ class HexGame {
             await this.renderBoardWithHeatmap(data.board);
             this.updateTrmphDisplay();
             this.updateButtonStates();
+            this.persistSessionState();
 
             // Auto-move for computer players
             if (data.winner) {
@@ -2049,6 +2201,7 @@ class HexGame {
             if (this.isBoardEmpty(this.previousBoard)) {
                 this.showInstructionText();
             }
+            this.persistSessionState();
         } catch (error) {
             console.error('Failed to redo move:', error);
             this.showError('Failed to redo move.');
@@ -2291,6 +2444,7 @@ class HexGame {
             this.updateTrmphDisplay();
             await this.renderBoardWithHeatmap(data.board);
             this.updateButtonStates();
+            this.persistSessionState();
 
             // Clear the input
             this.trmphInput.value = '';
