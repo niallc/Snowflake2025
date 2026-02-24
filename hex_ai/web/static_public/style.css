@@ -149,9 +149,9 @@
 [data-color-scheme="wood"] {
   --board-region-bg: rgba(201, 157, 92, 0.11);
 
-  --board-bg: #debe88;
-  --board-cell-empty: #a58852;
-  --board-cell-stroke: #5f472f;
+  --board-bg: #debe8870;
+  --board-cell-empty: #9e8049;
+  --board-cell-stroke: #c0b3a6;
   --board-cell-hover-stroke: #5a442d;
   --board-edge-blue: #0f0d0b;
   --board-edge-red: #fffaf0;
@@ -177,9 +177,9 @@
 [data-theme="dark"][data-color-scheme="wood"] {
   --board-region-bg: rgba(206, 168, 108, 0.08);
 
-  --board-bg: #7e5e35;
-  --board-cell-empty: #ab8150;
-  --board-cell-stroke: #694f30;
+  --board-bg: #debe8870;
+  --board-cell-empty: #9e8049;
+  --board-cell-stroke: #5a4938;
   --board-cell-hover-stroke: #c7a36f;
   --board-edge-blue: #000000;
   --board-edge-red: #fff9ee;
