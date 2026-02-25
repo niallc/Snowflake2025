@@ -81,4 +81,32 @@ def test_get_unique_checkpoint_path_with_different_extensions():
         base_path2.touch()
         unique_path2 = get_unique_checkpoint_path(base_path2)
         assert unique_path2 != base_path2
-        assert unique_path2.suffix == ".pth" 
+        assert unique_path2.suffix == ".pth"
+
+
+def test_get_unique_checkpoint_path_pt_collides_with_existing_pt_gz():
+    """A base .pt path should collide with an existing .pt.gz checkpoint sibling."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "epoch3_mini19.pt"
+        compressed_existing = Path(tmpdir) / "epoch3_mini19.pt.gz"
+        compressed_existing.touch()
+
+        unique_path = get_unique_checkpoint_path(base_path)
+
+        assert unique_path != base_path
+        assert unique_path.suffix == ".pt"
+        assert unique_path.name.startswith("epoch3_mini19_")
+
+
+def test_get_unique_checkpoint_path_pt_gz_collides_with_existing_pt():
+    """A base .pt.gz path should collide with an existing .pt checkpoint sibling."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_path = Path(tmpdir) / "epoch3_mini19.pt.gz"
+        uncompressed_existing = Path(tmpdir) / "epoch3_mini19.pt"
+        uncompressed_existing.touch()
+
+        unique_path = get_unique_checkpoint_path(base_path)
+
+        assert unique_path != base_path
+        assert unique_path.name.startswith("epoch3_mini19.pt_")
+        assert unique_path.suffix == ".gz"

@@ -243,7 +243,25 @@ def get_unique_checkpoint_path(base_path: Path) -> Path:
     Example:
         If "epoch3_mini19.pt.gz" exists, returns "epoch3_mini19_250802_1041.pt.gz"
     """
-    if not base_path.exists():
+    def _checkpoint_collision_variants(path: Path) -> List[Path]:
+        """
+        Return path variants that should be treated as the same logical checkpoint.
+
+        We treat compressed and uncompressed `.pt` forms as colliding names because
+        training commonly requests a `.pt` path and then saves to `.pt.gz`.
+        """
+        variants = [path]
+        name = path.name
+        if name.endswith(".pt"):
+            variants.append(path.with_name(f"{name}.gz"))
+        elif name.endswith(".pt.gz"):
+            variants.append(path.with_name(name[:-3]))
+        return variants
+
+    def _path_collides(path: Path) -> bool:
+        return any(candidate.exists() for candidate in _checkpoint_collision_variants(path))
+
+    if not _path_collides(base_path):
         return base_path
     
     # Extract stem and suffix
@@ -251,7 +269,6 @@ def get_unique_checkpoint_path(base_path: Path) -> Path:
     suffix = base_path.suffix
     
     # Generate timestamp (yymmdd_hrmin format)
-    from datetime import datetime
     timestamp = datetime.now().strftime("%y%m%d_%H%M")
     
     # Create new path with timestamp
@@ -259,7 +276,7 @@ def get_unique_checkpoint_path(base_path: Path) -> Path:
     new_path = base_path.parent / f"{new_stem}{suffix}"
     
     # If this path also exists, add seconds to make it unique
-    if new_path.exists():
+    if _path_collides(new_path):
         timestamp_with_seconds = datetime.now().strftime("%y%m%d_%H%M%S")
         new_stem = f"{stem}_{timestamp_with_seconds}"
         new_path = base_path.parent / f"{new_stem}{suffix}"
