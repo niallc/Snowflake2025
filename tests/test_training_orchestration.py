@@ -160,6 +160,18 @@ class TestCheckpointFinding:
             latest = find_latest_checkpoint_for_epoch(temp_path, 1)
             assert latest is None
 
+    def test_find_latest_checkpoint_uses_numeric_mini_order(self):
+        """`mini10` must sort after `mini9` (numeric, not lexicographic)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            (temp_path / "epoch1_mini9.pt.gz").touch()
+            (temp_path / "epoch1_mini10.pt.gz").touch()
+
+            latest = find_latest_checkpoint_for_epoch(temp_path, 1)
+            assert latest is not None
+            assert "epoch1_mini10" in str(latest)
+
 
 class TestExperimentNameGeneration:
     """Test experiment name generation functionality."""
@@ -295,4 +307,3 @@ class TestMemoryEfficiency:
                     # Should only have called gzip.open once (for the sample file)
                     assert mock_gzip.call_count == 1
                     assert mock_pickle.call_count == 1 
-

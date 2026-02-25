@@ -100,7 +100,7 @@
     if (!probe) {
       return fallback;
     }
-    const cssVar = `var(${name})`;
+    const cssVar = `var(${name}, ${fallback})`;
     if (property === 'backgroundColor') {
       probe.style.backgroundColor = cssVar;
       const resolved = getComputedStyle(probe).backgroundColor;

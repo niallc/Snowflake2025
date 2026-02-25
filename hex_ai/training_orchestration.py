@@ -164,8 +164,22 @@ def find_latest_checkpoint_for_epoch(experiment_dir: Path, target_epoch: int) ->
     if not checkpoint_files:
         return None
     
-    # Return the latest one (highest mini-epoch number)
-    return max(checkpoint_files, key=lambda f: f.name)
+    # Return the latest one by numeric mini-epoch (not lexicographic filename order).
+    parsed_candidates: List[Tuple[int, int, Path]] = []
+    for checkpoint in checkpoint_files:
+        match = re.search(r"epoch(\d+)_mini(\d+)", checkpoint.name)
+        if not match:
+            continue
+        epoch = int(match.group(1))
+        mini_epoch = int(match.group(2))
+        if epoch != target_epoch:
+            continue
+        parsed_candidates.append((mini_epoch, checkpoint.stat().st_mtime_ns, checkpoint))
+
+    if not parsed_candidates:
+        return None
+
+    return max(parsed_candidates, key=lambda item: (item[0], item[1], item[2].name))[2]
 
 
 def get_training_stream_state_sidecar_path(checkpoint_path: Path) -> Path:

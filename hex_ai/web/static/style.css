@@ -23,6 +23,16 @@
   --modal-overlay: rgba(0, 0, 0, 0.5);
   --debug-bg: #fff;
   --status-bg: #f4f4f4;
+  --heatmap-band-below-stroke: #925e16;
+  --heatmap-band-above-stroke: #1f8658;
+  --heatmap-band-even-stroke: #657697;
+  --heatmap-low: #b87418;
+  --heatmap-mid: #7f8fb0;
+  --heatmap-high: #1f9f60;
+  --heatmap-tooltip-bg: rgba(244, 248, 255, 0.94);
+  --heatmap-tooltip-text: #102036;
+  --heatmap-tooltip-border: rgba(74, 94, 133, 0.62);
+  --heatmap-tooltip-shadow: rgba(12, 18, 30, 0.25);
 }
 
 /* Dark theme */
@@ -49,6 +59,16 @@
   --modal-overlay: rgba(0, 0, 0, 0.8);
   --debug-bg: #3a3a3a;
   --status-bg: #4a4a4a;
+  --heatmap-band-below-stroke: #e9b45f;
+  --heatmap-band-above-stroke: #6ad79b;
+  --heatmap-band-even-stroke: #a4b2d1;
+  --heatmap-low: #d19a3d;
+  --heatmap-mid: #8f9ec1;
+  --heatmap-high: #56c98f;
+  --heatmap-tooltip-bg: rgba(14, 18, 28, 0.96);
+  --heatmap-tooltip-text: #eef4ff;
+  --heatmap-tooltip-border: rgba(120, 142, 188, 0.78);
+  --heatmap-tooltip-shadow: rgba(0, 0, 0, 0.52);
 }
 
 .player-settings {
@@ -243,30 +263,18 @@ small {
 }
 
 #board-container svg polygon.heatmap-scored.heatmap-below {
-  stroke: #946018;
+  stroke: var(--heatmap-band-below-stroke);
   stroke-dasharray: 6 4;
 }
 
 #board-container svg polygon.heatmap-scored.heatmap-above {
-  stroke: #257f53;
+  stroke: var(--heatmap-band-above-stroke);
   stroke-dasharray: none;
 }
 
 #board-container svg polygon.heatmap-scored.heatmap-even {
-  stroke: #6c778f;
+  stroke: var(--heatmap-band-even-stroke);
   stroke-dasharray: 2.5 3.5;
-}
-
-[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-below {
-  stroke: #e7b65f;
-}
-
-[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-above {
-  stroke: #71e2a1;
-}
-
-[data-theme="dark"] #board-container svg polygon.heatmap-scored.heatmap-even {
-  stroke: #b6c2df;
 }
 
 #controls {
