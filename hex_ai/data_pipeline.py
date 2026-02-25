@@ -14,6 +14,8 @@ import torch.nn as nn
 import numpy as np
 import gzip
 import pickle
+import base64
+import hashlib
 import json
 import logging
 import random
@@ -36,10 +38,12 @@ logger = logging.getLogger(__name__)
 AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotations/reflections)
 # TODO: Refine ths as I doubt the actual validation gets nearly this big
 MAX_VALIDATION_MEMORY_GB = 9.0
+TRAINING_STREAM_STATE_VERSION = 1
 
 # Compact in-memory representation for pooled training/validation examples:
-# (board, policy, value, player_to_move)
-PositionPoolEntry = Tuple[Any, Any, Any, Any]
+# (board, policy, value, player_to_move, source_ref)
+PositionSourceRef = Tuple[int, str, int]  # (dir_idx, shard_filename, example_idx)
+PositionPoolEntry = Tuple[Any, Any, Any, Any, Optional[PositionSourceRef]]
 
 
 def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:
@@ -198,6 +202,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Track read offsets within the head shard of each directory queue.
         # Offset is 0 when no partially-consumed shard exists for that directory.
         self.current_shard_offsets: List[int] = [0] * len(self.data_dirs)
+        self._shard_lookup_by_dir: List[Dict[str, Path]] = []
+        self.dataset_fingerprint: Optional[str] = None
         self.directory_weights: List[float] = []  # Proportional weights for each directory
         
         # Statistics and monitoring
@@ -278,6 +284,37 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         # Store original state for reset functionality
         self._original_shard_queues = [queue.copy() for queue in self.shard_queues]
+        self._build_shard_lookup()
+        self.dataset_fingerprint = self._compute_dataset_fingerprint()
+
+    def _build_shard_lookup(self) -> None:
+        """Build per-directory shard filename -> path lookup for stream-state restore."""
+        lookup_by_dir: List[Dict[str, Path]] = []
+        for dir_idx, queue in enumerate(self._original_shard_queues):
+            dir_lookup: Dict[str, Path] = {}
+            for shard_path in queue:
+                shard_name = shard_path.name
+                if shard_name in dir_lookup and dir_lookup[shard_name] != shard_path:
+                    raise RuntimeError(
+                        f"Duplicate shard filename in directory index {dir_idx}: {shard_name}. "
+                        "Stream-state restore requires unique shard filenames per directory."
+                    )
+                dir_lookup[shard_name] = shard_path
+            lookup_by_dir.append(dir_lookup)
+        self._shard_lookup_by_dir = lookup_by_dir
+
+    def _compute_dataset_fingerprint(self) -> str:
+        """Compute deterministic fingerprint for stream-state compatibility checks."""
+        payload = {
+            "data_dirs": [str(Path(d).resolve()) for d in self.data_dirs],
+            "shard_ranges": list(self.shard_ranges),
+            "shards": [
+                [str(path.resolve()) for path in queue]
+                for queue in self._original_shard_queues
+            ],
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     
     def _estimate_total_data(self):
         """Estimate total positions and games by sampling a few shards from each directory."""
@@ -473,7 +510,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                     if isinstance(data, dict) and 'examples' in data:
                         # Keep only fields needed by training/validation to reduce steady-state memory.
                         all_validation_positions.extend(
-                            self._create_compact_position_example(example, copy_arrays=False)
+                            self._create_compact_position_example(
+                                example,
+                                copy_arrays=False,
+                                source_ref=None,
+                            )
                             for example in data['examples']
                         )
                     
@@ -539,7 +580,12 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             self.logger.info(f"Validation dataset initialized: {len(all_validation_positions):,} positions, "
                            f"estimated {estimated_final_memory_gb:.2f}GB memory usage")
 
-    def _create_compact_position_example(self, example: Dict, copy_arrays: bool) -> PositionPoolEntry:
+    def _create_compact_position_example(
+        self,
+        example: Dict,
+        copy_arrays: bool,
+        source_ref: Optional[PositionSourceRef] = None,
+    ) -> PositionPoolEntry:
         """
         Build a compact in-memory training example.
 
@@ -559,7 +605,233 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             policy,
             example.get('value'),
             example.get('player_to_move'),
+            source_ref,
         )
+
+    @staticmethod
+    def _encode_state_blob(value: Any) -> str:
+        """Encode arbitrary Python object as base64-pickled string for JSON payloads."""
+        payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        return base64.b64encode(payload).decode("ascii")
+
+    @staticmethod
+    def _decode_state_blob(encoded: str) -> Any:
+        """Decode base64-pickled string from stream-state payload."""
+        payload = base64.b64decode(encoded.encode("ascii"))
+        return pickle.loads(payload)
+
+    def _extract_source_ref(self, position: PositionPoolEntry) -> Optional[PositionSourceRef]:
+        """Extract source reference from pooled position entry."""
+        if isinstance(position, tuple) and len(position) >= 5:
+            source_ref = position[4]
+            if source_ref is None:
+                return None
+            if (
+                not isinstance(source_ref, tuple)
+                or len(source_ref) != 3
+                or not isinstance(source_ref[0], int)
+                or not isinstance(source_ref[1], str)
+                or not isinstance(source_ref[2], int)
+            ):
+                raise RuntimeError(f"Invalid position source_ref shape: {source_ref}")
+            return source_ref
+        return None
+
+    def _serialize_shard_queues(self) -> List[List[str]]:
+        """Serialize shard queues as filename-only lists."""
+        return [[path.name for path in queue] for queue in self.shard_queues]
+
+    def _deserialize_shard_queues(self, serialized_queues: List[List[str]]) -> List[List[Path]]:
+        """Deserialize shard queue filenames back to resolved paths."""
+        if len(serialized_queues) != len(self.data_dirs):
+            raise RuntimeError(
+                f"Invalid serialized shard queue count: {len(serialized_queues)} "
+                f"(expected {len(self.data_dirs)})"
+            )
+
+        resolved: List[List[Path]] = []
+        for dir_idx, shard_names in enumerate(serialized_queues):
+            dir_lookup = self._shard_lookup_by_dir[dir_idx]
+            queue: List[Path] = []
+            for shard_name in shard_names:
+                shard_path = dir_lookup.get(shard_name)
+                if shard_path is None:
+                    raise RuntimeError(
+                        f"Unknown shard '{shard_name}' for directory index {dir_idx} "
+                        f"during stream-state restore"
+                    )
+                queue.append(shard_path)
+            resolved.append(queue)
+        return resolved
+
+    def _restore_position_pool_from_refs(self, serialized_refs: List[List[Any]]) -> deque:
+        """
+        Reconstruct position pool from serialized source refs.
+
+        Uses bounded shard caching during restore to avoid loading all shard payloads.
+        """
+        shard_example_cache: Dict[Tuple[int, str], List[Any]] = {}
+        restored_entries: List[PositionPoolEntry] = []
+
+        for raw_ref in serialized_refs:
+            if (
+                not isinstance(raw_ref, list)
+                or len(raw_ref) != 3
+                or not isinstance(raw_ref[0], int)
+                or not isinstance(raw_ref[1], str)
+                or not isinstance(raw_ref[2], int)
+            ):
+                raise RuntimeError(f"Invalid serialized pool ref: {raw_ref}")
+
+            dir_idx = raw_ref[0]
+            shard_name = raw_ref[1]
+            example_idx = raw_ref[2]
+            source_ref: PositionSourceRef = (dir_idx, shard_name, example_idx)
+
+            if dir_idx < 0 or dir_idx >= len(self.data_dirs):
+                raise RuntimeError(f"Pool ref dir_idx out of range: {dir_idx}")
+
+            cache_key = (dir_idx, shard_name)
+            examples = shard_example_cache.get(cache_key)
+            if examples is None:
+                shard_path = self._shard_lookup_by_dir[dir_idx].get(shard_name)
+                if shard_path is None:
+                    raise RuntimeError(
+                        f"Pool ref references unknown shard '{shard_name}' in directory {dir_idx}"
+                    )
+                with gzip.open(shard_path, "rb") as f:
+                    shard_data = pickle.load(f)
+                examples = shard_data.get("examples", []) if isinstance(shard_data, dict) else []
+                if not isinstance(examples, list):
+                    raise RuntimeError(
+                        f"Shard examples payload is not a list for {shard_path}"
+                    )
+                shard_example_cache[cache_key] = examples
+
+                # Keep cache bounded to reduce transient restore memory.
+                if len(shard_example_cache) > 16:
+                    shard_example_cache.pop(next(iter(shard_example_cache)))
+
+            if example_idx < 0 or example_idx >= len(examples):
+                raise RuntimeError(
+                    f"Pool ref example_idx out of range for shard {shard_name}: "
+                    f"{example_idx} (examples={len(examples)})"
+                )
+
+            restored_entries.append(
+                self._create_compact_position_example(
+                    examples[example_idx],
+                    copy_arrays=True,
+                    source_ref=source_ref,
+                )
+            )
+
+        return deque(restored_entries)
+
+    def export_state(self) -> Dict[str, Any]:
+        """Export JSON-serializable training stream state for exact restart resume."""
+        if self.is_validation:
+            raise RuntimeError("export_state is only supported for training datasets")
+        if self.dataset_fingerprint is None:
+            raise RuntimeError("Cannot export state: dataset_fingerprint is not initialized")
+
+        pool_refs: List[List[Any]] = []
+        for position in self.position_pool:
+            source_ref = self._extract_source_ref(position)
+            if source_ref is None:
+                raise RuntimeError(
+                    "Cannot export stream state: position_pool contains entries without source refs"
+                )
+            pool_refs.append([source_ref[0], source_ref[1], source_ref[2]])
+
+        return {
+            "version": TRAINING_STREAM_STATE_VERSION,
+            "dataset_fingerprint": self.dataset_fingerprint,
+            "shard_queues": self._serialize_shard_queues(),
+            "current_shard_offsets": list(self.current_shard_offsets),
+            "loaded_shard_counts": list(self.loaded_shard_counts),
+            "position_pool_refs": pool_refs,
+            "total_positions_yielded": int(self.total_positions_yielded),
+            "total_shards_loaded": int(self.total_shards_loaded),
+            "approx_batch_count": int(self.approx_batch_count),
+            "random_state": {
+                "python": self._encode_state_blob(random.getstate()),
+                "numpy": self._encode_state_blob(np.random.get_state()),
+            },
+        }
+
+    def import_state(self, state: Dict[str, Any]) -> None:
+        """Import training stream state and restore queue/pool/cursor for restart resume."""
+        if self.is_validation:
+            raise RuntimeError("import_state is only supported for training datasets")
+        if self.dataset_fingerprint is None:
+            raise RuntimeError("Cannot import state: dataset_fingerprint is not initialized")
+
+        version = state.get("version")
+        if version != TRAINING_STREAM_STATE_VERSION:
+            raise RuntimeError(
+                f"Unsupported training stream state version: {version} "
+                f"(expected {TRAINING_STREAM_STATE_VERSION})"
+            )
+
+        state_fingerprint = state.get("dataset_fingerprint")
+        if state_fingerprint != self.dataset_fingerprint:
+            raise RuntimeError(
+                "Training stream state fingerprint mismatch. "
+                "Refusing to import stream state for a different dataset configuration."
+            )
+
+        shard_queues = state.get("shard_queues")
+        if not isinstance(shard_queues, list):
+            raise RuntimeError("Invalid stream state: shard_queues must be a list")
+        restored_shard_queues = self._deserialize_shard_queues(shard_queues)
+
+        current_shard_offsets = state.get("current_shard_offsets")
+        loaded_shard_counts = state.get("loaded_shard_counts")
+        if (
+            not isinstance(current_shard_offsets, list)
+            or not isinstance(loaded_shard_counts, list)
+            or len(current_shard_offsets) != len(self.data_dirs)
+            or len(loaded_shard_counts) != len(self.data_dirs)
+        ):
+            raise RuntimeError(
+                "Invalid stream state: current_shard_offsets/loaded_shard_counts shape mismatch"
+            )
+
+        for dir_idx, (offset, queue) in enumerate(zip(current_shard_offsets, restored_shard_queues)):
+            if not isinstance(offset, int) or offset < 0:
+                raise RuntimeError(f"Invalid shard offset for dir {dir_idx}: {offset}")
+            if len(queue) == 0 and offset != 0:
+                raise RuntimeError(
+                    f"Invalid shard offset for exhausted dir {dir_idx}: {offset}"
+                )
+
+        serialized_pool_refs = state.get("position_pool_refs")
+        if not isinstance(serialized_pool_refs, list):
+            raise RuntimeError("Invalid stream state: position_pool_refs must be a list")
+        restored_pool = self._restore_position_pool_from_refs(serialized_pool_refs)
+
+        random_state = state.get("random_state")
+        if not isinstance(random_state, dict):
+            raise RuntimeError("Invalid stream state: random_state must be a dict")
+        random_state_python = random_state.get("python")
+        random_state_numpy = random_state.get("numpy")
+        if not isinstance(random_state_python, str) or not isinstance(random_state_numpy, str):
+            raise RuntimeError("Invalid stream state: random_state payload missing")
+
+        # Apply restored state after full validation succeeds.
+        self.shard_queues = restored_shard_queues
+        self.current_shard_offsets = [int(v) for v in current_shard_offsets]
+        self.loaded_shard_counts = [int(v) for v in loaded_shard_counts]
+        self.position_pool = restored_pool
+        self.total_positions_yielded = int(state.get("total_positions_yielded", 0))
+        self.total_shards_loaded = int(state.get("total_shards_loaded", 0))
+        self.approx_batch_count = int(state.get("approx_batch_count", 0))
+        self._memory_warning_logged = False
+        self._shards_exhausted_logged = False
+
+        random.setstate(self._decode_state_blob(random_state_python))
+        np.random.set_state(self._decode_state_blob(random_state_numpy))
     
     def _monitor_memory(self) -> bool:
         """
@@ -728,11 +1000,21 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 # Also drop metadata fields to keep memory overhead lower.
                 first_copy_checked = False  # Track if we've checked the first copy for diagnostics
                 shard_positions_added = 0
-                for example in file_examples[shard_offset:]:
+                for relative_idx, example in enumerate(file_examples[shard_offset:]):
                     if positions_added >= positions_needed:
                         break
+                    example_idx = shard_offset + relative_idx
+                    source_ref: PositionSourceRef = (
+                        selected_dir_idx,
+                        shard_path.name,
+                        example_idx,
+                    )
                     
-                    example_copy = self._create_compact_position_example(example, copy_arrays=True)
+                    example_copy = self._create_compact_position_example(
+                        example,
+                        copy_arrays=True,
+                        source_ref=source_ref,
+                    )
                     
                     # Check for array sharing AFTER copying (memory leak diagnostic)
                     # This verifies that the copy actually broke the memory sharing
@@ -853,7 +1135,11 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         """Process a single position (augmentation, tensor conversion, etc.)."""
         # Prefer compact tuple representation; keep dict fallback for safety.
         if isinstance(position, tuple):
-            board, policy, value, player_to_move = position
+            if len(position) < 4:
+                raise RuntimeError(
+                    f"Invalid compact position tuple length: {len(position)} (expected >= 4)"
+                )
+            board, policy, value, player_to_move = position[:4]
         else:
             board = position['board']
             policy = position['policy']

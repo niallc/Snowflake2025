@@ -611,7 +611,7 @@ class TrainingStep:
 
     @staticmethod
     def _parse_epoch_mini_from_checkpoint(checkpoint_path: Path) -> tuple[int, int]:
-        match = re.search(r"epoch(\d+)_mini(\d+)\.pt(?:\.gz)?$", checkpoint_path.name)
+        match = re.search(r"epoch(\d+)_mini(\d+)", checkpoint_path.name)
         if not match:
             raise ValueError(
                 f"Could not parse epoch/mini from checkpoint filename: {checkpoint_path.name}"

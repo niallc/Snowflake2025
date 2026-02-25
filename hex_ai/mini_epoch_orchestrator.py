@@ -1,6 +1,11 @@
+import gzip
+import json
 import logging
 import sys
+import time
 from itertools import islice
+from pathlib import Path
+from typing import Optional
 import numpy as np
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.memory_profiler import get_profiler, write_epoch_summary
@@ -39,6 +44,7 @@ class MiniEpochOrchestrator:
         start_epoch=0,
         start_mini_epoch=0,
         max_mini_epochs=None,
+        resume_with_stream_state=False,
     ):
         self.trainer = trainer
         self.train_loader = train_loader
@@ -55,6 +61,49 @@ class MiniEpochOrchestrator:
         self.max_mini_epochs = (
             None if max_mini_epochs is None else max(0, int(max_mini_epochs))
         )
+        self.resume_with_stream_state = bool(resume_with_stream_state)
+
+    @staticmethod
+    def _checkpoint_path_with_compression(path: Path, compress: bool) -> Path:
+        """Compute final checkpoint filename after optional gzip compression."""
+        if not compress:
+            return path
+        if str(path).endswith(".pt.gz"):
+            return path
+        return path.with_suffix(".pt.gz")
+
+    @staticmethod
+    def _stream_state_sidecar_path(checkpoint_path: Path) -> Path:
+        """Build sidecar path for persisted training stream-state."""
+        name = checkpoint_path.name
+        if name.endswith(".pt.gz"):
+            base_name = name[:-6]
+        elif name.endswith(".pt"):
+            base_name = name[:-3]
+        else:
+            base_name = name
+        return checkpoint_path.with_name(f"{base_name}.stream_state.json.gz")
+
+    def _save_stream_state_sidecar(self, checkpoint_path: Path) -> Optional[Path]:
+        """Persist training stream-state to a compressed JSON sidecar file."""
+        train_dataset = getattr(self.train_loader, "dataset", None)
+        if train_dataset is None or not hasattr(train_dataset, "export_state"):
+            return None
+
+        start_time = time.time()
+        state_payload = train_dataset.export_state()
+        sidecar_path = self._stream_state_sidecar_path(checkpoint_path)
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with gzip.open(sidecar_path, "wt", encoding="utf-8") as f:
+            json.dump(state_payload, f, separators=(",", ":"), sort_keys=True)
+
+        elapsed = time.time() - start_time
+        self.logger.info(
+            f"Saved training stream state: {sidecar_path.name} "
+            f"({len(state_payload.get('position_pool_refs', [])):,} pooled positions, {elapsed:.2f}s)"
+        )
+        return sidecar_path
 
     def _log_mini_epoch_memory_markers(self, epoch: int, mini_epoch: int, batch_count: int) -> None:
         """
@@ -169,10 +218,16 @@ class MiniEpochOrchestrator:
         self.logger.info(f"Starting training: epochs {self.start_epoch} to {self.num_epochs-1} (total {self.num_epochs} epochs)")
         self.logger.info(f"Mini-epoch: {self.mini_epoch_samples:,} samples ({self.mini_epoch_batches} batches of size {self.train_loader.batch_size})")
         if self.start_mini_epoch > 0:
-            self.logger.info(
-                f"Resuming within first epoch: skipping first {self.start_mini_epoch} mini-epochs "
-                f"of epoch {self.start_epoch + 1}"
-            )
+            if self.resume_with_stream_state:
+                self.logger.info(
+                    f"Resuming with persisted stream-state at epoch {self.start_epoch + 1}, "
+                    f"continuing from mini-epoch {self.start_mini_epoch + 1}"
+                )
+            else:
+                self.logger.info(
+                    f"Resuming within first epoch: skipping first {self.start_mini_epoch} mini-epochs "
+                    f"of epoch {self.start_epoch + 1}"
+                )
         if self.max_mini_epochs is not None:
             self.logger.info(f"Chunk cap enabled: train at most {self.max_mini_epochs} mini-epochs in this process")
         
@@ -188,10 +243,19 @@ class MiniEpochOrchestrator:
                 self.logger.info("Shutdown requested before dataset reset, stopping training")
                 raise GracefulShutdownRequested()
             
+            resume_with_restored_stream_this_epoch = (
+                self.resume_with_stream_state and epoch == self.start_epoch
+            )
             # Reset datasets for new epoch (if they have a reset method)
             if hasattr(self.train_loader.dataset, 'reset'):
-                self.logger.info("Resetting training dataset for new epoch")
-                self.train_loader.dataset.reset()
+                if resume_with_restored_stream_this_epoch:
+                    self.logger.info(
+                        "Keeping restored training stream-state for resumed epoch "
+                        "(skipping training dataset reset)"
+                    )
+                else:
+                    self.logger.info("Resetting training dataset for new epoch")
+                    self.train_loader.dataset.reset()
             
             # Also reset validation dataset if it exists
             if self.val_loader and hasattr(self.val_loader.dataset, 'reset'):
@@ -199,9 +263,16 @@ class MiniEpochOrchestrator:
                 self.val_loader.dataset.reset()
             
             batch_iter = iter(self.train_loader)
-            mini_epoch_idx = 0
+            mini_epoch_idx = (
+                self.start_mini_epoch if resume_with_restored_stream_this_epoch else 0
+            )
             epoch_exhausted = False
-            skip_mini_epochs_this_epoch = self.start_mini_epoch if epoch == self.start_epoch else 0
+            if resume_with_restored_stream_this_epoch:
+                skip_mini_epochs_this_epoch = 0
+            else:
+                skip_mini_epochs_this_epoch = (
+                    self.start_mini_epoch if epoch == self.start_epoch else 0
+                )
             while True:
                 if self.max_mini_epochs is not None and trained_mini_epochs >= self.max_mini_epochs:
                     self.logger.info(
@@ -279,11 +350,21 @@ class MiniEpochOrchestrator:
                 # Checkpointing
                 if self.checkpoint_dir is not None:
                     from hex_ai.file_utils import get_unique_checkpoint_path
-                    from pathlib import Path
                     checkpoint_dir = Path(self.checkpoint_dir)
                     base_checkpoint_path = checkpoint_dir / f"epoch{epoch+1}_mini{mini_epoch_idx+1}.pt"
                     checkpoint_path = get_unique_checkpoint_path(base_checkpoint_path)
-                    self.trainer.save_checkpoint(checkpoint_path, train_metrics, val_metrics, compress=True)
+                    compress_checkpoint = True
+                    final_checkpoint_path = self._checkpoint_path_with_compression(
+                        checkpoint_path,
+                        compress=compress_checkpoint,
+                    )
+                    self._save_stream_state_sidecar(final_checkpoint_path)
+                    self.trainer.save_checkpoint(
+                        checkpoint_path,
+                        train_metrics,
+                        val_metrics,
+                        compress=compress_checkpoint,
+                    )
                 
                 # Logging
                 if (mini_epoch_idx % self.log_interval == 0) or (mini_epoch_idx == 0):

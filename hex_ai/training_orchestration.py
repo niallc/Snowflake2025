@@ -168,6 +168,18 @@ def find_latest_checkpoint_for_epoch(experiment_dir: Path, target_epoch: int) ->
     return max(checkpoint_files, key=lambda f: f.name)
 
 
+def get_training_stream_state_sidecar_path(checkpoint_path: Path) -> Path:
+    """Build sidecar filename for a checkpoint."""
+    name = checkpoint_path.name
+    if name.endswith(".pt.gz"):
+        base_name = name[:-6]
+    elif name.endswith(".pt"):
+        base_name = name[:-3]
+    else:
+        base_name = name
+    return checkpoint_path.with_name(f"{base_name}.stream_state.json.gz")
+
+
 def run_single_experiment(
     exp_config, 
     train_loader, 
@@ -204,13 +216,15 @@ def run_single_experiment(
         max_mini_epochs: Optional per-process mini-epoch cap for chunked restarts
         resume_mode: Resume policy:
             - "next_epoch": resume from next epoch (legacy behavior)
-            - "same_epoch": resume from same epoch and skip completed mini-epochs
+            - "same_epoch": resume within same epoch (prefers persisted stream-state sidecar;
+              falls back to mini-epoch skip alignment if sidecar is unavailable)
         target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
     """
     # Determine checkpoint path and start epoch
     checkpoint_path = None
     start_epoch = 0
     start_mini_epoch = 0
+    resume_with_stream_state = False
     
     if resume_from:
         checkpoint_path = Path(resume_from)
@@ -322,6 +336,32 @@ def run_single_experiment(
     if checkpoint_path:
         trainer.load_checkpoint(checkpoint_path, override_checkpoint_hyperparameters=override_checkpoint_hyperparameters)
         logger.info(f"Loaded checkpoint from {checkpoint_path}")
+
+        if resume_mode == "same_epoch":
+            train_dataset = getattr(train_loader, "dataset", None)
+            stream_state_path = get_training_stream_state_sidecar_path(checkpoint_path)
+
+            if train_dataset is None or not hasattr(train_dataset, "import_state"):
+                logger.warning(
+                    "Resume mode is 'same_epoch' but training dataset does not support stream-state import. "
+                    "Falling back to mini-epoch skip alignment."
+                )
+            elif stream_state_path.exists():
+                load_start = time.time()
+                with gzip.open(stream_state_path, "rt", encoding="utf-8") as f:
+                    stream_state = json.load(f)
+                train_dataset.import_state(stream_state)
+                resume_with_stream_state = True
+                elapsed = time.time() - load_start
+                logger.info(
+                    f"Loaded training stream state from {stream_state_path} "
+                    f"({len(stream_state.get('position_pool_refs', [])):,} pooled positions, {elapsed:.2f}s)"
+                )
+            else:
+                logger.warning(
+                    f"Stream-state sidecar not found for {checkpoint_path.name}: {stream_state_path}. "
+                    "Falling back to mini-epoch skip alignment (may re-use some data in this resumed chunk)."
+                )
     
     # Use results_path directly (no extra directory nesting)
     experiment_name = exp_config.get('experiment_name', 'unknown_experiment')
@@ -339,6 +379,7 @@ def run_single_experiment(
         start_epoch=start_epoch,
         start_mini_epoch=start_mini_epoch,
         max_mini_epochs=max_mini_epochs,
+        resume_with_stream_state=resume_with_stream_state,
         shutdown_handler=shutdown_handler
     )
     
