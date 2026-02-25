@@ -29,3 +29,9 @@ This file captures project-specific guidance for Codex agents working in this re
 - Typical updates are append-only additions to `MODEL_GENERATIONS`.
 - Do not treat these updates as unexpected or concerning during unrelated cleanup/refactor work.
 - Ignore unrelated `model_config.py` changes unless the task explicitly requires editing that file.
+
+### 2026-02-25 - Fail-Fast and Explicit Override Policy
+- Prefer fail-fast behavior when restart/state assumptions are violated (missing files, incompatible state, unexpected invariants).
+- Do not add silent fallbacks that continue execution with ambiguous semantics unless explicitly requested.
+- If a non-fail-fast path is needed for exceptional recovery, gate it behind an explicit manual override and log it clearly.
+- Prioritize surfacing potential bugs over masking them with automatic fallback behavior.

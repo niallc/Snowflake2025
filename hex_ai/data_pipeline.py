@@ -212,6 +212,9 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.approx_batch_count = 0
         self._memory_warning_logged = False  # Track if we've already logged the memory warning
         self._shards_exhausted_logged = False  # Track if we've already logged that shards are exhausted
+        # True when import_state() loaded a persisted cursor that should be used
+        # as-is for exactly one iterator construction.
+        self._resume_stream_state_pending = False
         
         # Memory leak diagnostics (if enabled)
         self.diagnostics = get_diagnostics()
@@ -398,6 +401,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.approx_batch_count = 0
         self._memory_warning_logged = False
         self._shards_exhausted_logged = False
+        self._resume_stream_state_pending = False
         
         if self.is_validation:
             # For validation datasets, reset the position index
@@ -829,6 +833,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.approx_batch_count = int(state.get("approx_batch_count", 0))
         self._memory_warning_logged = False
         self._shards_exhausted_logged = False
+        self._resume_stream_state_pending = True
 
         random.setstate(self._decode_state_blob(random_state_python))
         np.random.set_state(self._decode_state_blob(random_state_numpy))
@@ -861,19 +866,31 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         Main iteration logic - yields positions from the mixed pool.
         For validation datasets, yields from pre-shuffled validation data.
         """
-        # Reset statistics
-        self.total_positions_yielded = 0
-        self.total_shards_loaded = 0
-        self.approx_batch_count = 0
-        
         # Handle validation datasets differently
         if self.is_validation:
+            # Reset statistics for validation iterators.
+            self.total_positions_yielded = 0
+            self.total_shards_loaded = 0
+            self.approx_batch_count = 0
             yield from self._iterate_validation_data()
             return
+
+        resume_from_imported_state = self._resume_stream_state_pending
+        self._resume_stream_state_pending = False
+
+        # For standard epoch starts, reset per-epoch counters.
+        # For resumed same-epoch continuation, preserve restored counters so the
+        # max_examples_unaugmented limit tracks uninterrupted behavior.
+        if not resume_from_imported_state:
+            self.total_positions_yielded = 0
+            self.total_shards_loaded = 0
+            self.approx_batch_count = 0
         
         # Training dataset logic (original)
-        # Initial pool fill
-        self._refill_pool()
+        # Initial pool fill. On resumed same-epoch continuation, keep the restored
+        # pool and only refill if it is currently empty.
+        if not self.position_pool and self._has_available_shards():
+            self._refill_pool()
         
         # Main iteration loop
         while (
