@@ -179,7 +179,10 @@ def run_single_experiment(
     resume_from: Optional[str] = None,
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
-    override_checkpoint_hyperparameters: bool = False
+    override_checkpoint_hyperparameters: bool = False,
+    max_mini_epochs: Optional[int] = None,
+    resume_mode: str = "next_epoch",
+    target_end_epoch: Optional[int] = None,
 ):
     """
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
@@ -198,28 +201,74 @@ def run_single_experiment(
         run_timestamp: Optional timestamp for the run
         override_checkpoint_hyperparameters: If True, reset optimizer state to use current hyperparameters
                                            instead of checkpoint hyperparameters
+        max_mini_epochs: Optional per-process mini-epoch cap for chunked restarts
+        resume_mode: Resume policy:
+            - "next_epoch": resume from next epoch (legacy behavior)
+            - "same_epoch": resume from same epoch and skip completed mini-epochs
+        target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
     """
     # Determine checkpoint path and start epoch
     checkpoint_path = None
     start_epoch = 0
+    start_mini_epoch = 0
     
     if resume_from:
         checkpoint_path = Path(resume_from)
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint file not found: {resume_from}")
         
-        # Extract epoch from checkpoint filename
+        # Extract epoch + mini from checkpoint filename
         # Expected format: epoch{N}_mini{M}.pt.gz
-        match = re.search(r'epoch(\d+)_mini', checkpoint_path.name)
+        match = re.search(r'epoch(\d+)_mini(\d+)', checkpoint_path.name)
         if match:
             completed_epoch = int(match.group(1))
-            start_epoch = completed_epoch  # Start from the completed epoch (will continue from where we left off)
-            # Adjust num_epochs to ensure we train for the full requested duration
-            # If we want 3 total epochs and completed 2, we need to train for 3 more epochs (2, 3, 4)
-            num_epochs = completed_epoch + num_epochs
-            logger.info(f"Resuming from epoch {start_epoch} using checkpoint: {checkpoint_path}")
+            completed_mini = int(match.group(2))
+
+            if resume_mode == "next_epoch":
+                # Legacy behavior: continue at next epoch boundary.
+                start_epoch = completed_epoch
+                start_mini_epoch = 0
+            elif resume_mode == "same_epoch":
+                # Chunked-restart behavior: continue within the same epoch.
+                # Orchestrator epoch loop is 0-based; checkpoint filenames are 1-based.
+                start_epoch = max(0, completed_epoch - 1)
+                start_mini_epoch = max(0, completed_mini)
+            else:
+                raise ValueError(f"Unsupported resume_mode: {resume_mode}")
+
+            if target_end_epoch is not None:
+                if target_end_epoch < 1:
+                    raise ValueError(
+                        f"target_end_epoch must be >= 1, got {target_end_epoch}"
+                    )
+                if target_end_epoch <= start_epoch:
+                    logger.info(
+                        f"Training already complete for target_end_epoch={target_end_epoch}; "
+                        f"start_epoch={start_epoch}, checkpoint={checkpoint_path}"
+                    )
+                    return {
+                        'total_batches': 0,
+                        'epochs_completed': 0,
+                        'mini_epochs_trained': 0,
+                        'stopped_due_to_max_mini_epochs': False,
+                        'already_complete': True,
+                    }
+                num_epochs = target_end_epoch
+            else:
+                # Adjust num_epochs to ensure we train for the full requested duration.
+                # If we want 3 total epochs and completed 2, we need to train for 3 more epochs (2, 3, 4).
+                num_epochs = completed_epoch + num_epochs
+
+            logger.info(
+                f"Resuming from checkpoint {checkpoint_path} "
+                f"(completed epoch={completed_epoch}, mini={completed_mini}, "
+                f"resume_mode={resume_mode}, start_epoch={start_epoch}, start_mini={start_mini_epoch}, "
+                f"end_epoch={num_epochs})"
+            )
         else:
-            raise ValueError(f"Could not extract epoch from checkpoint filename: {checkpoint_path.name}")
+            raise ValueError(
+                f"Could not extract epoch/mini from checkpoint filename: {checkpoint_path.name}"
+            )
     
     # Create model and trainer
     # Filter hyperparameters for model vs trainer
@@ -288,6 +337,8 @@ def run_single_experiment(
         num_epochs=num_epochs,
         mini_epoch_samples=mini_epoch_samples,
         start_epoch=start_epoch,
+        start_mini_epoch=start_mini_epoch,
+        max_mini_epochs=max_mini_epochs,
         shutdown_handler=shutdown_handler
     )
     
@@ -408,7 +459,10 @@ def run_hyperparameter_tuning_current_data(
     verbose: int = 2,  # Verbose level (2=default, 3=detailed pool/shard info)
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
-    override_checkpoint_hyperparameters: bool = False
+    override_checkpoint_hyperparameters: bool = False,
+    max_mini_epochs: Optional[int] = None,
+    resume_mode: str = "next_epoch",
+    target_end_epoch: Optional[int] = None,
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -438,6 +492,9 @@ def run_hyperparameter_tuning_current_data(
         shutdown_handler: Shutdown handler for graceful termination
         run_timestamp: Optional timestamp for the run
         override_checkpoint_hyperparameters: Whether to override checkpoint hyperparameters
+        max_mini_epochs: Optional per-process mini-epoch cap for chunked restarts
+        resume_mode: Resume mode for checkpoint continuation ("next_epoch" or "same_epoch")
+        target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
         
     Returns:
         Dictionary containing overall results
@@ -545,7 +602,10 @@ def run_hyperparameter_tuning_current_data(
                 resume_from=resume_from,
                 shutdown_handler=shutdown_handler,
                 run_timestamp=run_timestamp,
-                override_checkpoint_hyperparameters=override_checkpoint_hyperparameters
+                override_checkpoint_hyperparameters=override_checkpoint_hyperparameters,
+                max_mini_epochs=max_mini_epochs,
+                resume_mode=resume_mode,
+                target_end_epoch=target_end_epoch,
             )
             
             # Save experiment metadata with data source information
@@ -561,7 +621,10 @@ def run_hyperparameter_tuning_current_data(
                     'enable_augmentation': enable_augmentation,
                     'train_ratio': train_ratio,
                     'random_seed': random_seed,
-                    'resumed_from': resume_from
+                    'resumed_from': resume_from,
+                    'max_mini_epochs': max_mini_epochs,
+                    'resume_mode': resume_mode,
+                    'target_end_epoch': target_end_epoch,
                 }
             )
             

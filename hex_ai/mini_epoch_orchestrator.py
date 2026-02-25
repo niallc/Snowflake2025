@@ -26,8 +26,20 @@ class MiniEpochOrchestrator:
         orchestrator = MiniEpochOrchestrator(trainer, train_loader, val_loader, mini_epoch_samples=128000, num_epochs=10)
         orchestrator.run()
     """
-    def __init__(self, trainer, train_loader, val_loader=None, mini_epoch_samples=128000, num_epochs=1,
-                 checkpoint_dir=None, log_interval=1, shutdown_handler=None, start_epoch=0):
+    def __init__(
+        self,
+        trainer,
+        train_loader,
+        val_loader=None,
+        mini_epoch_samples=128000,
+        num_epochs=1,
+        checkpoint_dir=None,
+        log_interval=1,
+        shutdown_handler=None,
+        start_epoch=0,
+        start_mini_epoch=0,
+        max_mini_epochs=None,
+    ):
         self.trainer = trainer
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -39,6 +51,10 @@ class MiniEpochOrchestrator:
         self.logger = logging.getLogger(__name__)
         self.shutdown_handler = shutdown_handler
         self.start_epoch = start_epoch
+        self.start_mini_epoch = max(0, int(start_mini_epoch))
+        self.max_mini_epochs = (
+            None if max_mini_epochs is None else max(0, int(max_mini_epochs))
+        )
 
     def _log_mini_epoch_memory_markers(self, epoch: int, mini_epoch: int, batch_count: int) -> None:
         """
@@ -152,8 +168,17 @@ class MiniEpochOrchestrator:
         """
         self.logger.info(f"Starting training: epochs {self.start_epoch} to {self.num_epochs-1} (total {self.num_epochs} epochs)")
         self.logger.info(f"Mini-epoch: {self.mini_epoch_samples:,} samples ({self.mini_epoch_batches} batches of size {self.train_loader.batch_size})")
+        if self.start_mini_epoch > 0:
+            self.logger.info(
+                f"Resuming within first epoch: skipping first {self.start_mini_epoch} mini-epochs "
+                f"of epoch {self.start_epoch + 1}"
+            )
+        if self.max_mini_epochs is not None:
+            self.logger.info(f"Chunk cap enabled: train at most {self.max_mini_epochs} mini-epochs in this process")
         
         batch_count = 0  # Initialize batch_count outside the loop
+        completed_epochs = 0
+        trained_mini_epochs = 0
         
         for epoch in range(self.start_epoch, self.num_epochs):
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
@@ -176,7 +201,18 @@ class MiniEpochOrchestrator:
             batch_iter = iter(self.train_loader)
             mini_epoch_idx = 0
             epoch_exhausted = False
+            skip_mini_epochs_this_epoch = self.start_mini_epoch if epoch == self.start_epoch else 0
             while True:
+                if self.max_mini_epochs is not None and trained_mini_epochs >= self.max_mini_epochs:
+                    self.logger.info(
+                        f"Reached chunk cap ({self.max_mini_epochs} mini-epochs). Stopping current process cleanly."
+                    )
+                    return {
+                        'total_batches': batch_count,
+                        'epochs_completed': completed_epochs,
+                        'mini_epochs_trained': trained_mini_epochs,
+                        'stopped_due_to_max_mini_epochs': True,
+                    }
                 try:
                     first_batch = next(batch_iter)
                     batch_count += 1
@@ -201,6 +237,23 @@ class MiniEpochOrchestrator:
                             self.logger.info(f"End of epoch {epoch+1} reached (StopIteration)")
                             epoch_exhausted = True
                             return
+
+                if mini_epoch_idx < skip_mini_epochs_this_epoch:
+                    for _ in _mini_epoch_batch_stream():
+                        pass
+                    mini_epoch_idx += 1
+                    if (
+                        mini_epoch_idx == skip_mini_epochs_this_epoch
+                        or (mini_epoch_idx % max(1, self.log_interval) == 0)
+                    ):
+                        self.logger.info(
+                            f"Skipped mini-epoch {mini_epoch_idx}/{skip_mini_epochs_this_epoch} "
+                            f"for epoch {epoch+1} during resume alignment"
+                        )
+                    if epoch_exhausted:
+                        self.logger.info(f"No more data in epoch {epoch+1}, breaking")
+                        break
+                    continue
                 
                 # Validation (do this before training so we can pass metrics)
                 val_metrics = None
@@ -219,6 +272,9 @@ class MiniEpochOrchestrator:
                     mini_epoch=mini_epoch_idx+1,
                     val_metrics=val_metrics
                 )
+
+                # Keep checkpoint metadata aligned with filename epoch numbering.
+                self.trainer.current_epoch = epoch + 1
                 
                 # Checkpointing
                 if self.checkpoint_dir is not None:
@@ -248,6 +304,7 @@ class MiniEpochOrchestrator:
 
                 self._log_mini_epoch_memory_markers(epoch + 1, mini_epoch_idx + 1, batch_count)
                 mini_epoch_idx += 1
+                trained_mini_epochs += 1
 
                 if epoch_exhausted:
                     self.logger.info(f"No more data in epoch {epoch+1}, breaking")
@@ -274,6 +331,14 @@ class MiniEpochOrchestrator:
                         f"  Total pool size: {len(position_pool):,} positions\n"
                         f"{'🚨 CONFIRMED: Shared arrays account for >2GB memory leak!' if result['estimated_memory_gb'] > 2.0 else '⚠️  Shared arrays <2GB, other sources may be responsible'}"
                     )
+            completed_epochs += 1
         
-        self.logger.info(f"Training completed: processed {batch_count} total batches across {self.num_epochs - self.start_epoch} epochs")
-        return {'total_batches': batch_count, 'epochs_completed': self.num_epochs - self.start_epoch} 
+        self.logger.info(
+            f"Training completed: processed {batch_count} total batches across {completed_epochs} epochs"
+        )
+        return {
+            'total_batches': batch_count,
+            'epochs_completed': completed_epochs,
+            'mini_epochs_trained': trained_mini_epochs,
+            'stopped_due_to_max_mini_epochs': False,
+        }

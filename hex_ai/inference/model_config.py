@@ -239,6 +239,10 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
         "dir": "hyperparameter_tuning/pipeline_20260221_044357/",
         "models": ["epoch161_mini42.pt.gz", "epoch161_mini50.pt.gz", "epoch161_mini64.pt.gz"]
     },
+    54: {
+        "dir": "hyperparameter_tuning/pipeline_20260225_024817/",
+        "models": ["epoch162_mini15.pt.gz"]
+    },
 }
 
 def _get_current_generation() -> int:

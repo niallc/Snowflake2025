@@ -14,8 +14,10 @@ that provides better error handling, progress tracking, and configurability.
 """
 
 import argparse
+import json
 import logging
 import os
+import re
 import sys
 import time
 import subprocess
@@ -82,6 +84,12 @@ class PipelineConfig:
     results_dir: str = "checkpoints/hyperparameter_tuning"
     override_checkpoint_hyperparameters: bool = False
     hyperparameter_overrides: Dict = field(default_factory=dict)
+    restart_every_mini_epochs: int = 10
+    max_mini_epochs_per_run: Optional[int] = None
+    resume_mode: str = "next_epoch"
+    target_end_epoch: Optional[int] = None
+    internal_training_chunk_run: bool = False
+    run_timestamp_override: Optional[str] = None
     
     # Pipeline control
     run_game_collection: bool = False  # New: Collect games from multiple sources
@@ -97,7 +105,11 @@ class PipelineConfig:
     def __post_init__(self):
         """Generate derived paths and validate configuration."""
         # Generate timestamp for this run
-        self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_timestamp = (
+            self.run_timestamp_override
+            if self.run_timestamp_override
+            else datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
         
         # Generate model filename
         self.model_filename = f"epoch{self.model_epoch}_mini{self.model_mini}.pt.gz"
@@ -175,6 +187,11 @@ class PipelineConfig:
                 "Game collection enabled but all processing steps are disabled. "
                 "The collected data will not be used for training. "
                 "Either enable preprocessing steps or use --cleaned-trmph-data-dirs for already processed data."
+            )
+
+        if self.restart_every_mini_epochs < 0:
+            raise ValueError(
+                f"restart_every_mini_epochs must be >= 0, got {self.restart_every_mini_epochs}"
             )
     
     def _resolve_ordered_positions_dir(self, newly_created_dir: Optional[str] = None) -> Optional[str]:
@@ -529,52 +546,34 @@ class ShufflingStep:
 
 class TrainingStep:
     """Handles model training."""
+
+    NUM_EPOCHS_PER_PIPELINE_RUN = 4
+    MINI_EPOCH_SAMPLES = 250000
+    TRAINING_RANDOM_SEED = 42
     
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-    
-    def run(self, new_shuffled_dir: str):
-        """Run training with the new data."""
-        self.logger.info("=" * 60)
-        self.logger.info("STEP 5: MODEL TRAINING")
-        self.logger.info("=" * 60)
-        
-        # Create results directory
-        results_dir = str(Path(self.config.results_dir) / f"pipeline_{self.config.run_timestamp}")
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
-        
-        self.logger.info(f"New training data directory: {new_shuffled_dir}")
-        self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
-        self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
-        self.logger.info(f"Results directory: {results_dir}")
-        self.logger.info(f"Max samples: {self.config.max_samples}")
-        self.logger.info(f"Resume from: {self.config.model_full_path}")
-        
-        # Create shutdown handler
-        shutdown_handler = GracefulShutdown()
-        
-        # Create experiment configurations from shared sweep
+
+    def _build_experiments(self) -> List[Dict[str, Any]]:
+        """Build experiment definitions from the hyperparameter sweep config."""
         sweep = create_hyperparameter_sweep(self.config.hyperparameter_overrides)
-        
-        # Generate all parameter combinations
+
         import itertools
         param_names = list(sweep.keys())
         param_values = list(sweep.values())
         all_configs = list(itertools.product(*param_values))
-        
-        experiments = []
+
+        experiments: List[Dict[str, Any]] = []
         for i, config_values in enumerate(all_configs):
             config = dict(zip(param_names, config_values))
-            
-            # Compute value_weight so that policy_weight + value_weight = 1
+
+            # Keep policy/value loss weights normalized.
             if "policy_weight" in config:
                 config["value_weight"] = 1.0 - config["policy_weight"]
-            
-            # Create experiment name
+
             exp_name = f"pipeline_sweep_{i}"
             if len(all_configs) > 1:
-                # Add parameter labels for multi-parameter sweeps
                 varying_params = [k for k, v in sweep.items() if len(v) > 1]
                 if varying_params:
                     labels = []
@@ -586,52 +585,326 @@ class TrainingStep:
                         else:
                             labels.append(f"{short_label}{value}")
                     exp_name = f"pipeline_sweep_{i}_{'_'.join(labels)}"
-            
-            experiments.append({
-                'experiment_name': exp_name,
-                'hyperparameters': config
-            })
-        
-        # Take snapshot before training starts (if profiling enabled)
-        if self.config.enable_memory_profiling:
-            take_snapshot("training_start")
-        
-        # Run training
+
+            experiments.append(
+                {
+                    "experiment_name": exp_name,
+                    "hyperparameters": config,
+                }
+            )
+        return experiments
+
+    def _resolve_training_data_sources(self, new_shuffled_dir: Optional[str]):
         if new_shuffled_dir:
             all_data_dirs = [new_shuffled_dir] + self.config.training_data_dirs
-            all_shard_ranges = ["all"] + self.config.shard_ranges  # "all" for new data
-            # For validation, use only the predefined validation directories (don't add new data)
-            all_validation_dirs = self.config.resolved_validation_dirs
-            all_validation_shard_ranges = self.config.resolved_validation_ranges
+            all_shard_ranges = ["all"] + self.config.shard_ranges
         else:
             all_data_dirs = self.config.training_data_dirs
             all_shard_ranges = self.config.shard_ranges
-            all_validation_dirs = self.config.resolved_validation_dirs
-            all_validation_shard_ranges = self.config.resolved_validation_ranges
-        
-        results = run_hyperparameter_tuning_current_data(
+
+        return (
+            all_data_dirs,
+            all_shard_ranges,
+            self.config.resolved_validation_dirs,
+            self.config.resolved_validation_ranges,
+        )
+
+    @staticmethod
+    def _parse_epoch_mini_from_checkpoint(checkpoint_path: Path) -> tuple[int, int]:
+        match = re.search(r"epoch(\d+)_mini(\d+)\.pt(?:\.gz)?$", checkpoint_path.name)
+        if not match:
+            raise ValueError(
+                f"Could not parse epoch/mini from checkpoint filename: {checkpoint_path.name}"
+            )
+        return int(match.group(1)), int(match.group(2))
+
+    def _find_latest_checkpoint(self, checkpoint_dir: Path) -> Path:
+        candidates = list(checkpoint_dir.glob("epoch*_mini*.pt*"))
+        if not candidates:
+            raise FileNotFoundError(
+                f"No epoch checkpoint files found in {checkpoint_dir}"
+            )
+
+        def _key(path: Path):
+            epoch, mini = self._parse_epoch_mini_from_checkpoint(path)
+            return (epoch, mini)
+
+        return max(candidates, key=_key)
+
+    def _run_training_once(
+        self,
+        *,
+        experiments: List[Dict[str, Any]],
+        all_data_dirs: List[str],
+        all_shard_ranges: List[str],
+        all_validation_dirs: List[str],
+        all_validation_shard_ranges: List[str],
+        results_dir: str,
+        resume_from: str,
+        max_mini_epochs: Optional[int],
+        resume_mode: str,
+        target_end_epoch: Optional[int],
+    ) -> Dict[str, Any]:
+        shutdown_handler = GracefulShutdown()
+        return run_hyperparameter_tuning_current_data(
             experiments=experiments,
             data_dirs=all_data_dirs,
             validation_dirs=all_validation_dirs,
             validation_shard_ranges=all_validation_shard_ranges,
             results_dir=results_dir,
             train_ratio=0.8,
-            num_epochs=4, 
+            num_epochs=self.NUM_EPOCHS_PER_PIPELINE_RUN,
             early_stopping_patience=None,
-            random_seed=42,
+            random_seed=self.TRAINING_RANDOM_SEED,
             max_examples_unaugmented=self.config.max_samples,
             max_validation_examples=self.config.max_validation_samples,
             experiment_name=None,
             enable_augmentation=True,
-            mini_epoch_samples=250000, 
-            resume_from=self.config.model_full_path,
+            mini_epoch_samples=self.MINI_EPOCH_SAMPLES,
+            resume_from=resume_from,
             shard_ranges=all_shard_ranges,
             shutdown_handler=shutdown_handler,
             run_timestamp=self.config.run_timestamp,
             override_checkpoint_hyperparameters=self.config.override_checkpoint_hyperparameters,
-            shuffle_shards=True
+            shuffle_shards=True,
+            max_mini_epochs=max_mini_epochs,
+            resume_mode=resume_mode,
+            target_end_epoch=target_end_epoch,
         )
-        
+
+    def _build_child_chunk_command(
+        self,
+        *,
+        checkpoint_path: Path,
+        all_data_dirs: List[str],
+        all_shard_ranges: List[str],
+        all_validation_dirs: List[str],
+        all_validation_shard_ranges: List[str],
+        resume_mode: str,
+        target_end_epoch: int,
+    ) -> List[str]:
+        model_epoch, model_mini = self._parse_epoch_mini_from_checkpoint(checkpoint_path)
+        cmd = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--model-path",
+            str(checkpoint_path.parent),
+            "--model-epoch",
+            str(model_epoch),
+            "--model-mini",
+            str(model_mini),
+            "--no-selfplay",
+            "--no-preprocessing",
+            "--no-trmph-processing",
+            "--no-shuffling",
+            "--no-cleanup",
+            "--training-data-dirs",
+            *all_data_dirs,
+            "--shard-ranges",
+            *all_shard_ranges,
+            "--results-dir",
+            self.config.results_dir,
+            "--max-samples",
+            str(self.config.max_samples),
+            "--max-validation-samples",
+            str(self.config.max_validation_samples),
+            "--restart-every-mini-epochs",
+            str(self.config.restart_every_mini_epochs),
+            "--run-timestamp",
+            self.config.run_timestamp,
+            "--internal-training-chunk-run",
+            "--max-mini-epochs-per-run",
+            str(self.config.restart_every_mini_epochs),
+            "--resume-mode",
+            resume_mode,
+            "--target-end-epoch",
+            str(target_end_epoch),
+        ]
+
+        if all_validation_dirs and all_validation_shard_ranges:
+            cmd.extend(["--validation-dirs", *all_validation_dirs])
+            cmd.extend(["--validation-shard-ranges", *all_validation_shard_ranges])
+        else:
+            cmd.append("--no-validation")
+
+        if self.config.override_checkpoint_hyperparameters:
+            cmd.append("--override-checkpoint-hyperparameters")
+
+        # Preserve explicit hyperparameter overrides across chunk runs.
+        override_arg_map = {
+            "learning_rate": "--learning-rate",
+            "batch_size": "--train-batch-size",
+            "weight_decay": "--weight-decay",
+            "policy_weight": "--policy-weight",
+            "max_grad_norm": "--max-grad-norm",
+            "value_learning_rate_factor": "--value-learning-rate-factor",
+            "value_weight_decay_factor": "--value-weight-decay-factor",
+        }
+        for key, arg_name in override_arg_map.items():
+            values = self.config.hyperparameter_overrides.get(key)
+            if values:
+                cmd.extend([arg_name, str(values[0])])
+
+        return cmd
+
+    def _run_training_with_restarts(
+        self,
+        *,
+        experiments: List[Dict[str, Any]],
+        all_data_dirs: List[str],
+        all_shard_ranges: List[str],
+        all_validation_dirs: List[str],
+        all_validation_shard_ranges: List[str],
+        results_dir: str,
+    ) -> str:
+        if len(experiments) != 1:
+            self.logger.warning(
+                "Automatic chunked restarts currently support a single experiment. "
+                "Falling back to a single-process training run."
+            )
+            results = self._run_training_once(
+                experiments=experiments,
+                all_data_dirs=all_data_dirs,
+                all_shard_ranges=all_shard_ranges,
+                all_validation_dirs=all_validation_dirs,
+                all_validation_shard_ranges=all_validation_shard_ranges,
+                results_dir=results_dir,
+                resume_from=self.config.model_full_path,
+                max_mini_epochs=None,
+                resume_mode="next_epoch",
+                target_end_epoch=self.config.target_end_epoch,
+            )
+            self.logger.info(f"Training completed: {results}")
+            return results_dir
+
+        starting_checkpoint = Path(self.config.model_full_path)
+        if not starting_checkpoint.exists():
+            raise FileNotFoundError(
+                f"Starting checkpoint not found: {starting_checkpoint}"
+            )
+        initial_epoch, _initial_mini = self._parse_epoch_mini_from_checkpoint(starting_checkpoint)
+        target_end_epoch = (
+            self.config.target_end_epoch
+            if self.config.target_end_epoch is not None
+            else (initial_epoch + self.NUM_EPOCHS_PER_PIPELINE_RUN)
+        )
+
+        self.logger.info(
+            f"Chunked training restart mode enabled (every {self.config.restart_every_mini_epochs} mini-epochs). "
+            f"Target end epoch: {target_end_epoch}"
+        )
+
+        latest_resume_checkpoint = starting_checkpoint
+        chunk_idx = 0
+
+        while True:
+            chunk_idx += 1
+            resume_mode = "next_epoch" if chunk_idx == 1 else "same_epoch"
+            child_cmd = self._build_child_chunk_command(
+                checkpoint_path=latest_resume_checkpoint,
+                all_data_dirs=all_data_dirs,
+                all_shard_ranges=all_shard_ranges,
+                all_validation_dirs=all_validation_dirs,
+                all_validation_shard_ranges=all_validation_shard_ranges,
+                resume_mode=resume_mode,
+                target_end_epoch=target_end_epoch,
+            )
+
+            epoch, mini = self._parse_epoch_mini_from_checkpoint(latest_resume_checkpoint)
+            self.logger.info(
+                f"Starting training chunk {chunk_idx}: resume checkpoint epoch{epoch}_mini{mini}, "
+                f"resume_mode={resume_mode}"
+            )
+            child_result = subprocess.run(child_cmd, check=False)
+            if child_result.returncode != 0:
+                raise RuntimeError(
+                    f"Training chunk {chunk_idx} failed with exit code {child_result.returncode}"
+                )
+
+            overall_results_path = Path(results_dir) / "overall_results.json"
+            if not overall_results_path.exists():
+                raise RuntimeError(
+                    f"Expected chunk results file not found: {overall_results_path}"
+                )
+            with open(overall_results_path, "r", encoding="utf-8") as f:
+                chunk_results = json.load(f)
+
+            chunk_experiments = chunk_results.get("experiments")
+            if not isinstance(chunk_experiments, list) or not chunk_experiments:
+                raise RuntimeError(
+                    f"Invalid chunk results format in {overall_results_path}: missing experiments list"
+                )
+            chunk_result = chunk_experiments[0]
+
+            if chunk_result.get("already_complete"):
+                self.logger.info("Chunked training supervisor: target already reached.")
+                break
+
+            stopped_due_to_cap = bool(chunk_result.get("stopped_due_to_max_mini_epochs"))
+            if not stopped_due_to_cap:
+                self.logger.info("Chunked training supervisor: training completed all planned epochs.")
+                break
+
+            next_checkpoint = self._find_latest_checkpoint(Path(results_dir))
+            if next_checkpoint == latest_resume_checkpoint:
+                raise RuntimeError(
+                    f"Chunk {chunk_idx} completed but did not produce a newer checkpoint in {results_dir}"
+                )
+            latest_resume_checkpoint = next_checkpoint
+
+        return results_dir
+
+    def run(self, new_shuffled_dir: str):
+        """Run training with the new data."""
+        self.logger.info("=" * 60)
+        self.logger.info("STEP 5: MODEL TRAINING")
+        self.logger.info("=" * 60)
+
+        results_dir = str(Path(self.config.results_dir) / f"pipeline_{self.config.run_timestamp}")
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        self.logger.info(f"New training data directory: {new_shuffled_dir}")
+        self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
+        self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
+        self.logger.info(f"Results directory: {results_dir}")
+        self.logger.info(f"Max samples: {self.config.max_samples}")
+        self.logger.info(f"Resume from: {self.config.model_full_path}")
+
+        experiments = self._build_experiments()
+
+        if self.config.enable_memory_profiling:
+            take_snapshot("training_start")
+
+        (
+            all_data_dirs,
+            all_shard_ranges,
+            all_validation_dirs,
+            all_validation_shard_ranges,
+        ) = self._resolve_training_data_sources(new_shuffled_dir)
+
+        if self.config.restart_every_mini_epochs > 0 and not self.config.internal_training_chunk_run:
+            return self._run_training_with_restarts(
+                experiments=experiments,
+                all_data_dirs=all_data_dirs,
+                all_shard_ranges=all_shard_ranges,
+                all_validation_dirs=all_validation_dirs,
+                all_validation_shard_ranges=all_validation_shard_ranges,
+                results_dir=results_dir,
+            )
+
+        results = self._run_training_once(
+            experiments=experiments,
+            all_data_dirs=all_data_dirs,
+            all_shard_ranges=all_shard_ranges,
+            all_validation_dirs=all_validation_dirs,
+            all_validation_shard_ranges=all_validation_shard_ranges,
+            results_dir=results_dir,
+            resume_from=self.config.model_full_path,
+            max_mini_epochs=self.config.max_mini_epochs_per_run,
+            resume_mode=self.config.resume_mode,
+            target_end_epoch=self.config.target_end_epoch,
+        )
+
         self.logger.info(f"Training completed: {results}")
         return results_dir
 
@@ -946,6 +1219,12 @@ Examples:
     parser.add_argument("--max-samples", type=int, default=35000000, help="Max training samples")
     parser.add_argument("--max-validation-samples", type=int, default=50000, help="Max validation samples")
     parser.add_argument("--results-dir", default="checkpoints/hyperparameter_tuning", help="Results directory")
+    parser.add_argument(
+        "--restart-every-mini-epochs",
+        type=int,
+        default=10,
+        help="Restart the training subprocess every N mini-epochs (default: 10, set 0 to disable).",
+    )
     parser.add_argument("--override-checkpoint-hyperparameters", action="store_true", 
                        help="Override checkpoint hyperparameters with current sweep settings (resets optimizer state)")
     
@@ -970,6 +1249,18 @@ Examples:
                        help="Enable memory profiling (tracks RSS vs heap and takes snapshots)")
     parser.add_argument("--memory-profile-interval-seconds", type=int, default=60,
                        help="Sampling interval for memory profiling timeline (default: 60)")
+
+    # Internal chunk-run controls (hidden)
+    parser.add_argument("--internal-training-chunk-run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--max-mini-epochs-per-run", type=int, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--resume-mode",
+        choices=["next_epoch", "same_epoch"],
+        default="next_epoch",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--target-end-epoch", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--run-timestamp", type=str, help=argparse.SUPPRESS)
     
     return parser.parse_args()
 
@@ -1072,6 +1363,12 @@ def main():
             max_samples=args.max_samples,
             max_validation_samples=args.max_validation_samples,
             results_dir=args.results_dir,
+            restart_every_mini_epochs=args.restart_every_mini_epochs,
+            max_mini_epochs_per_run=args.max_mini_epochs_per_run,
+            resume_mode=args.resume_mode,
+            target_end_epoch=args.target_end_epoch,
+            internal_training_chunk_run=args.internal_training_chunk_run,
+            run_timestamp_override=args.run_timestamp,
             override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters,
             hyperparameter_overrides=hyperparameter_overrides,
             run_game_collection=args.run_game_collection,
