@@ -195,6 +195,7 @@ def run_single_experiment(
     max_mini_epochs: Optional[int] = None,
     resume_mode: str = "next_epoch",
     target_end_epoch: Optional[int] = None,
+    allow_missing_stream_sidecar_fallback: bool = False,
 ):
     """
     Run a single experiment: instantiate Trainer, Orchestrator, and run training.
@@ -216,9 +217,12 @@ def run_single_experiment(
         max_mini_epochs: Optional per-process mini-epoch cap for chunked restarts
         resume_mode: Resume policy:
             - "next_epoch": resume from next epoch (legacy behavior)
-            - "same_epoch": resume within same epoch (prefers persisted stream-state sidecar;
-              falls back to mini-epoch skip alignment if sidecar is unavailable)
+            - "same_epoch": resume within same epoch (requires persisted stream-state sidecar
+              unless explicit fallback override is enabled)
         target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
+        allow_missing_stream_sidecar_fallback: If True, allow fallback to mini-epoch skip
+            alignment when same-epoch stream-state is missing/unavailable. Default False
+            (fail-fast).
     """
     # Determine checkpoint path and start epoch
     checkpoint_path = None
@@ -342,26 +346,62 @@ def run_single_experiment(
             stream_state_path = get_training_stream_state_sidecar_path(checkpoint_path)
 
             if train_dataset is None or not hasattr(train_dataset, "import_state"):
-                logger.warning(
-                    "Resume mode is 'same_epoch' but training dataset does not support stream-state import. "
-                    "Falling back to mini-epoch skip alignment."
+                msg = (
+                    "Resume mode is 'same_epoch' but training dataset does not support stream-state import."
                 )
-            elif stream_state_path.exists():
-                load_start = time.time()
-                with gzip.open(stream_state_path, "rt", encoding="utf-8") as f:
-                    stream_state = json.load(f)
-                train_dataset.import_state(stream_state)
-                resume_with_stream_state = True
-                elapsed = time.time() - load_start
-                logger.info(
-                    f"Loaded training stream state from {stream_state_path} "
-                    f"({len(stream_state.get('position_pool_refs', [])):,} pooled positions, {elapsed:.2f}s)"
-                )
+                if allow_missing_stream_sidecar_fallback:
+                    logger.warning(
+                        f"{msg} Falling back to mini-epoch skip alignment because "
+                        "--allow-missing-stream-sidecar-fallback is enabled."
+                    )
+                else:
+                    raise RuntimeError(
+                        f"{msg} Failing fast to avoid ambiguous restart semantics. "
+                        "Enable --allow-missing-stream-sidecar-fallback only for manual recovery."
+                    )
             else:
-                logger.warning(
-                    f"Stream-state sidecar not found for {checkpoint_path.name}: {stream_state_path}. "
-                    "Falling back to mini-epoch skip alignment (may re-use some data in this resumed chunk)."
-                )
+                if not stream_state_path.exists():
+                    msg = (
+                        f"Stream-state sidecar not found for {checkpoint_path.name}: {stream_state_path}."
+                    )
+                    if allow_missing_stream_sidecar_fallback:
+                        logger.warning(
+                            f"{msg} Falling back to mini-epoch skip alignment because "
+                            "--allow-missing-stream-sidecar-fallback is enabled "
+                            "(may re-use some data in this resumed chunk)."
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"{msg} Failing fast to avoid silent data-reuse semantics. "
+                            "Enable --allow-missing-stream-sidecar-fallback only for manual recovery."
+                        )
+                else:
+                    try:
+                        load_start = time.time()
+                        with gzip.open(stream_state_path, "rt", encoding="utf-8") as f:
+                            stream_state = json.load(f)
+                        train_dataset.import_state(stream_state)
+                        resume_with_stream_state = True
+                        elapsed = time.time() - load_start
+                        logger.info(
+                            f"Loaded training stream state from {stream_state_path} "
+                            f"({len(stream_state.get('position_pool_refs', [])):,} pooled positions, {elapsed:.2f}s)"
+                        )
+                    except Exception as e:
+                        msg = (
+                            f"Failed to load/import stream-state sidecar for {checkpoint_path.name}: {e}"
+                        )
+                        if allow_missing_stream_sidecar_fallback:
+                            logger.warning(
+                                f"{msg}. Falling back to mini-epoch skip alignment because "
+                                "--allow-missing-stream-sidecar-fallback is enabled "
+                                "(may re-use some data in this resumed chunk)."
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"{msg}. Failing fast to avoid silent restart-state corruption. "
+                                "Enable --allow-missing-stream-sidecar-fallback only for manual recovery."
+                            ) from e
     
     # Use results_path directly (no extra directory nesting)
     experiment_name = exp_config.get('experiment_name', 'unknown_experiment')
@@ -504,6 +544,7 @@ def run_hyperparameter_tuning_current_data(
     max_mini_epochs: Optional[int] = None,
     resume_mode: str = "next_epoch",
     target_end_epoch: Optional[int] = None,
+    allow_missing_stream_sidecar_fallback: bool = False,
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -536,6 +577,8 @@ def run_hyperparameter_tuning_current_data(
         max_mini_epochs: Optional per-process mini-epoch cap for chunked restarts
         resume_mode: Resume mode for checkpoint continuation ("next_epoch" or "same_epoch")
         target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
+        allow_missing_stream_sidecar_fallback: If True, allow same-epoch resume fallback
+            when stream-state sidecar is unavailable.
         
     Returns:
         Dictionary containing overall results
@@ -647,6 +690,7 @@ def run_hyperparameter_tuning_current_data(
                 max_mini_epochs=max_mini_epochs,
                 resume_mode=resume_mode,
                 target_end_epoch=target_end_epoch,
+                allow_missing_stream_sidecar_fallback=allow_missing_stream_sidecar_fallback,
             )
             
             # Save experiment metadata with data source information
@@ -666,6 +710,7 @@ def run_hyperparameter_tuning_current_data(
                     'max_mini_epochs': max_mini_epochs,
                     'resume_mode': resume_mode,
                     'target_end_epoch': target_end_epoch,
+                    'allow_missing_stream_sidecar_fallback': allow_missing_stream_sidecar_fallback,
                 }
             )
             

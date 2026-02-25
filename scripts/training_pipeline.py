@@ -88,6 +88,7 @@ class PipelineConfig:
     max_mini_epochs_per_run: Optional[int] = None
     resume_mode: str = "next_epoch"
     target_end_epoch: Optional[int] = None
+    allow_missing_stream_sidecar_fallback: bool = False
     internal_training_chunk_run: bool = False
     run_timestamp_override: Optional[str] = None
     
@@ -644,6 +645,7 @@ class TrainingStep:
         max_mini_epochs: Optional[int],
         resume_mode: str,
         target_end_epoch: Optional[int],
+        allow_missing_stream_sidecar_fallback: bool,
     ) -> Dict[str, Any]:
         shutdown_handler = GracefulShutdown()
         return run_hyperparameter_tuning_current_data(
@@ -670,6 +672,7 @@ class TrainingStep:
             max_mini_epochs=max_mini_epochs,
             resume_mode=resume_mode,
             target_end_epoch=target_end_epoch,
+            allow_missing_stream_sidecar_fallback=allow_missing_stream_sidecar_fallback,
         )
 
     def _build_child_chunk_command(
@@ -729,6 +732,8 @@ class TrainingStep:
 
         if self.config.override_checkpoint_hyperparameters:
             cmd.append("--override-checkpoint-hyperparameters")
+        if self.config.allow_missing_stream_sidecar_fallback:
+            cmd.append("--allow-missing-stream-sidecar-fallback")
 
         # Preserve explicit hyperparameter overrides across chunk runs.
         override_arg_map = {
@@ -773,6 +778,7 @@ class TrainingStep:
                 max_mini_epochs=None,
                 resume_mode="next_epoch",
                 target_end_epoch=self.config.target_end_epoch,
+                allow_missing_stream_sidecar_fallback=self.config.allow_missing_stream_sidecar_fallback,
             )
             self.logger.info(f"Training completed: {results}")
             return results_dir
@@ -799,7 +805,7 @@ class TrainingStep:
 
         while True:
             chunk_idx += 1
-            resume_mode = "next_epoch" if chunk_idx == 1 else "same_epoch"
+            resume_mode = "same_epoch"
             child_cmd = self._build_child_chunk_command(
                 checkpoint_path=latest_resume_checkpoint,
                 all_data_dirs=all_data_dirs,
@@ -903,6 +909,7 @@ class TrainingStep:
             max_mini_epochs=self.config.max_mini_epochs_per_run,
             resume_mode=self.config.resume_mode,
             target_end_epoch=self.config.target_end_epoch,
+            allow_missing_stream_sidecar_fallback=self.config.allow_missing_stream_sidecar_fallback,
         )
 
         self.logger.info(f"Training completed: {results}")
@@ -1225,6 +1232,14 @@ Examples:
         default=10,
         help="Restart the training subprocess every N mini-epochs (default: 10, set 0 to disable).",
     )
+    parser.add_argument(
+        "--allow-missing-stream-sidecar-fallback",
+        action="store_true",
+        help=(
+            "Allow same-epoch resume to fall back when stream-state sidecar is missing/unavailable. "
+            "Disabled by default to fail fast on restart-state inconsistencies."
+        ),
+    )
     parser.add_argument("--override-checkpoint-hyperparameters", action="store_true", 
                        help="Override checkpoint hyperparameters with current sweep settings (resets optimizer state)")
     
@@ -1364,6 +1379,7 @@ def main():
             max_validation_samples=args.max_validation_samples,
             results_dir=args.results_dir,
             restart_every_mini_epochs=args.restart_every_mini_epochs,
+            allow_missing_stream_sidecar_fallback=args.allow_missing_stream_sidecar_fallback,
             max_mini_epochs_per_run=args.max_mini_epochs_per_run,
             resume_mode=args.resume_mode,
             target_end_epoch=args.target_end_epoch,
