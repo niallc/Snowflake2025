@@ -24,7 +24,13 @@ from hex_ai.selfplay.selfplay_engine import (
     SelfPlayEngine,
 )
 from hex_ai.system_utils import get_git_commit_info
-from hex_ai.utils.opening_strategies import create_pie_rule_strategy, RandomOpeningStrategy
+from hex_ai.utils.opening_strategies import (
+    PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH,
+    PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY,
+    PIE_RULE_VALUE_BALANCED_WEIGHT_EXPONENT,
+    RandomOpeningStrategy,
+    create_pie_rule_strategy,
+)
 from hex_ai.utils.tournament_logging import get_command_line
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
 from hex_ai.utils.run_state_store import (
@@ -72,10 +78,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
-                       choices=['pie_rule', 'random', 'none'],
-                       help='Opening strategy: pie_rule (default), random, or none')
+                       choices=['pie_rule', 'pie_rule_legacy', 'random', 'none'],
+                       help='Opening strategy: pie_rule (value-balanced, default), pie_rule_legacy, random, or none')
     parser.add_argument('--bad_move_frequency', type=float, default=0.1,
-                       help='Frequency of bad moves in pie rule openings (0.0-1.0)')
+                       help='Frequency of bad moves in legacy pie rule openings (0.0-1.0)')
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
@@ -489,6 +495,11 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     # Print additional selfplay specific info
     if args.opening_strategy == 'pie_rule':
+        print(f"  Pie-rule mode: value_balanced")
+        print(f"  Pie-rule weight exponent: {PIE_RULE_VALUE_BALANCED_WEIGHT_EXPONENT}")
+        print(f"  Pie-rule min move probability: {PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY:.4%}")
+        print(f"  Pie-rule opening cycle length: {PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH}")
+    elif args.opening_strategy == 'pie_rule_legacy':
         print(f"  Bad move frequency: {args.bad_move_frequency}")
     print(f"  Board size: {args.board_size}")
     print(f"  Output directory: {args.output_dir}")
@@ -501,7 +512,13 @@ def _run_single_process(args: argparse.Namespace) -> None:
         if args.opening_strategy == 'pie_rule':
             opening_strategy = create_pie_rule_strategy(
                 board_size=args.board_size,
-                bad_move_frequency=args.bad_move_frequency
+                strategy_mode="value_balanced",
+            )
+        elif args.opening_strategy == 'pie_rule_legacy':
+            opening_strategy = create_pie_rule_strategy(
+                board_size=args.board_size,
+                bad_move_frequency=args.bad_move_frequency,
+                strategy_mode="legacy",
             )
         elif args.opening_strategy == 'random':
             # Create random strategy with some common opening moves
