@@ -234,8 +234,25 @@ class MiniEpochOrchestrator:
         batch_count = 0  # Initialize batch_count outside the loop
         completed_epochs = 0
         trained_mini_epochs = 0
+
+        def _max_mini_epoch_cap_result():
+            return {
+                'total_batches': batch_count,
+                'epochs_completed': completed_epochs,
+                'mini_epochs_trained': trained_mini_epochs,
+                'stopped_due_to_max_mini_epochs': True,
+            }
         
         for epoch in range(self.start_epoch, self.num_epochs):
+            if (
+                self.max_mini_epochs is not None
+                and trained_mini_epochs >= self.max_mini_epochs
+            ):
+                self.logger.info(
+                    f"Reached chunk cap ({self.max_mini_epochs} mini-epochs). Stopping current process cleanly."
+                )
+                return _max_mini_epoch_cap_result()
+
             self.logger.info(f"Starting epoch {epoch+1}/{self.num_epochs}")
             
             # Check for shutdown before resetting datasets (which can be expensive)
@@ -278,12 +295,7 @@ class MiniEpochOrchestrator:
                     self.logger.info(
                         f"Reached chunk cap ({self.max_mini_epochs} mini-epochs). Stopping current process cleanly."
                     )
-                    return {
-                        'total_batches': batch_count,
-                        'epochs_completed': completed_epochs,
-                        'mini_epochs_trained': trained_mini_epochs,
-                        'stopped_due_to_max_mini_epochs': True,
-                    }
+                    return _max_mini_epoch_cap_result()
                 try:
                     first_batch = next(batch_iter)
                     batch_count += 1
