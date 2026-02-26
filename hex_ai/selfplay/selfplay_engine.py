@@ -102,13 +102,20 @@ class SelfPlayEngine:
         self.streaming_provenance_file: Optional[str] = None
         self._streaming_games_written = 0
         
-        # Initialize model
+        # Initialize model inference once and reuse its wrapper for MCTS to avoid
+        # loading the same checkpoint twice in one process.
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
-        
+
+        model_wrapper = getattr(self.model, "model", None)
+        if not isinstance(model_wrapper, ModelWrapper):
+            raise TypeError(
+                "SelfPlayEngine expected SimpleModelInference.model to be a ModelWrapper, "
+                f"got {type(model_wrapper)!r}"
+            )
+        self.model_wrapper = model_wrapper
+
         # Initialize MCTS components
         self.game_engine = HexGameEngine()
-        # Create ModelWrapper for MCTS
-        self.model_wrapper = ModelWrapper(model_path, device=get_device())
         # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
@@ -809,8 +816,9 @@ class SelfPlayEngine:
             self._streaming_games_written += 1
 
     def clear_cache(self):
-        """Clear the model's inference cache."""
+        """Clear inference-related caches (SimpleModelInference + MCTS eval cache)."""
         self.model.clear_cache()
+        self.mcts.clear_cache()
 
     def shutdown(self):
         """Clean shutdown of the engine."""
