@@ -57,7 +57,6 @@ class PipelineConfig:
     num_games: int = 100000
     num_workers: int = 3  # Number of self-play workers
     temperature: float = DEFAULT_TEMPERATURE_START
-    batch_size: int = 128
     cache_size: int = DEFAULT_CACHE_SIZE
     write_provenance: bool = True
     
@@ -1194,7 +1193,6 @@ Examples:
     parser.add_argument("--num-games", type=int, default=100000, help="Number of games to generate")
     parser.add_argument("--num-workers", type=int, default=3, help="Number of self-play workers")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE_START, help=f"Temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})")
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
     parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE, help=f"Cache size for model inference (default: {DEFAULT_CACHE_SIZE})")
     parser.add_argument(
         "--no-write-provenance",
@@ -1395,7 +1393,6 @@ def main():
             num_games=args.num_games,
             num_workers=args.num_workers,
             temperature=args.temperature,
-            batch_size=args.batch_size,
             cache_size=args.cache_size,
             write_provenance=not args.no_write_provenance,
             base_data_dir=args.base_data_dir,

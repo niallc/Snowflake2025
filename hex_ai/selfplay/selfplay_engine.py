@@ -126,10 +126,8 @@ class SelfPlayEngine:
         
         # Performance tracking
         self.stats = {
-            'total_inferences': 0,
+            # Keep this dict scoped to values we actually update in self-play.
             'total_time': 0.0,
-            'cache_hits': 0,
-            'cache_misses': 0,
             'games_generated': 0,
             'total_moves': 0,
             'games_per_second': 0.0
@@ -584,11 +582,16 @@ class SelfPlayEngine:
     def get_performance_stats(self) -> Dict[str, Any]:
         """Get comprehensive performance statistics."""
         stats = self.stats.copy()
-        
-        # Add model performance stats
-        model_stats = self.model.get_performance_stats()
-        stats['model'] = model_stats
+
+        # MCTS is the primary runtime path for self-play move generation.
         stats['mcts'] = self._build_mcts_summary_stats()
+
+        # Keep optional SimpleModelInference diagnostics only when there is activity.
+        model_stats = self.model.get_performance_stats()
+        total_inferences = self._safe_int(model_stats.get("total_inferences", 0))
+        total_batch_inferences = self._safe_int(model_stats.get("total_batch_inferences", 0))
+        if total_inferences > 0 or total_batch_inferences > 0:
+            stats['model'] = model_stats
         
         return stats
 

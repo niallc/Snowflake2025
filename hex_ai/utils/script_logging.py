@@ -315,13 +315,26 @@ def _print_selfplay_results(results: Any, config: ScriptConfig, output_files: Op
     # Performance statistics (if available)
     if hasattr(results, 'get_performance_stats'):
         stats = results.get_performance_stats()
-        if 'model' in stats:
-            model_stats = stats['model']
-            print(f"\n=== Model Performance ===")
-            print(f"Total inferences: {model_stats.get('total_inferences', 0)}")
-            print(f"Cache hit rate: {model_stats.get('cache', {}).get('hit_rate', 0):.1%}")
-            print(f"Average batch size: {model_stats.get('avg_batch_size', 0):.1f}")
-            print(f"Throughput: {model_stats.get('throughput', 0):.1f} boards/s")
+        mcts_stats = stats.get('mcts')
+        if isinstance(mcts_stats, dict):
+            print(f"\n=== MCTS Performance ===")
+            print(f"Moves searched: {mcts_stats.get('moves_searched', 0)}")
+            print(f"Search time: {mcts_stats.get('total_search_time_s', 0.0):.2f}s")
+            print(f"Average search time: {mcts_stats.get('avg_search_time_s', 0.0):.4f}s")
+            print(f"Effective simulations: {mcts_stats.get('total_effective_simulations', 0)}")
+            print(f"Unique evals: {mcts_stats.get('total_unique_evals', 0)}")
+            print(f"MCTS cache hit rate: {mcts_stats.get('cache_hit_rate', 0.0):.1%}")
+
+        model_stats = stats.get('model')
+        if isinstance(model_stats, dict):
+            total_inferences = int(model_stats.get('total_inferences', 0) or 0)
+            total_batch_inferences = int(model_stats.get('total_batch_inferences', 0) or 0)
+            if total_inferences > 0 or total_batch_inferences > 0:
+                print(f"\n=== Auxiliary Inference Diagnostics ===")
+                print(f"Total inferences: {total_inferences}")
+                print(f"Cache hit rate: {model_stats.get('cache', {}).get('hit_rate', 0):.1%}")
+                print(f"Average batch size: {model_stats.get('avg_batch_size', 0):.1f}")
+                print(f"Throughput: {model_stats.get('throughput', 0):.1f} boards/s")
     
     # Output files
     if output_files:

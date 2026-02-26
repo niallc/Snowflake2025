@@ -100,8 +100,7 @@ python scripts/training_pipeline.py \
 python scripts/training_pipeline.py \
   --model-path checkpoints/experiment/epoch4_mini1.pt.gz \
   --search-widths 15 10 5 \
-  --temperature 1.2 \
-  --batch-size 256
+  --temperature 1.2
 
 # Custom data processing
 python scripts/training_pipeline.py \
@@ -124,7 +123,6 @@ python scripts/training_pipeline.py \
 - `--num-workers`: Number of self-play workers (default: 3)
 - `--search-widths`: Search widths for minimax (default: [13, 8])
 - `--temperature`: Temperature for move sampling (default: 1.5)
-- `--batch-size`: Batch size for inference (default: 128)
 - `--cache-size`: Cache size for model inference (default: 60000)
 
 ### Data Configuration
@@ -228,13 +226,12 @@ This approach maintains the flexibility of your original workflow while providin
 # Recommended settings for your setup
 --num-workers 3        # 2-5 workers as you mentioned
 --num-games 100000     # Total games across all workers
---batch-size 128       # Optimized for your GPU
 --cache-size 60000     # Memory-efficient caching
 ```
 
 ### Performance Considerations
 
-- **GPU utilization**: Each worker uses the same GPU, so batch size matters more than worker count
+- **GPU utilization**: Each worker uses the same GPU, so simulation count and worker count are the key knobs
 - **CPU utilization**: Multiple workers can utilize multiple CPU cores for game generation
 - **Memory**: Each worker maintains its own cache and batch processing
 - **I/O**: Streaming save prevents data loss during long runs
