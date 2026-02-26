@@ -24,50 +24,54 @@ from hex_ai.utils.format_conversion import (
 from hex_ai.value_utils import apply_move_to_tensor, get_top_k_legal_moves, sample_move_by_value, get_player_to_move_from_moves
 
 
-# Edge coordinates for Union-Find
-LEFT_EDGE = -1
-RIGHT_EDGE = BOARD_SIZE
-TOP_EDGE = -1
-BOTTOM_EDGE = BOARD_SIZE
-
 # Hex neighbor directions (same for all positions)
 HEX_NEIGHBOR_DIRECTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, -1), (-1, 1)]
 
-# Edge indices for DSU connectivity
-EDGE_INDICES = {
-    'red_left': BOARD_SIZE * BOARD_SIZE,
-    'red_right': BOARD_SIZE * BOARD_SIZE + 1,
-    'blue_top': BOARD_SIZE * BOARD_SIZE,
-    'blue_bottom': BOARD_SIZE * BOARD_SIZE + 1
-}
+# Precomputed neighbor lookup tables for efficient connectivity.
+# Keyed by board size so state/engine logic can rely on local board geometry.
+_NEIGHBOR_CACHE: Dict[int, List[List[int]]] = {}
 
-# Precomputed neighbor lookup table for efficient connectivity
-# Each cell (r, c) maps to a list of up to 6 neighbor indices
-NEIGHBORS: List[List[int]] = []
 
-def _get_adjacent_positions(row: int, col: int) -> List[Tuple[int, int]]:
+def _get_adjacent_positions(row: int, col: int, board_size: int) -> List[Tuple[int, int]]:
     """Get adjacent positions for a given (row, col) coordinate."""
     adjacent = []
     for dr, dc in HEX_NEIGHBOR_DIRECTIONS:
         new_row, new_col = row + dr, col + dc
-        if 0 <= new_row < BOARD_SIZE and 0 <= new_col < BOARD_SIZE:
+        if 0 <= new_row < board_size and 0 <= new_col < board_size:
             adjacent.append((new_row, new_col))
     return adjacent
 
-def _initialize_neighbors():
-    """Initialize the global NEIGHBORS lookup table using shared logic."""
-    global NEIGHBORS
-    NEIGHBORS = []
-    
-    for r in range(BOARD_SIZE):
-        for c in range(BOARD_SIZE):
-            neighbors = []
-            for nr, nc in _get_adjacent_positions(r, c):
-                neighbors.append(nr * BOARD_SIZE + nc)
-            NEIGHBORS.append(neighbors)
 
-# Initialize the neighbor lookup table
-_initialize_neighbors()
+def _build_neighbors(board_size: int) -> List[List[int]]:
+    """Build a neighbor lookup table for the specified board size."""
+    neighbors_lookup: List[List[int]] = []
+    for r in range(board_size):
+        for c in range(board_size):
+            neighbors = []
+            for nr, nc in _get_adjacent_positions(r, c, board_size):
+                neighbors.append(nr * board_size + nc)
+            neighbors_lookup.append(neighbors)
+    return neighbors_lookup
+
+
+def _neighbors_for_board_size(board_size: int) -> List[List[int]]:
+    """Get (or lazily build) neighbor lookup table for board size."""
+    neighbors = _NEIGHBOR_CACHE.get(board_size)
+    if neighbors is None:
+        neighbors = _build_neighbors(board_size)
+        _NEIGHBOR_CACHE[board_size] = neighbors
+    return neighbors
+
+
+def _edge_indices_for_board_size(board_size: int) -> Dict[str, int]:
+    """Return DSU edge-node indices for the specified board size."""
+    first_edge_idx = board_size * board_size
+    return {
+        "red_left": first_edge_idx,
+        "red_right": first_edge_idx + 1,
+        "blue_top": first_edge_idx,
+        "blue_bottom": first_edge_idx + 1,
+    }
 
 # Performance instrumentation
 INIT_REBUILDS = 0
@@ -97,34 +101,41 @@ def _ensure_supported_board_size(board_size: int) -> None:
         )
 
 
-def rowcol_to_index(r: int, c: int) -> int:
+def rowcol_to_index(r: int, c: int, board_size: int = BOARD_SIZE) -> int:
     """Convert (row, col) to DSU index."""
-    return r * BOARD_SIZE + c
+    return r * board_size + c
 
-def index_to_rowcol(idx: int) -> Tuple[int, int]:
+def index_to_rowcol(idx: int, board_size: int = BOARD_SIZE) -> Tuple[int, int]:
     """Convert DSU index to (row, col)."""
-    return idx // BOARD_SIZE, idx % BOARD_SIZE
+    return idx // board_size, idx % board_size
 
-def _get_edge_connections(row: int, col: int, piece_color: str) -> List[int]:
+def _get_edge_connections(
+    row: int,
+    col: int,
+    piece_color: str,
+    *,
+    board_size: int,
+    edge_indices: Dict[str, int],
+) -> List[int]:
     """Get edge indices that a piece at (row, col) should connect to."""
     edge_connections = []
     
     if piece_color == PieceEnum.RED.value:
         if col == 0:  # Left edge
-            edge_connections.append(EDGE_INDICES['red_left'])
-        if col == BOARD_SIZE - 1:  # Right edge
-            edge_connections.append(EDGE_INDICES['red_right'])
+            edge_connections.append(edge_indices['red_left'])
+        if col == board_size - 1:  # Right edge
+            edge_connections.append(edge_indices['red_right'])
     else:  # BLUE
         if row == 0:  # Top edge
-            edge_connections.append(EDGE_INDICES['blue_top'])
-        if row == BOARD_SIZE - 1:  # Bottom edge
-            edge_connections.append(EDGE_INDICES['blue_bottom'])
+            edge_connections.append(edge_indices['blue_top'])
+        if row == board_size - 1:  # Bottom edge
+            edge_connections.append(edge_indices['blue_bottom'])
     
     return edge_connections
 
-def _create_dsu_pair() -> Tuple['ArrayDSU', 'ArrayDSU']:
+def _create_dsu_pair(board_size: int) -> Tuple['ArrayDSU', 'ArrayDSU']:
     """Create a pair of DSUs for red and blue connectivity tracking."""
-    dsu_size = BOARD_SIZE * BOARD_SIZE + 2  # +2 for edge nodes
+    dsu_size = board_size * board_size + 2  # +2 for edge nodes
     return ArrayDSU(dsu_size), ArrayDSU(dsu_size)
 
 # Efficient array-based Union-Find data structure for Hex connectivity
@@ -254,6 +265,7 @@ class HexGameState:
     Represents the state of a Hex game using N×N character format.
     """
     board: np.ndarray = field(default_factory=lambda: np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1'))
+    board_size: int = field(init=False)
     _current_player: Player = field(init=False, repr=False)  # No default - must be set in __init__
     move_history: List[Tuple[int, int]] = field(default_factory=list)
     game_over: bool = False
@@ -265,6 +277,8 @@ class HexGameState:
     # Efficient connectivity tracking
     red_dsu: ArrayDSU = field(init=False, repr=False)
     blue_dsu: ArrayDSU = field(init=False, repr=False)
+    _neighbors: List[List[int]] = field(init=False, repr=False)
+    _edge_indices: Dict[str, int] = field(init=False, repr=False)
     _legal_move_mask: Optional[np.ndarray] = field(default=None, repr=False)
 
     def __init__(self, _current_player: Player, board: Optional[np.ndarray] = None,
@@ -273,7 +287,20 @@ class HexGameState:
                  *, skip_initial_connectivity: bool = False,
                  legal_move_mask: Optional[np.ndarray] = None):
         # Initialize board
-        self.board = board if board is not None else np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype='U1')
+        if board is None:
+            self.board = np.full((BOARD_SIZE, BOARD_SIZE), PieceEnum.EMPTY.value, dtype="U1")
+        else:
+            self.board = np.asarray(board)
+        if self.board.ndim != 2:
+            raise ValueError(f"Board must be 2D, got shape {self.board.shape}")
+        if self.board.shape[0] != self.board.shape[1]:
+            raise ValueError(f"Board must be square, got shape {self.board.shape}")
+        self.board_size = int(self.board.shape[0])
+        if self.board_size <= 0:
+            raise ValueError(f"Board size must be positive, got {self.board_size}")
+        self._neighbors = _neighbors_for_board_size(self.board_size)
+        self._edge_indices = _edge_indices_for_board_size(self.board_size)
+
         # Initialize current player with compatibility for legacy int
         if not isinstance(_current_player, Player):
             raise TypeError(f"_current_player must be Player, got {type(_current_player)}")
@@ -287,7 +314,7 @@ class HexGameState:
         self._undo_stack = []
         
         # Initialize DSUs for connectivity tracking
-        self.red_dsu, self.blue_dsu = _create_dsu_pair()
+        self.red_dsu, self.blue_dsu = _create_dsu_pair(self.board_size)
         
         # Build initial connectivity from board state (unless skipped for performance)
         if not skip_initial_connectivity:
@@ -336,13 +363,12 @@ class HexGameState:
         """Preferred: expose winner as Winner enum (or None if game not over)."""
         return self._winner
 
-    @staticmethod
-    def _normalize_legal_move_mask(legal_move_mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    def _normalize_legal_move_mask(self, legal_move_mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
         """Validate and normalize an optional legal-move mask."""
         if legal_move_mask is None:
             return None
         mask = np.asarray(legal_move_mask, dtype=bool)
-        expected_shape = (BOARD_SIZE, BOARD_SIZE)
+        expected_shape = (self.board_size, self.board_size)
         if mask.shape != expected_shape:
             raise ValueError(
                 f"Legal move mask must have shape {expected_shape}, got {mask.shape}"
@@ -359,7 +385,7 @@ class HexGameState:
         self._legal_move_mask = self._normalize_legal_move_mask(legal_move_mask)
 
     def is_valid_move(self, row: int, col: int) -> bool:
-        if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+        if not (0 <= row < self.board_size and 0 <= col < self.board_size):
             return False
         if self.game_over:
             return False
@@ -467,27 +493,33 @@ class HexGameState:
         INIT_REBUILDS += 1
         
         # Connect all existing pieces to their neighbors
-        for r in range(BOARD_SIZE):
-            for c in range(BOARD_SIZE):
+        for r in range(self.board_size):
+            for c in range(self.board_size):
                 if self.board[r, c] != PieceEnum.EMPTY.value:
                     self._connect_piece_to_neighbors(r, c)
     
     def _connect_piece_to_neighbors(self, row: int, col: int) -> None:
         """Connect a piece to its same-color neighbors using efficient DSU."""
-        piece_idx = rowcol_to_index(row, col)
+        piece_idx = rowcol_to_index(row, col, self.board_size)
         piece_color = self.board[row, col]
         
         # Choose the appropriate DSU
         dsu = self.red_dsu if piece_color == PieceEnum.RED.value else self.blue_dsu
         
         # Connect to same-color neighbors
-        for neighbor_idx in NEIGHBORS[piece_idx]:
-            nr, nc = index_to_rowcol(neighbor_idx)
+        for neighbor_idx in self._neighbors[piece_idx]:
+            nr, nc = index_to_rowcol(neighbor_idx, self.board_size)
             if self.board[nr, nc] == piece_color:
                 dsu.union(piece_idx, neighbor_idx)
         
         # Connect to edges if on board edge
-        for edge_idx in _get_edge_connections(row, col, piece_color):
+        for edge_idx in _get_edge_connections(
+            row,
+            col,
+            piece_color,
+            board_size=self.board_size,
+            edge_indices=self._edge_indices,
+        ):
             dsu.union(piece_idx, edge_idx)
     
     def _connect_new_piece_only(self, row: int, col: int, piece: PieceEnum) -> None:
@@ -502,30 +534,42 @@ class HexGameState:
             col: Column index of the new piece  
             piece: The piece that was placed
         """
-        piece_idx = rowcol_to_index(row, col)
+        piece_idx = rowcol_to_index(row, col, self.board_size)
         piece_color = piece.value
         
         # Choose the appropriate DSU
         dsu = self.red_dsu if piece_color == PieceEnum.RED.value else self.blue_dsu
         
         # Connect to same-color neighbors
-        for neighbor_idx in NEIGHBORS[piece_idx]:
-            nr, nc = index_to_rowcol(neighbor_idx)
+        for neighbor_idx in self._neighbors[piece_idx]:
+            nr, nc = index_to_rowcol(neighbor_idx, self.board_size)
             if self.board[nr, nc] == piece_color:
                 dsu.union(piece_idx, neighbor_idx)
         
         # Connect to edges if on board edge
-        for edge_idx in _get_edge_connections(row, col, piece_color):
+        for edge_idx in _get_edge_connections(
+            row,
+            col,
+            piece_color,
+            board_size=self.board_size,
+            edge_indices=self._edge_indices,
+        ):
             dsu.union(piece_idx, edge_idx)
     
     def _check_winner_efficient(self) -> Optional[WinnerEnum]:
         """Check for winner using efficient DSU connectivity."""
         # Check red win (horizontal connection)
-        if self.red_dsu.connected(EDGE_INDICES['red_left'], EDGE_INDICES['red_right']):
+        if self.red_dsu.connected(
+            self._edge_indices["red_left"],
+            self._edge_indices["red_right"],
+        ):
             return WinnerEnum.RED
         
         # Check blue win (vertical connection)
-        if self.blue_dsu.connected(EDGE_INDICES['blue_top'], EDGE_INDICES['blue_bottom']):
+        if self.blue_dsu.connected(
+            self._edge_indices["blue_top"],
+            self._edge_indices["blue_bottom"],
+        ):
             return WinnerEnum.BLUE
         
         return None
@@ -593,8 +637,8 @@ class HexGameState:
 
     def get_legal_moves(self) -> List[Tuple[int, int]]:
         return [(row, col)
-                for row in range(BOARD_SIZE)
-                for col in range(BOARD_SIZE)
+                for row in range(self.board_size)
+                for col in range(self.board_size)
                 if self.is_valid_move(row, col)]
 
     def get_board_tensor(self) -> torch.Tensor:
@@ -619,6 +663,7 @@ class HexGameState:
             return make_empty_hex_state()
             
         # Handle optional prefix
+        board_size = BOARD_SIZE
         moves_str = trmph
         if trmph.startswith("#13,"):
             moves_str = trmph[4:]  # Remove "#13," prefix
@@ -642,11 +687,11 @@ class HexGameState:
         # First create an EMPTY BOARD, then add moves to it.
         # Blue always starts first, so we always begin with Player.BLUE
         # The moves will be applied in sequence (blue, red, blue, red, ...)
-        state = make_empty_hex_state()
+        state = make_empty_hex_state(board_size=board_size)
         
         # Apply all moves
         for move in moves:
-            row, col = trmph_move_to_rowcol(move)
+            row, col = trmph_move_to_rowcol(move, board_size=board_size)
             state = state.make_move(row, col)
         return state
 
@@ -809,7 +854,8 @@ def apply_move_to_tensor_trmph(board_tensor: torch.Tensor, trmph_move: str, play
     """
     
     try:
-        row, col = trmph_move_to_rowcol(trmph_move)
+        board_size = int(board_tensor.shape[-1])
+        row, col = trmph_move_to_rowcol(trmph_move, board_size=board_size)
         return apply_move_to_tensor(board_tensor, row, col, player)
     except Exception as e:
         raise ValueError(f"Invalid TRMPH move '{trmph_move}': {e}") 

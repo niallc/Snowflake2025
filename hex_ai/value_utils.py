@@ -623,9 +623,9 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
     Check if a position is empty in a 3-channel board tensor.
     
     Args:
-        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
-        row: Row index (0-(BOARD_SIZE-1))
-        col: Column index (0-(BOARD_SIZE-1))
+        board_tensor: torch.Tensor of shape (3, N, N) (or at least 2 channels for occupancy check)
+        row: Row index (0-(N-1))
+        col: Column index (0-(N-1))
         tolerance: Floating-point tolerance for comparisons (default: 1e-9)
         
     Returns:
@@ -635,7 +635,16 @@ def is_position_empty(board_tensor: torch.Tensor, row: int, col: int, tolerance:
         ValueError: If the position has an invalid value (not approximately EMPTY_ONEHOT or PIECE_ONEHOT)
         IndexError: If coordinates are out of bounds
     """
-    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+    if board_tensor.ndim != 3 or int(board_tensor.shape[0]) < 2:
+        raise ValueError(f"Expected tensor shape (C, N, N) with C>=2, got {tuple(board_tensor.shape)}")
+    board_rows = int(board_tensor.shape[-2])
+    board_cols = int(board_tensor.shape[-1])
+    if board_rows <= 0 or board_cols <= 0:
+        raise ValueError(f"Board tensor dimensions must be positive, got {tuple(board_tensor.shape)}")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {tuple(board_tensor.shape)}")
+
+    if not (0 <= row < board_rows and 0 <= col < board_cols):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
     
     blue_val = board_tensor[Channel.BLUE.value, row, col].item()
@@ -656,15 +665,15 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player:
     Apply a move to a 3-channel board tensor and return the new tensor.
     
     This is the core function that directly manipulates tensors for efficiency.
-    The tensor should be in (3, BOARD_SIZE, BOARD_SIZE) format where:
+    The tensor should be in (3, N, N) format where:
     - channels[Channel.BLUE] = blue pieces (0 or 1)
     - channels[Channel.RED] = red pieces (0 or 1) 
     - channels[Channel.PLAYER_TO_MOVE] = player-to-move (Player.BLUE or Player.RED)
     
     Args:
-        board_tensor: torch.Tensor of shape (3, BOARD_SIZE, BOARD_SIZE)
-        row: Row index (0-(BOARD_SIZE-1))
-        col: Column index (0-(BOARD_SIZE-1))
+        board_tensor: torch.Tensor of shape (3, N, N)
+        row: Row index (0-(N-1))
+        col: Column index (0-(N-1))
         player: Player making the move (Player enum only)
         
     Returns:
@@ -674,11 +683,20 @@ def apply_move_to_tensor(board_tensor: torch.Tensor, row: int, col: int, player:
         ValueError: If position is invalid or already occupied
         IndexError: If coordinates are out of bounds
     """
-    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+    if board_tensor.ndim != 3:
+        raise ValueError(f"Expected tensor shape (3, N, N), got {tuple(board_tensor.shape)}")
+    channels = int(board_tensor.shape[0])
+    board_rows = int(board_tensor.shape[-2])
+    board_cols = int(board_tensor.shape[-1])
+    if channels != 3:
+        raise ValueError(f"Expected tensor shape (3, N, N), got {tuple(board_tensor.shape)}")
+    if board_rows <= 0 or board_cols <= 0:
+        raise ValueError(f"Board tensor dimensions must be positive, got {tuple(board_tensor.shape)}")
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square board tensor, got {tuple(board_tensor.shape)}")
+
+    if not (0 <= row < board_rows and 0 <= col < board_cols):
         raise IndexError(f"Position ({row}, {col}) is out of bounds")
-    
-    if board_tensor.shape != (3, BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected tensor shape (3, {BOARD_SIZE}, {BOARD_SIZE}), got {board_tensor.shape}")
     
     # Check if position is already occupied using utility function
     if not is_position_empty(board_tensor, row, col):

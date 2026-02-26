@@ -192,22 +192,39 @@ def tensor_to_trmph(tensor_pos: int, board_size: int = BOARD_SIZE) -> str:
 # --- Board/Tensor Conversion Functions ---
 def board_2nxn_to_nxn(board_2nxn: torch.Tensor) -> np.ndarray:
     """Convert 2×N×N tensor format to N×N array format."""
-    if board_2nxn.shape != (2, BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected shape (2, {BOARD_SIZE}, {BOARD_SIZE}), got {board_2nxn.shape}")
-    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+    if isinstance(board_2nxn, torch.Tensor):
+        board_np = board_2nxn.detach().cpu().numpy()
+    else:
+        board_np = np.asarray(board_2nxn)
+    if board_np.ndim != 3 or board_np.shape[0] != 2:
+        raise ValueError(f"Expected shape (2, N, N), got {board_np.shape}")
+    board_size_rows = int(board_np.shape[1])
+    board_size_cols = int(board_np.shape[2])
+    if board_size_rows <= 0 or board_size_cols <= 0:
+        raise ValueError(f"Board dimensions must be positive, got {board_np.shape}")
+    if board_size_rows != board_size_cols:
+        raise ValueError(f"Expected square board shape, got {board_np.shape}")
+    board_nxn = np.full((board_size_rows, board_size_cols), piece_to_char(Piece.EMPTY), dtype='U1')
     # Convert one-hot encoded channels to N×N format
-    board_nxn[board_2nxn[channel_to_int(Channel.BLUE)] == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
-    board_nxn[board_2nxn[channel_to_int(Channel.RED)] == PIECE_ONEHOT] = piece_to_char(Piece.RED)
+    board_nxn[board_np[channel_to_int(Channel.BLUE)] == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
+    board_nxn[board_np[channel_to_int(Channel.RED)] == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     return board_nxn
 
 def board_nxn_to_2nxn(board_nxn: np.ndarray) -> torch.Tensor:
     """Convert N×N array format to 2×N×N tensor format."""
-    if board_nxn.shape != (BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected shape ({BOARD_SIZE}, {BOARD_SIZE}), got {board_nxn.shape}")
-    board_2nxn = torch.zeros(2, BOARD_SIZE, BOARD_SIZE, dtype=torch.float32)
+    board_np = np.asarray(board_nxn)
+    if board_np.ndim != 2:
+        raise ValueError(f"Expected shape (N, N), got {board_np.shape}")
+    board_size_rows = int(board_np.shape[0])
+    board_size_cols = int(board_np.shape[1])
+    if board_size_rows <= 0 or board_size_cols <= 0:
+        raise ValueError(f"Board dimensions must be positive, got {board_np.shape}")
+    if board_size_rows != board_size_cols:
+        raise ValueError(f"Expected square board shape, got {board_np.shape}")
+    board_2nxn = torch.zeros(2, board_size_rows, board_size_cols, dtype=torch.float32)
     # Convert N×N format to one-hot encoded channels
-    board_2nxn[channel_to_int(Channel.BLUE)] = torch.from_numpy((board_nxn == piece_to_char(Piece.BLUE)).astype(np.float32))
-    board_2nxn[channel_to_int(Channel.RED)] = torch.from_numpy((board_nxn == piece_to_char(Piece.RED)).astype(np.float32))
+    board_2nxn[channel_to_int(Channel.BLUE)] = torch.from_numpy((board_np == piece_to_char(Piece.BLUE)).astype(np.float32))
+    board_2nxn[channel_to_int(Channel.RED)] = torch.from_numpy((board_np == piece_to_char(Piece.RED)).astype(np.float32))
     return board_2nxn
 
 def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
@@ -226,13 +243,21 @@ def board_2nxn_to_3nxn(board_2nxn: torch.Tensor) -> torch.Tensor:
     if isinstance(board_2nxn, torch.Tensor):
         board_np = board_2nxn.detach().cpu().numpy()
     else:
-        board_np = board_2nxn
+        board_np = np.asarray(board_2nxn)
+    if board_np.ndim != 3 or board_np.shape[0] != 2:
+        raise ValueError(f"Expected shape (2, N, N), got {board_np.shape}")
+    board_size_rows = int(board_np.shape[1])
+    board_size_cols = int(board_np.shape[2])
+    if board_size_rows <= 0 or board_size_cols <= 0:
+        raise ValueError(f"Board dimensions must be positive, got {board_np.shape}")
+    if board_size_rows != board_size_cols:
+        raise ValueError(f"Expected square board shape, got {board_np.shape}")
     # For format conversion, we don't have error tracking context, so pass None
     # This will use the original behavior (raise exception for invalid boards)
     player_to_move = get_player_to_move_from_board(board_np, error_tracker=None)
     # Convert Player enum to integer for tensor creation
     player_to_move_int = player_to_int(player_to_move)
-    player_channel = np.full((BOARD_SIZE, BOARD_SIZE), float(player_to_move_int), dtype=np.float32)
+    player_channel = np.full((board_size_rows, board_size_cols), float(player_to_move_int), dtype=np.float32)
     # Add player-to-move channel as the third channel
     board_3ch = np.concatenate([board_np, player_channel[None, ...]], axis=0)
     return torch.from_numpy(board_3ch)
@@ -266,17 +291,23 @@ def board_3nxn_to_nxn(board_3nxn: torch.Tensor) -> np.ndarray:
     if isinstance(board_3nxn, torch.Tensor):
         board_np = board_3nxn.detach().cpu().numpy()
     else:
-        board_np = board_3nxn
+        board_np = np.asarray(board_3nxn)
     
-    if board_np.shape != (3, BOARD_SIZE, BOARD_SIZE):
-        raise ValueError(f"Expected shape (3, {BOARD_SIZE}, {BOARD_SIZE}), got {board_np.shape}")
+    if board_np.ndim != 3 or board_np.shape[0] != 3:
+        raise ValueError(f"Expected shape (3, N, N), got {board_np.shape}")
+    board_size_rows = int(board_np.shape[1])
+    board_size_cols = int(board_np.shape[2])
+    if board_size_rows <= 0 or board_size_cols <= 0:
+        raise ValueError(f"Board dimensions must be positive, got {board_np.shape}")
+    if board_size_rows != board_size_cols:
+        raise ValueError(f"Expected square board shape, got {board_np.shape}")
     
     # Extract blue and red channels
     blue_channel = board_np[channel_to_int(Channel.BLUE)]
     red_channel = board_np[channel_to_int(Channel.RED)]
     
     # Convert to N×N string format
-    board_nxn = np.full((BOARD_SIZE, BOARD_SIZE), piece_to_char(Piece.EMPTY), dtype='U1')
+    board_nxn = np.full((board_size_rows, board_size_cols), piece_to_char(Piece.EMPTY), dtype='U1')
     board_nxn[blue_channel == PIECE_ONEHOT] = piece_to_char(Piece.BLUE)
     board_nxn[red_channel == PIECE_ONEHOT] = piece_to_char(Piece.RED)
     
