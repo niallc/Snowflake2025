@@ -181,7 +181,10 @@ class SelfPlayEngine:
             confidence_termination_threshold=self.confidence_termination_threshold,
             cache_size=self.cache_size,  # Use same cache size as SimpleModelInference
             c_puct=self.c_puct,  # Use specified PUCT exploration constant
-            enable_gumbel_root_selection=self.enable_gumbel  # Enable/disable Gumbel root selection
+            # Used by non-Gumbel visit-count move selection (and its reporting path).
+            temperature_start=self.temperature,
+            temperature_end=self.temperature_end,
+            enable_gumbel_root_selection=self.enable_gumbel,  # Enable/disable Gumbel root selection
         )
         # Reuse one MCTS instance so eval_cache can persist across moves/games in this process.
         self.mcts = BaselineMCTS(self.game_engine, self.model_wrapper, self.mcts_config)
@@ -227,6 +230,7 @@ class SelfPlayEngine:
                 "Gumbel root selection": enable_gumbel,
                 "Early termination threshold": confidence_termination_threshold,
                 "Temperature": temperature,
+                "Temperature end": temperature_end,
             }
             write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
             if self.write_provenance:
@@ -252,6 +256,11 @@ class SelfPlayEngine:
             print(f"  Gumbel root selection: {enable_gumbel}")
             print(f"  Early termination threshold: {confidence_termination_threshold}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
+            if enable_gumbel and self.mcts_sims <= self.mcts_config.gumbel_sim_threshold:
+                print(
+                    "  Note: Gumbel root selection uses fixed root temperature=1.0; "
+                    "configured temperature applies to non-Gumbel visit-count sampling."
+                )
             print(f"  Write provenance sidecar: {write_provenance}")
             print(f"  Verbose: {verbose}")
             
@@ -827,6 +836,7 @@ class SelfPlayEngine:
             f.write(f"# C_PUCT: {self.c_puct}\n")
             f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
             f.write(f"# Temperature: {self.temperature}\n")
+            f.write(f"# Temperature end: {self.temperature_end}\n")
             f.write(f"# Git commit: {git_info['status']}\n")
             f.write("# Format: trmph_string winner\n")
             

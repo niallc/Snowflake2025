@@ -66,15 +66,32 @@ def parse_args() -> argparse.Namespace:
                        help=f'PUCT exploration constant for MCTS (default: {DEFAULT_C_PUCT})')
     parser.add_argument('--disable-gumbel', action='store_true',
                        help='Disable Gumbel-AlphaZero root selection for MCTS (enabled by default)')
-    parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE_START, help=f'Starting temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})')
-    parser.add_argument('--temperature_end', type=float, default=DEFAULT_TEMPERATURE_END, help=f'Final temperature for move sampling (for decay) (default: {DEFAULT_TEMPERATURE_END})')
+    parser.add_argument(
+        '--temperature',
+        type=float,
+        default=DEFAULT_TEMPERATURE_START,
+        help=(
+            f'Starting temperature for non-Gumbel visit-count move sampling '
+            f'(default: {DEFAULT_TEMPERATURE_START})'
+        ),
+    )
+    parser.add_argument(
+        '--temperature_end',
+        type=float,
+        default=DEFAULT_TEMPERATURE_END,
+        help=(
+            f'Final temperature for non-Gumbel visit-count move sampling decay '
+            f'(default: {DEFAULT_TEMPERATURE_END})'
+        ),
+    )
     parser.add_argument(
         '--confidence-termination-threshold',
         type=float,
         default=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
         help=(
             "Early-termination confidence threshold for self-play MCTS. "
-            "Set >1.0 to effectively disable confidence termination."
+            "Must be in [0, 1]. Higher values are more conservative; "
+            "1.0 is the most conservative setting."
         ),
     )
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
