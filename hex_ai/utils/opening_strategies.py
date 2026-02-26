@@ -387,7 +387,6 @@ class PieRuleOpeningStrategy(OpeningStrategy):
     def __init__(
         self,
         board_size: int = BOARD_SIZE,
-        bad_move_frequency: float = 0.1,
         strategy_mode: str = "value_balanced",
         weight_exponent: float = PIE_RULE_VALUE_BALANCED_WEIGHT_EXPONENT,
         min_move_probability: float = PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY,
@@ -406,7 +405,6 @@ class PieRuleOpeningStrategy(OpeningStrategy):
             )
 
         self.strategy_mode = strategy_mode
-        self.bad_move_frequency = bad_move_frequency
         self.weight_exponent = float(weight_exponent)
         self.min_move_probability = float(min_move_probability)
         self.cycle_length = int(cycle_length)
@@ -415,6 +413,7 @@ class PieRuleOpeningStrategy(OpeningStrategy):
         self.balanced_moves: List[Tuple[int, int]] = []
         self.somewhat_unbalanced_moves: List[Tuple[int, int]] = []
         self.bad_moves: List[Tuple[int, int]] = []
+        self._legacy_bad_move_indices: List[int] = []
         self.balanced_games = 0
         self.unbalanced_games = 0
         self.network_games = 0
@@ -434,6 +433,9 @@ class PieRuleOpeningStrategy(OpeningStrategy):
             self._initialize_legacy_openings()
 
     def _initialize_legacy_openings(self) -> None:
+        # TODO(2026-03-31): Remove legacy pie-rule mode if it is not useful in practice.
+        first_move_bad_move_frequency = 0.1
+
         # Balanced moves: (a2-a13), (b5-b11), (b2-k2)
         for row in range(1, self.board_size):  # a2 to a13
             self.balanced_moves.append((row, 0))  # col 0 = 'a'
@@ -457,7 +459,13 @@ class PieRuleOpeningStrategy(OpeningStrategy):
         self.balanced_games = len(self.balanced_moves)
         self.unbalanced_games = len(self.somewhat_unbalanced_moves)
         self.network_games = 2  # 2 games with network-chosen moves
-        self.bad_games = int(len(self.bad_moves) * self.bad_move_frequency)
+        self.bad_games = int(
+            len(self.bad_moves) * first_move_bad_move_frequency
+        )
+        self._legacy_bad_move_indices = [
+            int(game_index / first_move_bad_move_frequency)
+            for game_index in range(self.bad_games)
+        ]
         self._total_games = (
             self.balanced_games
             + self.unbalanced_games
@@ -496,7 +504,7 @@ class PieRuleOpeningStrategy(OpeningStrategy):
         game_index -= self.network_games
 
         if game_index < self.bad_games:
-            bad_move_index = int(game_index / self.bad_move_frequency)
+            bad_move_index = self._legacy_bad_move_indices[game_index]
             if bad_move_index < len(self.bad_moves):
                 return self.bad_moves[bad_move_index]
         return None
@@ -573,7 +581,6 @@ def get_trmph_opening_move(opening_move: Optional[Tuple[int, int]],
 
 def create_pie_rule_strategy(
     board_size: int = BOARD_SIZE,
-    bad_move_frequency: float = 0.1,
     strategy_mode: str = "value_balanced",
     weight_exponent: float = PIE_RULE_VALUE_BALANCED_WEIGHT_EXPONENT,
     min_move_probability: float = PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY,
@@ -584,7 +591,6 @@ def create_pie_rule_strategy(
     
     Args:
         board_size: Size of the board
-        bad_move_frequency: Frequency of bad moves for legacy mode (0.0 to 1.0)
         strategy_mode: "value_balanced" (default) or "legacy"
         weight_exponent: Weight exponent for value_balanced mode
         min_move_probability: Minimum probability floor per move for value_balanced mode
@@ -595,7 +601,6 @@ def create_pie_rule_strategy(
     """
     return PieRuleOpeningStrategy(
         board_size=board_size,
-        bad_move_frequency=bad_move_frequency,
         strategy_mode=strategy_mode,
         weight_exponent=weight_exponent,
         min_move_probability=min_move_probability,

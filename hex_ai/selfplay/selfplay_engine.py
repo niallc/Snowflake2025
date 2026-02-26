@@ -110,7 +110,7 @@ class SelfPlayEngine:
             cache_size: Size of the LRU cache
             temperature: Starting temperature for move sampling
             temperature_end: Final temperature for move sampling (for decay)
-            verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
+            verbose: Verbosity level (0=quiet, 1=normal, 2=detailed, 3+=debug)
             streaming_save: Save games incrementally to avoid data loss
             streaming_file: File path for streaming save (auto-generated if None)
             output_dir: Output directory for streaming files (used if streaming_file is None)

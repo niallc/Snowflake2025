@@ -53,7 +53,10 @@ def parse_args() -> argparse.Namespace:
         '--board-size',
         type=int,
         default=BOARD_SIZE,
-        help=f'Board size for self-play generation (default: {BOARD_SIZE})'
+        help=(
+            f'Board size for self-play generation '
+            f'(currently only {BOARD_SIZE} is supported).'
+        ),
     )
     parser.add_argument('--model_path', type=str, 
                        default=get_model_path("best"),
@@ -97,9 +100,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'pie_rule_legacy', 'random', 'none'],
                        help='Opening strategy: pie_rule (value-balanced, default), pie_rule_legacy, random, or none')
-    parser.add_argument('--bad_move_frequency', type=float, default=0.1,
-                       help='Frequency of bad moves in legacy pie rule openings (0.0-1.0)')
-    parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
+    parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed, 3+=debug)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
     parser.add_argument(
@@ -116,7 +117,7 @@ def parse_args() -> argparse.Namespace:
         help='Disable move-provenance sidecar writing',
     )
     parser.add_argument('--progress_interval', type=int, default=20, 
-                       help='How often to print progress updates')
+                       help='How often to print progress updates (must be > 0)')
     parser.add_argument(
         '--restart-every-games',
         type=int,
@@ -144,9 +145,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--mcts-profile', action='store_true',
                        help='Print lightweight MCTS timing breakdown every N calls (GPU vs CPU time).')
     parser.add_argument('--mcts-profile-every', type=int, default=10,
-                       help='Print MCTS profile once every N MCTS move selections (default: 10).')
+                       help='Print MCTS profile once every N MCTS move selections (must be > 0).')
     parser.add_argument('--mcts-profile-max-calls', type=int, default=50,
-                       help='Maximum number of MCTS move selections to profile (default: 50).')
+                       help='Maximum number of MCTS move selections to profile (must be >= 0).')
     parser.add_argument('--internal-chunk-run', action='store_true', help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -221,7 +222,6 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "temperature_end": args.temperature_end,
         "confidence_termination_threshold": args.confidence_termination_threshold,
         "opening_strategy": args.opening_strategy,
-        "bad_move_frequency": args.bad_move_frequency,
         "verbose": args.verbose,
         "streaming_save": args.streaming_save,
         "write_provenance": args.write_provenance,
@@ -259,8 +259,6 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         str(args.confidence_termination_threshold),
         "--opening_strategy",
         args.opening_strategy,
-        "--bad_move_frequency",
-        str(args.bad_move_frequency),
         "--verbose",
         str(args.verbose),
         "--progress_interval",
@@ -517,7 +515,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         print(f"  Pie-rule min move probability: {PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY:.4%}")
         print(f"  Pie-rule opening cycle length: {PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH}")
     elif args.opening_strategy == 'pie_rule_legacy':
-        print(f"  Bad move frequency: {args.bad_move_frequency}")
+        print("  Pie-rule mode: legacy")
     print(f"  Board size: {args.board_size}")
     print(f"  Output directory: {args.output_dir}")
     print(f"  Timestamp: {timestamp}")
@@ -534,7 +532,6 @@ def _run_single_process(args: argparse.Namespace) -> None:
         elif args.opening_strategy == 'pie_rule_legacy':
             opening_strategy = create_pie_rule_strategy(
                 board_size=args.board_size,
-                bad_move_frequency=args.bad_move_frequency,
                 strategy_mode="legacy",
             )
         elif args.opening_strategy == 'random':
@@ -632,6 +629,16 @@ def main():
         raise ValueError("--num_games must be > 0")
     if args.board_size <= 0:
         raise ValueError("--board-size must be > 0")
+    if args.board_size != BOARD_SIZE:
+        raise ValueError(
+            f"--board-size currently supports only {BOARD_SIZE}; got {args.board_size}"
+        )
+    if args.progress_interval <= 0:
+        raise ValueError("--progress_interval must be > 0")
+    if args.mcts_profile_every <= 0:
+        raise ValueError("--mcts-profile-every must be > 0")
+    if args.mcts_profile_max_calls < 0:
+        raise ValueError("--mcts-profile-max-calls must be >= 0")
     if args.restart_every_games < 0:
         raise ValueError("--restart-every-games cannot be negative")
 
