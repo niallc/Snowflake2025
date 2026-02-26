@@ -197,9 +197,10 @@ class PipelineConfig:
                 f"restart_every_mini_epochs must be >= 0, got {self.restart_every_mini_epochs}"
             )
 
-        if self.policy_provenance_mode not in {"off", "require"}:
+        if self.policy_provenance_mode not in {"off", "optional", "require"}:
             raise ValueError(
-                f"policy_provenance_mode must be 'off' or 'require', got {self.policy_provenance_mode!r}"
+                "policy_provenance_mode must be 'off', 'optional', or 'require', "
+                f"got {self.policy_provenance_mode!r}"
             )
     
     def _resolve_ordered_positions_dir(self, newly_created_dir: Optional[str] = None) -> Optional[str]:
@@ -1242,10 +1243,12 @@ Examples:
     parser.add_argument(
         "--policy-provenance-mode",
         default="require",
-        choices=["off", "require"],
+        choices=["off", "optional", "require"],
         help=(
             "Policy provenance handling during TRMPH processing: "
-            "'off' ignores sidecars, 'require' enforces sidecar alignment and masks policy targets."
+            "'off' ignores sidecars; "
+            "'optional' uses sidecars when present and falls back to all-valid when missing; "
+            "'require' enforces sidecar alignment and masks policy targets."
         ),
     )
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")

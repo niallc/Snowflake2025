@@ -43,7 +43,7 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
             - output_dir: str - Output directory path
             - run_tag: str - Optional run tag for output files
             - position_selector: str - Position selector for extraction
-            - policy_provenance_mode: str - 'off' or 'require'
+            - policy_provenance_mode: str - 'off', 'optional', or 'require'
     
     Returns:
         Dict with processing results:
@@ -121,20 +121,27 @@ def process_single_file_direct(
         
         # Load TRMPH file
         trmph_lines = load_trmph_file(file_path)
-        if policy_provenance_mode not in {"off", "require"}:
+        if policy_provenance_mode not in {"off", "optional", "require"}:
             raise ValueError(
                 f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
-                "(expected 'off' or 'require')"
+                "(expected 'off', 'optional', or 'require')"
             )
 
         provenance_records = []
+        provenance_active = False
         consumed_provenance_records = 0
-        if policy_provenance_mode == "require":
+        if policy_provenance_mode in {"optional", "require"}:
             sidecar_path = sidecar_path_for_trmph(file_path)
-            provenance_records = load_move_provenance_sidecar(sidecar_path)
-            logger.info(
-                f"Loaded {len(provenance_records)} move provenance records from {sidecar_path}"
-            )
+            if sidecar_path.exists():
+                provenance_records = load_move_provenance_sidecar(sidecar_path)
+                provenance_active = True
+                logger.info(
+                    f"Loaded {len(provenance_records)} move provenance records from {sidecar_path}"
+                )
+            elif policy_provenance_mode == "require":
+                raise FileNotFoundError(
+                    f"Missing required move provenance sidecar: {sidecar_path}"
+                )
         
         # Process each game line
         all_examples = []
@@ -155,7 +162,7 @@ def process_single_file_direct(
 
                 policy_train_mask = None
                 policy_move_codes = None
-                if policy_provenance_mode == "require":
+                if provenance_active:
                     if consumed_provenance_records >= len(provenance_records):
                         raise ValueError(
                             f"Missing provenance record for game {consumed_provenance_records} "
@@ -201,32 +208,32 @@ def process_single_file_direct(
                     all_examples.extend(examples)
                     file_stats['valid_games'] += 1
                     file_stats['examples_generated'] += len(examples)
-                    if policy_provenance_mode == "require":
+                    if provenance_active:
                         _update_policy_provenance_stats(
                             file_stats=file_stats,
                             examples=examples,
                             policy_move_codes=policy_move_codes,
                         )
                 elif skip_reason == "duplicate_moves":
-                    if policy_provenance_mode == "require":
+                    if provenance_active:
                         raise ValueError(
-                            f"Duplicate moves found in provenance-required mode for {file_path} game line {i + 1}"
+                            f"Duplicate moves found in provenance-enabled mode for {file_path} game line {i + 1}"
                         )
                     file_stats['duplicate_move_games'] += 1
                 else:
                     file_stats['skipped_games'] += 1
                     
             except Exception as e:
-                if policy_provenance_mode == "require":
+                if policy_provenance_mode == "require" or provenance_active:
                     raise ValueError(
-                        f"Failed to process game {i+1} in provenance-required mode for {file_path}: {e}"
+                        f"Failed to process game {i+1} in provenance-enabled mode for {file_path}: {e}"
                     ) from e
                 logger.warning(f"Failed to process game {i+1} in {file_path}: {e}")
                 file_stats['skipped_games'] += 1
         
         file_stats['all_games'] = len(trmph_lines)
 
-        if policy_provenance_mode == "require":
+        if provenance_active:
             if consumed_provenance_records != len(provenance_records):
                 raise ValueError(
                     f"Provenance record count mismatch for {file_path}: "

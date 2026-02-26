@@ -592,6 +592,37 @@ class TestTRMPHProcessor:
         assert not results[0]['success']
         assert "move_codes length" in results[0]['error']
 
+    def test_policy_provenance_optional_fallback_without_sidecar(self):
+        """Optional mode should process files without sidecars as all-policy-trainable."""
+        self.create_test_trmph_file(
+            "optional_no_sidecar.trmph",
+            f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n",
+        )
+
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir),
+            policy_provenance_mode="optional",
+            max_workers=1,
+        )
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+
+        assert len(results) == 1
+        assert results[0]['success']
+        output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
+        assert len(output_files) == 1
+
+        with gzip.open(output_files[0], 'rb') as f:
+            data = pickle.load(f)
+
+        non_terminal_examples = [
+            ex for ex in data['examples']
+            if ex['metadata']['position_in_game'] < (ex['metadata']['total_positions'] - 1)
+        ]
+        assert non_terminal_examples
+        assert all(ex['policy'] is not None for ex in non_terminal_examples)
+
     def test_combine_and_clean_files_propagates_provenance_sidecars(self):
         """Preprocessing combine/clean should emit aligned sidecars in require mode."""
         self.create_test_trmph_file(
@@ -640,3 +671,25 @@ class TestTRMPHProcessor:
                 chunk_size=10,
                 policy_provenance_mode="require",
             )
+
+    def test_combine_and_clean_files_optional_writes_fallback_sidecar(self):
+        """Preprocessing optional mode should synthesize all-valid sidecars when missing."""
+        self.create_test_trmph_file(
+            "combine_optional_missing_sidecar.trmph",
+            "#13,a1b2 b\n#13,c3d4e5 r\n",
+        )
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        chunk_path = self.output_dir / "cleaned_chunk_000.trmph"
+        chunk_sidecar = sidecar_path_for_trmph(chunk_path)
+        assert chunk_path.exists()
+        assert chunk_sidecar.exists()
+
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["VV", "VVV"]

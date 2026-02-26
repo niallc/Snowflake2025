@@ -45,9 +45,11 @@ def parse_arguments():
     parser.add_argument(
         "--policy-provenance-mode",
         default="off",
-        choices=["off", "require"],
+        choices=["off", "optional", "require"],
         help=(
-            "Move provenance handling: 'off' ignores sidecars, "
+            "Move provenance handling: "
+            "'off' ignores sidecars; "
+            "'optional' uses sidecars when present and falls back to all-valid when missing; "
             "'require' enforces sidecar presence/alignment and policy masking."
         ),
     )

@@ -29,7 +29,7 @@ class ProcessingConfig:
             output_dir: Output directory for processed files
             max_files: Maximum number of files to process (for testing)
             position_selector: Which positions to extract from each game
-            policy_provenance_mode: Provenance sidecar behavior ('off' or 'require')
+            policy_provenance_mode: Provenance sidecar behavior ('off', 'optional', or 'require')
             run_tag: Tag for this processing run (default: timestamp)
             max_workers: Number of worker processes to use
         """
@@ -66,7 +66,7 @@ class ProcessingConfig:
         if self.position_selector not in ["all", "final", "penultimate"]:
             raise ValueError(f"Invalid position_selector: {self.position_selector}")
 
-        if self.policy_provenance_mode not in ["off", "require"]:
+        if self.policy_provenance_mode not in ["off", "optional", "require"]:
             raise ValueError(
                 f"Invalid policy_provenance_mode: {self.policy_provenance_mode}"
             )

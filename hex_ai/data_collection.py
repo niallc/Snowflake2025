@@ -18,6 +18,7 @@ from .move_provenance import (
     make_move_provenance_record,
     sidecar_path_for_trmph,
 )
+from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves
 from hex_ai.data_pipeline import discover_training_data_files_all, discover_training_data_files_by_shards
 
 logger = logging.getLogger(__name__)
@@ -338,13 +339,14 @@ def combine_and_clean_files(
         input_dirs: Source directory (or directories) containing .trmph files
         output_dir: Output directory for cleaned chunks
         chunk_size: Number of games per cleaned chunk
-        policy_provenance_mode: 'off' or 'require'
+        policy_provenance_mode: 'off', 'optional', or 'require'
     """
-    if policy_provenance_mode not in {"off", "require"}:
+    if policy_provenance_mode not in {"off", "optional", "require"}:
         raise ValueError(
             f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
-            "(expected 'off' or 'require')"
+            "(expected 'off', 'optional', or 'require')"
         )
+    provenance_enabled = policy_provenance_mode in {"optional", "require"}
     provenance_required = policy_provenance_mode == "require"
 
     if isinstance(input_dirs, Path):
@@ -376,32 +378,45 @@ def combine_and_clean_files(
     for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
-        if provenance_required:
+        if provenance_enabled:
             sidecar_path = sidecar_path_for_trmph(file_path)
-            provenance_records = load_move_provenance_sidecar(sidecar_path)
-            if len(provenance_records) != len(games):
-                raise ValueError(
-                    f"Provenance record count mismatch for {file_path}: "
-                    f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
-                )
-
-            for game_index, game_line in enumerate(games):
-                record = provenance_records[game_index]
-                if record.game_index != game_index:
+            if sidecar_path.exists():
+                provenance_records = load_move_provenance_sidecar(sidecar_path)
+                if len(provenance_records) != len(games):
                     raise ValueError(
-                        f"Provenance game_index mismatch for {file_path}: "
-                        f"expected {game_index}, found {record.game_index}"
+                        f"Provenance record count mismatch for {file_path}: "
+                        f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
                     )
-                existing = game_to_provenance.get(game_line)
-                if existing is None:
-                    game_to_provenance[game_line] = record
-                elif (
-                    existing.move_codes != record.move_codes
-                    or existing.policy_train_mask != record.policy_train_mask
-                ):
-                    raise ValueError(
-                        "Conflicting provenance for duplicate game line across input files: "
-                        f"{game_line[:80]}..."
+
+                for game_index, game_line in enumerate(games):
+                    record = provenance_records[game_index]
+                    if record.game_index != game_index:
+                        raise ValueError(
+                            f"Provenance game_index mismatch for {file_path}: "
+                            f"expected {game_index}, found {record.game_index}"
+                        )
+                    _add_or_validate_game_provenance(
+                        game_to_provenance=game_to_provenance,
+                        game_line=game_line,
+                        record=record,
+                    )
+            elif provenance_required:
+                raise FileNotFoundError(
+                    f"Missing required move provenance sidecar: {sidecar_path}"
+                )
+            else:
+                # Optional mode fallback: treat every move as valid policy target.
+                for game_index, game_line in enumerate(games):
+                    move_text = game_line.split()[0]
+                    move_count = len(split_trmph_moves(strip_trmph_preamble(move_text)))
+                    fallback_record = make_move_provenance_record(
+                        game_index=game_index,
+                        move_codes=("V" * move_count),
+                    )
+                    _add_or_validate_game_provenance(
+                        game_to_provenance=game_to_provenance,
+                        game_line=game_line,
+                        record=fallback_record,
                     )
 
         all_games.extend(games)
@@ -428,7 +443,7 @@ def combine_and_clean_files(
             for game in chunk:
                 f.write(game + '\n')
         logger.info(f"Wrote chunk {i} with {len(chunk)} games to {chunk_path}")
-        if provenance_required:
+        if provenance_enabled:
             sidecar_path = sidecar_path_for_trmph(chunk_path)
             with open(sidecar_path, "w", encoding="utf-8") as f:
                 for game_index, game_line in enumerate(chunk):
@@ -461,7 +476,7 @@ def combine_and_clean_files(
         f.write(f"Duplicates removed: {len(all_games) - len(unique_games)}\n")
         f.write(f"Output chunks: {len(chunks)}\n")
         f.write(f"Games per chunk: ~{chunk_size}\n")
-        if provenance_required:
+        if provenance_enabled:
             f.write(f"Provenance sidecars written: yes\n")
         f.write(f"\nInput files:\n")
         for file_path in all_trmph_files:
@@ -469,10 +484,31 @@ def combine_and_clean_files(
         f.write(f"\nOutput files:\n")
         for i in range(len(chunks)):
             f.write(f"  cleaned_chunk_{i:03d}.trmph\n")
-            if provenance_required:
+            if provenance_enabled:
                 f.write(f"  cleaned_chunk_{i:03d}.provenance.jsonl\n")
     
     logger.info(f"Processing complete! Summary written to {summary_path}")
+
+
+def _add_or_validate_game_provenance(
+    *,
+    game_to_provenance: Dict[str, MoveProvenanceRecord],
+    game_line: str,
+    record: MoveProvenanceRecord,
+) -> None:
+    existing = game_to_provenance.get(game_line)
+    if existing is None:
+        game_to_provenance[game_line] = record
+        return
+
+    if (
+        existing.move_codes != record.move_codes
+        or existing.policy_train_mask != record.policy_train_mask
+    ):
+        raise ValueError(
+            "Conflicting provenance for duplicate game line across input files: "
+            f"{game_line[:80]}..."
+        )
 
 
 def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
