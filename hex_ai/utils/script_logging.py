@@ -46,7 +46,6 @@ class ScriptConfig:
     checkpoint_dirs: Optional[List[str]] = None
     default_checkpoint_dir: Optional[str] = None
     temperature_end: Optional[float] = None
-    no_batched_inference: Optional[bool] = None
     confidence_termination_threshold: Optional[Union[float, List[float], Dict[str, float]]] = None
 
 
@@ -195,7 +194,6 @@ class SelfplayPrinter(ConfigurationPrinter):
             print(f"  Batch size: {config.batch_size}")
         if config.cache_size:
             print(f"  Cache size: {config.cache_size}")
-        print(f"  Batched inference: {not config.no_batched_inference if hasattr(config, 'no_batched_inference') else 'unknown'}")
 
 
 def print_script_configuration(

@@ -47,7 +47,6 @@ def parse_args() -> argparse.Namespace:
                        default=get_model_path("best"),
                        help='Path to model checkpoint')
     parser.add_argument('--output_dir', type=str, default='data/sf25/aug02', help='Output directory')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
     parser.add_argument('--cache_size', type=int, default=DEFAULT_CACHE_SIZE, help=f'Cache size for model inference (default: {DEFAULT_CACHE_SIZE})')
     parser.add_argument('--mcts_sims', type=int, default=DEFAULT_MCTS_SIMS, 
                        help=f'Number of MCTS simulations per move (default: {DEFAULT_MCTS_SIMS})')
@@ -87,8 +86,6 @@ def parse_args() -> argparse.Namespace:
         action='store_false',
         help='Disable move-provenance sidecar writing',
     )
-    parser.add_argument('--no_batched_inference', action='store_true',
-                       help='Disable batched inference (use individual calls)')
     parser.add_argument('--progress_interval', type=int, default=20, 
                        help='How often to print progress updates')
     parser.add_argument(
@@ -186,7 +183,6 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "num_games_total": args.num_games,
         "model_path": args.model_path,
         "output_dir": args.output_dir,
-        "batch_size": args.batch_size,
         "cache_size": args.cache_size,
         "mcts_sims": args.mcts_sims,
         "c_puct": args.c_puct,
@@ -199,7 +195,6 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "verbose": args.verbose,
         "streaming_save": args.streaming_save,
         "write_provenance": args.write_provenance,
-        "no_batched_inference": args.no_batched_inference,
         "progress_interval": args.progress_interval,
         "mcts_profile": args.mcts_profile,
         "mcts_profile_every": args.mcts_profile_every,
@@ -218,8 +213,6 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         args.model_path,
         "--output_dir",
         args.output_dir,
-        "--batch_size",
-        str(args.batch_size),
         "--cache_size",
         str(args.cache_size),
         "--mcts_sims",
@@ -254,8 +247,6 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         cmd.append("--write-provenance")
     else:
         cmd.append("--no-write-provenance")
-    if args.no_batched_inference:
-        cmd.append("--no_batched_inference")
     if args.mcts_profile:
         cmd.append("--mcts-profile")
     return cmd
@@ -471,7 +462,6 @@ def _run_single_process(args: argparse.Namespace) -> None:
         temperatures=args.temperature,
         pie_rule=False,  # Not applicable to selfplay
         opening_strategy=args.opening_strategy,
-        batch_size=args.batch_size,
         cache_size=args.cache_size,
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
@@ -479,7 +469,6 @@ def _run_single_process(args: argparse.Namespace) -> None:
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
         confidence_termination_threshold=args.confidence_termination_threshold,
         temperature_end=args.temperature_end,
-        no_batched_inference=args.no_batched_inference,
         output_dir=args.output_dir
     )
     
@@ -492,14 +481,6 @@ def _run_single_process(args: argparse.Namespace) -> None:
     print(f"  Timestamp: {timestamp}")
     print()
     
-    # # Note about execution configuration
-    # if not args.no_batched_inference:
-    #     print(f"\nNOTE: Using single-threaded execution with batched inference.")
-    #     print("This is the recommended configuration for optimal performance.")
-    # else:
-    #     print(f"\nNOTE: Using individual inference calls.")
-    #     print("This configuration may provide better performance for non-batched inference.")
-        
     # Create opening strategy
     opening_strategy = None
     if args.opening_strategy != 'none':
@@ -516,14 +497,12 @@ def _run_single_process(args: argparse.Namespace) -> None:
     # Initialize self-play engine
     engine = SelfPlayEngine(
         model_path=args.model_path,
-        batch_size=args.batch_size,
         cache_size=args.cache_size,
         temperature=args.temperature,
         temperature_end=args.temperature_end,
         verbose=args.verbose,
         streaming_save=args.streaming_save,
         write_provenance=args.write_provenance,
-        use_batched_inference=not args.no_batched_inference,
         output_dir=args.output_dir,
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,

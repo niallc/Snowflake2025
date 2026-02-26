@@ -43,10 +43,10 @@ SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
-    def __init__(self, model_path: str, batch_size: int = 32, 
+    def __init__(self, model_path: str,
                  cache_size: int = DEFAULT_CACHE_SIZE, temperature: float = DEFAULT_TEMPERATURE_START, temperature_end: float = DEFAULT_TEMPERATURE_END, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
-                 use_batched_inference: bool = True, output_dir: str = None,
+                 output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
                  confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
                  write_provenance: bool = True,
@@ -64,14 +64,12 @@ class SelfPlayEngine:
         
         Args:
             model_path: Path to the model checkpoint
-            batch_size: Batch size for inference
             cache_size: Size of the LRU cache
             temperature: Starting temperature for move sampling
             temperature_end: Final temperature for move sampling (for decay)
             verbose: Verbosity level (0=quiet, 1=normal, 2=detailed)
             streaming_save: Save games incrementally to avoid data loss
             streaming_file: File path for streaming save (auto-generated if None)
-            use_batched_inference: Whether to use batched inference for better performance
             output_dir: Output directory for streaming files (used if streaming_file is None)
             mcts_sims: Number of MCTS simulations per move
             c_puct: PUCT exploration constant for MCTS
@@ -80,14 +78,12 @@ class SelfPlayEngine:
             write_provenance: Whether to write move-provenance sidecar data
         """
         self.model_path = model_path
-        self.batch_size = batch_size
         self.cache_size = cache_size
         self.temperature = temperature
         self.temperature_end = temperature_end
         self.verbose = verbose
         self.streaming_save = streaming_save
         self.streaming_file = streaming_file
-        self.use_batched_inference = use_batched_inference
         self.output_dir = output_dir
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
@@ -188,7 +184,6 @@ class SelfPlayEngine:
         if self.verbose >= 1:
             print(f"SelfPlayEngine initialized:")
             print(f"  Model: {model_path}")
-            print(f"  Batch size: {batch_size}")
             print(f"  Cache size: {cache_size}")
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
             print(f"  C_PUCT: {c_puct}")
@@ -197,7 +192,6 @@ class SelfPlayEngine:
             print(f"  Temperature: {temperature} -> {temperature_end}")
             print(f"  Write provenance sidecar: {write_provenance}")
             print(f"  Verbose: {verbose}")
-            print(f"  Batched inference: {use_batched_inference}")
             
 
 
@@ -449,7 +443,6 @@ class SelfPlayEngine:
         """
         start_time = time.time()
         print(f"Generating {num_games} games...")
-        print(f"Using {'batched' if self.use_batched_inference else 'individual'} inference")
         
         games = []
         
@@ -501,7 +494,6 @@ class SelfPlayEngine:
         
         start_time = time.time()
         print(f"Generating {num_games} games with streaming save...")
-        print(f"Using {'batched' if self.use_batched_inference else 'individual'} inference")
         
         games = []
         
@@ -558,7 +550,6 @@ class SelfPlayEngine:
         start_time = time.time()
         print(f"Generating {num_games} games with opening strategy...")
         print(f"Strategy covers {opening_strategy.get_total_games()} games")
-        print(f"Using {'batched' if self.use_batched_inference else 'individual'} inference")
         
         games = []
         
@@ -814,11 +805,6 @@ class SelfPlayEngine:
                 f.write(record.to_json_line())
                 f.write("\n")
             self._streaming_games_written += 1
-
-    def clear_cache(self):
-        """Clear inference-related caches (SimpleModelInference + MCTS eval cache)."""
-        self.model.clear_cache()
-        self.mcts.clear_cache()
 
     def shutdown(self):
         """Clean shutdown of the engine."""

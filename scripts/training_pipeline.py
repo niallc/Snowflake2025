@@ -329,13 +329,11 @@ class SelfPlayStep:
             # Create self-play engine
             engine = SelfPlayEngine(
                 model_path=self.config.model_full_path,
-                batch_size=self.config.batch_size,
                 cache_size=self.config.cache_size,
                 temperature=self.config.temperature,
                 verbose=1,
                 streaming_save=True,
                 write_provenance=self.config.write_provenance,
-                use_batched_inference=True,
                 output_dir=output_dir
             )
             
