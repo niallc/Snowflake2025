@@ -433,6 +433,48 @@ class MCTSGumbelMixin:
         self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
         self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
 
+    def _merge_forced_round_stats_into_timing_tracker(
+        self,
+        timing_tracker: MCTSTimingTracker,
+        gumbel_metrics: Dict[str, Any],
+    ) -> None:
+        """
+        Merge forced-round MCTS timing totals into the outer run timing tracker.
+
+        Gumbel root selection delegates core simulations via run_forced_root_actions(),
+        which uses its own timing tracker. Without this merge, top-level MCTS stats
+        can show zero NN/CPU timing despite real simulations being executed.
+        """
+        forced = gumbel_metrics.get("forced_stats_totals", None)
+        if not isinstance(forced, dict):
+            return
+
+        timing_tracker.batch_count += int(forced.get("batch_count", 0))
+        batch_sizes = forced.get("batch_sizes", [])
+        if isinstance(batch_sizes, list):
+            timing_tracker.batch_sizes.extend(batch_sizes)
+
+        timing_tracker.h2d_ms_total += float(forced.get("h2d_ms", 0.0))
+        timing_tracker.forward_ms_total += float(forced.get("forward_ms", 0.0))
+        timing_tracker.pure_forward_ms_total += float(forced.get("pure_forward_ms", 0.0))
+        timing_tracker.sync_ms_total += float(forced.get("sync_ms", 0.0))
+        timing_tracker.d2h_ms_total += float(forced.get("d2h_ms", 0.0))
+
+        for source_key, tracker_key in (
+            ("select_ms", "select"),
+            ("encode_ms", "encode"),
+            ("stack_ms", "stack"),
+            ("expand_ms", "expand"),
+            ("backprop_ms", "backprop"),
+            ("cache_lookup_ms", "cache_lookup"),
+            ("state_creation_ms", "state_creation"),
+            ("make_move_ms", "make_move"),
+        ):
+            timing_tracker.timings[tracker_key] = (
+                timing_tracker.timings.get(tracker_key, 0.0)
+                + float(forced.get(source_key, 0.0))
+            )
+
     def _finalize_gumbel_selection(
         self,
         root: MCTSNode,
@@ -531,6 +573,7 @@ class MCTSGumbelMixin:
         )
 
         self._record_gumbel_metrics(gumbel_metrics)
+        self._merge_forced_round_stats_into_timing_tracker(timing_tracker, gumbel_metrics)
         if verbose >= 4:
             print(f"Gumbel root: fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE:.3f}")
         timing_tracker.end_timing("gumbel_algorithm")

@@ -55,6 +55,15 @@ def parse_args() -> argparse.Namespace:
                        help='Disable Gumbel-AlphaZero root selection for MCTS (enabled by default)')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE_START, help=f'Starting temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})')
     parser.add_argument('--temperature_end', type=float, default=DEFAULT_TEMPERATURE_END, help=f'Final temperature for move sampling (for decay) (default: {DEFAULT_TEMPERATURE_END})')
+    parser.add_argument(
+        '--confidence-termination-threshold',
+        type=float,
+        default=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+        help=(
+            "Early-termination confidence threshold for self-play MCTS. "
+            "Set >1.0 to effectively disable confidence termination."
+        ),
+    )
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'random', 'none'],
                        help='Opening strategy: pie_rule (default), random, or none')
@@ -169,6 +178,7 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "disable_gumbel": args.disable_gumbel,
         "temperature": args.temperature,
         "temperature_end": args.temperature_end,
+        "confidence_termination_threshold": args.confidence_termination_threshold,
         "opening_strategy": args.opening_strategy,
         "bad_move_frequency": args.bad_move_frequency,
         "verbose": args.verbose,
@@ -204,6 +214,8 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         str(args.temperature),
         "--temperature_end",
         str(args.temperature_end),
+        "--confidence-termination-threshold",
+        str(args.confidence_termination_threshold),
         "--opening_strategy",
         args.opening_strategy,
         "--bad_move_frequency",
@@ -423,7 +435,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
-        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+        confidence_termination_threshold=args.confidence_termination_threshold,
         temperature_end=args.temperature_end,
         no_batched_inference=args.no_batched_inference,
         output_dir=args.output_dir
@@ -473,7 +485,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
-        confidence_termination_threshold=DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+        confidence_termination_threshold=args.confidence_termination_threshold,
         command_line=command_line,
         mcts_profile=args.mcts_profile,
         mcts_profile_every=args.mcts_profile_every,

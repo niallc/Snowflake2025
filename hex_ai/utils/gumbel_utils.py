@@ -347,6 +347,23 @@ def gumbel_alpha_zero_root_batched(
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
     last_round_rows: List[Dict[str, Any]] = []
+    forced_stats_totals: Dict[str, Any] = {
+        "batch_count": 0,
+        "batch_sizes": [],
+        "h2d_ms": 0.0,
+        "forward_ms": 0.0,
+        "pure_forward_ms": 0.0,
+        "sync_ms": 0.0,
+        "d2h_ms": 0.0,
+        "select_ms": 0.0,
+        "encode_ms": 0.0,
+        "stack_ms": 0.0,
+        "expand_ms": 0.0,
+        "backprop_ms": 0.0,
+        "cache_lookup_ms": 0.0,
+        "state_creation_ms": 0.0,
+        "make_move_ms": 0.0,
+    }
 
     # Compute v_pi once per root and use it consistently for all ranking/debug rows.
     v_pi = compute_completed_baseline_v_pi(pi, legal_actions, q_of_child, n_of_child)
@@ -510,7 +527,28 @@ def gumbel_alpha_zero_root_batched(
 
         # Run the forced actions
         stats = mcts.run_forced_root_actions(root, actions_this_round, verbose=0)
-        nn_calls_per_move += stats.get("batch_count", 0)
+        batch_count = int(stats.get("batch_count", 0))
+        nn_calls_per_move += batch_count
+        forced_stats_totals["batch_count"] += batch_count
+        batch_sizes = stats.get("batch_sizes", []) or []
+        if isinstance(batch_sizes, list):
+            forced_stats_totals["batch_sizes"].extend(batch_sizes)
+        for key in (
+            "h2d_ms",
+            "forward_ms",
+            "pure_forward_ms",
+            "sync_ms",
+            "d2h_ms",
+            "select_ms",
+            "encode_ms",
+            "stack_ms",
+            "expand_ms",
+            "backprop_ms",
+            "cache_lookup_ms",
+            "state_creation_ms",
+            "make_move_ms",
+        ):
+            forced_stats_totals[key] += float(stats.get(key, 0.0))
         if "simulations_completed" not in stats:
             raise ValueError(
                 "Forced-root simulation contract violated in gumbel_alpha_zero_root_batched. "
@@ -631,6 +669,7 @@ def gumbel_alpha_zero_root_batched(
         "avg_nn_batch_size": total_leaves_evaluated / max(1, nn_calls_per_move),
         "leaves_distinct_ratio": distinct_leaves_evaluated / max(1, total_leaves_evaluated),
         "timing_breakdown": timing_data,
+        "forced_stats_totals": forced_stats_totals,
         "v_pi_01": float(v_pi),
         "round_uses_gumbel": bool(round_uses_gumbel),
         "selected_action": selected_action,
