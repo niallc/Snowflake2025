@@ -7,6 +7,7 @@ import argparse
 import numpy as np
 import os
 import random
+import signal
 import subprocess
 import sys
 import time
@@ -349,7 +350,29 @@ def _run_chunked_selfplay(args: argparse.Namespace) -> int:
                 f"({games_completed}/{total_games} completed so far)"
             )
             child_cmd = _build_chunk_command(args, chunk_games)
-            child_result = subprocess.run(child_cmd, check=False)
+            child_process = subprocess.Popen(child_cmd)
+            try:
+                child_returncode = child_process.wait()
+            except KeyboardInterrupt:
+                print("\nInterrupt received. Requesting graceful shutdown of active chunk...")
+                if child_process.poll() is None:
+                    child_process.send_signal(signal.SIGINT)
+                    try:
+                        child_process.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        print("Active chunk did not exit after SIGINT; terminating child process.")
+                        child_process.terminate()
+                        try:
+                            child_process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            print("Active chunk still running after terminate; killing child process.")
+                            child_process.kill()
+                            child_process.wait()
+                raise
+            child_result = subprocess.CompletedProcess(
+                args=child_cmd,
+                returncode=child_returncode,
+            )
 
             if child_result.returncode != 0:
                 progress["current_chunk"] = None
