@@ -271,7 +271,8 @@ def print_script_results(
     results: Any,
     config: ScriptConfig,
     output_files: Optional[Dict[str, str]] = None,
-    total_time: Optional[float] = None
+    total_time: Optional[float] = None,
+    performance_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Print unified results analysis for all script types.
@@ -282,9 +283,16 @@ def print_script_results(
         config: ScriptConfig object
         output_files: Optional dict of output file paths
         total_time: Optional total execution time (mainly for selfplay)
+        performance_stats: Optional precomputed performance stats payload
     """
     if script_type == "selfplay":
-        _print_selfplay_results(results, config, output_files, total_time)
+        _print_selfplay_results(
+            results,
+            config,
+            output_files,
+            total_time,
+            performance_stats=performance_stats,
+        )
     elif script_type in ["tournament", "deterministic_tournament"]:
         _print_tournament_results(results, config, output_files)
     else:
@@ -294,7 +302,13 @@ def print_script_results(
                 print(f"  {file_type.title()}: {file_path}")
 
 
-def _print_selfplay_results(results: Any, config: ScriptConfig, output_files: Optional[Dict[str, str]] = None, total_time: Optional[float] = None) -> None:
+def _print_selfplay_results(
+    results: Any,
+    config: ScriptConfig,
+    output_files: Optional[Dict[str, str]] = None,
+    total_time: Optional[float] = None,
+    performance_stats: Optional[Dict[str, Any]] = None,
+) -> None:
     """Print selfplay-specific results."""
     print(f"\n=== Generation Complete ===")
     
@@ -313,8 +327,10 @@ def _print_selfplay_results(results: Any, config: ScriptConfig, output_files: Op
         print(f"Red win rate: {red_wins / len(results):.1%}")
     
     # Performance statistics (if available)
-    if hasattr(results, 'get_performance_stats'):
+    stats = performance_stats
+    if stats is None and hasattr(results, 'get_performance_stats'):
         stats = results.get_performance_stats()
+    if isinstance(stats, dict):
         mcts_stats = stats.get('mcts')
         if isinstance(mcts_stats, dict):
             print(f"\n=== MCTS Performance ===")

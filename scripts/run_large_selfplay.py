@@ -549,8 +549,16 @@ def _run_single_process(args: argparse.Namespace) -> None:
             output_files["trmph"] = trmph_file
             if args.write_provenance:
                 output_files["provenance"] = str(sidecar_path_for_trmph(trmph_file))
-        
-        print_script_results("selfplay", games, script_config, output_files, total_time)
+
+        performance_stats = engine.get_performance_stats()
+        print_script_results(
+            "selfplay",
+            games,
+            script_config,
+            output_files,
+            total_time,
+            performance_stats=performance_stats,
+        )
         
     except KeyboardInterrupt:
         print("\n\nGeneration interrupted by user.")
