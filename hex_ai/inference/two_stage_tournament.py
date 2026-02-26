@@ -331,7 +331,7 @@ class TwoStageTournament:
                 response_path,
             ]
 
-            logger.info("Starting worker for %s", mode)
+            logger.debug("Starting worker for %s", mode)
             completed = subprocess.run(command, check=False)
             if completed.returncode != 0:
                 raise RuntimeError(f"Tournament worker failed (mode={mode}, exit_code={completed.returncode}).")
