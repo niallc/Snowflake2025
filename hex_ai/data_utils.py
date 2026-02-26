@@ -664,6 +664,8 @@ def extract_training_examples_with_selector_from_game(
     winner_from_file: str,
     game_id: tuple,
     position_selector: str = "all",
+    policy_train_mask: Optional[str] = None,
+    policy_move_codes: Optional[str] = None,
     include_trmph: bool = False,
     shuffle_positions: bool = True
 ) -> tuple[list, Optional[str]]:
@@ -680,6 +682,37 @@ def extract_training_examples_with_selector_from_game(
         if not moves:
             raise ValueError("Empty game after removing repeated moves")
         total_positions = len(moves) + 1
+
+        if policy_train_mask is not None:
+            if not isinstance(policy_train_mask, str):
+                raise ValueError(
+                    f"policy_train_mask must be str when provided, got {type(policy_train_mask)}"
+                )
+            if len(policy_train_mask) != len(moves):
+                raise ValueError(
+                    f"policy_train_mask length {len(policy_train_mask)} does not match move count {len(moves)}"
+                )
+            invalid_mask_bits = sorted(set(policy_train_mask) - {"0", "1"})
+            if invalid_mask_bits:
+                raise ValueError(
+                    f"policy_train_mask contains invalid bits: {invalid_mask_bits}"
+                )
+
+        if policy_move_codes is not None:
+            if not isinstance(policy_move_codes, str):
+                raise ValueError(
+                    f"policy_move_codes must be str when provided, got {type(policy_move_codes)}"
+                )
+            if len(policy_move_codes) != len(moves):
+                raise ValueError(
+                    f"policy_move_codes length {len(policy_move_codes)} does not match move count {len(moves)}"
+                )
+            invalid_codes = sorted(set(policy_move_codes) - {"V", "G", "C", "T"})
+            if invalid_codes:
+                raise ValueError(
+                    f"policy_move_codes contains invalid values: {invalid_codes}"
+                )
+
         if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
         winner_clear = trmph_winner_to_clear_str(winner_from_file)
@@ -706,7 +739,14 @@ def extract_training_examples_with_selector_from_game(
         training_examples = []
         for i, position in enumerate(position_indices):
             board_state = create_board_from_moves(moves[:position])
-            policy_target = None if position >= len(moves) else create_policy_target(moves[position])
+            is_terminal_position = position >= len(moves)
+            policy_target = None
+            if not is_terminal_position:
+                policy_trainable = True
+                if policy_train_mask is not None:
+                    policy_trainable = policy_train_mask[position] == "1"
+                if policy_trainable:
+                    policy_target = create_policy_target(moves[position])
             player_to_move = get_player_to_move_from_moves(moves[:position])
             # Convert winner string to Winner enum
             winner_enum = Winner.BLUE if winner_clear == "BLUE" else Winner.RED if winner_clear == "RED" else None
@@ -718,6 +758,10 @@ def extract_training_examples_with_selector_from_game(
                 'value_sample_tier': value_sample_tiers[i],
                 'winner': winner_enum
             }
+            if policy_move_codes is not None and not is_terminal_position:
+                metadata['policy_move_code'] = policy_move_codes[position]
+            if policy_train_mask is not None and not is_terminal_position:
+                metadata['policy_target_trainable'] = policy_train_mask[position] == "1"
             if include_trmph:
                 metadata['trmph_game'] = trmph_text
             example = {

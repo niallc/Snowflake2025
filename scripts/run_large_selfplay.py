@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 
 from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.inference.model_config import get_model_path
+from hex_ai.move_provenance import sidecar_path_for_trmph
 from hex_ai.selfplay.selfplay_engine import (
     DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
     SelfPlayEngine,
@@ -72,6 +73,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
+    parser.add_argument(
+        '--write-provenance',
+        dest='write_provenance',
+        action='store_true',
+        default=True,
+        help='Write move-provenance sidecar (.provenance.jsonl) alongside TRMPH output (default: enabled)',
+    )
+    parser.add_argument(
+        '--no-write-provenance',
+        dest='write_provenance',
+        action='store_false',
+        help='Disable move-provenance sidecar writing',
+    )
     parser.add_argument('--no_batched_inference', action='store_true',
                        help='Disable batched inference (use individual calls)')
     parser.add_argument('--progress_interval', type=int, default=20, 
@@ -183,6 +197,7 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "bad_move_frequency": args.bad_move_frequency,
         "verbose": args.verbose,
         "streaming_save": args.streaming_save,
+        "write_provenance": args.write_provenance,
         "no_batched_inference": args.no_batched_inference,
         "progress_interval": args.progress_interval,
         "mcts_profile": args.mcts_profile,
@@ -234,6 +249,10 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         cmd.append("--disable-gumbel")
     if args.streaming_save:
         cmd.append("--streaming_save")
+    if args.write_provenance:
+        cmd.append("--write-provenance")
+    else:
+        cmd.append("--no-write-provenance")
     if args.no_batched_inference:
         cmd.append("--no_batched_inference")
     if args.mcts_profile:
@@ -480,6 +499,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         temperature_end=args.temperature_end,
         verbose=args.verbose,
         streaming_save=args.streaming_save,
+        write_provenance=args.write_provenance,
         use_batched_inference=not args.no_batched_inference,
         output_dir=args.output_dir,
         mcts_sims=args.mcts_sims,
@@ -525,6 +545,8 @@ def _run_single_process(args: argparse.Namespace) -> None:
         output_files = {}
         if trmph_file:
             output_files["trmph"] = trmph_file
+            if args.write_provenance:
+                output_files["provenance"] = str(sidecar_path_for_trmph(trmph_file))
         
         print_script_results("selfplay", games, script_config, output_files, total_time)
         

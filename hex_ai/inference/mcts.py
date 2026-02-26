@@ -582,6 +582,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         stats["effective_sims_total"] = int(self._effective_sims_total)
         stats["unique_evals_per_sec"] = 0.0
         stats["effective_sims_per_sec"] = 0.0
+        stats["selected_move_source"] = termination_info.reason
 
         return MCTSResult(
             move=move,
@@ -703,12 +704,14 @@ class BaselineMCTS(MCTSGumbelMixin):
     ) -> MCTSResult:
         """Build final result payload for a completed non-terminated MCTS search."""
         move, move_probs = self._compute_move(root, root_state, verbose)
+        selected_move_source = self._resolve_selected_move_source(root, move)
         tree_data = self.get_tree_data(root, move_probs)
         win_probability = compute_win_probability_from_tree_data(tree_data)
 
         stats = self._get_stats_builder().create_final_stats(
             timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
         )
+        stats["selected_move_source"] = selected_move_source
 
         if getattr(self, "_used_gumbel_root_selection", False):
             # Use actual MCTS metrics for distinct leaves evaluation.
@@ -737,6 +740,26 @@ class BaselineMCTS(MCTSGumbelMixin):
             algorithm_termination_info=None,
             win_probability=win_probability
         )
+
+    def _resolve_selected_move_source(
+        self,
+        root: MCTSNode,
+        selected_move: Tuple[int, int],
+    ) -> str:
+        """Return canonical move-selection source for the final chosen root move."""
+        if getattr(self, "_used_gumbel_root_selection", False):
+            return "gumbel_root"
+
+        if self.cfg.enable_terminal_move_detection and any(root.terminal_moves):
+            terminal_indices = [
+                i for i, is_terminal in enumerate(root.terminal_moves) if is_terminal
+            ]
+            if terminal_indices:
+                terminal_move = root.legal_moves[terminal_indices[0]]
+                if selected_move == terminal_move:
+                    return "terminal_move"
+
+        return "visit_counts"
 
     def _root_temperature(self, move_idx: int, board_size: int) -> float:
         """

@@ -10,9 +10,16 @@ import tempfile
 import os
 import gzip
 import pickle
+import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+from hex_ai.data_collection import combine_and_clean_files
+from hex_ai.move_provenance import (
+    load_move_provenance_sidecar,
+    make_move_provenance_record,
+    sidecar_path_for_trmph,
+)
 from hex_ai.trmph_processing.processor import TRMPHProcessor
 from hex_ai.trmph_processing.config import ProcessingConfig
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
@@ -40,6 +47,17 @@ class TestTRMPHProcessor:
         with open(file_path, 'w') as f:
             f.write(content)
         return file_path
+
+    def create_test_provenance_sidecar(self, trmph_filename: str, move_codes_per_game: list[str]) -> Path:
+        """Create a matching provenance sidecar for a test TRMPH file."""
+        trmph_path = self.data_dir / trmph_filename
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            for game_index, move_codes in enumerate(move_codes_per_game):
+                record = make_move_provenance_record(game_index, move_codes)
+                f.write(record.to_json_line())
+                f.write("\n")
+        return sidecar_path
     
     def test_initialization(self):
         """Test TRMPHProcessor initialization."""
@@ -483,4 +501,142 @@ class TestTRMPHProcessor:
         # Verify file can be loaded completely
         with gzip.open(output_files[0], 'rb') as f:
             data = pickle.load(f)
-        assert data is not None 
+        assert data is not None
+
+    def test_policy_provenance_require_masks_policy_targets(self):
+        """Require-mode provenance should keep value targets and mask policy targets."""
+        content = (
+            f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
+            f"#13,a1b2 {TRMPH_RED_WIN}\n"
+        )
+        self.create_test_trmph_file("provenance_ok.trmph", content)
+        self.create_test_provenance_sidecar("provenance_ok.trmph", ["VCG", "CC"])
+
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir),
+            policy_provenance_mode="require",
+            max_workers=1,
+        )
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+
+        assert len(results) == 1
+        assert results[0]['success']
+        stats = results[0]['stats']
+        assert stats['policy_positions_total'] == 5
+        assert stats['policy_positions_trainable'] == 2
+        assert stats['policy_positions_skipped'] == 3
+        assert stats['policy_positions_skipped_by_code'] == {'C': 3}
+
+        output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
+        assert len(output_files) == 1
+        with gzip.open(output_files[0], 'rb') as f:
+            data = pickle.load(f)
+
+        examples = data['examples']
+        non_terminal_examples = [
+            ex for ex in examples
+            if ex['metadata']['position_in_game'] < (ex['metadata']['total_positions'] - 1)
+        ]
+        assert len(non_terminal_examples) == 5
+        assert sum(ex['policy'] is not None for ex in non_terminal_examples) == 2
+        assert sum(ex['policy'] is None for ex in non_terminal_examples) == 3
+
+    def test_policy_provenance_require_missing_sidecar_fails(self):
+        """Require-mode should fail fast when sidecar is missing."""
+        content = f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
+        self.create_test_trmph_file("missing_sidecar.trmph", content)
+
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir),
+            policy_provenance_mode="require",
+            max_workers=1,
+        )
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+
+        assert len(results) == 1
+        assert not results[0]['success']
+        assert "Missing required move provenance sidecar" in results[0]['error']
+
+    def test_policy_provenance_require_move_count_mismatch_fails(self):
+        """Require-mode should fail on sidecar/game move-count misalignment."""
+        trmph_path = self.create_test_trmph_file(
+            "mismatch_sidecar.trmph",
+            f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n",
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        bad_record = {
+            "schema_version": 1,
+            "game_index": 0,
+            "move_count": 99,
+            "move_codes": "VCG",
+            "policy_train_mask": "101",
+        }
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(bad_record))
+            f.write("\n")
+
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir),
+            policy_provenance_mode="require",
+            max_workers=1,
+        )
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+
+        assert len(results) == 1
+        assert not results[0]['success']
+        assert "move_codes length" in results[0]['error']
+
+    def test_combine_and_clean_files_propagates_provenance_sidecars(self):
+        """Preprocessing combine/clean should emit aligned sidecars in require mode."""
+        self.create_test_trmph_file(
+            "combine_1.trmph",
+            "#13,a1b2 b\n#13,c3d4 r\n",
+        )
+        self.create_test_provenance_sidecar("combine_1.trmph", ["VC", "GG"])
+
+        self.create_test_trmph_file(
+            "combine_2.trmph",
+            "#13,c3d4 r\n#13,e5f6 b\n",
+        )
+        self.create_test_provenance_sidecar("combine_2.trmph", ["GG", "TT"])
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="require",
+        )
+
+        chunk_path = self.output_dir / "cleaned_chunk_000.trmph"
+        assert chunk_path.exists()
+        chunk_sidecar = sidecar_path_for_trmph(chunk_path)
+        assert chunk_sidecar.exists()
+
+        with open(chunk_path, "r", encoding="utf-8") as f:
+            chunk_lines = [line.strip() for line in f.readlines() if line.strip()]
+        assert chunk_lines == ["#13,a1b2 b", "#13,c3d4 r", "#13,e5f6 b"]
+
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.game_index for record in records] == [0, 1, 2]
+        assert [record.move_codes for record in records] == ["VC", "GG", "TT"]
+
+    def test_combine_and_clean_files_require_missing_sidecar_fails(self):
+        """Preprocessing require mode should fail when an input sidecar is missing."""
+        self.create_test_trmph_file(
+            "combine_missing_sidecar.trmph",
+            "#13,a1b2 b\n",
+        )
+
+        with pytest.raises(FileNotFoundError, match="Missing required move provenance sidecar"):
+            combine_and_clean_files(
+                input_dirs=[self.data_dir],
+                output_dir=self.output_dir,
+                chunk_size=10,
+                policy_provenance_mode="require",
+            )

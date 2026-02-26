@@ -42,6 +42,15 @@ def parse_arguments():
     parser.add_argument("--max-files", type=int, help="Maximum number of files to process (for testing)")
     parser.add_argument("--run-tag", help="Tag for this processing run (default: timestamp)")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
+    parser.add_argument(
+        "--policy-provenance-mode",
+        default="off",
+        choices=["off", "require"],
+        help=(
+            "Move provenance handling: 'off' ignores sidecars, "
+            "'require' enforces sidecar presence/alignment and policy masking."
+        ),
+    )
     parser.add_argument("--max-workers", type=int, default=6, help="Number of worker processes to use (default: 6)")
     parser.add_argument("--sequential", action="store_true", help="Process files sequentially (for debugging)")
     
@@ -55,6 +64,7 @@ def create_config_from_args(args):
         output_dir=args.output_dir,
         max_files=args.max_files,
         position_selector=args.position_selector,
+        policy_provenance_mode=args.policy_provenance_mode,
         run_tag=args.run_tag,
         max_workers=1 if args.sequential else args.max_workers
     )

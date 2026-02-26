@@ -8,6 +8,7 @@ import os
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
@@ -16,13 +17,27 @@ from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty
 from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
+from hex_ai.move_provenance import (
+    MOVE_CODE_CONFIDENCE_TERMINATION,
+    MOVE_CODE_GUMBEL_ROOT,
+    MOVE_CODE_TERMINAL_TERMINATION,
+    MOVE_CODE_VISIT_COUNT,
+    make_move_provenance_record,
+    sidecar_path_for_trmph,
+)
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
-from hex_ai.utils.format_conversion import rowcol_to_trmph
+from hex_ai.utils.format_conversion import count_trmph_moves, rowcol_to_trmph
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.value_utils import validate_trmph_winner
 
 DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
+SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
+    "visit_counts": MOVE_CODE_VISIT_COUNT,
+    "gumbel_root": MOVE_CODE_GUMBEL_ROOT,
+    "neural_network_confidence": MOVE_CODE_CONFIDENCE_TERMINATION,
+    "terminal_move": MOVE_CODE_TERMINAL_TERMINATION,
+}
 
 
 class SelfPlayEngine:
@@ -34,6 +49,7 @@ class SelfPlayEngine:
                  use_batched_inference: bool = True, output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
                  confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
+                 write_provenance: bool = True,
                  command_line: str = None,
                  mcts_profile: bool = False,
                  mcts_profile_every: int = 10,
@@ -61,6 +77,7 @@ class SelfPlayEngine:
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
             confidence_termination_threshold: Early-termination confidence threshold
+            write_provenance: Whether to write move-provenance sidecar data
         """
         self.model_path = model_path
         self.batch_size = batch_size
@@ -76,11 +93,14 @@ class SelfPlayEngine:
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
         self.confidence_termination_threshold = confidence_termination_threshold
+        self.write_provenance = write_provenance
         self.command_line = command_line
         self.mcts_profile = mcts_profile
         self.mcts_profile_every = mcts_profile_every
         self.mcts_profile_max_calls = mcts_profile_max_calls
         self._mcts_profile_calls = 0
+        self.streaming_provenance_file: Optional[str] = None
+        self._streaming_games_written = 0
         
         # Initialize model
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
@@ -143,6 +163,15 @@ class SelfPlayEngine:
                 "Temperature": temperature,
             }
             write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
+            if self.write_provenance:
+                self.streaming_provenance_file = str(
+                    sidecar_path_for_trmph(self.streaming_file)
+                )
+                Path(self.streaming_provenance_file).parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                with open(self.streaming_provenance_file, "w", encoding="utf-8"):
+                    pass
         
         # Logging
         self.logger = logging.getLogger(__name__)
@@ -157,6 +186,7 @@ class SelfPlayEngine:
             print(f"  Gumbel root selection: {enable_gumbel}")
             print(f"  Early termination threshold: {confidence_termination_threshold}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
+            print(f"  Write provenance sidecar: {write_provenance}")
             print(f"  Verbose: {verbose}")
             print(f"  Batched inference: {use_batched_inference}")
             
@@ -190,6 +220,7 @@ class SelfPlayEngine:
             print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
         
         state = make_empty_hex_state()  # Always uses 13x13 board
+        move_provenance_codes: List[str] = []
         
         # Apply opening move if provided
         if opening_move is not None:
@@ -198,6 +229,10 @@ class SelfPlayEngine:
                 trmph_move = rowcol_to_trmph(row, col)
                 print(f"🎮 SELF-PLAY: Starting with opening move {trmph_move} ({row}, {col})")
             state = state.make_move(row, col)
+            if self.write_provenance:
+                # Opening moves are externally provided and have no MCTS source in schema v1.
+                # We mark them as trainable visit-style moves to keep move-level alignment.
+                move_provenance_codes.append(MOVE_CODE_VISIT_COUNT)
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Starting new game with MCTS ({self.mcts_sims} simulations)")
@@ -255,6 +290,10 @@ class SelfPlayEngine:
             
             # Get the best move from the result
             move = mcts_result.move
+            if self.write_provenance:
+                move_provenance_codes.append(
+                    self._get_move_provenance_code(mcts_result.stats)
+                )
             
             # Get root value (approximate from MCTS)
             tree_data = mcts_result.tree_data
@@ -293,11 +332,37 @@ class SelfPlayEngine:
             'trmph': state.to_trmph(),
             'winner': winner_char
         }
+        if self.write_provenance:
+            game_data['move_provenance_codes'] = ''.join(move_provenance_codes)
+            expected_move_count = count_trmph_moves(game_data['trmph'])
+            if len(game_data['move_provenance_codes']) != expected_move_count:
+                raise RuntimeError(
+                    "Move provenance length mismatch for generated game. "
+                    f"Expected {expected_move_count}, got {len(game_data['move_provenance_codes'])}."
+                )
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game complete, winner: {state.winner}, moves: {len(state.move_history)}")
         
         return game_data
+
+    def _get_move_provenance_code(self, move_stats: Optional[Dict[str, Any]]) -> str:
+        """Translate MCTS-selected move source into provenance code."""
+        stats = move_stats or {}
+        source_raw = stats.get("selected_move_source")
+        source = str(source_raw).strip() if source_raw is not None else ""
+        if not source:
+            raise ValueError(
+                "MCTS result missing selected_move_source; cannot build move provenance sidecar."
+            )
+
+        code = SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE.get(source)
+        if code is None:
+            raise ValueError(
+                f"Unsupported selected_move_source {source!r}. "
+                f"Expected one of {sorted(SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE.keys())}."
+            )
+        return code
 
     def _validate_game_data(self, game_data: Dict[str, Any], game_id: Optional[int] = None) -> None:
         """
@@ -340,6 +405,28 @@ class SelfPlayEngine:
         if not trmph.startswith(TRMPH_PREFIX):
             game_info = f" (game {game_id})" if game_id is not None else ""
             raise ValueError(f"Invalid TRMPH format{game_info}: must start with {TRMPH_PREFIX!r}")
+
+        move_count = count_trmph_moves(trmph)
+        move_codes = game_data.get('move_provenance_codes')
+
+        if self.write_provenance and move_codes is None:
+            game_info = f" (game {game_id})" if game_id is not None else ""
+            raise ValueError(
+                f"Missing move_provenance_codes{game_info} while write_provenance=True"
+            )
+
+        if move_codes is not None:
+            if not isinstance(move_codes, str):
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"Invalid move_provenance_codes{game_info}: expected str, got {type(move_codes)}"
+                )
+            if len(move_codes) != move_count:
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"Invalid move_provenance_codes length{game_info}: "
+                    f"expected {move_count}, got {len(move_codes)}"
+                )
 
     def generate_games_with_monitoring(self, num_games: int, board_size: int = BOARD_SIZE, 
                                      progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
@@ -443,6 +530,8 @@ class SelfPlayEngine:
         
         print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
         print(f"Games saved to: {self.streaming_file}")
+        if self.write_provenance and self.streaming_provenance_file:
+            print(f"Move provenance sidecar: {self.streaming_provenance_file}")
         
         return games
 
@@ -472,7 +561,7 @@ class SelfPlayEngine:
             # Get opening move from strategy
             opening_move = opening_strategy.get_opening_move(i)
             
-            game_data = self._generate_single_game(board_size, opening_move)
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
             self._validate_game_data(game_data, i)
             games.append(game_data)
             
@@ -659,9 +748,24 @@ class SelfPlayEngine:
             for game in games:
                 self._validate_game_data(game)
                 f.write(f"{game['trmph']} {game['winner']}\n")
+
+        if self.write_provenance:
+            provenance_file = str(sidecar_path_for_trmph(trmph_file))
+            with open(provenance_file, 'w', encoding='utf-8') as f:
+                for game_index, game in enumerate(games):
+                    move_codes = game.get('move_provenance_codes')
+                    if move_codes is None:
+                        raise ValueError(
+                            f"Missing move_provenance_codes for game index {game_index} while writing provenance"
+                        )
+                    record = make_move_provenance_record(game_index, move_codes)
+                    f.write(record.to_json_line())
+                    f.write("\n")
         
         if self.verbose >= 1:
             print(f"Saved {len(games)} games to {trmph_file}")
+            if self.write_provenance:
+                print(f"Saved move provenance sidecar to {provenance_file}")
         
         return trmph_file
 
@@ -674,6 +778,24 @@ class SelfPlayEngine:
         
         with open(self.streaming_file, 'a') as f:
             f.write(f"{game_data['trmph']} {game_data['winner']}\n")
+
+        if self.write_provenance:
+            if self.streaming_provenance_file is None:
+                raise RuntimeError(
+                    "streaming_provenance_file is not initialized while write_provenance=True"
+                )
+            move_codes = game_data.get('move_provenance_codes')
+            if move_codes is None:
+                raise ValueError(
+                    "Missing move_provenance_codes while writing streaming provenance sidecar"
+                )
+            record = make_move_provenance_record(
+                self._streaming_games_written, move_codes
+            )
+            with open(self.streaming_provenance_file, 'a', encoding='utf-8') as f:
+                f.write(record.to_json_line())
+                f.write("\n")
+            self._streaming_games_written += 1
 
     def clear_cache(self):
         """Clear the model's inference cache."""

@@ -59,6 +59,7 @@ class PipelineConfig:
     temperature: float = DEFAULT_TEMPERATURE_START
     batch_size: int = 128
     cache_size: int = DEFAULT_CACHE_SIZE
+    write_provenance: bool = True
     
     # Data directories - explicit types to avoid confusion
     base_data_dir: str = "data"
@@ -75,6 +76,7 @@ class PipelineConfig:
     # Processing configuration
     chunk_size: int = 10000
     position_selector: str = "all"
+    policy_provenance_mode: str = "require"
     max_workers_trmph: int = 6
     num_buckets_shuffle: int = 100
     
@@ -193,6 +195,11 @@ class PipelineConfig:
         if self.restart_every_mini_epochs < 0:
             raise ValueError(
                 f"restart_every_mini_epochs must be >= 0, got {self.restart_every_mini_epochs}"
+            )
+
+        if self.policy_provenance_mode not in {"off", "require"}:
+            raise ValueError(
+                f"policy_provenance_mode must be 'off' or 'require', got {self.policy_provenance_mode!r}"
             )
     
     def _resolve_ordered_positions_dir(self, newly_created_dir: Optional[str] = None) -> Optional[str]:
@@ -320,6 +327,7 @@ class SelfPlayStep:
                 temperature=self.config.temperature,
                 verbose=1,
                 streaming_save=True,
+                write_provenance=self.config.write_provenance,
                 use_batched_inference=True,
                 output_dir=output_dir
             )
@@ -419,7 +427,12 @@ class PreprocessingStep:
         
         # Process all sources together
         self.logger.info(f"Processing {len(input_sources)} input sources together")
-        combine_and_clean_files(input_sources, Path(self.config.cleaned_dir), self.config.chunk_size)
+        combine_and_clean_files(
+            input_sources,
+            Path(self.config.cleaned_dir),
+            self.config.chunk_size,
+            policy_provenance_mode=self.config.policy_provenance_mode,
+        )
         
         # Verify output was created
         output_files = list(Path(self.config.cleaned_dir).glob("*.trmph"))
@@ -446,6 +459,7 @@ class TRMPHProcessingStep:
         self.logger.info(f"Input directory: {input_dir}")
         self.logger.info(f"Output directory: {self.config.ordered_positions_dir}")
         self.logger.info(f"Position selector: {self.config.position_selector}")
+        self.logger.info(f"Policy provenance mode: {self.config.policy_provenance_mode}")
         self.logger.info(f"Max workers: {self.config.max_workers_trmph}")
         
         # Check if output already exists
@@ -468,6 +482,7 @@ class TRMPHProcessingStep:
             'output_dir': self.config.ordered_positions_dir,
             'max_files': None,
             'position_selector': self.config.position_selector,
+            'policy_provenance_mode': self.config.policy_provenance_mode,
             'run_tag': f"pipeline_{self.config.run_timestamp}",
             'max_workers': self.config.max_workers_trmph,
             'sequential': False
@@ -1176,6 +1191,11 @@ Examples:
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE_START, help=f"Temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference")
     parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE, help=f"Cache size for model inference (default: {DEFAULT_CACHE_SIZE})")
+    parser.add_argument(
+        "--no-write-provenance",
+        action="store_true",
+        help="Disable move-provenance sidecar writing during self-play generation.",
+    )
     
     # Data configuration
     parser.add_argument("--base-data-dir", default="data", help="Base directory for data")
@@ -1219,6 +1239,15 @@ Examples:
     
     parser.add_argument("--chunk-size", type=int, default=10000, help="Chunk size for preprocessing")
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
+    parser.add_argument(
+        "--policy-provenance-mode",
+        default="require",
+        choices=["off", "require"],
+        help=(
+            "Policy provenance handling during TRMPH processing: "
+            "'off' ignores sidecars, 'require' enforces sidecar alignment and masks policy targets."
+        ),
+    )
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
     parser.add_argument("--num-buckets-shuffle", type=int, default=100, help="Number of buckets for shuffling")
     
@@ -1361,6 +1390,7 @@ def main():
             temperature=args.temperature,
             batch_size=args.batch_size,
             cache_size=args.cache_size,
+            write_provenance=not args.no_write_provenance,
             base_data_dir=args.base_data_dir,
             raw_trmph_data_dirs=args.raw_trmph_data_dirs,
             cleaned_trmph_data_dirs=args.cleaned_trmph_data_dirs,
@@ -1373,6 +1403,7 @@ def main():
             selfplay_dir=args.selfplay_dir,
             chunk_size=args.chunk_size,
             position_selector=args.position_selector,
+            policy_provenance_mode=args.policy_provenance_mode,
             max_workers_trmph=args.max_workers_trmph,
             num_buckets_shuffle=args.num_buckets_shuffle,
             max_samples=args.max_samples,

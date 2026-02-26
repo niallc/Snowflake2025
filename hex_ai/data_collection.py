@@ -12,6 +12,12 @@ from datetime import datetime
 
 from .data_utils import find_trmph_files, extract_games_from_file, remove_duplicates
 from .data_config import log_processed_files
+from .move_provenance import (
+    MoveProvenanceRecord,
+    load_move_provenance_sidecar,
+    make_move_provenance_record,
+    sidecar_path_for_trmph,
+)
 from hex_ai.data_pipeline import discover_training_data_files_all, discover_training_data_files_by_shards
 
 logger = logging.getLogger(__name__)
@@ -319,28 +325,85 @@ def collect_and_organize_data(
     }
 
 
-def combine_and_clean_files(input_dirs: List[Path], output_dir: Path, chunk_size: int = 20000):
-    """Combine all TRMPH files from multiple input directories, remove duplicates, and split into chunks."""
+def combine_and_clean_files(
+    input_dirs: List[Path] | Path,
+    output_dir: Path,
+    chunk_size: int = 20000,
+    policy_provenance_mode: str = "off",
+):
+    """
+    Combine TRMPH files, remove duplicates, split into chunks, and optionally propagate provenance.
+
+    Args:
+        input_dirs: Source directory (or directories) containing .trmph files
+        output_dir: Output directory for cleaned chunks
+        chunk_size: Number of games per cleaned chunk
+        policy_provenance_mode: 'off' or 'require'
+    """
+    if policy_provenance_mode not in {"off", "require"}:
+        raise ValueError(
+            f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
+            "(expected 'off' or 'require')"
+        )
+    provenance_required = policy_provenance_mode == "require"
+
+    if isinstance(input_dirs, Path):
+        normalized_input_dirs = [input_dirs]
+    else:
+        normalized_input_dirs = [Path(d) for d in input_dirs]
+
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Find all TRMPH files from all input directories
-    all_trmph_files = []
-    for input_dir in input_dirs:
+    all_trmph_files: List[Path] = []
+    for input_dir in normalized_input_dirs:
         if not input_dir.exists():
             raise FileNotFoundError(f"Input directory {input_dir} does not exist - this is likely a configuration error")
-        trmph_files = list(input_dir.glob("*.trmph"))
+        trmph_files = sorted(input_dir.glob("*.trmph"))
         all_trmph_files.extend(trmph_files)
         logger.info(f"Found {len(trmph_files)} .trmph files in {input_dir}")
     
     if not all_trmph_files:
-        raise RuntimeError(f"No .trmph files found in any input directory: {[str(d) for d in input_dirs]}. This suggests a configuration error or empty directories.")
+        raise RuntimeError(
+            f"No .trmph files found in any input directory: {[str(d) for d in normalized_input_dirs]}. "
+            "This suggests a configuration error or empty directories."
+        )
     
     # Extract all games from all files
-    all_games = []
+    all_games: List[str] = []
+    game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
+        if provenance_required:
+            sidecar_path = sidecar_path_for_trmph(file_path)
+            provenance_records = load_move_provenance_sidecar(sidecar_path)
+            if len(provenance_records) != len(games):
+                raise ValueError(
+                    f"Provenance record count mismatch for {file_path}: "
+                    f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
+                )
+
+            for game_index, game_line in enumerate(games):
+                record = provenance_records[game_index]
+                if record.game_index != game_index:
+                    raise ValueError(
+                        f"Provenance game_index mismatch for {file_path}: "
+                        f"expected {game_index}, found {record.game_index}"
+                    )
+                existing = game_to_provenance.get(game_line)
+                if existing is None:
+                    game_to_provenance[game_line] = record
+                elif (
+                    existing.move_codes != record.move_codes
+                    or existing.policy_train_mask != record.policy_train_mask
+                ):
+                    raise ValueError(
+                        "Conflicting provenance for duplicate game line across input files: "
+                        f"{game_line[:80]}..."
+                    )
+
         all_games.extend(games)
         logger.info(f"  Extracted {len(games)} games from {file_path.name}")
     
@@ -365,26 +428,49 @@ def combine_and_clean_files(input_dirs: List[Path], output_dir: Path, chunk_size
             for game in chunk:
                 f.write(game + '\n')
         logger.info(f"Wrote chunk {i} with {len(chunk)} games to {chunk_path}")
+        if provenance_required:
+            sidecar_path = sidecar_path_for_trmph(chunk_path)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                for game_index, game_line in enumerate(chunk):
+                    source_record = game_to_provenance.get(game_line)
+                    if source_record is None:
+                        raise ValueError(
+                            f"Missing source provenance while writing cleaned sidecar for {chunk_path}"
+                        )
+                    record = make_move_provenance_record(
+                        game_index=game_index,
+                        move_codes=source_record.move_codes,
+                    )
+                    f.write(record.to_json_line())
+                    f.write("\n")
+            logger.info(
+                f"Wrote chunk provenance sidecar for chunk {i}: {sidecar_path}"
+            )
     
     # Write summary
     summary_path = output_dir / "processing_summary.txt"
     with open(summary_path, 'w') as f:
         f.write(f"Self-play data preprocessing summary\n")
         f.write(f"=====================================\n")
-        f.write(f"Input directories: {[str(d) for d in input_dirs]}\n")
+        f.write(f"Input directories: {[str(d) for d in normalized_input_dirs]}\n")
         f.write(f"Output directory: {output_dir}\n")
+        f.write(f"Policy provenance mode: {policy_provenance_mode}\n")
         f.write(f"Total input files: {len(all_trmph_files)}\n")
         f.write(f"Total games extracted: {len(all_games)}\n")
         f.write(f"Unique games after deduplication: {len(unique_games)}\n")
         f.write(f"Duplicates removed: {len(all_games) - len(unique_games)}\n")
         f.write(f"Output chunks: {len(chunks)}\n")
         f.write(f"Games per chunk: ~{chunk_size}\n")
+        if provenance_required:
+            f.write(f"Provenance sidecars written: yes\n")
         f.write(f"\nInput files:\n")
         for file_path in all_trmph_files:
             f.write(f"  {file_path}\n")
         f.write(f"\nOutput files:\n")
         for i in range(len(chunks)):
             f.write(f"  cleaned_chunk_{i:03d}.trmph\n")
+            if provenance_required:
+                f.write(f"  cleaned_chunk_{i:03d}.provenance.jsonl\n")
     
     logger.info(f"Processing complete! Summary written to {summary_path}")
 

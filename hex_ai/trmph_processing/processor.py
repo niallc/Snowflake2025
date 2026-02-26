@@ -61,7 +61,8 @@ class ParallelProcessor:
                 'data_dir': str(config.data_dir),
                 'output_dir': str(config.output_dir),
                 'run_tag': config.run_tag,
-                'position_selector': config.position_selector
+                'position_selector': config.position_selector,
+                'policy_provenance_mode': config.policy_provenance_mode,
             }
             file_infos.append(file_info)
         
@@ -135,7 +136,8 @@ class SequentialProcessor:
                 'data_dir': str(config.data_dir),
                 'output_dir': str(config.output_dir),
                 'run_tag': config.run_tag,
-                'position_selector': config.position_selector
+                'position_selector': config.position_selector,
+                'policy_provenance_mode': config.policy_provenance_mode,
             }
             
             try:
@@ -238,6 +240,27 @@ class TRMPHProcessor:
             r.get('stats', {}).get('duplicate_move_games', 0) 
             for r in results if r['success']
         )
+        total_policy_positions = sum(
+            r.get('stats', {}).get('policy_positions_total', 0)
+            for r in results if r['success']
+        )
+        total_policy_trainable = sum(
+            r.get('stats', {}).get('policy_positions_trainable', 0)
+            for r in results if r['success']
+        )
+        total_policy_skipped = sum(
+            r.get('stats', {}).get('policy_positions_skipped', 0)
+            for r in results if r['success']
+        )
+        skipped_by_code: Dict[str, int] = {}
+        for result in results:
+            if not result.get('success'):
+                continue
+            file_counts = result.get('stats', {}).get('policy_positions_skipped_by_code', {})
+            if not isinstance(file_counts, dict):
+                continue
+            for code, count in file_counts.items():
+                skipped_by_code[code] = skipped_by_code.get(code, 0) + int(count)
         
         logger.info("")
         logger.info("PROCESSING SUMMARY:")
@@ -252,6 +275,19 @@ class TRMPHProcessor:
         
         if total_duplicate_move_games > 0:
             logger.warning(f"  {total_duplicate_move_games} games skipped due to duplicate moves")
+
+        if total_policy_positions > 0:
+            logger.info(
+                "  Policy positions (non-terminal): "
+                f"total={total_policy_positions}, "
+                f"trainable={total_policy_trainable}, "
+                f"skipped={total_policy_skipped}"
+            )
+            if skipped_by_code:
+                by_code = ", ".join(
+                    f"{code}={count}" for code, count in sorted(skipped_by_code.items())
+                )
+                logger.info(f"  Skipped policy positions by move code: {by_code}")
     
     def _save_results(self, results: List[Dict]):
         """Save processing results to JSON file."""

@@ -18,6 +18,7 @@ class ProcessingConfig:
                  output_dir: str, 
                  max_files: Optional[int] = None,
                  position_selector: str = "all",
+                 policy_provenance_mode: str = "off",
                  run_tag: Optional[str] = None,
                  max_workers: int = 6):
         """
@@ -28,6 +29,7 @@ class ProcessingConfig:
             output_dir: Output directory for processed files
             max_files: Maximum number of files to process (for testing)
             position_selector: Which positions to extract from each game
+            policy_provenance_mode: Provenance sidecar behavior ('off' or 'require')
             run_tag: Tag for this processing run (default: timestamp)
             max_workers: Number of worker processes to use
         """
@@ -35,6 +37,7 @@ class ProcessingConfig:
         self.output_dir = Path(output_dir)
         self.max_files = max_files
         self.position_selector = position_selector
+        self.policy_provenance_mode = policy_provenance_mode
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.max_workers = max_workers
     
@@ -45,6 +48,7 @@ class ProcessingConfig:
             'output_dir': str(self.output_dir),
             'max_files': self.max_files,
             'position_selector': self.position_selector,
+            'policy_provenance_mode': self.policy_provenance_mode,
             'run_tag': self.run_tag,
             'max_workers': self.max_workers,
         }
@@ -61,6 +65,11 @@ class ProcessingConfig:
         
         if self.position_selector not in ["all", "final", "penultimate"]:
             raise ValueError(f"Invalid position_selector: {self.position_selector}")
+
+        if self.policy_provenance_mode not in ["off", "require"]:
+            raise ValueError(
+                f"Invalid policy_provenance_mode: {self.policy_provenance_mode}"
+            )
         
         if self.max_workers < 1:
             raise ValueError(f"max_workers must be at least 1, got {self.max_workers}")
@@ -74,5 +83,6 @@ class ProcessingConfig:
                 f"output_dir='{self.output_dir}', "
                 f"max_files={self.max_files}, "
                 f"position_selector='{self.position_selector}', "
+                f"policy_provenance_mode='{self.policy_provenance_mode}', "
                 f"run_tag='{self.run_tag}', "
-                f"max_workers={self.max_workers})") 
+                f"max_workers={self.max_workers})")

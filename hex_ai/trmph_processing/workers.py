@@ -17,6 +17,11 @@ from hex_ai.file_utils import atomic_write_pickle_gz, sanitize_filename
 from hex_ai.data_utils import load_trmph_file
 from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.data_utils import extract_training_examples_with_selector_from_game
+from hex_ai.move_provenance import (
+    load_move_provenance_sidecar,
+    sidecar_path_for_trmph,
+)
+from hex_ai.utils.format_conversion import strip_trmph_preamble, split_trmph_moves
 from hex_ai.value_utils import Player, Winner
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,7 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
             - output_dir: str - Output directory path
             - run_tag: str - Optional run tag for output files
             - position_selector: str - Position selector for extraction
+            - policy_provenance_mode: str - 'off' or 'require'
     
     Returns:
         Dict with processing results:
@@ -55,6 +61,7 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
         output_dir = Path(file_info['output_dir'])
         run_tag = file_info.get('run_tag')
         position_selector = file_info.get('position_selector', 'all')
+        policy_provenance_mode = file_info.get('policy_provenance_mode', 'off')
         
         # Process the file directly without BatchProcessor to avoid resume issues
         logger.info(f"Processing file {file_path} (index {file_idx})")
@@ -62,7 +69,8 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
             file_path, 
             file_idx, 
             output_dir,
-            position_selector=position_selector
+            position_selector=position_selector,
+            policy_provenance_mode=policy_provenance_mode,
         )
         logger.info(f"Completed processing {file_path}: {stats.get('examples_generated', 0)} examples")
         
@@ -82,7 +90,13 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path, position_selector: str = "all") -> Dict[str, Any]:
+def process_single_file_direct(
+    file_path: Path,
+    file_idx: int,
+    output_dir: Path,
+    position_selector: str = "all",
+    policy_provenance_mode: str = "off",
+) -> Dict[str, Any]:
     """
     Process a single .trmph file directly without BatchProcessor state management.
     
@@ -95,6 +109,10 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         'skipped_games': 0,       # Games that couldn't be processed (format errors, etc.)
         'duplicate_move_games': 0, # Games skipped due to duplicate moves
         'examples_generated': 0,  # Total training examples created
+        'policy_positions_total': 0,  # Non-terminal policy positions considered
+        'policy_positions_trainable': 0,  # Non-terminal positions with policy target
+        'policy_positions_skipped': 0,  # Non-terminal positions with policy=None
+        'policy_positions_skipped_by_code': {},  # e.g. {'C': 123}
         'file_error': None        # File-level error (if any)
     }
     
@@ -103,23 +121,75 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         
         # Load TRMPH file
         trmph_lines = load_trmph_file(file_path)
+        if policy_provenance_mode not in {"off", "require"}:
+            raise ValueError(
+                f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
+                "(expected 'off' or 'require')"
+            )
+
+        provenance_records = []
+        consumed_provenance_records = 0
+        if policy_provenance_mode == "require":
+            sidecar_path = sidecar_path_for_trmph(file_path)
+            provenance_records = load_move_provenance_sidecar(sidecar_path)
+            logger.info(
+                f"Loaded {len(provenance_records)} move provenance records from {sidecar_path}"
+            )
         
         # Process each game line
         all_examples = []
         for i, game_line in enumerate(trmph_lines):
             try:
                 # Parse the game record
-                trmph_url, winner = parse_trmph_line_flexible(game_line)
+                try:
+                    trmph_url, winner = parse_trmph_line_flexible(game_line)
+                except ValueError:
+                    # Header/noise lines are expected in .trmph files.
+                    file_stats['skipped_games'] += 1
+                    continue
                 
                 # Skip lines without winner indicator
                 if winner is None:
                     file_stats['skipped_games'] += 1
                     continue
+
+                policy_train_mask = None
+                policy_move_codes = None
+                if policy_provenance_mode == "require":
+                    if consumed_provenance_records >= len(provenance_records):
+                        raise ValueError(
+                            f"Missing provenance record for game {consumed_provenance_records} "
+                            f"in {file_path}"
+                        )
+
+                    provenance_record = provenance_records[consumed_provenance_records]
+                    expected_game_index = consumed_provenance_records
+                    if provenance_record.game_index != expected_game_index:
+                        raise ValueError(
+                            f"Provenance game_index mismatch for {file_path}: "
+                            f"expected {expected_game_index}, got {provenance_record.game_index}"
+                        )
+
+                    expected_move_count = len(split_trmph_moves(strip_trmph_preamble(trmph_url)))
+                    if provenance_record.move_count != expected_move_count:
+                        raise ValueError(
+                            f"Provenance move_count mismatch for game {expected_game_index} in {file_path}: "
+                            f"expected {expected_move_count}, got {provenance_record.move_count}"
+                        )
+
+                    policy_train_mask = provenance_record.policy_train_mask
+                    policy_move_codes = provenance_record.move_codes
+                    consumed_provenance_records += 1
                 
                 # Extract training examples from this game
                 game_id = (file_idx, i+1)  # file_idx and line_idx (1-based)
                 examples, skip_reason = extract_training_examples_with_selector_from_game(
-                    trmph_url, winner, game_id, position_selector=position_selector
+                    trmph_url,
+                    winner,
+                    game_id,
+                    position_selector=position_selector,
+                    policy_train_mask=policy_train_mask,
+                    policy_move_codes=policy_move_codes,
                 )
                 
                 if examples:
@@ -131,16 +201,37 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
                     all_examples.extend(examples)
                     file_stats['valid_games'] += 1
                     file_stats['examples_generated'] += len(examples)
+                    if policy_provenance_mode == "require":
+                        _update_policy_provenance_stats(
+                            file_stats=file_stats,
+                            examples=examples,
+                            policy_move_codes=policy_move_codes,
+                        )
                 elif skip_reason == "duplicate_moves":
+                    if policy_provenance_mode == "require":
+                        raise ValueError(
+                            f"Duplicate moves found in provenance-required mode for {file_path} game line {i + 1}"
+                        )
                     file_stats['duplicate_move_games'] += 1
                 else:
                     file_stats['skipped_games'] += 1
                     
             except Exception as e:
+                if policy_provenance_mode == "require":
+                    raise ValueError(
+                        f"Failed to process game {i+1} in provenance-required mode for {file_path}: {e}"
+                    ) from e
                 logger.warning(f"Failed to process game {i+1} in {file_path}: {e}")
                 file_stats['skipped_games'] += 1
         
         file_stats['all_games'] = len(trmph_lines)
+
+        if policy_provenance_mode == "require":
+            if consumed_provenance_records != len(provenance_records):
+                raise ValueError(
+                    f"Provenance record count mismatch for {file_path}: "
+                    f"consumed {consumed_provenance_records}, available {len(provenance_records)}"
+                )
         
         # Save processed examples if any were generated
         if all_examples:
@@ -176,6 +267,48 @@ def process_single_file_direct(file_path: Path, file_idx: int, output_dir: Path,
         file_stats['file_error'] = str(e)
         logger.error(f"Failed to process file {file_path}: {e}")
         raise
+
+
+def _update_policy_provenance_stats(
+    *,
+    file_stats: Dict[str, Any],
+    examples: list[Dict[str, Any]],
+    policy_move_codes: str,
+) -> None:
+    """Accumulate policy filtering observability counters from extracted examples."""
+    if not policy_move_codes:
+        raise ValueError("policy_move_codes is required for provenance stats")
+
+    skipped_by_code = file_stats['policy_positions_skipped_by_code']
+
+    for example in examples:
+        metadata = example.get('metadata')
+        if not isinstance(metadata, dict):
+            raise ValueError("Example metadata missing while accumulating provenance stats")
+
+        position = metadata.get('position_in_game')
+        total_positions = metadata.get('total_positions')
+        if not isinstance(position, int) or not isinstance(total_positions, int):
+            raise ValueError(
+                f"Invalid metadata for provenance stats: position={position!r}, total_positions={total_positions!r}"
+            )
+
+        is_terminal_position = position >= (total_positions - 1)
+        if is_terminal_position:
+            continue
+
+        if position < 0 or position >= len(policy_move_codes):
+            raise ValueError(
+                f"Position {position} out of range for policy_move_codes length {len(policy_move_codes)}"
+            )
+
+        file_stats['policy_positions_total'] += 1
+        if example.get('policy') is None:
+            file_stats['policy_positions_skipped'] += 1
+            move_code = policy_move_codes[position]
+            skipped_by_code[move_code] = skipped_by_code.get(move_code, 0) + 1
+        else:
+            file_stats['policy_positions_trainable'] += 1
 
 
 def validate_examples_data(examples: list):
