@@ -707,29 +707,29 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     generation_error: Optional[Exception] = None
     integrity_error: Optional[Exception] = None
+    generation_results: Any = None
     try:
         # Generate games
         if args.streaming_save:
-            games = engine.generate_games_streaming(
+            generation_results = engine.generate_games_streaming(
                 num_games=args.num_games,
                 board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
+            trmph_file = engine.streaming_file
         else:
-            games = engine.generate_games_with_monitoring(
+            generation_results = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
                 board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
-        
-        # Save games and prepare results
-        trmph_file = None
-        if games:
-            # Save as TRMPH text file
-            base_filename = f"{args.output_dir}/selfplay_{timestamp}"
-            trmph_file = engine.save_games_simple(games, base_filename)
+            trmph_file = None
+            if generation_results:
+                # Save as TRMPH text file
+                base_filename = f"{args.output_dir}/selfplay_{timestamp}"
+                trmph_file = engine.save_games_simple(generation_results, base_filename)
         
         # Calculate total time
         total_time = time.time() - start_time
@@ -744,7 +744,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         performance_stats = engine.get_performance_stats()
         print_script_results(
             "selfplay",
-            games,
+            generation_results,
             script_config,
             output_files,
             total_time,

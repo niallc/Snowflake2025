@@ -311,20 +311,33 @@ def _print_selfplay_results(
 ) -> None:
     """Print selfplay-specific results."""
     print(f"\n=== Generation Complete ===")
-    
+
+    total_games = 0
+    red_wins = 0
+    blue_wins = 0
+    if isinstance(results, dict) and {
+        "num_games",
+        "red_wins",
+        "blue_wins",
+    }.issubset(results):
+        total_games = int(results.get("num_games", 0))
+        red_wins = int(results.get("red_wins", 0))
+        blue_wins = int(results.get("blue_wins", 0))
+    elif isinstance(results, list) and len(results) > 0:
+        winners = [game.get('winner', 'unknown') for game in results]
+        total_games = len(results)
+        red_wins = winners.count('r')
+        blue_wins = winners.count('b')
+
     # Print timing information if available
     if total_time is not None:
         print(f"Total time: {total_time:.1f}s")
-        if hasattr(results, '__len__') and len(results) > 0:
-            print(f"Games per second: {len(results) / total_time:.1f}")
-    
-    # Winner distribution
-    if hasattr(results, '__len__') and len(results) > 0:
-        winners = [game.get('winner', 'unknown') for game in results]
-        red_wins = winners.count('r')
-        blue_wins = winners.count('b')
+        if total_games > 0:
+            print(f"Games per second: {total_games / total_time:.1f}")
+
+    if total_games > 0:
         print(f"Winner distribution: Red {red_wins}, Blue {blue_wins}")
-        print(f"Red win rate: {red_wins / len(results):.1%}")
+        print(f"Red win rate: {red_wins / total_games:.1%}")
     
     # Performance statistics (if available)
     stats = performance_stats
