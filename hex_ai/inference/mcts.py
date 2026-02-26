@@ -653,6 +653,12 @@ class BaselineMCTS(MCTSGumbelMixin):
         """Reset per-run state (especially Gumbel diagnostics) before search."""
         # This matters in interactive settings (web UI) where one BaselineMCTS instance may be reused.
         self.verbose = int(verbose)
+        # Keep eval_cache warm across runs, but reset per-run counters so returned stats
+        # remain scoped to the current search call.
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self._unique_evals_total = 0
+        self._effective_sims_total = 0
         self._used_gumbel_root_selection = False
         self._gumbel_selected_action = None
         self._gumbel_selected_tensor_action = None

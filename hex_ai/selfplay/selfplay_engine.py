@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.enums import Winner
 from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty_hex_state
-from hex_ai.inference.mcts import BaselineMCTS, BaselineMCTSConfig, create_mcts_config
+from hex_ai.inference.mcts import BaselineMCTS, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.move_provenance import (
@@ -118,6 +118,8 @@ class SelfPlayEngine:
             c_puct=self.c_puct,  # Use specified PUCT exploration constant
             enable_gumbel_root_selection=self.enable_gumbel  # Enable/disable Gumbel root selection
         )
+        # Reuse one MCTS instance so eval_cache can persist across moves/games in this process.
+        self.mcts = BaselineMCTS(self.game_engine, self.model_wrapper, self.mcts_config)
         
         # Performance tracking
         self.stats = {
@@ -244,16 +246,13 @@ class SelfPlayEngine:
             # Use MCTS for move generation
             if self.verbose >= 3:
                 print(f"🎮 SELF-PLAY: Move {len(state.move_history)}, player {state.current_player}, legal moves: {len(state.get_legal_moves())}")
-            
-            # Use natural MCTS interface
-            mcts = BaselineMCTS(self.game_engine, self.model_wrapper, self.mcts_config)
-            
+
             # Run MCTS
             if self.verbose >= 3:
                 print(f"🎮 SELF-PLAY: Running MCTS with {self.mcts_sims} simulations")
             
             start_time = time.perf_counter()
-            mcts_result = mcts.run(state)
+            mcts_result = self.mcts.run(state)
             search_time = time.perf_counter() - start_time
             self._accumulate_mcts_run_stats(mcts_result.stats, search_time)
 
@@ -301,7 +300,7 @@ class SelfPlayEngine:
             
             # Log MCTS statistics
             if self.verbose >= 2:
-                cache_hit_rate = mcts.cache_hits / max(1, mcts.cache_hits + mcts.cache_misses)
+                cache_hit_rate = self.mcts.cache_hits / max(1, self.mcts.cache_hits + self.mcts.cache_misses)
                 print(
                     f"[Move {len(state.move_history)}] MCTS: sims={self.mcts_sims}, "
                     f"inferences={mcts_result.stats.get('total_simulations', 0)}, "
