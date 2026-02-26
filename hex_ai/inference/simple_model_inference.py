@@ -8,7 +8,7 @@ import psutil
 import torch
 
 from hex_ai.config import (
-    MODEL_CHANNELS, PLAYER_CHANNEL, TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
+    BOARD_SIZE, MODEL_CHANNELS, PLAYER_CHANNEL, TRAINING_BLUE_WIN, TRAINING_RED_WIN, TRMPH_BLUE_WIN, TRMPH_RED_WIN
 )
 from hex_ai.data_utils import create_board_from_moves
 from hex_ai.enums import Channel
@@ -73,6 +73,43 @@ class SimpleModelInference:
     # - Keep TRMPH/tensor interfaces as boundary conversions (str/float)
     # - Avoid using raw BLUE/RED channel constants directly; prefer Channel enum
     # - Add type hints to all public methods and enforce fail-fast for invalid inputs
+    @staticmethod
+    def _normalize_board_size(board_size: int, *, source: str) -> int:
+        """Normalize and validate integer board-size inputs."""
+        if isinstance(board_size, bool):
+            raise TypeError(f"{source} must be an integer, got bool")
+        try:
+            size = int(board_size)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{source} must be an integer, got {type(board_size)}") from exc
+        if size <= 0:
+            raise ValueError(f"{source} must be positive, got {size}")
+        return size
+
+    @staticmethod
+    def _ensure_supported_board_size(board_size: int) -> None:
+        """
+        Fail fast for unsupported board sizes until model/runtime are fully parameterized.
+        """
+        if board_size != BOARD_SIZE:
+            raise ValueError(
+                f"Unsupported inference board size {board_size}. "
+                f"Current SimpleModelInference runtime supports only {BOARD_SIZE}x{BOARD_SIZE}."
+            )
+
+    @staticmethod
+    def _extract_model_policy_board_size(model: Any) -> Optional[int]:
+        """Best-effort board-size extraction from model policy-head metadata."""
+        policy_head = getattr(model, "policy_head", None)
+        if policy_head is None:
+            return None
+        value = getattr(policy_head, "board_size", None)
+        if value is None:
+            return None
+        return SimpleModelInference._normalize_board_size(
+            value, source="model.policy_head.board_size"
+        )
+
     def __init__(
         self,
         checkpoint_path: str,
@@ -81,7 +118,8 @@ class SimpleModelInference:
         cache_size: int = 30000,
         max_batch_size: int = 1000,
         enable_caching: bool = True,
-        verbose: int = 2
+        verbose: int = 2,
+        board_size: int = BOARD_SIZE,
     ):
         """
         Initialize the SimpleModelInference with a trained model.
@@ -94,10 +132,14 @@ class SimpleModelInference:
             max_batch_size: Maximum batch size for inference
             enable_caching: Whether to enable caching
             verbose: Verbosity level (0=silent, 1=minimal, 2=normal, 3=debug)
+            board_size: Board size for inference inputs (currently fail-fast restricted to BOARD_SIZE)
         """
         self.checkpoint_path = checkpoint_path
         self.model_type = model_type
-        self.board_size = 13  # Fixed for Hex
+        self.board_size = self._normalize_board_size(
+            board_size, source="SimpleModelInference.board_size"
+        )
+        self._ensure_supported_board_size(self.board_size)
         
         # Use centralized device detection if not specified
         if device is None:
@@ -119,6 +161,14 @@ class SimpleModelInference:
         
         # Initialize the model wrapper
         self.model = ModelWrapper(checkpoint_path, self.device, model_type)
+        model_policy_board_size = self._extract_model_policy_board_size(
+            getattr(self.model, "model", None)
+        )
+        if model_policy_board_size is not None and model_policy_board_size != self.board_size:
+            raise ValueError(
+                "Inference board size does not match checkpoint model policy head size: "
+                f"{self.board_size} vs {model_policy_board_size}."
+            )
         
         # Initialize caching
         self.enable_caching = enable_caching

@@ -148,7 +148,12 @@ class SelfPlayEngine:
         
         # Initialize model inference once and reuse its wrapper for MCTS to avoid
         # loading the same checkpoint twice in one process.
-        self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
+        self.model = SimpleModelInference(
+            model_path,
+            device=get_device(),
+            cache_size=cache_size,
+            board_size=self.board_size,
+        )
         model_board_size = self._normalize_board_size(
             getattr(self.model, "board_size", BOARD_SIZE),
             source="SimpleModelInference.board_size",
