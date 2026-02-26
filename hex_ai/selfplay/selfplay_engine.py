@@ -714,6 +714,18 @@ class SelfPlayEngine:
         print(f"Algorithm termination reasons: {reason_summary}")
         print("================================\n")
 
+    def _simple_inference_summary_has_activity(self) -> bool:
+        """
+        Return whether SimpleModelInference tracked any actual inference work.
+
+        Self-play move generation uses BaselineMCTS + ModelWrapper, so these counters are
+        often zero in this code path.
+        """
+        model_stats = self.model.get_performance_stats()
+        total_inferences = self._safe_int(model_stats.get("total_inferences", 0))
+        total_batch_inferences = self._safe_int(model_stats.get("total_batch_inferences", 0))
+        return total_inferences > 0 or total_batch_inferences > 0
+
     def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str) -> str:
         """
         Save games to a TRMPH text file.
@@ -804,5 +816,6 @@ class SelfPlayEngine:
     def shutdown(self):
         """Clean shutdown of the engine."""
         print("Shutting down SelfPlayEngine...")
-        self.model.print_performance_summary()
+        if self._simple_inference_summary_has_activity():
+            self.model.print_performance_summary()
         self.print_mcts_run_summary()
