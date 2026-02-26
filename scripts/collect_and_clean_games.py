@@ -37,6 +37,9 @@ from hex_ai.data_config import (
     get_collected_dir_name, get_cleaned_dir_name
 )
 
+PROVENANCE_MODE_CHOICES = ["off", "optional", "require"]
+DEFAULT_PROVENANCE_MODE = "optional"
+
 
 def setup_logging():
     """Configure logging."""
@@ -65,9 +68,15 @@ def collect_mode(args):
     logging.info(f"Source directories: {[str(d) for d in source_dirs]}")
     logging.info(f"Output directory: {output_dir}")
     logging.info(f"Chunk size: {args.chunk_size}")
+    logging.info(f"Policy provenance mode: {args.policy_provenance_mode}")
     
     try:
-        stats = collect_and_organize_data(source_dirs, output_dir, args.chunk_size)
+        stats = collect_and_organize_data(
+            source_dirs,
+            output_dir,
+            args.chunk_size,
+            policy_provenance_mode=args.policy_provenance_mode,
+        )
         if "error" in stats:
             return 1
         
@@ -92,9 +101,15 @@ def process_mode(args):
     logging.info(f"Input directory: {input_dir}")
     logging.info(f"Output directory: {output_dir}")
     logging.info(f"Chunk size: {args.chunk_size}")
+    logging.info(f"Policy provenance mode: {args.policy_provenance_mode}")
     
     try:
-        combine_and_clean_files(input_dir, output_dir, args.chunk_size)
+        combine_and_clean_files(
+            input_dir,
+            output_dir,
+            args.chunk_size,
+            policy_provenance_mode=args.policy_provenance_mode,
+        )
         logging.info("Single directory processing completed successfully!")
         return 0
     except Exception as e:
@@ -164,9 +179,16 @@ def tournament_mode(args):
     logging.info(f"Output directory: {output_dir}")
     logging.info(f"Since date: {since_date}")
     logging.info(f"Chunk size: {args.chunk_size}")
+    logging.info(f"Policy provenance mode: {args.policy_provenance_mode}")
     
     try:
-        stats = collect_tournament_data_since_date(source_dirs, output_dir, since_date, args.chunk_size)
+        stats = collect_tournament_data_since_date(
+            source_dirs,
+            output_dir,
+            since_date,
+            args.chunk_size,
+            policy_provenance_mode=args.policy_provenance_mode,
+        )
         if "error" in stats:
             return 1
         
@@ -221,6 +243,19 @@ Examples:
     
     # Create subparsers for different modes
     subparsers = parser.add_subparsers(dest='mode', help='Processing mode')
+
+    def _add_policy_provenance_mode_arg(mode_parser: argparse.ArgumentParser) -> None:
+        mode_parser.add_argument(
+            "--policy-provenance-mode",
+            choices=PROVENANCE_MODE_CHOICES,
+            default=DEFAULT_PROVENANCE_MODE,
+            help=(
+                "Move provenance handling for output chunks: "
+                "'off' skips sidecars; "
+                "'optional' uses sidecars when present and falls back to all-valid when missing; "
+                "'require' fails fast if sidecars are missing/misaligned."
+            ),
+        )
     
     # Collect mode parser
     collect_parser = subparsers.add_parser('collect', help='Collect data from multiple sources')
@@ -237,6 +272,7 @@ Examples:
         "--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
         help=f"Number of games per chunk (default: {DEFAULT_CHUNK_SIZE})"
     )
+    _add_policy_provenance_mode_arg(collect_parser)
     
     # Test mode parser
     test_parser = subparsers.add_parser('test', help='Inspect .trmph discovery (optionally filtered by mtime)')
@@ -276,6 +312,7 @@ Examples:
         "--since-days", type=int,
         help="Collect data since N days ago (alternative to --since-date)"
     )
+    _add_policy_provenance_mode_arg(tournament_parser)
     
     # Process mode parser
     process_parser = subparsers.add_parser('process', help='Process a single directory')
@@ -291,6 +328,7 @@ Examples:
         "--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
         help=f"Number of games per chunk (default: {DEFAULT_CHUNK_SIZE})"
     )
+    _add_policy_provenance_mode_arg(process_parser)
     
     args = parser.parse_args()
     

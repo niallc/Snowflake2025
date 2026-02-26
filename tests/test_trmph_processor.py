@@ -11,10 +11,15 @@ import os
 import gzip
 import pickle
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from hex_ai.data_collection import combine_and_clean_files
+from hex_ai.data_collection import (
+    collect_and_organize_data,
+    collect_tournament_data_since_date,
+    combine_and_clean_files,
+)
 from hex_ai.move_provenance import (
     load_move_provenance_sidecar,
     make_move_provenance_record,
@@ -693,3 +698,67 @@ class TestTRMPHProcessor:
 
         records = load_move_provenance_sidecar(chunk_sidecar)
         assert [record.move_codes for record in records] == ["VV", "VVV"]
+
+    def test_combine_and_clean_files_optional_prefers_authoritative_sidecar_over_fallback(self):
+        """Optional mode should keep real sidecar provenance when mixed with fallback duplicates."""
+        self.create_test_trmph_file(
+            "combine_optional_legacy.trmph",
+            "#13,a1b2 b\n",
+        )
+        self.create_test_trmph_file(
+            "combine_optional_modern.trmph",
+            "#13,a1b2 b\n",
+        )
+        self.create_test_provenance_sidecar("combine_optional_modern.trmph", ["GC"])
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "cleaned_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["GC"]
+
+    def test_collect_and_organize_data_optional_writes_sidecars(self):
+        """Collection mode should emit sidecars in optional mode."""
+        self.create_test_trmph_file(
+            "collected_optional_sidecar.trmph",
+            "#13,a1b2 b\n#13,c3d4e5 r\n",
+        )
+
+        stats = collect_and_organize_data(
+            source_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        assert stats["provenance_sidecars_written"] is True
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "collected_chunk_000.trmph")
+        assert chunk_sidecar.exists()
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["VV", "VVV"]
+
+    def test_collect_tournament_data_since_date_optional_writes_sidecars(self):
+        """Tournament collection should emit sidecars in optional mode."""
+        self.create_test_trmph_file(
+            "tournament_optional_sidecar.trmph",
+            "#13,a1b2 b\n",
+        )
+
+        stats = collect_tournament_data_since_date(
+            source_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            since_date=datetime.now() - timedelta(days=1),
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        assert stats["provenance_sidecars_written"] is True
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "tournament_chunk_000.trmph")
+        assert chunk_sidecar.exists()
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["VV"]

@@ -237,9 +237,15 @@ class GameCollectionStep:
         
         self.logger.info(f"Source directories: {[str(d) for d in source_dirs]}")
         self.logger.info(f"Output directory: {output_dir}")
+        self.logger.info(f"Policy provenance mode: {self.config.policy_provenance_mode}")
         
         # Run game collection
-        stats = collect_and_organize_data(source_dirs, output_dir, self.config.chunk_size)
+        stats = collect_and_organize_data(
+            source_dirs,
+            output_dir,
+            self.config.chunk_size,
+            policy_provenance_mode=self.config.policy_provenance_mode,
+        )
         
         if "error" in stats:
             raise RuntimeError(f"Game collection failed: {stats['error']}")
@@ -1245,7 +1251,7 @@ Examples:
         default="require",
         choices=["off", "optional", "require"],
         help=(
-            "Policy provenance handling during TRMPH processing: "
+            "Policy provenance handling during collection/preprocessing/TRMPH processing: "
             "'off' ignores sidecars; "
             "'optional' uses sidecars when present and falls back to all-valid when missing; "
             "'require' enforces sidecar alignment and masks policy targets."

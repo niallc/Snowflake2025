@@ -13,6 +13,7 @@ from datetime import datetime
 from .data_utils import find_trmph_files, extract_games_from_file, remove_duplicates
 from .data_config import log_processed_files
 from .move_provenance import (
+    MOVE_CODE_VISIT_COUNT,
     MoveProvenanceRecord,
     load_move_provenance_sidecar,
     make_move_provenance_record,
@@ -73,11 +74,94 @@ def find_trmph_files_with_date_filter(
     logger.info(f"Filtered {len(all_files)} -> {len(filtered)} .trmph files by mtime")
     return filtered
 
+
+def _validate_policy_provenance_mode(policy_provenance_mode: str) -> tuple[bool, bool]:
+    if policy_provenance_mode not in {"off", "optional", "require"}:
+        raise ValueError(
+            f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
+            "(expected 'off', 'optional', or 'require')"
+        )
+    provenance_enabled = policy_provenance_mode in {"optional", "require"}
+    provenance_required = policy_provenance_mode == "require"
+    return provenance_enabled, provenance_required
+
+
+def _build_fallback_provenance_record(
+    *,
+    game_index: int,
+    game_line: str,
+) -> MoveProvenanceRecord:
+    move_text = game_line.split()[0]
+    move_count = len(split_trmph_moves(strip_trmph_preamble(move_text)))
+    return make_move_provenance_record(
+        game_index=game_index,
+        move_codes=(MOVE_CODE_VISIT_COUNT * move_count),
+    )
+
+
+def _collect_file_provenance(
+    *,
+    file_path: Path,
+    games: List[str],
+    policy_provenance_mode: str,
+    game_to_provenance: Dict[str, MoveProvenanceRecord],
+    game_to_provenance_is_fallback: Dict[str, bool],
+) -> None:
+    provenance_enabled, provenance_required = _validate_policy_provenance_mode(
+        policy_provenance_mode
+    )
+    if not provenance_enabled:
+        return
+
+    sidecar_path = sidecar_path_for_trmph(file_path)
+    if sidecar_path.exists():
+        provenance_records = load_move_provenance_sidecar(sidecar_path)
+        if len(provenance_records) != len(games):
+            raise ValueError(
+                f"Provenance record count mismatch for {file_path}: "
+                f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
+            )
+
+        for game_index, game_line in enumerate(games):
+            record = provenance_records[game_index]
+            if record.game_index != game_index:
+                raise ValueError(
+                    f"Provenance game_index mismatch for {file_path}: "
+                    f"expected {game_index}, found {record.game_index}"
+                )
+            _add_or_validate_game_provenance(
+                game_to_provenance=game_to_provenance,
+                game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+                game_line=game_line,
+                record=record,
+                is_fallback=False,
+            )
+        return
+
+    if provenance_required:
+        raise FileNotFoundError(
+            f"Missing required move provenance sidecar: {sidecar_path}"
+        )
+
+    for game_index, game_line in enumerate(games):
+        fallback_record = _build_fallback_provenance_record(
+            game_index=game_index,
+            game_line=game_line,
+        )
+        _add_or_validate_game_provenance(
+            game_to_provenance=game_to_provenance,
+            game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+            game_line=game_line,
+            record=fallback_record,
+            is_fallback=True,
+        )
+
 def collect_tournament_data_since_date(
     source_dirs: List[Path],
     output_dir: Path,
     since_date: datetime,
-    chunk_size: int = 20000
+    chunk_size: int = 20000,
+    policy_provenance_mode: str = "off",
 ) -> Dict:
     """
     Collect tournament data since a specific date.
@@ -87,10 +171,13 @@ def collect_tournament_data_since_date(
         output_dir: Directory to write organized data to
         since_date: Only collect data from this date onwards
         chunk_size: Number of games per chunk file
+        policy_provenance_mode: 'off', 'optional', or 'require'
         
     Returns:
         Dictionary with collection statistics
     """
+    provenance_enabled, _ = _validate_policy_provenance_mode(policy_provenance_mode)
+
     logger.info(f"Collecting tournament data since {since_date}")
     
     all_files = find_trmph_files_with_date_filter(source_dirs, start_date=since_date)
@@ -104,13 +191,23 @@ def collect_tournament_data_since_date(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Extract all games from all files
-    all_games = []
+    all_games: List[str] = []
     source_stats = {}
     processed_files_by_source = {}
+    game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
+    game_to_provenance_is_fallback: Dict[str, bool] = {}
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
+        if provenance_enabled:
+            _collect_file_provenance(
+                file_path=file_path,
+                games=games,
+                policy_provenance_mode=policy_provenance_mode,
+                game_to_provenance=game_to_provenance,
+                game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+            )
         all_games.extend(games)
         
         # Track statistics by source
@@ -145,6 +242,22 @@ def collect_tournament_data_since_date(
             for game in chunk:
                 f.write(game + '\n')
         logger.info(f"Wrote chunk {i} with {len(chunk)} games to {chunk_path}")
+        if provenance_enabled:
+            sidecar_path = sidecar_path_for_trmph(chunk_path)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                for game_index, game_line in enumerate(chunk):
+                    source_record = game_to_provenance.get(game_line)
+                    if source_record is None:
+                        raise ValueError(
+                            f"Missing source provenance while writing tournament sidecar for {chunk_path}"
+                        )
+                    record = make_move_provenance_record(
+                        game_index=game_index,
+                        move_codes=source_record.move_codes,
+                    )
+                    f.write(record.to_json_line())
+                    f.write("\n")
+            logger.info(f"Wrote chunk provenance sidecar for chunk {i}: {sidecar_path}")
     
     # Write summary
     summary_path = output_dir / "tournament_collection_summary.txt"
@@ -154,6 +267,7 @@ def collect_tournament_data_since_date(
         f.write(f"Collection date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Since date: {since_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Output directory: {output_dir}\n")
+        f.write(f"Policy provenance mode: {policy_provenance_mode}\n")
         f.write(f"Total source directories: {len(source_dirs)}\n")
         f.write(f"Directories with data: {len(dirs_with_data)}\n")
         f.write(f"Total input files: {len(all_files)}\n")
@@ -162,6 +276,8 @@ def collect_tournament_data_since_date(
         f.write(f"Duplicates removed: {len(all_games) - len(unique_games)}\n")
         f.write(f"Output chunks: {len(chunks)}\n")
         f.write(f"Games per chunk: ~{chunk_size}\n")
+        if provenance_enabled:
+            f.write(f"Provenance sidecars written: yes\n")
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -182,6 +298,8 @@ def collect_tournament_data_since_date(
         f.write(f"\nOutput files:\n")
         for i in range(len(chunks)):
             f.write(f"  tournament_chunk_{i:03d}.trmph\n")
+            if provenance_enabled:
+                f.write(f"  tournament_chunk_{i:03d}.provenance.jsonl\n")
     
     # Log processed files for tracking
     for source_dir, processed_files in processed_files_by_source.items():
@@ -197,6 +315,7 @@ def collect_tournament_data_since_date(
         "unique_games": len(unique_games),
         "duplicates_removed": len(all_games) - len(unique_games),
         "chunks_created": len(chunks),
+        "provenance_sidecars_written": provenance_enabled,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -207,7 +326,8 @@ def collect_and_organize_data(
     output_dir: Path, 
     chunk_size: int = 20000,
     start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None,
+    policy_provenance_mode: str = "off",
 ) -> Dict:
     """
     Collect all training data from multiple sources and organize it.
@@ -218,10 +338,13 @@ def collect_and_organize_data(
         chunk_size: Number of games per chunk file
         start_date: Only include files with mtime >= start_date
         end_date: Only include files with mtime <= end_date
+        policy_provenance_mode: 'off', 'optional', or 'require'
         
     Returns:
         Dictionary with collection statistics
     """
+    provenance_enabled, _ = _validate_policy_provenance_mode(policy_provenance_mode)
+
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -235,13 +358,23 @@ def collect_and_organize_data(
         return {"error": "No files found"}
     
     # Extract all games from all files
-    all_games = []
+    all_games: List[str] = []
     source_stats = {}
     processed_files_by_source = {}
+    game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
+    game_to_provenance_is_fallback: Dict[str, bool] = {}
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
+        if provenance_enabled:
+            _collect_file_provenance(
+                file_path=file_path,
+                games=games,
+                policy_provenance_mode=policy_provenance_mode,
+                game_to_provenance=game_to_provenance,
+                game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+            )
         all_games.extend(games)
         
         # Track statistics by source
@@ -276,6 +409,22 @@ def collect_and_organize_data(
             for game in chunk:
                 f.write(game + '\n')
         logger.info(f"Wrote chunk {i} with {len(chunk)} games to {chunk_path}")
+        if provenance_enabled:
+            sidecar_path = sidecar_path_for_trmph(chunk_path)
+            with open(sidecar_path, "w", encoding="utf-8") as f:
+                for game_index, game_line in enumerate(chunk):
+                    source_record = game_to_provenance.get(game_line)
+                    if source_record is None:
+                        raise ValueError(
+                            f"Missing source provenance while writing collected sidecar for {chunk_path}"
+                        )
+                    record = make_move_provenance_record(
+                        game_index=game_index,
+                        move_codes=source_record.move_codes,
+                    )
+                    f.write(record.to_json_line())
+                    f.write("\n")
+            logger.info(f"Wrote chunk provenance sidecar for chunk {i}: {sidecar_path}")
     
     # Write summary
     summary_path = output_dir / "collection_summary.txt"
@@ -284,6 +433,7 @@ def collect_and_organize_data(
         f.write(f"================================\n")
         f.write(f"Collection date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Output directory: {output_dir}\n")
+        f.write(f"Policy provenance mode: {policy_provenance_mode}\n")
         f.write(f"Total source directories: {len(source_dirs)}\n")
         f.write(f"Total input files: {len(all_files)}\n")
         f.write(f"Total games extracted: {len(all_games)}\n")
@@ -291,6 +441,8 @@ def collect_and_organize_data(
         f.write(f"Duplicates removed: {len(all_games) - len(unique_games)}\n")
         f.write(f"Output chunks: {len(chunks)}\n")
         f.write(f"Games per chunk: ~{chunk_size}\n")
+        if provenance_enabled:
+            f.write(f"Provenance sidecars written: yes\n")
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -307,6 +459,8 @@ def collect_and_organize_data(
         f.write(f"\nOutput files:\n")
         for i in range(len(chunks)):
             f.write(f"  collected_chunk_{i:03d}.trmph\n")
+            if provenance_enabled:
+                f.write(f"  collected_chunk_{i:03d}.provenance.jsonl\n")
     
     # Log processed files for tracking (but don't move them)
     for source_dir, processed_files in processed_files_by_source.items():
@@ -321,6 +475,7 @@ def collect_and_organize_data(
         "unique_games": len(unique_games),
         "duplicates_removed": len(all_games) - len(unique_games),
         "chunks_created": len(chunks),
+        "provenance_sidecars_written": provenance_enabled,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -341,13 +496,7 @@ def combine_and_clean_files(
         chunk_size: Number of games per cleaned chunk
         policy_provenance_mode: 'off', 'optional', or 'require'
     """
-    if policy_provenance_mode not in {"off", "optional", "require"}:
-        raise ValueError(
-            f"Invalid policy_provenance_mode {policy_provenance_mode!r} "
-            "(expected 'off', 'optional', or 'require')"
-        )
-    provenance_enabled = policy_provenance_mode in {"optional", "require"}
-    provenance_required = policy_provenance_mode == "require"
+    provenance_enabled, _ = _validate_policy_provenance_mode(policy_provenance_mode)
 
     if isinstance(input_dirs, Path):
         normalized_input_dirs = [input_dirs]
@@ -375,49 +524,18 @@ def combine_and_clean_files(
     # Extract all games from all files
     all_games: List[str] = []
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
+    game_to_provenance_is_fallback: Dict[str, bool] = {}
     for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
         if provenance_enabled:
-            sidecar_path = sidecar_path_for_trmph(file_path)
-            if sidecar_path.exists():
-                provenance_records = load_move_provenance_sidecar(sidecar_path)
-                if len(provenance_records) != len(games):
-                    raise ValueError(
-                        f"Provenance record count mismatch for {file_path}: "
-                        f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
-                    )
-
-                for game_index, game_line in enumerate(games):
-                    record = provenance_records[game_index]
-                    if record.game_index != game_index:
-                        raise ValueError(
-                            f"Provenance game_index mismatch for {file_path}: "
-                            f"expected {game_index}, found {record.game_index}"
-                        )
-                    _add_or_validate_game_provenance(
-                        game_to_provenance=game_to_provenance,
-                        game_line=game_line,
-                        record=record,
-                    )
-            elif provenance_required:
-                raise FileNotFoundError(
-                    f"Missing required move provenance sidecar: {sidecar_path}"
-                )
-            else:
-                # Optional mode fallback: treat every move as valid policy target.
-                for game_index, game_line in enumerate(games):
-                    move_text = game_line.split()[0]
-                    move_count = len(split_trmph_moves(strip_trmph_preamble(move_text)))
-                    fallback_record = make_move_provenance_record(
-                        game_index=game_index,
-                        move_codes=("V" * move_count),
-                    )
-                    _add_or_validate_game_provenance(
-                        game_to_provenance=game_to_provenance,
-                        game_line=game_line,
-                        record=fallback_record,
-                    )
+            _collect_file_provenance(
+                file_path=file_path,
+                games=games,
+                policy_provenance_mode=policy_provenance_mode,
+                game_to_provenance=game_to_provenance,
+                game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+            )
 
         all_games.extend(games)
         logger.info(f"  Extracted {len(games)} games from {file_path.name}")
@@ -493,22 +611,42 @@ def combine_and_clean_files(
 def _add_or_validate_game_provenance(
     *,
     game_to_provenance: Dict[str, MoveProvenanceRecord],
+    game_to_provenance_is_fallback: Dict[str, bool],
     game_line: str,
     record: MoveProvenanceRecord,
+    is_fallback: bool,
 ) -> None:
     existing = game_to_provenance.get(game_line)
     if existing is None:
         game_to_provenance[game_line] = record
+        game_to_provenance_is_fallback[game_line] = is_fallback
         return
 
-    if (
-        existing.move_codes != record.move_codes
-        or existing.policy_train_mask != record.policy_train_mask
-    ):
-        raise ValueError(
-            "Conflicting provenance for duplicate game line across input files: "
-            f"{game_line[:80]}..."
-        )
+    existing_is_fallback = game_to_provenance_is_fallback[game_line]
+    records_match = (
+        existing.move_codes == record.move_codes
+        and existing.policy_train_mask == record.policy_train_mask
+    )
+    if records_match:
+        if existing_is_fallback and not is_fallback:
+            game_to_provenance[game_line] = record
+            game_to_provenance_is_fallback[game_line] = False
+        return
+
+    if existing_is_fallback and not is_fallback:
+        # Prefer authoritative sidecar-derived provenance over synthesized fallback.
+        game_to_provenance[game_line] = record
+        game_to_provenance_is_fallback[game_line] = False
+        return
+
+    if not existing_is_fallback and is_fallback:
+        # Keep existing authoritative provenance, ignore conflicting fallback.
+        return
+
+    raise ValueError(
+        "Conflicting provenance for duplicate game line across input files: "
+        f"{game_line[:80]}..."
+    )
 
 
 def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:
