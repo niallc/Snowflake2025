@@ -7,18 +7,23 @@ import argparse
 import numpy as np
 import os
 import random
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.inference.model_config import get_model_path
-from hex_ai.move_provenance import sidecar_path_for_trmph
+from hex_ai.move_provenance import (
+    MOVE_CODE_VISIT_COUNT,
+    make_move_provenance_record,
+    sidecar_path_for_trmph,
+)
 from hex_ai.selfplay.selfplay_engine import (
     DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
     SelfPlayEngine,
@@ -103,6 +108,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--verbose', type=int, default=1, help='Verbosity level (0=quiet, 1=normal, 2=detailed, 3+=debug)')
     parser.add_argument('--streaming_save', action='store_true', 
                        help='Save games incrementally to avoid data loss')
+    parser.add_argument(
+        '--streaming-pair-integrity',
+        type=str,
+        choices=['check', 'repair-tail', 'off'],
+        default='check',
+        help=(
+            "Streaming TRMPH/provenance integrity handling: "
+            "'check' (fail on mismatch), "
+            "'repair-tail' (repair exactly one missing terminal sidecar line), "
+            "or 'off'."
+        ),
+    )
     parser.add_argument(
         '--write-provenance',
         dest='write_provenance',
@@ -224,6 +241,7 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "opening_strategy": args.opening_strategy,
         "verbose": args.verbose,
         "streaming_save": args.streaming_save,
+        "streaming_pair_integrity": args.streaming_pair_integrity,
         "write_provenance": args.write_provenance,
         "progress_interval": args.progress_interval,
         "mcts_profile": args.mcts_profile,
@@ -261,6 +279,8 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         args.opening_strategy,
         "--verbose",
         str(args.verbose),
+        "--streaming-pair-integrity",
+        args.streaming_pair_integrity,
         "--progress_interval",
         str(args.progress_interval),
         "--mcts-profile-every",
@@ -465,6 +485,125 @@ def _run_chunked_selfplay(args: argparse.Namespace) -> int:
 
 
 def _run_single_process(args: argparse.Namespace) -> None:
+    def _count_trmph_game_lines(file_path: str) -> int:
+        count = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("#13,"):
+                    count += 1
+        return count
+
+    def _count_nonempty_lines(file_path: str) -> int:
+        count = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    count += 1
+        return count
+
+    def _get_last_trmph_game_line(file_path: str) -> Optional[str]:
+        last_line: Optional[str] = None
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line.startswith("#13,"):
+                    last_line = line
+        return last_line
+
+    def _reconcile_streaming_pair(
+        streaming_file: str,
+        provenance_file: str,
+        *,
+        mode: str,
+    ) -> None:
+        if mode == "off":
+            return
+        if mode not in {"check", "repair-tail"}:
+            raise ValueError(
+                f"Unsupported streaming pair integrity mode: {mode!r}"
+            )
+
+        if not os.path.exists(streaming_file):
+            raise RuntimeError(
+                f"Streaming TRMPH file is missing: {streaming_file}"
+            )
+        if not os.path.exists(provenance_file):
+            raise RuntimeError(
+                f"Streaming provenance sidecar is missing: {provenance_file}"
+            )
+
+        trmph_games = _count_trmph_game_lines(streaming_file)
+        provenance_records = _count_nonempty_lines(provenance_file)
+        if trmph_games == provenance_records:
+            return
+
+        mismatch_message = (
+            "Streaming TRMPH/provenance mismatch: "
+            f"{trmph_games} game lines vs {provenance_records} provenance lines "
+            f"(TRMPH: {streaming_file}, sidecar: {provenance_file})."
+        )
+        if mode == "check":
+            raise RuntimeError(mismatch_message)
+
+        # repair-tail mode: only permit exactly one missing terminal sidecar line.
+        if trmph_games != provenance_records + 1:
+            raise RuntimeError(
+                mismatch_message
+                + " repair-tail only supports exactly one missing terminal sidecar line."
+            )
+
+        last_game_line = _get_last_trmph_game_line(streaming_file)
+        if last_game_line is None:
+            raise RuntimeError(
+                "Cannot repair streaming sidecar: no TRMPH game lines found."
+            )
+        parts = last_game_line.split()
+        if len(parts) != 2:
+            raise RuntimeError(
+                "Cannot repair streaming sidecar: trailing TRMPH game line is malformed."
+            )
+        trmph_text = parts[0]
+        move_count = count_trmph_moves(trmph_text)
+        move_codes = MOVE_CODE_VISIT_COUNT * move_count
+        recovery_record = make_move_provenance_record(
+            game_index=provenance_records,
+            move_codes=move_codes,
+        )
+
+        backup_dir = os.path.join(
+            os.path.dirname(streaming_file),
+            ".stream_integrity_backups",
+        )
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trmph_backup = os.path.join(
+            backup_dir,
+            f"{os.path.basename(streaming_file)}.{backup_timestamp}.bak",
+        )
+        provenance_backup = os.path.join(
+            backup_dir,
+            f"{os.path.basename(provenance_file)}.{backup_timestamp}.bak",
+        )
+        shutil.copy2(streaming_file, trmph_backup)
+        shutil.copy2(provenance_file, provenance_backup)
+
+        with open(provenance_file, "a", encoding="utf-8") as f:
+            f.write(recovery_record.to_json_line())
+            f.write("\n")
+
+        repaired_trmph_games = _count_trmph_game_lines(streaming_file)
+        repaired_provenance_records = _count_nonempty_lines(provenance_file)
+        if repaired_trmph_games != repaired_provenance_records:
+            raise RuntimeError(
+                "repair-tail wrote fallback provenance but counts still mismatch: "
+                f"{repaired_trmph_games} vs {repaired_provenance_records}."
+            )
+
+        print(
+            "WARNING: repaired one missing terminal streaming provenance line "
+            f"using all-trainable fallback codes. Backups: {trmph_backup}, "
+            f"{provenance_backup}"
+        )
     
     # Get command line early - crash if not available
     try:
@@ -566,6 +705,8 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     start_time = time.time()
     
+    generation_error: Optional[Exception] = None
+    integrity_error: Optional[Exception] = None
     try:
         # Generate games
         if args.streaming_save:
@@ -616,10 +757,39 @@ def _run_single_process(args: argparse.Namespace) -> None:
             print("Games saved incrementally - no data loss.")
     except Exception as e:
         print(f"\nError during generation: {e}")
-        raise
+        generation_error = e
     finally:
+        if (
+            args.streaming_save
+            and args.write_provenance
+            and args.streaming_pair_integrity != "off"
+        ):
+            streaming_file = engine.streaming_file
+            provenance_file = engine.streaming_provenance_file
+            if not streaming_file or not provenance_file:
+                integrity_error = RuntimeError(
+                    "Streaming integrity check requested but streaming file pair "
+                    "is not fully initialized."
+                )
+                print(f"\nERROR: {integrity_error}")
+            else:
+                try:
+                    _reconcile_streaming_pair(
+                        streaming_file,
+                        provenance_file,
+                        mode=args.streaming_pair_integrity,
+                    )
+                except Exception as e:
+                    integrity_error = e
+                    print(f"\nERROR: {integrity_error}")
+
         # Clean shutdown
         engine.shutdown()
+
+    if generation_error is not None:
+        raise generation_error
+    if integrity_error is not None:
+        raise integrity_error
 
 
 def main():
