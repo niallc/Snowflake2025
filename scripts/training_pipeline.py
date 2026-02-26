@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 import hex_ai
-from hex_ai.config import DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_START
+from hex_ai.config import BOARD_SIZE, DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_START
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.trmph_processing.cli import create_config_from_args, process_files
 from hex_ai.file_utils import GracefulShutdown
@@ -56,6 +56,7 @@ class PipelineConfig:
     # Self-play configuration
     num_games: int = 100000
     num_workers: int = 3  # Number of self-play workers
+    board_size: int = BOARD_SIZE
     temperature: float = DEFAULT_TEMPERATURE_START
     cache_size: int = DEFAULT_CACHE_SIZE
     write_provenance: bool = True
@@ -196,6 +197,9 @@ class PipelineConfig:
                 f"restart_every_mini_epochs must be >= 0, got {self.restart_every_mini_epochs}"
             )
 
+        if self.board_size <= 0:
+            raise ValueError(f"board_size must be > 0, got {self.board_size}")
+
         if self.policy_provenance_mode not in {"off", "optional", "require"}:
             raise ValueError(
                 "policy_provenance_mode must be 'off', 'optional', or 'require', "
@@ -278,6 +282,7 @@ class SelfPlayStep:
         self.logger.info(f"Model: {self.config.model_full_path}")
         self.logger.info(f"Total games: {self.config.num_games}")
         self.logger.info(f"Workers: {self.config.num_workers}")
+        self.logger.info(f"Board size: {self.config.board_size}")
         self.logger.info(f"Games per worker: {games_per_worker}")
         self.logger.info(f"Output directory: {self.config.selfplay_dir}")
         
@@ -333,12 +338,14 @@ class SelfPlayStep:
                 verbose=1,
                 streaming_save=True,
                 write_provenance=self.config.write_provenance,
-                output_dir=output_dir
+                output_dir=output_dir,
+                board_size=self.config.board_size,
             )
             
             # Generate games
             engine.generate_games_streaming(
                 num_games=num_games,
+                board_size=self.config.board_size,
                 progress_interval=10
             )
             
@@ -1192,6 +1199,7 @@ Examples:
     # Self-play configuration
     parser.add_argument("--num-games", type=int, default=100000, help="Number of games to generate")
     parser.add_argument("--num-workers", type=int, default=3, help="Number of self-play workers")
+    parser.add_argument("--board-size", type=int, default=BOARD_SIZE, help=f"Board size for self-play generation (default: {BOARD_SIZE})")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE_START, help=f"Temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})")
     parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE, help=f"Cache size for model inference (default: {DEFAULT_CACHE_SIZE})")
     parser.add_argument(
@@ -1392,6 +1400,7 @@ def main():
             model_mini=args.model_mini,
             num_games=args.num_games,
             num_workers=args.num_workers,
+            board_size=args.board_size,
             temperature=args.temperature,
             cache_size=args.cache_size,
             write_provenance=not args.no_write_provenance,

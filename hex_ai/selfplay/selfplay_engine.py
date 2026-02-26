@@ -43,6 +43,48 @@ SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
+    @staticmethod
+    def _normalize_board_size(board_size: int, *, source: str) -> int:
+        """Normalize and validate integer board-size inputs."""
+        if isinstance(board_size, bool):
+            raise TypeError(f"{source} must be an integer, got bool")
+        try:
+            size = int(board_size)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{source} must be an integer, got {type(board_size)}") from exc
+        if size <= 0:
+            raise ValueError(f"{source} must be positive, got {size}")
+        return size
+
+    @staticmethod
+    def _ensure_supported_board_size(board_size: int) -> None:
+        """
+        Fail fast for unsupported board sizes until engine/model are fully parameterized.
+
+        This avoids silently running 13x13 logic when callers believe another board size is in use.
+        """
+        if board_size != BOARD_SIZE:
+            raise ValueError(
+                f"Unsupported self-play board size {board_size}. "
+                f"Current self-play runtime supports only {BOARD_SIZE}x{BOARD_SIZE}. "
+                "Engine/model parameterization is required before enabling other sizes."
+            )
+
+    def _resolve_generation_board_size(self, board_size: Optional[int]) -> int:
+        """Resolve per-call board size while enforcing engine-level consistency."""
+        if board_size is None:
+            return self.board_size
+        requested_size = self._normalize_board_size(
+            board_size, source="self-play generation board_size"
+        )
+        if requested_size != self.board_size:
+            raise ValueError(
+                "generate_games* board_size must match engine board_size. "
+                f"Got {requested_size} vs {self.board_size}."
+            )
+        self._ensure_supported_board_size(requested_size)
+        return requested_size
+
     def __init__(self, model_path: str,
                  cache_size: int = DEFAULT_CACHE_SIZE, temperature: float = DEFAULT_TEMPERATURE_START, temperature_end: float = DEFAULT_TEMPERATURE_END, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
@@ -53,7 +95,8 @@ class SelfPlayEngine:
                  command_line: str = None,
                  mcts_profile: bool = False,
                  mcts_profile_every: int = 10,
-                 mcts_profile_max_calls: int = 50):
+                 mcts_profile_max_calls: int = 50,
+                 board_size: int = BOARD_SIZE):
         
         # Generate a unique run seed based on current time
         self.run_seed = int(time.time() * 1000000) % (2**32)
@@ -76,6 +119,7 @@ class SelfPlayEngine:
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
             confidence_termination_threshold: Early-termination confidence threshold
             write_provenance: Whether to write move-provenance sidecar data
+            board_size: Board size for generated games (currently fail-fast restricted to 13)
         """
         self.model_path = model_path
         self.cache_size = cache_size
@@ -94,6 +138,10 @@ class SelfPlayEngine:
         self.mcts_profile = mcts_profile
         self.mcts_profile_every = mcts_profile_every
         self.mcts_profile_max_calls = mcts_profile_max_calls
+        self.board_size = self._normalize_board_size(
+            board_size, source="SelfPlayEngine.board_size"
+        )
+        self._ensure_supported_board_size(self.board_size)
         self._mcts_profile_calls = 0
         self.streaming_provenance_file: Optional[str] = None
         self._streaming_games_written = 0
@@ -101,6 +149,15 @@ class SelfPlayEngine:
         # Initialize model inference once and reuse its wrapper for MCTS to avoid
         # loading the same checkpoint twice in one process.
         self.model = SimpleModelInference(model_path, device=get_device(), cache_size=cache_size)
+        model_board_size = self._normalize_board_size(
+            getattr(self.model, "board_size", BOARD_SIZE),
+            source="SimpleModelInference.board_size",
+        )
+        if model_board_size != self.board_size:
+            raise ValueError(
+                "Self-play board size does not match model board size: "
+                f"{self.board_size} vs {model_board_size}."
+            )
 
         model_wrapper = getattr(self.model, "model", None)
         if not isinstance(model_wrapper, ModelWrapper):
@@ -111,7 +168,7 @@ class SelfPlayEngine:
         self.model_wrapper = model_wrapper
 
         # Initialize MCTS components
-        self.game_engine = HexGameEngine()
+        self.game_engine = HexGameEngine(board_size=self.board_size)
         # Create MCTS configuration optimized for self-play with confidence termination
         self.mcts_config = create_mcts_config("selfplay",
             sims=self.mcts_sims,
@@ -159,6 +216,7 @@ class SelfPlayEngine:
             # Write header using generic function
             metadata = {
                 "Model": model_path,
+                "Board size": self.board_size,
                 "MCTS simulations": mcts_sims,
                 "C_PUCT": c_puct,
                 "Gumbel root selection": enable_gumbel,
@@ -182,6 +240,7 @@ class SelfPlayEngine:
         if self.verbose >= 1:
             print(f"SelfPlayEngine initialized:")
             print(f"  Model: {model_path}")
+            print(f"  Board size: {self.board_size}")
             print(f"  Cache size: {cache_size}")
             print(f"  Search method: MCTS ({mcts_sims} simulations)")
             print(f"  C_PUCT: {c_puct}")
@@ -198,13 +257,15 @@ class SelfPlayEngine:
         Generate a single self-play game.
         
         Args:
-            board_size: Size of the board (ignored, always uses 13)
+            board_size: Size of the board
             opening_move: Optional opening move as (row, col) tuple
             game_id: Optional game ID for setting unique random seed
             
         Returns:
             Dictionary containing game data with TRMPH string and winner
         """
+        self._ensure_supported_board_size(board_size)
+
         # Set unique random seed for this game to ensure diversity
         if game_id is not None:
             # Combine run seed with game_id to ensure uniqueness across runs
@@ -220,14 +281,19 @@ class SelfPlayEngine:
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
         
-        state = make_empty_hex_state()  # Always uses 13x13 board
+        state = make_empty_hex_state(board_size=board_size)
         move_provenance_codes: List[str] = []
         
         # Apply opening move if provided
         if opening_move is not None:
             row, col = opening_move
+            if not (0 <= row < board_size and 0 <= col < board_size):
+                raise ValueError(
+                    f"Opening move {opening_move} is out of bounds for "
+                    f"{board_size}x{board_size} board."
+                )
             if self.verbose >= 3:
-                trmph_move = rowcol_to_trmph(row, col)
+                trmph_move = rowcol_to_trmph(row, col, board_size=board_size)
                 print(f"🎮 SELF-PLAY: Starting with opening move {trmph_move} ({row}, {col})")
             state = state.make_move(row, col)
             if self.write_provenance:
@@ -426,19 +492,20 @@ class SelfPlayEngine:
                     f"expected {move_count}, got {len(move_codes)}"
                 )
 
-    def generate_games_with_monitoring(self, num_games: int, board_size: int = BOARD_SIZE, 
+    def generate_games_with_monitoring(self, num_games: int, board_size: Optional[int] = None, 
                                      progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate self-play games with monitoring and statistics.
         
         Args:
             num_games: Number of games to generate
-            board_size: Size of the board (default: 13)
+            board_size: Optional board size override (must match engine board size)
             progress_interval: How often to print progress updates
             
         Returns:
             List of game data dictionaries
         """
+        effective_board_size = self._resolve_generation_board_size(board_size)
         start_time = time.time()
         print(f"Generating {num_games} games...")
         
@@ -451,7 +518,7 @@ class SelfPlayEngine:
             if opening_strategy is not None:
                 opening_move = opening_strategy.get_opening_move(i)
             
-            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
             self._validate_game_data(game_data, i)
             games.append(game_data)
             
@@ -474,19 +541,20 @@ class SelfPlayEngine:
         
         return games
 
-    def generate_games_streaming(self, num_games: int, board_size: int = BOARD_SIZE, 
+    def generate_games_streaming(self, num_games: int, board_size: Optional[int] = None, 
                                progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
         Generate games with streaming save to avoid data loss on interruption.
         
         Args:
             num_games: Number of games to generate
-            board_size: Size of the board (default: 13)
+            board_size: Optional board size override (must match engine board size)
             progress_interval: How often to print progress updates
             
         Returns:
             List of game data dictionaries
         """
+        effective_board_size = self._resolve_generation_board_size(board_size)
         if not self.streaming_save:
             raise RuntimeError("Streaming save is not enabled. Set self.streaming_save=True to use generate_games_streaming.")
         
@@ -502,7 +570,7 @@ class SelfPlayEngine:
             if opening_strategy is not None:
                 opening_move = opening_strategy.get_opening_move(i)
             
-            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
             self._validate_game_data(game_data, i)
             games.append(game_data)
             
@@ -532,19 +600,20 @@ class SelfPlayEngine:
         return games
 
     def generate_games_with_opening_strategy(self, opening_strategy, num_games: int, 
-                                           board_size: int = BOARD_SIZE, progress_interval: int = 10) -> List[Dict[str, Any]]:
+                                           board_size: Optional[int] = None, progress_interval: int = 10) -> List[Dict[str, Any]]:
         """
         Generate self-play games using a specific opening strategy.
         
         Args:
             opening_strategy: OpeningStrategy instance that provides opening moves
             num_games: Number of games to generate
-            board_size: Size of the board (default: 13)
+            board_size: Optional board size override (must match engine board size)
             progress_interval: How often to print progress updates
             
         Returns:
             List of game data dictionaries
         """
+        effective_board_size = self._resolve_generation_board_size(board_size)
         start_time = time.time()
         print(f"Generating {num_games} games with opening strategy...")
         print(f"Strategy covers {opening_strategy.get_total_games()} games")
@@ -556,7 +625,7 @@ class SelfPlayEngine:
             # Get opening move from strategy
             opening_move = opening_strategy.get_opening_move(i)
             
-            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
             self._validate_game_data(game_data, i)
             games.append(game_data)
             

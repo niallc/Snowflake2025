@@ -43,6 +43,12 @@ CHUNKED_RUN_TYPE = "selfplay_chunked"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate large-scale self-play games")
     parser.add_argument('--num_games', type=int, default=1000, help='Number of games to generate')
+    parser.add_argument(
+        '--board-size',
+        type=int,
+        default=BOARD_SIZE,
+        help=f'Board size for self-play generation (default: {BOARD_SIZE})'
+    )
     parser.add_argument('--model_path', type=str, 
                        default=get_model_path("best"),
                        help='Path to model checkpoint')
@@ -181,6 +187,7 @@ def _resolve_chunked_state_file(args: argparse.Namespace, config_fingerprint: st
 def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "num_games_total": args.num_games,
+        "board_size": args.board_size,
         "model_path": args.model_path,
         "output_dir": args.output_dir,
         "cache_size": args.cache_size,
@@ -209,6 +216,8 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         os.path.abspath(__file__),
         "--num_games",
         str(chunk_games),
+        "--board-size",
+        str(args.board_size),
         "--model_path",
         args.model_path,
         "--output_dir",
@@ -458,7 +467,11 @@ def _run_single_process(args: argparse.Namespace) -> None:
         models=[args.model_path],
         strategies=[f"mcts_{args.mcts_sims}"],
         num_games=args.num_games,
-        strategy_config={"mcts_sims": args.mcts_sims, "c_puct": args.c_puct},
+        strategy_config={
+            "mcts_sims": args.mcts_sims,
+            "c_puct": args.c_puct,
+            "board_size": args.board_size,
+        },
         temperatures=args.temperature,
         pie_rule=False,  # Not applicable to selfplay
         opening_strategy=args.opening_strategy,
@@ -477,6 +490,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
     # Print additional selfplay specific info
     if args.opening_strategy == 'pie_rule':
         print(f"  Bad move frequency: {args.bad_move_frequency}")
+    print(f"  Board size: {args.board_size}")
     print(f"  Output directory: {args.output_dir}")
     print(f"  Timestamp: {timestamp}")
     print()
@@ -486,13 +500,17 @@ def _run_single_process(args: argparse.Namespace) -> None:
     if args.opening_strategy != 'none':
         if args.opening_strategy == 'pie_rule':
             opening_strategy = create_pie_rule_strategy(
-                board_size=BOARD_SIZE,
+                board_size=args.board_size,
                 bad_move_frequency=args.bad_move_frequency
             )
         elif args.opening_strategy == 'random':
             # Create random strategy with some common opening moves
-            common_moves = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (9, 9), (10, 10), (11, 11), (12, 12)]
-            opening_strategy = RandomOpeningStrategy(common_moves, board_size=BOARD_SIZE, empty_board_prob=0.1)
+            common_moves = [(idx, idx) for idx in range(args.board_size)]
+            opening_strategy = RandomOpeningStrategy(
+                common_moves,
+                board_size=args.board_size,
+                empty_board_prob=0.1,
+            )
     
     # Initialize self-play engine
     engine = SelfPlayEngine(
@@ -512,6 +530,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         mcts_profile=args.mcts_profile,
         mcts_profile_every=args.mcts_profile_every,
         mcts_profile_max_calls=args.mcts_profile_max_calls,
+        board_size=args.board_size,
     )
     
     start_time = time.time()
@@ -521,14 +540,14 @@ def _run_single_process(args: argparse.Namespace) -> None:
         if args.streaming_save:
             games = engine.generate_games_streaming(
                 num_games=args.num_games,
-                board_size=BOARD_SIZE,
+                board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
         else:
             games = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
-                board_size=BOARD_SIZE,
+                board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
@@ -577,6 +596,8 @@ def main():
 
     if args.num_games <= 0:
         raise ValueError("--num_games must be > 0")
+    if args.board_size <= 0:
+        raise ValueError("--board-size must be > 0")
     if args.restart_every_games < 0:
         raise ValueError("--restart-every-games cannot be negative")
 

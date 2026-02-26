@@ -72,6 +72,31 @@ _initialize_neighbors()
 # Performance instrumentation
 INIT_REBUILDS = 0
 
+
+def _normalize_board_size(board_size: int, *, source: str) -> int:
+    """Normalize and validate board-size inputs."""
+    if isinstance(board_size, bool):
+        raise TypeError(f"{source} must be an integer, got bool")
+    try:
+        size = int(board_size)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{source} must be an integer, got {type(board_size)}") from exc
+    if size <= 0:
+        raise ValueError(f"{source} must be positive, got {size}")
+    return size
+
+
+def _ensure_supported_board_size(board_size: int) -> None:
+    """
+    Fail fast for unsupported board sizes until the game engine is fully parameterized.
+    """
+    if board_size != BOARD_SIZE:
+        raise ValueError(
+            f"Unsupported board size {board_size}. "
+            f"Current HexGameState/HexGameEngine runtime supports only {BOARD_SIZE}x{BOARD_SIZE}."
+        )
+
+
 def rowcol_to_index(r: int, c: int) -> int:
     """Convert (row, col) to DSU index."""
     return r * BOARD_SIZE + c
@@ -578,12 +603,13 @@ class HexGameState:
 
     def to_trmph(self) -> str:
         """Convert game state to TRMPH format."""
+        board_size = int(self.board.shape[0])
         moves_str = ""
         for row, col in self.move_history:
-            trmph_move = rowcol_to_trmph(row, col)
+            trmph_move = rowcol_to_trmph(row, col, board_size=board_size)
             moves_str += trmph_move
         
-        return f"#13,{moves_str}"
+        return f"#{board_size},{moves_str}"
     
     @classmethod
     def from_trmph(cls, trmph: str) -> 'HexGameState':
@@ -598,12 +624,15 @@ class HexGameState:
             moves_str = trmph[4:]  # Remove "#13," prefix
         elif trmph.startswith("#"):
             # Handle other sizes if needed, or just strip up to comma
-            try:
-                comma_idx = trmph.index(',')
-                moves_str = trmph[comma_idx+1:]
-            except ValueError:
+            if "," not in trmph:
                 # No comma, maybe just preamble?
                 return make_empty_hex_state()
+            comma_idx = trmph.index(',')
+            board_size = _normalize_board_size(
+                trmph[1:comma_idx], source="TRMPH preamble board size"
+            )
+            _ensure_supported_board_size(board_size)
+            moves_str = trmph[comma_idx+1:]
                 
         if not moves_str:
             return make_empty_hex_state()
@@ -641,11 +670,12 @@ class HexGameEngine:
     """
     
     def __init__(self, board_size: int = BOARD_SIZE):
-        self.board_size = board_size
+        self.board_size = _normalize_board_size(board_size, source="HexGameEngine.board_size")
+        _ensure_supported_board_size(self.board_size)
     
     def reset(self) -> HexGameState:
         """Start a new game."""
-        return make_empty_hex_state()
+        return make_empty_hex_state(board_size=self.board_size)
     
     def make_move(self, state: HexGameState, row: int, col: int) -> HexGameState:
         """
@@ -807,13 +837,18 @@ def select_top_value_head_move(model, state, top_k=20, temperature=1.0):
     return topk_moves[chosen_idx]
 
 
-def make_empty_hex_state() -> HexGameState:
+def make_empty_hex_state(board_size: int = BOARD_SIZE) -> HexGameState:
     """Create an empty Hex game state with Blue as the starting player.
     
     This is the standard way to start a new game. Blue always goes first
     in Hex by convention.
+
+    Args:
+        board_size: Board size for the game (currently fail-fast restricted to BOARD_SIZE)
     
     Returns:
         A new HexGameState with an empty board and Blue to play
     """
+    board_size = _normalize_board_size(board_size, source="make_empty_hex_state board_size")
+    _ensure_supported_board_size(board_size)
     return HexGameState(Player.BLUE) 

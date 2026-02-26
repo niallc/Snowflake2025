@@ -18,7 +18,11 @@ class OpeningStrategy:
     """Base class for opening strategies."""
     
     def __init__(self, board_size: int = BOARD_SIZE):
-        self.board_size = board_size
+        if isinstance(board_size, bool):
+            raise TypeError("board_size must be an integer, got bool")
+        self.board_size = int(board_size)
+        if self.board_size <= 0:
+            raise ValueError(f"board_size must be positive, got {self.board_size}")
     
     def get_opening_move(self, game_index: int) -> Optional[Tuple[int, int]]:
         """
@@ -50,6 +54,11 @@ class PieRuleOpeningStrategy(OpeningStrategy):
     
     def __init__(self, board_size: int = BOARD_SIZE, bad_move_frequency: float = 0.1):
         super().__init__(board_size)
+        if self.board_size != BOARD_SIZE:
+            raise ValueError(
+                f"PieRuleOpeningStrategy is currently tuned for {BOARD_SIZE}x{BOARD_SIZE}. "
+                f"Got {self.board_size}."
+            )
         self.bad_move_frequency = bad_move_frequency
         
         # Define opening moves by category
@@ -177,7 +186,7 @@ def create_board_with_opening(opening_move: Optional[Tuple[int, int]],
     Returns:
         HexGameState with the opening move applied
     """
-    state = make_empty_hex_state()
+    state = make_empty_hex_state(board_size=board_size)
     
     if opening_move is not None:
         row, col = opening_move
