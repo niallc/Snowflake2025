@@ -109,6 +109,19 @@ class SelfPlayEngine:
             'total_moves': 0,
             'games_per_second': 0.0
         }
+
+        # Aggregate MCTS runtime stats across all searched moves in this engine process.
+        self.mcts_run_stats = {
+            'moves_searched': 0,
+            'total_search_time_s': 0.0,
+            'total_effective_simulations': 0,
+            'total_unique_evals': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'batch_count': 0,
+            'batch_size_sum': 0.0,
+            'algorithm_termination_reason_counts': {},
+        }
         
         # Streaming save setup
         if self.streaming_save and self.streaming_file is None:
@@ -207,6 +220,7 @@ class SelfPlayEngine:
             start_time = time.perf_counter()
             mcts_result = mcts.run(state)
             search_time = time.perf_counter() - start_time
+            self._accumulate_mcts_run_stats(mcts_result.stats, search_time)
 
             if self.mcts_profile and self._mcts_profile_calls < self.mcts_profile_max_calls:
                 self._mcts_profile_calls += 1
@@ -261,6 +275,7 @@ class SelfPlayEngine:
             
             # Apply move
             state = state.make_move(*move)
+            self.stats['total_moves'] += 1
         
         # Game data - TRMPH string and winner
         # Only handle enum case - fail fast on legacy values
@@ -487,8 +502,128 @@ class SelfPlayEngine:
         # Add model performance stats
         model_stats = self.model.get_performance_stats()
         stats['model'] = model_stats
+        stats['mcts'] = self._build_mcts_summary_stats()
         
         return stats
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        """Best-effort numeric conversion for stats aggregation."""
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not np.isfinite(numeric):
+            return default
+        return numeric
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        """Best-effort integer conversion for stats aggregation."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _accumulate_mcts_run_stats(self, move_stats: Optional[Dict[str, Any]], search_time_s: float) -> None:
+        """
+        Accumulate per-move MCTS stats into process-level totals.
+
+        This uses MCTS result stats as the primary source and falls back to wall-clock
+        search time measurement when per-move timing is missing.
+        """
+        stats = move_stats or {}
+        aggregate = self.mcts_run_stats
+
+        aggregate['moves_searched'] += 1
+
+        total_search_time_s = self._safe_float(
+            stats.get('total_search_time', search_time_s),
+            default=max(0.0, float(search_time_s)),
+        )
+        aggregate['total_search_time_s'] += max(0.0, total_search_time_s)
+
+        aggregate['total_effective_simulations'] += max(
+            0, self._safe_int(stats.get('effective_sims_total', 0))
+        )
+        aggregate['total_unique_evals'] += max(
+            0, self._safe_int(stats.get('unique_evals_total', 0))
+        )
+
+        cache_hits = max(0, self._safe_int(stats.get('cache_hits', 0)))
+        cache_misses = max(0, self._safe_int(stats.get('cache_misses', 0)))
+        aggregate['cache_hits'] += cache_hits
+        aggregate['cache_misses'] += cache_misses
+
+        batch_count = max(0, self._safe_int(stats.get('batch_count', 0)))
+        aggregate['batch_count'] += batch_count
+
+        batch_sizes = stats.get('batch_sizes', []) or []
+        if isinstance(batch_sizes, (list, tuple)):
+            for batch_size in batch_sizes:
+                aggregate['batch_size_sum'] += max(0.0, self._safe_float(batch_size, 0.0))
+
+        reason_raw = stats.get('algorithm_termination_reason', 'unknown')
+        reason = str(reason_raw).strip() if reason_raw is not None else ""
+        if not reason:
+            reason = 'unknown'
+        counts = aggregate['algorithm_termination_reason_counts']
+        counts[reason] = counts.get(reason, 0) + 1
+
+    def _build_mcts_summary_stats(self) -> Dict[str, Any]:
+        """Return normalized process-level MCTS summary stats."""
+        aggregate = self.mcts_run_stats
+        moves_searched = int(aggregate['moves_searched'])
+        total_search_time_s = float(aggregate['total_search_time_s'])
+        cache_hits = int(aggregate['cache_hits'])
+        cache_misses = int(aggregate['cache_misses'])
+        total_batches = int(aggregate['batch_count'])
+        batch_size_sum = float(aggregate['batch_size_sum'])
+        reason_counts = aggregate['algorithm_termination_reason_counts']
+        sorted_reason_counts = dict(sorted(reason_counts.items()))
+
+        return {
+            'moves_searched': moves_searched,
+            'total_search_time_s': total_search_time_s,
+            'avg_search_time_s': total_search_time_s / max(1, moves_searched),
+            'total_effective_simulations': int(aggregate['total_effective_simulations']),
+            'total_unique_evals': int(aggregate['total_unique_evals']),
+            'cache_hits': cache_hits,
+            'cache_misses': cache_misses,
+            'cache_hit_rate': cache_hits / max(1, cache_hits + cache_misses),
+            'batch_count': total_batches,
+            'avg_batch_size': batch_size_sum / max(1, total_batches),
+            'algorithm_termination_reason_counts': sorted_reason_counts,
+        }
+
+    def print_mcts_run_summary(self) -> None:
+        """Print aggregate MCTS runtime stats for this self-play process."""
+        stats = self._build_mcts_summary_stats()
+        print("\n=== Self-Play MCTS Summary ===")
+        print(f"Moves searched: {stats['moves_searched']}")
+        print(
+            f"Search time: total={stats['total_search_time_s']:.2f}s "
+            f"avg={stats['avg_search_time_s']:.4f}s"
+        )
+        print(f"Effective simulations: total={stats['total_effective_simulations']}")
+        print(f"Unique evals: total={stats['total_unique_evals']}")
+        print(
+            f"Cache: hits={stats['cache_hits']} misses={stats['cache_misses']} "
+            f"hit_rate={stats['cache_hit_rate']:.1%}"
+        )
+        print(
+            f"Batches: total={stats['batch_count']} "
+            f"avg_batch_size={stats['avg_batch_size']:.1f}"
+        )
+        reason_counts = stats['algorithm_termination_reason_counts']
+        if reason_counts:
+            reason_summary = ", ".join(
+                f"{reason}={count}" for reason, count in reason_counts.items()
+            )
+        else:
+            reason_summary = "none"
+        print(f"Algorithm termination reasons: {reason_summary}")
+        print("================================\n")
 
     def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str) -> str:
         """
@@ -548,3 +683,4 @@ class SelfPlayEngine:
         """Clean shutdown of the engine."""
         print("Shutting down SelfPlayEngine...")
         self.model.print_performance_summary()
+        self.print_mcts_run_summary()
