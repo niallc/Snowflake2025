@@ -917,14 +917,19 @@ class SelfPlayEngine:
 
     def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str) -> str:
         """
-        Save games to a TRMPH text file.
-        
+        Save-or-append games to a TRMPH text file and optional provenance sidecar.
+
         Args:
             games: List of game data dictionaries
             base_filename: Base filename (without extension)
             
         Returns:
-            The TRMPH file path
+            The TRMPH file path.
+
+        Notes:
+            - Creates new files (with headers) when none exist.
+            - Appends games/records when files already exist.
+            - Fails fast on inconsistent existing TRMPH/provenance pairs.
         """
         trmph_file = f"{base_filename}.trmph"
         trmph_path = Path(trmph_file)

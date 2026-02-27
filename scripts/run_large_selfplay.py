@@ -616,7 +616,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Generate timestamp for unique filenames
+    # Generate timestamp-based base filename (save path may append to existing files).
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Print configuration using unified logging
@@ -804,6 +804,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         raise generation_error
     if integrity_error is not None:
         raise integrity_error
+    # In chunked mode, return non-success so the parent does not count this chunk as complete.
     if interrupted and args.internal_chunk_run:
         raise SystemExit(130)
 
