@@ -108,6 +108,7 @@ def _collect_file_provenance(
     policy_provenance_mode: str,
     game_to_provenance: Dict[str, MoveProvenanceRecord],
     game_to_provenance_is_fallback: Dict[str, bool],
+    provenance_conflict_counter: Optional[Dict[str, int]] = None,
 ) -> None:
     provenance_enabled, provenance_required = _validate_policy_provenance_mode(
         policy_provenance_mode
@@ -137,6 +138,7 @@ def _collect_file_provenance(
                 game_line=game_line,
                 record=record,
                 is_fallback=False,
+                provenance_conflict_counter=provenance_conflict_counter,
             )
         return
 
@@ -156,6 +158,7 @@ def _collect_file_provenance(
             game_line=game_line,
             record=fallback_record,
             is_fallback=True,
+            provenance_conflict_counter=provenance_conflict_counter,
         )
 
 def collect_tournament_data_since_date(
@@ -198,6 +201,7 @@ def collect_tournament_data_since_date(
     processed_files_by_source = {}
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
+    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
@@ -209,6 +213,7 @@ def collect_tournament_data_since_date(
                 policy_provenance_mode=policy_provenance_mode,
                 game_to_provenance=game_to_provenance,
                 game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+                provenance_conflict_counter=provenance_conflict_counter,
             )
         all_games.extend(games)
         
@@ -224,6 +229,13 @@ def collect_tournament_data_since_date(
         logger.info(f"  Extracted {len(games)} games from {file_path.name}")
     
     logger.info(f"Total games extracted: {len(all_games)}")
+    authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    if authoritative_conflicts:
+        logger.warning(
+            "Observed %d conflicting authoritative provenance records for duplicate games; "
+            "keeping the first record encountered for each duplicate game line.",
+            authoritative_conflicts,
+        )
     
     # Remove duplicates
     unique_games = remove_duplicates(all_games)
@@ -280,6 +292,10 @@ def collect_tournament_data_since_date(
         f.write(f"Games per chunk: ~{chunk_size}\n")
         if provenance_enabled:
             f.write(f"Provenance sidecars written: yes\n")
+            f.write(
+                "Conflicting authoritative provenance records kept-first: "
+                f"{authoritative_conflicts}\n"
+            )
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -318,6 +334,7 @@ def collect_tournament_data_since_date(
         "duplicates_removed": len(all_games) - len(unique_games),
         "chunks_created": len(chunks),
         "provenance_sidecars_written": provenance_enabled,
+        "provenance_authoritative_conflicts": authoritative_conflicts,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -365,6 +382,7 @@ def collect_and_organize_data(
     processed_files_by_source = {}
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
+    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
@@ -376,6 +394,7 @@ def collect_and_organize_data(
                 policy_provenance_mode=policy_provenance_mode,
                 game_to_provenance=game_to_provenance,
                 game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+                provenance_conflict_counter=provenance_conflict_counter,
             )
         all_games.extend(games)
         
@@ -391,6 +410,13 @@ def collect_and_organize_data(
         logger.info(f"  Extracted {len(games)} games from {file_path.name}")
     
     logger.info(f"Total games extracted: {len(all_games)}")
+    authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    if authoritative_conflicts:
+        logger.warning(
+            "Observed %d conflicting authoritative provenance records for duplicate games; "
+            "keeping the first record encountered for each duplicate game line.",
+            authoritative_conflicts,
+        )
     
     # Remove duplicates
     unique_games = remove_duplicates(all_games)
@@ -445,6 +471,10 @@ def collect_and_organize_data(
         f.write(f"Games per chunk: ~{chunk_size}\n")
         if provenance_enabled:
             f.write(f"Provenance sidecars written: yes\n")
+            f.write(
+                "Conflicting authoritative provenance records kept-first: "
+                f"{authoritative_conflicts}\n"
+            )
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -478,6 +508,7 @@ def collect_and_organize_data(
         "duplicates_removed": len(all_games) - len(unique_games),
         "chunks_created": len(chunks),
         "provenance_sidecars_written": provenance_enabled,
+        "provenance_authoritative_conflicts": authoritative_conflicts,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -527,6 +558,7 @@ def combine_and_clean_files(
     all_games: List[str] = []
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
+    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
     for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
@@ -537,12 +569,20 @@ def combine_and_clean_files(
                 policy_provenance_mode=policy_provenance_mode,
                 game_to_provenance=game_to_provenance,
                 game_to_provenance_is_fallback=game_to_provenance_is_fallback,
+                provenance_conflict_counter=provenance_conflict_counter,
             )
 
         all_games.extend(games)
         logger.info(f"  Extracted {len(games)} games from {file_path.name}")
     
     logger.info(f"Total games extracted: {len(all_games)}")
+    authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    if authoritative_conflicts:
+        logger.warning(
+            "Observed %d conflicting authoritative provenance records for duplicate games; "
+            "keeping the first record encountered for each duplicate game line.",
+            authoritative_conflicts,
+        )
     
     # Remove duplicates
     unique_games = remove_duplicates(all_games)
@@ -598,6 +638,10 @@ def combine_and_clean_files(
         f.write(f"Games per chunk: ~{chunk_size}\n")
         if provenance_enabled:
             f.write(f"Provenance sidecars written: yes\n")
+            f.write(
+                "Conflicting authoritative provenance records kept-first: "
+                f"{authoritative_conflicts}\n"
+            )
         f.write(f"\nInput files:\n")
         for file_path in all_trmph_files:
             f.write(f"  {file_path}\n")
@@ -617,6 +661,7 @@ def _add_or_validate_game_provenance(
     game_line: str,
     record: MoveProvenanceRecord,
     is_fallback: bool,
+    provenance_conflict_counter: Optional[Dict[str, int]] = None,
 ) -> None:
     existing = game_to_provenance.get(game_line)
     if existing is None:
@@ -645,10 +690,13 @@ def _add_or_validate_game_provenance(
         # Keep existing authoritative provenance, ignore conflicting fallback.
         return
 
-    raise ValueError(
-        "Conflicting provenance for duplicate game line across input files: "
-        f"{game_line[:80]}..."
-    )
+    # Duplicate game lines can legitimately carry different authoritative move-source
+    # annotations; collection deduplicates by game line and keeps the first record.
+    if provenance_conflict_counter is not None:
+        provenance_conflict_counter["authoritative_conflicts"] = (
+            provenance_conflict_counter.get("authoritative_conflicts", 0) + 1
+        )
+    return
 
 
 def parse_shard_range(range_str: str, data_dir: str = None) -> tuple:

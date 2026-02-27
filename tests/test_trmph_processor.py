@@ -722,6 +722,34 @@ class TestTRMPHProcessor:
         records = load_move_provenance_sidecar(chunk_sidecar)
         assert [record.move_codes for record in records] == ["GC"]
 
+    def test_combine_and_clean_files_optional_keeps_first_authoritative_on_conflict(self):
+        """Optional mode should keep first-seen provenance for conflicting authoritative duplicates."""
+        self.create_test_trmph_file(
+            "combine_optional_conflict_a.trmph",
+            "#13,a1b2 b\n",
+        )
+        self.create_test_provenance_sidecar("combine_optional_conflict_a.trmph", ["GC"])
+
+        self.create_test_trmph_file(
+            "combine_optional_conflict_b.trmph",
+            "#13,a1b2 b\n",
+        )
+        self.create_test_provenance_sidecar("combine_optional_conflict_b.trmph", ["VV"])
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "cleaned_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["GC"]
+
+        summary_text = (self.output_dir / "processing_summary.txt").read_text(encoding="utf-8")
+        assert "Conflicting authoritative provenance records kept-first: 1" in summary_text
+
     def test_collect_and_organize_data_optional_writes_sidecars(self):
         """Collection mode should emit sidecars in optional mode."""
         self.create_test_trmph_file(

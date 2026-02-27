@@ -71,12 +71,13 @@ def find_trmph_files(source_dirs: List[Path]) -> List[Tuple[Path, Path]]:
             raise FileNotFoundError(f"Source directory {source_dir} does not exist - this is likely a configuration error")
             
         # Find all .trmph files recursively
-        trmph_files = list(source_dir.rglob("*.trmph"))
+        trmph_files = sorted(source_dir.rglob("*.trmph"))
         logger.info(f"Found {len(trmph_files)} .trmph files in {source_dir}")
         
         for file_path in trmph_files:
             all_files.append((source_dir, file_path))
     
+    all_files.sort(key=lambda item: str(item[1]))
     logger.info(f"Total .trmph files found: {len(all_files)}")
     return all_files
 
