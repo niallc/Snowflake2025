@@ -834,7 +834,15 @@ class TrainingStep:
 
         while True:
             chunk_idx += 1
-            resume_mode = "same_epoch"
+            # First chunk should honor configured resume mode so legacy checkpoints
+            # without stream-state sidecars can still resume at the next epoch.
+            # Subsequent chunks use same-epoch resume to preserve within-epoch
+            # continuity using sidecars produced by prior chunks.
+            resume_mode = (
+                self.config.resume_mode
+                if chunk_idx == 1
+                else "same_epoch"
+            )
             child_cmd = self._build_child_chunk_command(
                 checkpoint_path=latest_resume_checkpoint,
                 all_data_dirs=all_data_dirs,
