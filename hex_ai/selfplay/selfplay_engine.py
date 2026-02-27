@@ -623,8 +623,13 @@ class SelfPlayEngine:
         )
         return games, summary, total_time
 
-    def generate_games_with_monitoring(self, num_games: int, board_size: Optional[int] = None, 
-                                     progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
+    def generate_games_with_monitoring(
+        self,
+        num_games: int,
+        board_size: Optional[int] = None,
+        progress_interval: int = 10,
+        opening_strategy=None,
+    ) -> Tuple[List[Dict[str, Any]], SelfPlayGenerationSummary]:
         """
         Generate self-play games with monitoring and statistics.
         
@@ -634,7 +639,7 @@ class SelfPlayEngine:
             progress_interval: How often to print progress updates
             
         Returns:
-            List of game data dictionaries
+            Tuple of generated games and typed generation summary
         """
         effective_board_size = self._resolve_generation_board_size(board_size)
         print(f"Generating {num_games} games...")
@@ -652,7 +657,7 @@ class SelfPlayEngine:
             f"Generated {summary.num_games} games in {total_time:.1f}s "
             f"({self.stats['games_per_second']:.1f} games/s)"
         )
-        return games
+        return games, summary
 
     def generate_games_streaming(
         self,
@@ -704,8 +709,13 @@ class SelfPlayEngine:
             ),
         )
 
-    def generate_games_with_opening_strategy(self, opening_strategy, num_games: int, 
-                                           board_size: Optional[int] = None, progress_interval: int = 10) -> List[Dict[str, Any]]:
+    def generate_games_with_opening_strategy(
+        self,
+        opening_strategy,
+        num_games: int,
+        board_size: Optional[int] = None,
+        progress_interval: int = 10,
+    ) -> Tuple[List[Dict[str, Any]], SelfPlayGenerationSummary]:
         """
         Generate self-play games using a specific opening strategy.
         
@@ -716,7 +726,7 @@ class SelfPlayEngine:
             progress_interval: How often to print progress updates
             
         Returns:
-            List of game data dictionaries
+            Tuple of generated games and typed generation summary
         """
         effective_board_size = self._resolve_generation_board_size(board_size)
         print(f"Generating {num_games} games with opening strategy...")
@@ -735,7 +745,7 @@ class SelfPlayEngine:
             f"Generated {summary.num_games} games in {total_time:.1f}s "
             f"({self.stats['games_per_second']:.1f} games/s)"
         )
-        return games
+        return games, summary
 
     def get_performance_stats(self) -> Dict[str, Any]:
         """Get comprehensive performance statistics."""

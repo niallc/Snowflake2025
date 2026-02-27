@@ -718,13 +718,12 @@ def _run_single_process(args: argparse.Namespace) -> None:
                 opening_strategy=opening_strategy
             )
         else:
-            games = engine.generate_games_with_monitoring(
+            games, summary = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
                 board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
-            summary = SelfPlayGenerationSummary.from_games(games)
 
         # Save non-streaming games and finalize summary file paths
         if games is not None:
