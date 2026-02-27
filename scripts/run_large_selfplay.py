@@ -28,6 +28,7 @@ from hex_ai.selfplay.selfplay_engine import (
     DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
     SelfPlayEngine,
 )
+from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import (
     PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH,
@@ -707,44 +708,59 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     generation_error: Optional[Exception] = None
     integrity_error: Optional[Exception] = None
-    generation_results: Any = None
+    games: Optional[List[Dict[str, Any]]] = None
+    summary: Optional[SelfPlayGenerationSummary] = None
     try:
         # Generate games
         if args.streaming_save:
-            generation_results = engine.generate_games_streaming(
+            summary = engine.generate_games_streaming(
                 num_games=args.num_games,
                 board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
-            trmph_file = engine.streaming_file
         else:
-            generation_results = engine.generate_games_with_monitoring(
+            games = engine.generate_games_with_monitoring(
                 num_games=args.num_games,
                 board_size=args.board_size,
                 progress_interval=args.progress_interval,
                 opening_strategy=opening_strategy
             )
+            summary = SelfPlayGenerationSummary.from_games(games)
+
+        # Save non-streaming games and finalize summary file paths
+        if games is not None:
             trmph_file = None
-            if generation_results:
+            provenance_file = None
+            if games:
                 # Save as TRMPH text file
                 base_filename = f"{args.output_dir}/selfplay_{timestamp}"
-                trmph_file = engine.save_games_simple(generation_results, base_filename)
+                trmph_file = engine.save_games_simple(games, base_filename)
+                if args.write_provenance:
+                    provenance_file = str(sidecar_path_for_trmph(trmph_file))
+            if summary is None:
+                raise RuntimeError("Missing self-play summary for non-streaming generation.")
+            summary = summary.with_files(
+                trmph_file=trmph_file,
+                provenance_file=provenance_file,
+            )
+        elif summary is None:
+            raise RuntimeError("Missing self-play summary after generation.")
         
         # Calculate total time
         total_time = time.time() - start_time
         
         # Print results using unified analyzer
         output_files = {}
-        if trmph_file:
-            output_files["trmph"] = trmph_file
-            if args.write_provenance:
-                output_files["provenance"] = str(sidecar_path_for_trmph(trmph_file))
+        if summary.trmph_file:
+            output_files["trmph"] = summary.trmph_file
+        if summary.provenance_file:
+            output_files["provenance"] = summary.provenance_file
 
         performance_stats = engine.get_performance_stats()
         print_script_results(
             "selfplay",
-            generation_results,
+            summary,
             script_config,
             output_files,
             total_time,

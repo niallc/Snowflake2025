@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 
+from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_configs, generate_gumbel_summary_from_params
 from hex_ai.utils.tournament_stats import print_comprehensive_tournament_analysis
@@ -315,7 +316,11 @@ def _print_selfplay_results(
     total_games = 0
     red_wins = 0
     blue_wins = 0
-    if isinstance(results, dict) and {
+    if isinstance(results, SelfPlayGenerationSummary):
+        total_games = int(results.num_games)
+        red_wins = int(results.red_wins)
+        blue_wins = int(results.blue_wins)
+    elif isinstance(results, dict) and {
         "num_games",
         "red_wins",
         "blue_wins",

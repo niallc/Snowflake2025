@@ -25,6 +25,7 @@ from hex_ai.move_provenance import (
     make_move_provenance_record,
     sidecar_path_for_trmph,
 )
+from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
 from hex_ai.utils.format_conversion import count_trmph_moves, rowcol_to_trmph
@@ -561,7 +562,7 @@ class SelfPlayEngine:
         board_size: Optional[int] = None,
         progress_interval: int = 10,
         opening_strategy=None,
-    ) -> Dict[str, Any]:
+    ) -> SelfPlayGenerationSummary:
         """
         Generate games with streaming save to avoid data loss on interruption.
         
@@ -571,7 +572,7 @@ class SelfPlayEngine:
             progress_interval: How often to print progress updates
             
         Returns:
-            Summary dictionary with game count and winner totals
+            Typed summary with game count, winner totals, and output paths
         """
         effective_board_size = self._resolve_generation_board_size(board_size)
         if not self.streaming_save:
@@ -629,15 +630,17 @@ class SelfPlayEngine:
         if self.write_provenance and self.streaming_provenance_file:
             print(f"Move provenance sidecar: {self.streaming_provenance_file}")
         
-        summary: Dict[str, Any] = {
-            "num_games": games_generated,
-            "red_wins": red_wins,
-            "blue_wins": blue_wins,
-            "trmph_file": self.streaming_file,
-        }
-        if self.write_provenance and self.streaming_provenance_file:
-            summary["provenance_file"] = self.streaming_provenance_file
-        return summary
+        return SelfPlayGenerationSummary(
+            num_games=games_generated,
+            red_wins=red_wins,
+            blue_wins=blue_wins,
+            trmph_file=self.streaming_file,
+            provenance_file=(
+                self.streaming_provenance_file
+                if self.write_provenance
+                else None
+            ),
+        )
 
     def generate_games_with_opening_strategy(self, opening_strategy, num_games: int, 
                                            board_size: Optional[int] = None, progress_interval: int = 10) -> List[Dict[str, Any]]:
