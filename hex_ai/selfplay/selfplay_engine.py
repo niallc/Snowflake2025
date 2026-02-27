@@ -507,6 +507,81 @@ class SelfPlayEngine:
                     f"expected {move_count}, got {len(move_codes)}"
                 )
 
+    def _print_generation_progress(
+        self,
+        game_index: int,
+        num_games: int,
+        start_time: float,
+        progress_interval: int,
+    ) -> None:
+        """Print periodic generation progress updates."""
+        if (game_index + 1) % progress_interval == 0 or (game_index + 1) == num_games:
+            elapsed = time.time() - start_time
+            games_per_sec = (game_index + 1) / elapsed
+            if self.verbose >= 1:
+                print(
+                    f"  Generated {game_index + 1}/{num_games} games "
+                    f"({games_per_sec:.1f} games/s)"
+                )
+        elif self.verbose >= 1:
+            print(".", end="", flush=True)  # Progress dot for each game
+
+    def _update_generation_stats(self, num_games: int, total_time: float) -> None:
+        """Update process-level generation metrics."""
+        self.stats['games_generated'] += num_games
+        self.stats['total_time'] += total_time
+        self.stats['games_per_second'] = num_games / total_time if total_time > 0 else 0
+
+    def _generate_games_common(
+        self,
+        num_games: int,
+        board_size: int,
+        progress_interval: int,
+        opening_strategy=None,
+        *,
+        collect_games: bool,
+        stream_save: bool,
+    ) -> Tuple[List[Dict[str, Any]], SelfPlayGenerationSummary, float]:
+        """Run the shared self-play generation loop."""
+        start_time = time.time()
+        games: List[Dict[str, Any]] = []
+        games_generated = 0
+        red_wins = 0
+        blue_wins = 0
+
+        for i in range(num_games):
+            opening_move = None
+            if opening_strategy is not None:
+                opening_move = opening_strategy.get_opening_move(i)
+
+            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            self._validate_game_data(game_data, i)
+            winner = game_data['winner']
+            if winner == TRMPH_RED_WIN:
+                red_wins += 1
+            elif winner == TRMPH_BLUE_WIN:
+                blue_wins += 1
+            else:
+                raise ValueError(f"Unexpected winner while generating game {i}: {winner!r}")
+
+            if collect_games:
+                games.append(game_data)
+
+            if stream_save:
+                # Save immediately to avoid data loss on interruptions.
+                self.save_game_to_stream(game_data)
+
+            games_generated += 1
+            self._print_generation_progress(i, num_games, start_time, progress_interval)
+
+        total_time = time.time() - start_time
+        summary = SelfPlayGenerationSummary(
+            num_games=games_generated,
+            red_wins=red_wins,
+            blue_wins=blue_wins,
+        )
+        return games, summary, total_time
+
     def generate_games_with_monitoring(self, num_games: int, board_size: Optional[int] = None, 
                                      progress_interval: int = 10, opening_strategy=None) -> List[Dict[str, Any]]:
         """
@@ -521,39 +596,21 @@ class SelfPlayEngine:
             List of game data dictionaries
         """
         effective_board_size = self._resolve_generation_board_size(board_size)
-        start_time = time.time()
         print(f"Generating {num_games} games...")
-        
-        games = []
-        
-        # Generate games sequentially (single-threaded)
-        for i in range(num_games):
-            # Get opening move if strategy provided
-            opening_move = None
-            if opening_strategy is not None:
-                opening_move = opening_strategy.get_opening_move(i)
-            
-            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
-            self._validate_game_data(game_data, i)
-            games.append(game_data)
-            
-            # Progress update
-            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                elapsed = time.time() - start_time
-                games_per_sec = (i + 1) / elapsed
-                if self.verbose >= 1:
-                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-            elif self.verbose >= 1:
-                print(".", end="", flush=True)  # Progress dot for each game
-        
-        # Update statistics
-        total_time = time.time() - start_time
-        self.stats['games_generated'] += len(games)
-        self.stats['total_time'] += total_time
-        self.stats['games_per_second'] = len(games) / total_time if total_time > 0 else 0
-        
-        print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
-        
+
+        games, summary, total_time = self._generate_games_common(
+            num_games,
+            effective_board_size,
+            progress_interval,
+            opening_strategy=opening_strategy,
+            collect_games=True,
+            stream_save=False,
+        )
+        self._update_generation_stats(summary.num_games, total_time)
+        print(
+            f"Generated {summary.num_games} games in {total_time:.1f}s "
+            f"({self.stats['games_per_second']:.1f} games/s)"
+        )
         return games
 
     def generate_games_streaming(
@@ -578,62 +635,26 @@ class SelfPlayEngine:
         if not self.streaming_save:
             raise RuntimeError("Streaming save is not enabled. Set self.streaming_save=True to use generate_games_streaming.")
         
-        start_time = time.time()
         print(f"Generating {num_games} games with streaming save...")
-        games_generated = 0
-        red_wins = 0
-        blue_wins = 0
-        
-        # Generate games sequentially (single-threaded)
-        for i in range(num_games):
-            # Get opening move if strategy provided
-            opening_move = None
-            if opening_strategy is not None:
-                opening_move = opening_strategy.get_opening_move(i)
-            
-            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
-            self._validate_game_data(game_data, i)
-            winner = game_data['winner']
-            if winner == TRMPH_RED_WIN:
-                red_wins += 1
-            elif winner == TRMPH_BLUE_WIN:
-                blue_wins += 1
-            else:
-                raise ValueError(f"Unexpected winner while streaming game {i}: {winner!r}")
-            
-            # Save immediately to avoid data loss
-            self.save_game_to_stream(game_data)
-            games_generated += 1
-            
-            # Progress update
-            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                elapsed = time.time() - start_time
-                games_per_sec = (i + 1) / elapsed
-                if self.verbose >= 1:
-                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-            elif self.verbose >= 1:
-                print(".", end="", flush=True)  # Progress dot for each game
-        
-        # Update statistics
-        total_time = time.time() - start_time
-        self.stats['games_generated'] += games_generated
-        self.stats['total_time'] += total_time
-        self.stats['games_per_second'] = (
-            games_generated / total_time if total_time > 0 else 0
+        _, summary, total_time = self._generate_games_common(
+            num_games,
+            effective_board_size,
+            progress_interval,
+            opening_strategy=opening_strategy,
+            collect_games=False,
+            stream_save=True,
         )
-        
+        self._update_generation_stats(summary.num_games, total_time)
+
         print(
-            f"Generated {games_generated} games in {total_time:.1f}s "
+            f"Generated {summary.num_games} games in {total_time:.1f}s "
             f"({self.stats['games_per_second']:.1f} games/s)"
         )
         print(f"Games saved to: {self.streaming_file}")
         if self.write_provenance and self.streaming_provenance_file:
             print(f"Move provenance sidecar: {self.streaming_provenance_file}")
         
-        return SelfPlayGenerationSummary(
-            num_games=games_generated,
-            red_wins=red_wins,
-            blue_wins=blue_wins,
+        return summary.with_files(
             trmph_file=self.streaming_file,
             provenance_file=(
                 self.streaming_provenance_file
@@ -657,38 +678,22 @@ class SelfPlayEngine:
             List of game data dictionaries
         """
         effective_board_size = self._resolve_generation_board_size(board_size)
-        start_time = time.time()
         print(f"Generating {num_games} games with opening strategy...")
         print(f"Strategy covers {opening_strategy.get_total_games()} games")
-        
-        games = []
-        
-        # Generate games sequentially (single-threaded)
-        for i in range(num_games):
-            # Get opening move from strategy
-            opening_move = opening_strategy.get_opening_move(i)
-            
-            game_data = self._generate_single_game(effective_board_size, opening_move, game_id=i)
-            self._validate_game_data(game_data, i)
-            games.append(game_data)
-            
-            # Progress update
-            if (i + 1) % progress_interval == 0 or (i + 1) == num_games:
-                elapsed = time.time() - start_time
-                games_per_sec = (i + 1) / elapsed
-                if self.verbose >= 1:
-                    print(f"  Generated {i + 1}/{num_games} games ({games_per_sec:.1f} games/s)")
-            elif self.verbose >= 1:
-                print(".", end="", flush=True)  # Progress dot for each game
-        
-        # Update statistics
-        total_time = time.time() - start_time
-        self.stats['games_generated'] += len(games)
-        self.stats['total_time'] += total_time
-        self.stats['games_per_second'] = len(games) / total_time if total_time > 0 else 0
-        
-        print(f"Generated {len(games)} games in {total_time:.1f}s ({self.stats['games_per_second']:.1f} games/s)")
-        
+
+        games, summary, total_time = self._generate_games_common(
+            num_games,
+            effective_board_size,
+            progress_interval,
+            opening_strategy=opening_strategy,
+            collect_games=True,
+            stream_save=False,
+        )
+        self._update_generation_stats(summary.num_games, total_time)
+        print(
+            f"Generated {summary.num_games} games in {total_time:.1f}s "
+            f"({self.stats['games_per_second']:.1f} games/s)"
+        )
         return games
 
     def get_performance_stats(self) -> Dict[str, Any]:
