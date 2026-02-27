@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
 
+# TODO(2026-03): Switch default provenance mode to "require" after rollout.
+DEFAULT_POLICY_PROVENANCE_MODE = "optional"
+
 
 class ProcessingConfig:
     """Configuration for TRMPH processing."""
@@ -18,7 +21,7 @@ class ProcessingConfig:
                  output_dir: str, 
                  max_files: Optional[int] = None,
                  position_selector: str = "all",
-                 policy_provenance_mode: str = "off",
+                 policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE,
                  run_tag: Optional[str] = None,
                  max_workers: int = 6):
         """

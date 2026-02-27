@@ -35,3 +35,9 @@ This file captures project-specific guidance for Codex agents working in this re
 - Do not add silent fallbacks that continue execution with ambiguous semantics unless explicitly requested.
 - If a non-fail-fast path is needed for exceptional recovery, gate it behind an explicit manual override and log it clearly.
 - Prioritize surfacing potential bugs over masking them with automatic fallback behavior.
+
+### 2026-02-27 - Virtualenv Activation Guard for `hex_ai`
+- `hex_ai/__init__.py` enforces environment validation via `VIRTUAL_ENV`; calling `hex_ai_env/bin/python` directly may still fail if `VIRTUAL_ENV` is unset.
+- Preferred invocation for scripts/tests: `source hex_ai_env/bin/activate && python ...` from the repository root.
+- For subprocess launches that do not source a shell profile, set both `VIRTUAL_ENV=<repo>/hex_ai_env` and prepend `<repo>/hex_ai_env/bin` to `PATH`.
+- If you see `ImportError: hex_ai requires hex_ai_env virtual environment`, treat it as an environment setup issue first (not a code/runtime bug).

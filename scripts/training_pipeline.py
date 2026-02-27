@@ -43,6 +43,9 @@ from hex_ai.validation_defaults import resolve_validation_config, log_validation
 from hex_ai.data_pipeline import DataShuffler
 from hex_ai.memory_profiler import start_profiling, take_snapshot, stop_profiling
 
+# TODO(2026-03): Switch default provenance mode to "require" after rollout.
+DEFAULT_POLICY_PROVENANCE_MODE = "optional"
+
 
 @dataclass
 class PipelineConfig:
@@ -76,7 +79,7 @@ class PipelineConfig:
     # Processing configuration
     chunk_size: int = 10000
     position_selector: str = "all"
-    policy_provenance_mode: str = "require"
+    policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE
     max_workers_trmph: int = 6
     num_buckets_shuffle: int = 100
     
@@ -1252,7 +1255,7 @@ Examples:
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Position selector for TRMPH processing")
     parser.add_argument(
         "--policy-provenance-mode",
-        default="require",
+        default=DEFAULT_POLICY_PROVENANCE_MODE,
         choices=["off", "optional", "require"],
         help=(
             "Policy provenance handling during collection/preprocessing/TRMPH processing: "

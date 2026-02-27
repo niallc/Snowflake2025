@@ -26,6 +26,9 @@ from hex_ai.value_utils import Player, Winner
 
 logger = logging.getLogger(__name__)
 
+# TODO(2026-03): Switch default provenance mode to "require" after rollout.
+DEFAULT_POLICY_PROVENANCE_MODE = "optional"
+
 
 def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -61,7 +64,10 @@ def process_single_file_worker(file_info: Dict[str, Any]) -> Dict[str, Any]:
         output_dir = Path(file_info['output_dir'])
         run_tag = file_info.get('run_tag')
         position_selector = file_info.get('position_selector', 'all')
-        policy_provenance_mode = file_info.get('policy_provenance_mode', 'off')
+        policy_provenance_mode = file_info.get(
+            'policy_provenance_mode',
+            DEFAULT_POLICY_PROVENANCE_MODE,
+        )
         
         # Process the file directly without BatchProcessor to avoid resume issues
         logger.info(f"Processing file {file_path} (index {file_idx})")
@@ -95,7 +101,7 @@ def process_single_file_direct(
     file_idx: int,
     output_dir: Path,
     position_selector: str = "all",
-    policy_provenance_mode: str = "off",
+    policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE,
 ) -> Dict[str, Any]:
     """
     Process a single .trmph file directly without BatchProcessor state management.

@@ -16,7 +16,7 @@ from hex_ai.batch_processor import BatchProcessor
 from hex_ai.file_utils import GracefulShutdown
 
 # Import our processing modules
-from .config import ProcessingConfig
+from .config import DEFAULT_POLICY_PROVENANCE_MODE, ProcessingConfig
 from .processor import TRMPHProcessor
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def parse_arguments():
     parser.add_argument("--position-selector", default="all", choices=["all", "final", "penultimate"], help="Which positions to extract from each game: all, final, or penultimate")
     parser.add_argument(
         "--policy-provenance-mode",
-        default="off",
+        default=DEFAULT_POLICY_PROVENANCE_MODE,
         choices=["off", "optional", "require"],
         help=(
             "Move provenance handling: "

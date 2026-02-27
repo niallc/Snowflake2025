@@ -38,6 +38,7 @@ from hex_ai.data_config import (
 )
 
 PROVENANCE_MODE_CHOICES = ["off", "optional", "require"]
+# TODO(2026-03): Switch default provenance mode to "require" after rollout.
 DEFAULT_PROVENANCE_MODE = "optional"
 
 

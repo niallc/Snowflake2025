@@ -25,6 +25,8 @@ from hex_ai.data_pipeline import discover_training_data_files_all, discover_trai
 logger = logging.getLogger(__name__)
 
 MAX_DATE_LOOKBACK_DAYS = 62  # Fail fast to avoid accidentally collecting months of data.
+# TODO(2026-03): Switch default provenance mode to "require" after rollout.
+DEFAULT_POLICY_PROVENANCE_MODE = "optional"
 
 
 def _validate_date_range(start_date: Optional[datetime], end_date: Optional[datetime]) -> None:
@@ -161,7 +163,7 @@ def collect_tournament_data_since_date(
     output_dir: Path,
     since_date: datetime,
     chunk_size: int = 20000,
-    policy_provenance_mode: str = "off",
+    policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE,
 ) -> Dict:
     """
     Collect tournament data since a specific date.
@@ -327,7 +329,7 @@ def collect_and_organize_data(
     chunk_size: int = 20000,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    policy_provenance_mode: str = "off",
+    policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE,
 ) -> Dict:
     """
     Collect all training data from multiple sources and organize it.
@@ -485,7 +487,7 @@ def combine_and_clean_files(
     input_dirs: List[Path] | Path,
     output_dir: Path,
     chunk_size: int = 20000,
-    policy_provenance_mode: str = "off",
+    policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE,
 ):
     """
     Combine TRMPH files, remove duplicates, split into chunks, and optionally propagate provenance.
