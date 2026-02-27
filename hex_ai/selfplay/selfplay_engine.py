@@ -553,19 +553,45 @@ class SelfPlayEngine:
         game_index: int,
         num_games: int,
         start_time: float,
+        start_move_count: int,
+        last_report_time: float,
+        last_report_game_count: int,
+        last_report_move_count: int,
         progress_interval: int,
-    ) -> None:
-        """Print periodic generation progress updates."""
+    ) -> Tuple[float, int, int]:
+        """
+        Print periodic generation progress updates and return updated report state.
+
+        Returns:
+            Tuple of (last_report_time, last_report_game_count, last_report_move_count)
+            where move counts are tracked relative to this generation call's start.
+        """
         if (game_index + 1) % progress_interval == 0 or (game_index + 1) == num_games:
-            elapsed = time.time() - start_time
-            games_per_sec = (game_index + 1) / elapsed
+            now = time.time()
+            elapsed = max(now - start_time, 1e-9)
+            games_done = game_index + 1
+            moves_done = max(0, int(self.stats['total_moves']) - int(start_move_count))
+
+            cumulative_games_per_sec = games_done / elapsed
+            cumulative_moves_per_sec = moves_done / elapsed
+
+            window_elapsed = max(now - last_report_time, 1e-9)
+            window_games = max(1, games_done - last_report_game_count)
+            window_moves = max(0, moves_done - last_report_move_count)
+            window_games_per_sec = window_games / window_elapsed
+            window_moves_per_sec = window_moves / window_elapsed
             if self.verbose >= 1:
                 print(
-                    f"  Generated {game_index + 1}/{num_games} games "
-                    f"({games_per_sec:.2f} games/s)"
+                    f"  Generated {games_done}/{num_games} games "
+                    f"(cum: {cumulative_games_per_sec:.2f} games/s, "
+                    f"last{window_games}: {window_games_per_sec:.2f} games/s, "
+                    f"cum: {cumulative_moves_per_sec:.2f} moves/s, "
+                    f"last{window_games}: {window_moves_per_sec:.2f} moves/s)"
                 )
+            return now, games_done, moves_done
         elif self.verbose >= 1:
             print(".", end="", flush=True)  # Progress dot for each game
+        return last_report_time, last_report_game_count, last_report_move_count
 
     def _update_generation_stats(self, num_games: int, total_time: float) -> None:
         """Update process-level generation metrics."""
@@ -589,6 +615,10 @@ class SelfPlayEngine:
         games_generated = 0
         red_wins = 0
         blue_wins = 0
+        start_move_count = int(self.stats['total_moves'])
+        last_report_time = start_time
+        last_report_game_count = 0
+        last_report_move_count = 0
 
         for i in range(num_games):
             opening_move = None
@@ -613,7 +643,20 @@ class SelfPlayEngine:
                 self.save_game_to_stream(game_data)
 
             games_generated += 1
-            self._print_generation_progress(i, num_games, start_time, progress_interval)
+            (
+                last_report_time,
+                last_report_game_count,
+                last_report_move_count,
+            ) = self._print_generation_progress(
+                i,
+                num_games,
+                start_time,
+                start_move_count,
+                last_report_time,
+                last_report_game_count,
+                last_report_move_count,
+                progress_interval,
+            )
 
         total_time = time.time() - start_time
         summary = SelfPlayGenerationSummary(
@@ -750,6 +793,16 @@ class SelfPlayEngine:
     def get_performance_stats(self) -> Dict[str, Any]:
         """Get comprehensive performance statistics."""
         stats = self.stats.copy()
+        total_moves = self._safe_int(stats.get('total_moves', 0))
+        games_generated = self._safe_int(stats.get('games_generated', 0))
+        total_time = self._safe_float(stats.get('total_time', 0.0))
+
+        stats['moves_per_second'] = (
+            total_moves / total_time if total_time > 0.0 else 0.0
+        )
+        stats['avg_moves_per_game'] = (
+            total_moves / games_generated if games_generated > 0 else 0.0
+        )
 
         # MCTS is the primary runtime path for self-play move generation.
         stats['mcts'] = self._build_mcts_summary_stats()

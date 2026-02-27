@@ -349,6 +349,16 @@ def _print_selfplay_results(
     if stats is None and hasattr(results, 'get_performance_stats'):
         stats = results.get_performance_stats()
     if isinstance(stats, dict):
+        moves_per_second = stats.get('moves_per_second')
+        avg_moves_per_game = stats.get('avg_moves_per_game')
+        if (
+            total_games > 0
+            and isinstance(moves_per_second, (int, float))
+            and isinstance(avg_moves_per_game, (int, float))
+        ):
+            print(f"Moves per second: {float(moves_per_second):.2f}")
+            print(f"Average moves per game: {float(avg_moves_per_game):.2f}")
+
         mcts_stats = stats.get('mcts')
         if isinstance(mcts_stats, dict):
             print(f"\n=== MCTS Performance ===")
