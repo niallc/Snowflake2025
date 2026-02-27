@@ -209,10 +209,15 @@ def process_single_file_direct(
                     file_stats['valid_games'] += 1
                     file_stats['examples_generated'] += len(examples)
                     if provenance_active:
+                        if policy_train_mask is None or policy_move_codes is None:
+                            raise ValueError(
+                                "Missing policy provenance payload while provenance_active=True"
+                            )
                         _update_policy_provenance_stats(
                             file_stats=file_stats,
-                            examples=examples,
+                            policy_train_mask=policy_train_mask,
                             policy_move_codes=policy_move_codes,
+                            position_selector=position_selector,
                         )
                 elif skip_reason == "duplicate_moves":
                     if provenance_active:
@@ -279,43 +284,46 @@ def process_single_file_direct(
 def _update_policy_provenance_stats(
     *,
     file_stats: Dict[str, Any],
-    examples: list[Dict[str, Any]],
+    policy_train_mask: str,
     policy_move_codes: str,
+    position_selector: str,
 ) -> None:
-    """Accumulate policy filtering observability counters from extracted examples."""
+    """Accumulate policy filtering observability counters from provenance/mask metadata."""
     if not policy_move_codes:
         raise ValueError("policy_move_codes is required for provenance stats")
+    if not policy_train_mask:
+        raise ValueError("policy_train_mask is required for provenance stats")
+    if len(policy_train_mask) != len(policy_move_codes):
+        raise ValueError(
+            "policy_train_mask and policy_move_codes must have matching lengths "
+            f"(got {len(policy_train_mask)} vs {len(policy_move_codes)})"
+        )
+
+    move_count = len(policy_move_codes)
+    total_positions = move_count + 1
+    if position_selector == "all":
+        selected_positions = list(range(total_positions))
+    elif position_selector == "final":
+        selected_positions = [total_positions - 1]
+    elif position_selector == "penultimate":
+        selected_positions = [total_positions - 2] if total_positions >= 2 else []
+    else:
+        raise ValueError(f"Unknown position_selector for provenance stats: {position_selector!r}")
 
     skipped_by_code = file_stats['policy_positions_skipped_by_code']
-
-    for example in examples:
-        metadata = example.get('metadata')
-        if not isinstance(metadata, dict):
-            raise ValueError("Example metadata missing while accumulating provenance stats")
-
-        position = metadata.get('position_in_game')
-        total_positions = metadata.get('total_positions')
-        if not isinstance(position, int) or not isinstance(total_positions, int):
-            raise ValueError(
-                f"Invalid metadata for provenance stats: position={position!r}, total_positions={total_positions!r}"
-            )
-
-        is_terminal_position = position >= (total_positions - 1)
+    for position in selected_positions:
+        if position < 0:
+            raise ValueError(f"Negative position while accumulating provenance stats: {position}")
+        is_terminal_position = position >= move_count
         if is_terminal_position:
             continue
-
-        if position < 0 or position >= len(policy_move_codes):
-            raise ValueError(
-                f"Position {position} out of range for policy_move_codes length {len(policy_move_codes)}"
-            )
-
         file_stats['policy_positions_total'] += 1
-        if example.get('policy') is None:
+        if policy_train_mask[position] == "1":
+            file_stats['policy_positions_trainable'] += 1
+        else:
             file_stats['policy_positions_skipped'] += 1
             move_code = policy_move_codes[position]
             skipped_by_code[move_code] = skipped_by_code.get(move_code, 0) + 1
-        else:
-            file_stats['policy_positions_trainable'] += 1
 
 
 def validate_examples_data(examples: list):

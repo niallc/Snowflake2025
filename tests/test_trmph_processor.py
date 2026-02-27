@@ -509,7 +509,7 @@ class TestTRMPHProcessor:
         assert data is not None
 
     def test_policy_provenance_require_masks_policy_targets(self):
-        """Require-mode provenance should keep value targets and mask policy targets."""
+        """Require-mode provenance should skip masked policy positions and keep trainable ones."""
         content = (
             f"#13,a1b2c3 {TRMPH_BLUE_WIN}\n"
             f"#13,a1b2 {TRMPH_RED_WIN}\n"
@@ -544,9 +544,9 @@ class TestTRMPHProcessor:
             ex for ex in examples
             if ex['metadata']['position_in_game'] < (ex['metadata']['total_positions'] - 1)
         ]
-        assert len(non_terminal_examples) == 5
+        assert len(non_terminal_examples) == 2
         assert sum(ex['policy'] is not None for ex in non_terminal_examples) == 2
-        assert sum(ex['policy'] is None for ex in non_terminal_examples) == 3
+        assert sum(ex['policy'] is None for ex in non_terminal_examples) == 0
 
     def test_policy_provenance_require_missing_sidecar_fails(self):
         """Require-mode should fail fast when sidecar is missing."""

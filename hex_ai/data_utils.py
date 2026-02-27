@@ -740,13 +740,17 @@ def extract_training_examples_with_selector_from_game(
         for i, position in enumerate(position_indices):
             board_state = create_board_from_moves(moves[:position])
             is_terminal_position = position >= len(moves)
+            if not is_terminal_position and policy_train_mask is not None:
+                # Skip non-terminal positions that are explicitly masked out by provenance.
+                # These are not useful policy targets and do not add independent value signal.
+                # Note: terminal-winning move annotations (code 'T') map to trainable mask=1
+                # and are therefore kept as normal policy targets.
+                if policy_train_mask[position] != "1":
+                    continue
+
             policy_target = None
             if not is_terminal_position:
-                policy_trainable = True
-                if policy_train_mask is not None:
-                    policy_trainable = policy_train_mask[position] == "1"
-                if policy_trainable:
-                    policy_target = create_policy_target(moves[position])
+                policy_target = create_policy_target(moves[position])
             player_to_move = get_player_to_move_from_moves(moves[:position])
             # Convert winner string to Winner enum
             winner_enum = Winner.BLUE if winner_clear == "BLUE" else Winner.RED if winner_clear == "RED" else None

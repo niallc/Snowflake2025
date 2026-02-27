@@ -392,6 +392,15 @@ class PolicyValueLoss(nn.Module):
         """
         # Value loss using new log-cosh loss with label smoothing
         value_loss = compute_value_loss(value_pred, value_target, smooth=0.95)
+
+        # Positions with zero-vector policy targets should not contribute to policy-head updates.
+        # This covers post-game terminal positions (no next move target) and masked samples.
+        # Trainable terminal-winning moves (provenance code 'T') still have normal non-zero
+        # policy targets and continue to train the policy head.
+        batch_size = policy_target.shape[0]
+        zero_vectors = (policy_target.sum(dim=1) == 0.0)  # (batch_size,)
+        terminal_count = zero_vectors.sum().item()
+        non_terminal_indices = ~zero_vectors
         
         # ----- Logit L2 on legal moves only, centered over legal positions -----
         # This directly penalizes the scale/variance of legal logits to prevent explosion
@@ -414,9 +423,17 @@ class PolicyValueLoss(nn.Module):
         
         # Center logits over legal positions only, zero elsewhere
         centered = (policy_pred - legal_mean) * legal_mask
-        # Normalize by number of legal entries so batches with many illegals aren't over-penalized
-        logits_l2 = (centered.pow(2).sum(dim=1) / legal_counts.squeeze(1)).mean()
-        logits_l2_loss = self.logits_l2_lambda * logits_l2
+        # Normalize by number of legal entries so batches with many illegals aren't over-penalized.
+        # Only retain policy-regularization signal for samples with real policy targets.
+        logits_l2_per_sample = centered.pow(2).sum(dim=1) / legal_counts.squeeze(1)
+        if non_terminal_indices.any():
+            logits_l2 = logits_l2_per_sample[non_terminal_indices].mean()
+            logits_l2_loss = self.logits_l2_lambda * logits_l2
+        else:
+            logits_l2 = torch.tensor(0.0, dtype=policy_pred.dtype, device=policy_pred.device)
+            logits_l2_loss = torch.tensor(
+                0.0, dtype=policy_pred.dtype, device=policy_pred.device, requires_grad=True
+            )
         
         # TEMPORARY: Enhanced NaN detection for logits L2 calculation
         # TODO: Remove after confirming training stability (3+ successful runs)
@@ -457,17 +474,9 @@ class PolicyValueLoss(nn.Module):
             first_nan_detector.first_nan_logger.info(f"logits_l2_loss: {logits_l2_loss.item()}")
             first_nan_detector.first_nan_logger.info(f"logits_l2_loss is NaN: {torch.isnan(logits_l2_loss)}")
         
-        # Policy loss: handle terminal moves by detecting zero vectors
-        # Terminal moves are represented as zero vectors in the data pipeline
-        
-        # Check if any samples are terminal moves (zero vectors)
-        batch_size = policy_target.shape[0]
-        zero_vectors = (policy_target.sum(dim=1) == 0.0)  # (batch_size,)
-        terminal_count = zero_vectors.sum().item()
-        
+        # Policy loss: handle zero-vector policy targets (terminal/masked samples)
         if terminal_count > 0:
             # Mixed batch - process only non-terminal moves
-            non_terminal_indices = ~zero_vectors
             if non_terminal_indices.any():
                 # Process only non-terminal moves
                 non_terminal_policy_pred = policy_pred[non_terminal_indices]
