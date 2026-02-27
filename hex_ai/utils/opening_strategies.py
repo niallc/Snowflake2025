@@ -518,16 +518,18 @@ class RandomOpeningStrategy(OpeningStrategy):
     """Opening strategy that randomly selects from a set of moves."""
     
     def __init__(self, moves: List[Tuple[int, int]], board_size: int = BOARD_SIZE, 
-                 empty_board_prob: float = 0.1):
+                 empty_board_prob: float = 0.1, rng_seed: Optional[int] = None):
         super().__init__(board_size)
         self.moves = moves
         self.empty_board_prob = empty_board_prob
+        # Keep opening randomness independent from global random reseeding in self-play.
+        self._rng = random.Random(rng_seed)
     
     def get_opening_move(self, game_index: int) -> Optional[Tuple[int, int]]:
         """Get a random opening move."""
-        if random.random() < self.empty_board_prob:
+        if self._rng.random() < self.empty_board_prob:
             return None
-        return random.choice(self.moves)
+        return self._rng.choice(self.moves)
     
     def get_total_games(self) -> int:
         """This strategy can be used for any number of games."""

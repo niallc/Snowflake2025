@@ -4,7 +4,6 @@ Self-play engine for generating training data using the Hex AI model.
 
 import logging
 import numpy as np
-import os
 import random
 import time
 from datetime import datetime
@@ -13,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
 from hex_ai.enums import Winner
-from hex_ai.inference.game_engine import HexGameEngine, HexGameState, make_empty_hex_state
+from hex_ai.inference.game_engine import HexGameEngine, make_empty_hex_state
 from hex_ai.inference.mcts import BaselineMCTS, create_mcts_config
 from hex_ai.inference.model_wrapper import ModelWrapper
 from hex_ai.inference.simple_model_inference import SimpleModelInference
@@ -221,8 +220,9 @@ class SelfPlayEngine:
                 self.streaming_file = f"data/sf25/selfplay_default/streaming_selfplay_{timestamp}.trmph"
         
         if self.streaming_save:
-            os.makedirs(os.path.dirname(self.streaming_file), exist_ok=True)
-            # Write header using generic function
+            streaming_path = Path(self.streaming_file)
+            streaming_path.parent.mkdir(parents=True, exist_ok=True)
+
             metadata = {
                 "Model": model_path,
                 "Board size": self.board_size,
@@ -233,22 +233,63 @@ class SelfPlayEngine:
                 "Temperature": temperature,
                 "Temperature end": temperature_end,
             }
-            write_trmph_header(self.streaming_file, "Self-play games", metadata, self.run_seed, self.command_line)
+
             if self.write_provenance:
                 self.streaming_provenance_file = str(
                     sidecar_path_for_trmph(self.streaming_file)
                 )
-                Path(self.streaming_provenance_file).parent.mkdir(
-                    parents=True, exist_ok=True
+            if streaming_path.exists():
+                existing_games = self._count_trmph_game_lines(self.streaming_file)
+                self._streaming_games_written = existing_games
+                if self.write_provenance:
+                    if self.streaming_provenance_file is None:
+                        raise RuntimeError(
+                            "streaming_provenance_file is not initialized while write_provenance=True"
+                        )
+                    provenance_path = Path(self.streaming_provenance_file)
+                    if not provenance_path.exists():
+                        raise RuntimeError(
+                            "Cannot append to existing streaming TRMPH file without "
+                            f"matching provenance sidecar: {provenance_path}"
+                        )
+                    existing_provenance_records = self._count_nonempty_lines(
+                        self.streaming_provenance_file
+                    )
+                    if existing_provenance_records != existing_games:
+                        raise RuntimeError(
+                            "Existing streaming TRMPH/provenance files are inconsistent "
+                            f"and cannot be appended safely: {existing_games} game lines vs "
+                            f"{existing_provenance_records} provenance records."
+                        )
+                if self.verbose >= 1:
+                    print(
+                        "Appending to existing streaming output: "
+                        f"{self.streaming_file} (existing games: {existing_games})"
+                    )
+            else:
+                write_trmph_header(
+                    self.streaming_file,
+                    "Self-play games",
+                    metadata,
+                    self.run_seed,
+                    self.command_line,
                 )
-                with open(self.streaming_provenance_file, "w", encoding="utf-8"):
-                    pass
+                if self.write_provenance:
+                    if self.streaming_provenance_file is None:
+                        raise RuntimeError(
+                            "streaming_provenance_file is not initialized while write_provenance=True"
+                        )
+                    Path(self.streaming_provenance_file).parent.mkdir(
+                        parents=True, exist_ok=True
+                    )
+                    with open(self.streaming_provenance_file, "w", encoding="utf-8"):
+                        pass
         
         # Logging
         self.logger = logging.getLogger(__name__)
         
         if self.verbose >= 1:
-            print(f"SelfPlayEngine initialized:")
+            print("SelfPlayEngine initialized:")
             print(f"  Model: {model_path}")
             print(f"  Board size: {self.board_size}")
             print(f"  Cache size: {cache_size}")
@@ -843,6 +884,27 @@ class SelfPlayEngine:
         total_batch_inferences = self._safe_int(model_stats.get("total_batch_inferences", 0))
         return total_inferences > 0 or total_batch_inferences > 0
 
+    @staticmethod
+    def _count_trmph_game_lines(file_path: str) -> int:
+        """Count non-empty TRMPH game lines in a .trmph file."""
+        count = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line.startswith(TRMPH_PREFIX):
+                    count += 1
+        return count
+
+    @staticmethod
+    def _count_nonempty_lines(file_path: str) -> int:
+        """Count non-empty lines in a UTF-8 text file."""
+        count = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                if raw_line.strip():
+                    count += 1
+        return count
+
     def save_games_simple(self, games: List[Dict[str, Any]], base_filename: str) -> str:
         """
         Save games to a TRMPH text file.
@@ -854,48 +916,91 @@ class SelfPlayEngine:
         Returns:
             The TRMPH file path
         """
-        # Save as TRMPH text file
         trmph_file = f"{base_filename}.trmph"
-        
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(trmph_file), exist_ok=True)
-        
-        # Save as TRMPH text file using the same format as streaming
-        with open(trmph_file, 'w') as f:
-            # Write header with metadata
-            git_info = get_git_commit_info()
-            f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
-            f.write(f"# Model: {self.model_path}\n")
-            f.write(f"# MCTS simulations: {self.mcts_sims}\n")
-            f.write(f"# C_PUCT: {self.c_puct}\n")
-            f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
-            f.write(f"# Temperature: {self.temperature}\n")
-            f.write(f"# Temperature end: {self.temperature_end}\n")
-            f.write(f"# Git commit: {git_info['status']}\n")
-            f.write("# Format: trmph_string winner\n")
-            
-            # Write games
+        trmph_path = Path(trmph_file)
+        trmph_path.parent.mkdir(parents=True, exist_ok=True)
+
+        trmph_exists = trmph_path.exists()
+        existing_trmph_games = (
+            self._count_trmph_game_lines(trmph_file) if trmph_exists else 0
+        )
+        trmph_mode = "a" if trmph_exists else "w"
+
+        with open(trmph_file, trmph_mode, encoding="utf-8") as f:
+            if not trmph_exists:
+                git_info = get_git_commit_info()
+                f.write(f"# Self-play games - {datetime.now().isoformat()}\n")
+                f.write(f"# Model: {self.model_path}\n")
+                f.write(f"# MCTS simulations: {self.mcts_sims}\n")
+                f.write(f"# C_PUCT: {self.c_puct}\n")
+                f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
+                f.write(f"# Temperature: {self.temperature}\n")
+                f.write(f"# Temperature end: {self.temperature_end}\n")
+                f.write(f"# Git commit: {git_info['status']}\n")
+                f.write("# Format: trmph_string winner\n")
+
             for game in games:
                 self._validate_game_data(game)
                 f.write(f"{game['trmph']} {game['winner']}\n")
 
         if self.write_provenance:
             provenance_file = str(sidecar_path_for_trmph(trmph_file))
-            with open(provenance_file, 'w', encoding='utf-8') as f:
+            provenance_path = Path(provenance_file)
+            provenance_exists = provenance_path.exists()
+            if trmph_exists and not provenance_exists:
+                raise RuntimeError(
+                    "Cannot append games: existing TRMPH file has no matching "
+                    f"provenance sidecar ({provenance_file})."
+                )
+            if provenance_exists and not trmph_exists:
+                raise RuntimeError(
+                    "Found provenance sidecar without TRMPH file; refusing to append "
+                    f"due to ambiguous run state: {provenance_file}"
+                )
+
+            existing_provenance_records = (
+                self._count_nonempty_lines(provenance_file)
+                if provenance_exists
+                else 0
+            )
+            if trmph_exists and existing_provenance_records != existing_trmph_games:
+                raise RuntimeError(
+                    "Cannot append games: existing TRMPH/provenance pair is inconsistent "
+                    f"({existing_trmph_games} game lines vs {existing_provenance_records} "
+                    "provenance records)."
+                )
+
+            provenance_mode = "a" if provenance_exists else "w"
+            with open(provenance_file, provenance_mode, encoding='utf-8') as f:
                 for game_index, game in enumerate(games):
                     move_codes = game.get('move_provenance_codes')
                     if move_codes is None:
                         raise ValueError(
                             f"Missing move_provenance_codes for game index {game_index} while writing provenance"
                         )
-                    record = make_move_provenance_record(game_index, move_codes)
+                    record = make_move_provenance_record(
+                        existing_provenance_records + game_index,
+                        move_codes,
+                    )
                     f.write(record.to_json_line())
                     f.write("\n")
         
         if self.verbose >= 1:
-            print(f"Saved {len(games)} games to {trmph_file}")
+            if trmph_exists:
+                print(
+                    f"Appended {len(games)} games to {trmph_file} "
+                    f"(existing={existing_trmph_games}, total={existing_trmph_games + len(games)})"
+                )
+            else:
+                print(f"Saved {len(games)} games to {trmph_file}")
             if self.write_provenance:
-                print(f"Saved move provenance sidecar to {provenance_file}")
+                if trmph_exists:
+                    print(
+                        f"Appended move provenance sidecar records to {provenance_file} "
+                        f"(existing={existing_provenance_records}, total={existing_provenance_records + len(games)})"
+                    )
+                else:
+                    print(f"Saved move provenance sidecar to {provenance_file}")
         
         return trmph_file
 

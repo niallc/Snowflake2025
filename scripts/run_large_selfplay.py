@@ -4,9 +4,7 @@ Large-scale self-play generation script with optimized performance.
 """
 
 import argparse
-import numpy as np
 import os
-import random
 import shutil
 import signal
 import subprocess
@@ -29,7 +27,6 @@ from hex_ai.selfplay.selfplay_engine import (
     SelfPlayEngine,
 )
 from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
-from hex_ai.system_utils import get_git_commit_info
 from hex_ai.utils.opening_strategies import (
     PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH,
     PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY,
@@ -38,7 +35,7 @@ from hex_ai.utils.opening_strategies import (
     create_pie_rule_strategy,
 )
 from hex_ai.utils.tournament_logging import get_command_line
-from hex_ai.utils.gumbel_utils import generate_gumbel_summary_from_params
+from hex_ai.utils.format_conversion import count_trmph_moves
 from hex_ai.utils.run_state_store import (
     JsonRunStateStore,
     RunStateMismatchError,
@@ -650,7 +647,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     # Print additional selfplay specific info
     if args.opening_strategy == 'pie_rule':
-        print(f"  Pie-rule mode: value_balanced")
+        print("  Pie-rule mode: value_balanced")
         print(f"  Pie-rule weight exponent: {PIE_RULE_VALUE_BALANCED_WEIGHT_EXPONENT}")
         print(f"  Pie-rule min move probability: {PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY:.4%}")
         print(f"  Pie-rule opening cycle length: {PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH}")
@@ -708,6 +705,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
     
     generation_error: Optional[Exception] = None
     integrity_error: Optional[Exception] = None
+    interrupted = False
     games: Optional[List[Dict[str, Any]]] = None
     summary: Optional[SelfPlayGenerationSummary] = None
     try:
@@ -768,6 +766,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         )
         
     except KeyboardInterrupt:
+        interrupted = True
         print("\n\nGeneration interrupted by user.")
         if args.streaming_save:
             print("Games saved incrementally - no data loss.")
@@ -806,6 +805,8 @@ def _run_single_process(args: argparse.Namespace) -> None:
         raise generation_error
     if integrity_error is not None:
         raise integrity_error
+    if interrupted and args.internal_chunk_run:
+        raise SystemExit(130)
 
 
 def main():
