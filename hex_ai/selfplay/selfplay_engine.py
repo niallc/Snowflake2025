@@ -562,7 +562,7 @@ class SelfPlayEngine:
             if self.verbose >= 1:
                 print(
                     f"  Generated {game_index + 1}/{num_games} games "
-                    f"({games_per_sec:.1f} games/s)"
+                    f"({games_per_sec:.2f} games/s)"
                 )
         elif self.verbose >= 1:
             print(".", end="", flush=True)  # Progress dot for each game
@@ -655,7 +655,7 @@ class SelfPlayEngine:
         self._update_generation_stats(summary.num_games, total_time)
         print(
             f"Generated {summary.num_games} games in {total_time:.1f}s "
-            f"({self.stats['games_per_second']:.1f} games/s)"
+            f"({self.stats['games_per_second']:.2f} games/s)"
         )
         return games, summary
 
@@ -694,7 +694,7 @@ class SelfPlayEngine:
 
         print(
             f"Generated {summary.num_games} games in {total_time:.1f}s "
-            f"({self.stats['games_per_second']:.1f} games/s)"
+            f"({self.stats['games_per_second']:.2f} games/s)"
         )
         print(f"Games saved to: {self.streaming_file}")
         if self.write_provenance and self.streaming_provenance_file:
@@ -743,7 +743,7 @@ class SelfPlayEngine:
         self._update_generation_stats(summary.num_games, total_time)
         print(
             f"Generated {summary.num_games} games in {total_time:.1f}s "
-            f"({self.stats['games_per_second']:.1f} games/s)"
+            f"({self.stats['games_per_second']:.2f} games/s)"
         )
         return games, summary
 

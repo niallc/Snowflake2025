@@ -338,7 +338,7 @@ def _print_selfplay_results(
     if total_time is not None:
         print(f"Total time: {total_time:.1f}s")
         if total_games > 0:
-            print(f"Games per second: {total_games / total_time:.1f}")
+            print(f"Games per second: {total_games / total_time:.2f}")
 
     if total_games > 0:
         print(f"Winner distribution: Red {red_wins}, Blue {blue_wins}")

@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--restart-every-games',
         type=int,
-        default=0,
+        default=20000,
         help=(
             'If >0, run in chunked subprocess mode and restart the Python process '
             'after every N generated games.'
