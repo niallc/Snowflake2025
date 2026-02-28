@@ -61,6 +61,7 @@ class HexGame {
         this.openingGuideMarkerElements = new Map();
         this.openingGuideEnabled = false;
         this.openingGuideStorageKey = 'hex_ai_opening_guide_enabled';
+        this.statusLineStyleResetTimeoutId = null;
 
         this.initializeElements();
         this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
@@ -2255,6 +2256,8 @@ class HexGame {
                 return;
             }
 
+            // Clear transient status messages once a user move is accepted.
+            this.clearStatusLine();
             this.applyPieRuleStateFromResponse(data, false);
 
             this.recordReachedState(data.new_trmph, true);
@@ -2357,16 +2360,46 @@ class HexGame {
         this.redoBtn.disabled = this.isLoading || this.redoHistory.length === 0;
     }
 
+    clearStatusLine() {
+        if (this.statusLineStyleResetTimeoutId !== null) {
+            clearTimeout(this.statusLineStyleResetTimeoutId);
+            this.statusLineStyleResetTimeoutId = null;
+        }
+        if (!this.statusLine) {
+            return;
+        }
+        this.statusLine.textContent = '';
+        this.statusLine.style.color = '';
+        this.statusLine.style.fontWeight = '';
+    }
+
+    setStatusLineMessage(message, color, styleResetDelayMs) {
+        if (!this.statusLine) {
+            return;
+        }
+        if (this.statusLineStyleResetTimeoutId !== null) {
+            clearTimeout(this.statusLineStyleResetTimeoutId);
+            this.statusLineStyleResetTimeoutId = null;
+        }
+
+        this.statusLine.textContent = message;
+        this.statusLine.style.color = color;
+        this.statusLine.style.fontWeight = 'bold';
+
+        this.statusLineStyleResetTimeoutId = setTimeout(() => {
+            this.statusLineStyleResetTimeoutId = null;
+            if (!this.statusLine) {
+                return;
+            }
+            this.statusLine.style.color = '';
+            this.statusLine.style.fontWeight = '';
+        }, styleResetDelayMs);
+    }
+
     showError(message) {
         console.error('Game Error:', message);
         this.refreshThemeColors();
-        this.statusLine.textContent = `Error: ${message}`;
-        this.statusLine.style.color = this.getColors().STATUS_ERROR;
-        this.statusLine.style.fontWeight = 'bold';
-        setTimeout(() => {
-            this.statusLine.style.color = '';
-            this.statusLine.style.fontWeight = '';
-        }, 5000); // Show errors longer
+        this.setStatusLineMessage(`Error: ${message}`, this.getColors().STATUS_ERROR, 5000);
     }
 
     handleNetworkError(error, context) {
@@ -2382,13 +2415,7 @@ class HexGame {
     showSuccess(message) {
         console.log('Game Success:', message);
         this.refreshThemeColors();
-        this.statusLine.textContent = message;
-        this.statusLine.style.color = this.getColors().STATUS_SUCCESS;
-        this.statusLine.style.fontWeight = 'bold';
-        setTimeout(() => {
-            this.statusLine.style.color = '';
-            this.statusLine.style.fontWeight = '';
-        }, 3000);
+        this.setStatusLineMessage(message, this.getColors().STATUS_SUCCESS, 3000);
     }
 
 
