@@ -385,7 +385,7 @@ class HexGame {
             this.openingGuideEnabled = storedValue === 'true';
             return;
         }
-        this.openingGuideEnabled = true;
+        this.openingGuideEnabled = false;
         localStorage.setItem(this.openingGuideStorageKey, 'false');
     }
 

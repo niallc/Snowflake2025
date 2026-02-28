@@ -15,7 +15,7 @@ class UserSettingsPage {
             preferred_elo: 600,
             color_scheme: 'wood',
             piece_style: 'disc',
-            opening_guide_enabled: true,
+            opening_guide_enabled: false,
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
@@ -235,7 +235,7 @@ class UserSettingsPage {
                 preferred_elo: defaultElo,
                 color_scheme: 'wood',
                 piece_style: 'disc',
-                opening_guide_enabled: true,
+                opening_guide_enabled: false,
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
