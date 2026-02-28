@@ -44,6 +44,9 @@ scripts/example_strength_evaluation.py
 
 tests/test_winner_to_color_failfast.py
 docs/MathsJam 2025, Snowflake, Hex, AlphaGo - Google Slides.pdf
+mathsjamTalk/
+mathsjam_talk.mp4.mkv
+niallcardin_mathsjam25_talk.mp4
 
 # VSCode
 .vscode/

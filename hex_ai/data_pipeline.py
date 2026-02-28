@@ -672,12 +672,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         """
         Reconstruct position pool from serialized source refs.
 
-        Uses bounded shard caching during restore to avoid loading all shard payloads.
+        Restores by grouping refs per shard so each shard payload is loaded once.
+        The original pooled-position order is preserved exactly.
         """
-        shard_example_cache: Dict[Tuple[int, str], List[Any]] = {}
-        restored_entries: List[PositionPoolEntry] = []
+        refs_by_shard: Dict[Tuple[int, str], List[Tuple[int, int]]] = defaultdict(list)
+        restored_entries: List[Optional[PositionPoolEntry]] = [None] * len(serialized_refs)
 
-        for raw_ref in serialized_refs:
+        for position_idx, raw_ref in enumerate(serialized_refs):
             if (
                 not isinstance(raw_ref, list)
                 or len(raw_ref) != 3
@@ -690,47 +691,68 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             dir_idx = raw_ref[0]
             shard_name = raw_ref[1]
             example_idx = raw_ref[2]
-            source_ref: PositionSourceRef = (dir_idx, shard_name, example_idx)
 
             if dir_idx < 0 or dir_idx >= len(self.data_dirs):
                 raise RuntimeError(f"Pool ref dir_idx out of range: {dir_idx}")
 
-            cache_key = (dir_idx, shard_name)
-            examples = shard_example_cache.get(cache_key)
-            if examples is None:
-                shard_path = self._shard_lookup_by_dir[dir_idx].get(shard_name)
-                if shard_path is None:
-                    raise RuntimeError(
-                        f"Pool ref references unknown shard '{shard_name}' in directory {dir_idx}"
-                    )
-                with gzip.open(shard_path, "rb") as f:
-                    shard_data = pickle.load(f)
-                examples = shard_data.get("examples", []) if isinstance(shard_data, dict) else []
-                if not isinstance(examples, list):
-                    raise RuntimeError(
-                        f"Shard examples payload is not a list for {shard_path}"
-                    )
-                shard_example_cache[cache_key] = examples
+            refs_by_shard[(dir_idx, shard_name)].append((position_idx, example_idx))
 
-                # Keep cache bounded to reduce transient restore memory.
-                if len(shard_example_cache) > 16:
-                    shard_example_cache.pop(next(iter(shard_example_cache)))
+        unique_shard_count = len(refs_by_shard)
+        if self.verbose >= 2 and unique_shard_count > 0:
+            self.logger.info(
+                f"[StreamingMixedShardDataset] Restoring training pool from "
+                f"{len(serialized_refs):,} refs across {unique_shard_count:,} unique shards..."
+            )
 
-            if example_idx < 0 or example_idx >= len(examples):
+        progress_interval = max(1, unique_shard_count // 10)
+        for shard_restore_idx, ((dir_idx, shard_name), positions) in enumerate(
+            refs_by_shard.items(), start=1
+        ):
+            shard_path = self._shard_lookup_by_dir[dir_idx].get(shard_name)
+            if shard_path is None:
                 raise RuntimeError(
-                    f"Pool ref example_idx out of range for shard {shard_name}: "
-                    f"{example_idx} (examples={len(examples)})"
+                    f"Pool ref references unknown shard '{shard_name}' in directory {dir_idx}"
                 )
 
-            restored_entries.append(
-                self._create_compact_position_example(
+            with gzip.open(shard_path, "rb") as f:
+                shard_data = pickle.load(f)
+            examples = shard_data.get("examples", []) if isinstance(shard_data, dict) else []
+            if not isinstance(examples, list):
+                raise RuntimeError(
+                    f"Shard examples payload is not a list for {shard_path}"
+                )
+
+            for position_idx, example_idx in positions:
+                if example_idx < 0 or example_idx >= len(examples):
+                    raise RuntimeError(
+                        f"Pool ref example_idx out of range for shard {shard_name}: "
+                        f"{example_idx} (examples={len(examples)})"
+                    )
+                source_ref: PositionSourceRef = (dir_idx, shard_name, example_idx)
+                restored_entries[position_idx] = self._create_compact_position_example(
                     examples[example_idx],
                     copy_arrays=True,
                     source_ref=source_ref,
                 )
-            )
 
-        return deque(restored_entries)
+            if self.verbose >= 2 and (
+                shard_restore_idx == unique_shard_count
+                or shard_restore_idx % progress_interval == 0
+            ):
+                self.logger.info(
+                    f"[StreamingMixedShardDataset] Stream-state restore progress: "
+                    f"{shard_restore_idx:,}/{unique_shard_count:,} shards"
+                )
+
+        ordered_entries: List[PositionPoolEntry] = []
+        for idx, entry in enumerate(restored_entries):
+            if entry is None:
+                raise RuntimeError(
+                    f"Stream-state restore internal error: missing restored entry at index {idx}"
+                )
+            ordered_entries.append(entry)
+
+        return deque(ordered_entries)
 
     def export_state(self) -> Dict[str, Any]:
         """Export JSON-serializable training stream state for exact restart resume."""

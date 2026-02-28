@@ -58,6 +58,9 @@ from hex_ai.web.interactive_core import (
     validate_elo_rating as core_validate_elo_rating,
     validate_trmph_input as core_validate_trmph_input,
 )
+from hex_ai.utils.opening_strategies import (
+    PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13,
+)
 
 CORS_ALLOW_ALL = os.getenv("SF25_CORS_ALLOW_ALL", "0").lower() not in ("0", "false", "no")
 CORS_ALLOWED_ORIGINS = tuple(
@@ -1880,6 +1883,7 @@ def api_constants():
         "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
         "VIRTUAL_BOARD_PREFILL_MOVES": VIRTUAL_BOARD_PREFILL_MOVES,
         "DEFAULT_PIE_RULE_ENABLED": DEFAULT_PIE_RULE_ENABLED,
+        "PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13": PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13,
         "DIFFICULTY_LEVELS": get_difficulty_levels(),
         "ELO_CONFIG": {
             "MIN_ELO": MIN_ELO,

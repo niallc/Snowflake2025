@@ -55,16 +55,10 @@ class HexGame {
         this.difficultyLevels = null;
         this.trmphBoardShareBaseUrl = null;
         this.virtualBoardPrefillMoves = {};
-
-        // Purple hexes configuration using TRMPH coordinates
-        this.PURPLE_HEXES = ['b10', 'b11', 'b12', 'b3', 'b4', 'b5', 'b6', 'd10',
-            'b7', 'b8', 'b9', 'c10', 'c11', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9',
-            'd11', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9', 'e10', 'e11', 'e3', 'e4', 'e5',
-            'e6', 'e7', 'e8', 'e9', 'f10', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'g10', 'g4',
-            'g5', 'g6', 'g7', 'g8', 'g9', 'h10', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9', 'i10',
-            'i11', 'i3', 'i4', 'i5', 'i6', 'i7', 'i8', 'i9', 'j10', 'j11', 'j3', 'j4', 'j5', 'j6',
-            'j7', 'j8', 'j9', 'k10', 'k11', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'l2', 'l3',
-            'l4', 'l5', 'l6', 'l7', 'l8', 'l9', 'l10', 'l11'];
+        this.openingGuideWeakThreshold = 0.40;
+        this.openingGuideStrongThreshold = 0.55;
+        this.openingGuideStatusByMove = new Map();
+        this.openingGuideMarkerElements = new Map();
 
         this.initializeElements();
         this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
@@ -916,6 +910,84 @@ class HexGame {
         }
     }
 
+    parseOpeningGuideMove(move, boardSize) {
+        const normalized = typeof move === 'string' ? move.trim().toLowerCase() : '';
+        const match = normalized.match(/^([a-z])([1-9][0-9]*)$/);
+        if (!match) {
+            throw new Error(`Opening win-rate move key has invalid format: ${move}`);
+        }
+        const col = match[1].charCodeAt(0) - 97;
+        const row = parseInt(match[2], 10) - 1;
+        if (!Number.isFinite(row) || row < 0 || row >= boardSize || col < 0 || col >= boardSize) {
+            throw new Error(`Opening win-rate move key is out of board range: ${move}`);
+        }
+        return { row, col };
+    }
+
+    openingGuideMoveFromRowCol(row, col, boardSize) {
+        if (boardSize > 26) {
+            throw new Error(`Unsupported board size for opening guide coordinates: ${boardSize}`);
+        }
+        if (row < 0 || row >= boardSize || col < 0 || col >= boardSize) {
+            throw new Error(`Opening guide row/col out of range: row=${row}, col=${col}, boardSize=${boardSize}`);
+        }
+        return `${String.fromCharCode(97 + col)}${row + 1}`;
+    }
+
+    getSymmetricOpeningGuideMove(move, boardSize) {
+        const { row, col } = this.parseOpeningGuideMove(move, boardSize);
+        const mirroredRow = boardSize - 1 - row;
+        const mirroredCol = boardSize - 1 - col;
+        return this.openingGuideMoveFromRowCol(mirroredRow, mirroredCol, boardSize);
+    }
+
+    configureOpeningGuideStatuses(openingWinRates) {
+        if (!openingWinRates || typeof openingWinRates !== 'object' || Array.isArray(openingWinRates)) {
+            throw new Error('PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13 is missing from backend constants');
+        }
+        if (!Number.isFinite(this.boardSize) || this.boardSize < 2) {
+            throw new Error('BOARD_SIZE is not initialized before opening-guide setup');
+        }
+        const boardSize = this.boardSize;
+        const rawWinRatesByMove = new Map();
+        for (const [moveRaw, winRateRaw] of Object.entries(openingWinRates)) {
+            const move = typeof moveRaw === 'string' ? moveRaw.trim().toLowerCase() : '';
+            if (!move) {
+                throw new Error('Opening win-rate map includes an invalid move key');
+            }
+            this.parseOpeningGuideMove(move, boardSize);
+            const winRate = Number(winRateRaw);
+            if (!Number.isFinite(winRate) || winRate < 0 || winRate > 1) {
+                throw new Error(`Opening win rate for ${move} is invalid: ${winRateRaw}`);
+            }
+            rawWinRatesByMove.set(move, winRate);
+        }
+
+        const symmetrizedWinRatesByMove = new Map();
+        for (const [move, winRate] of rawWinRatesByMove.entries()) {
+            const symmetricMove = this.getSymmetricOpeningGuideMove(move, boardSize);
+            const symmetricWinRate = rawWinRatesByMove.get(symmetricMove);
+            if (!Number.isFinite(symmetricWinRate)) {
+                throw new Error(
+                    `Opening win-rate map is missing symmetric counterpart: ${move} <-> ${symmetricMove}`
+                );
+            }
+            symmetrizedWinRatesByMove.set(move, (winRate + symmetricWinRate) / 2);
+        }
+
+        const statusesByMove = new Map();
+        for (const [move, winRate] of symmetrizedWinRatesByMove.entries()) {
+            if (winRate < this.openingGuideWeakThreshold) {
+                statusesByMove.set(move, 'weak');
+            } else if (winRate > this.openingGuideStrongThreshold) {
+                statusesByMove.set(move, 'strong');
+            } else {
+                statusesByMove.set(move, 'balanced');
+            }
+        }
+        this.openingGuideStatusByMove = statusesByMove;
+    }
+
     updateInstructionTextForBoardMode() {
         if (!this.instructionText) {
             return;
@@ -1059,6 +1131,7 @@ class HexGame {
         this.previousBoard = null;
         this.hexElements.clear();
         this.pieceElements.clear();
+        this.openingGuideMarkerElements.clear();
     }
 
     cancelScheduledAutoMove() {
@@ -1307,6 +1380,7 @@ class HexGame {
                     return [parsedSize, typeof moves === 'string' ? moves : ''];
                 })
             );
+            this.configureOpeningGuideStatuses(data.PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13);
             this.pieceValues = data.PIECE_VALUES;
             this.playerValues = data.PLAYER_VALUES;
             this.winnerValues = data.WINNER_VALUES;
@@ -1637,6 +1711,7 @@ class HexGame {
         this.svg.innerHTML = '';
         this.hexElements.clear();
         this.pieceElements.clear();
+        this.openingGuideMarkerElements.clear();
     }
 
     updateBoardIncremental(newBoard) {
@@ -1655,6 +1730,7 @@ class HexGame {
 
         // Update legal moves highlighting
         this.updateLegalMovesHighlighting();
+        this.syncOpeningGuideMarkers(newBoard, 18);
 
         // Update previous board state
         this.previousBoard = newBoard.map(row => [...row]); // Deep copy
@@ -1770,13 +1846,12 @@ class HexGame {
         existingDisc.setAttribute('stroke', discStyle.stroke);
     }
 
-    shouldShadeHex(row, col) {
+    getOpeningGuideStatusForHex(row, col) {
         if (this.validateBoardSize() !== this.boardSize) {
-            return false;
+            return null;
         }
-        // Convert row/col to TRMPH format and check if it's in the purple hex list
-        const trmph = this.rowColToTRMPH(row, col);
-        return this.PURPLE_HEXES.includes(trmph);
+        const trmph = this.rowColToTRMPH(row, col).toLowerCase();
+        return this.openingGuideStatusByMove.get(trmph) || null;
     }
 
     isBoardEmpty(board) {
@@ -1792,29 +1867,57 @@ class HexGame {
         return true;
     }
 
-    clearAllPurpleShading() {
-        // Remove purple shading from all hexes
+    clearAllOpeningGuideMarkers() {
+        for (const marker of this.openingGuideMarkerElements.values()) {
+            marker.remove();
+        }
+        this.openingGuideMarkerElements.clear();
+    }
+
+    makeOpeningGuideMarker(cx, cy, hexRadius, status) {
+        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        marker.setAttribute('cx', String(cx));
+        marker.setAttribute('cy', String(cy));
+        marker.setAttribute('r', String(Math.max(4.2, hexRadius * 0.3)));
+        marker.classList.add('opening-guide-marker', `opening-guide-marker-${status}`);
+        marker.style.pointerEvents = 'none';
+        return marker;
+    }
+
+    syncOpeningGuideMarkers(board, hexRadius) {
+        const shouldShow = !this.heatmapEnabled &&
+            this.validateBoardSize() === this.boardSize &&
+            this.isBoardEmpty(board);
+        if (!shouldShow) {
+            this.clearAllOpeningGuideMarkers();
+            return;
+        }
+
+        this.clearAllOpeningGuideMarkers();
         const boardSize = this.validateBoardSize();
         for (let row = 0; row < boardSize; row++) {
             for (let col = 0; col < boardSize; col++) {
-                const key = `${row},${col}`;
-                const hexElement = this.hexElements.get(key);
-                if (hexElement) {
-                    hexElement.classList.remove('purple-shaded');
+                const status = this.getOpeningGuideStatusForHex(row, col);
+                if (!status) {
+                    continue;
                 }
+                const { x, y } = this.hexCenter(row, col, hexRadius);
+                const marker = this.makeOpeningGuideMarker(x, y, hexRadius, status);
+                this.svg.appendChild(marker);
+                this.openingGuideMarkerElements.set(`${row},${col}`, marker);
             }
         }
     }
 
     hideInstructionText() {
-        // Hide the instruction text about purple hexes
+        // Hide the instruction text about opening guide markers.
         if (this.instructionText) {
             this.instructionText.style.display = 'none';
         }
     }
 
     showInstructionText() {
-        // Show the instruction text about purple hexes
+        // Show the instruction text about opening guide markers.
         if (this.instructionText) {
             this.instructionText.style.display = 'block';
         }
@@ -1918,8 +2021,7 @@ class HexGame {
                 const fill = this.getHexColor(cell, row, col);
 
                 const isLegal = this.isLegalMove(row, col);
-                const shouldShade = !this.heatmapEnabled && isEmpty && this.shouldShadeHex(row, col);
-                const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal, shouldShade);
+                const hex = this.makeHex(x, y, HEX_RADIUS, fill, isLegal);
                 hex.setAttribute('data-row', row);
                 hex.setAttribute('data-col', col);
                 this.applyHeatmapClasses(hex, cell, row, col);
@@ -1942,6 +2044,11 @@ class HexGame {
 
                 this.updatePieceDisc(row, col, cell, x, y, HEX_RADIUS);
             }
+        }
+        if (isEmpty) {
+            this.syncOpeningGuideMarkers(board, HEX_RADIUS);
+        } else {
+            this.clearAllOpeningGuideMarkers();
         }
     }
 
@@ -1997,7 +2104,7 @@ class HexGame {
         return { x, y };
     }
 
-    makeHex(cx, cy, r, fill, highlight, shouldShade = false) {
+    makeHex(cx, cy, r, fill, highlight) {
         const points = [];
         for (let i = 0; i < 6; i++) {
             const angle = Math.PI / 3 * i + Math.PI / 6;
@@ -2011,11 +2118,6 @@ class HexGame {
         hex.setAttribute('fill', fill);
         hex.setAttribute('stroke', this.getColors().HEX_STROKE);
         hex.setAttribute('stroke-width', '1');
-
-        // Apply purple shading if needed
-        if (shouldShade) {
-            hex.classList.add('purple-shaded');
-        }
 
         if (highlight) {
             hex.style.cursor = 'pointer';
@@ -2102,11 +2204,10 @@ class HexGame {
         const row = parseInt(e.target.getAttribute('data-row'));
         const col = parseInt(e.target.getAttribute('data-col'));
 
-        // Clear purple shading immediately when a move is about to be made
-        // This ensures the move color shows properly
-        this.clearAllPurpleShading();
+        // Clear opening-guide markers immediately when a move is about to be made.
+        this.clearAllOpeningGuideMarkers();
 
-        // Hide instruction text since purple hexes are no longer relevant
+        // Hide instruction text after the opening move.
         this.hideInstructionText();
 
         // Allow user clicks regardless of computer settings
@@ -2493,11 +2594,10 @@ class HexGame {
             return;
         }
 
-        // Clear purple shading immediately when applying a sequence
-        // This ensures the new pieces show properly without purple overlay
-        this.clearAllPurpleShading();
+        // Clear opening-guide markers immediately when applying a sequence.
+        this.clearAllOpeningGuideMarkers();
 
-        // Hide instruction text since purple hexes are no longer relevant
+        // Hide instruction text after moves are already present.
         this.hideInstructionText();
 
         this.cancelScheduledAutoMove();

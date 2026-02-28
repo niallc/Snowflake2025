@@ -84,11 +84,13 @@
   --heatmap-tooltip-border: #7b88a7;
   --heatmap-tooltip-shadow: rgba(0, 0, 0, 0.25);
 
-  /* First-move guide shading */
-  --purple-shade-fill: #d4d4ff;
-  --purple-shade-stroke: #c0c0ff;
-  --purple-shade-hover-fill: #c4c4ff;
-  --purple-shade-hover-stroke: #a0a0ff;
+  /* Opening-guide markers */
+  --opening-guide-weak-fill: rgba(216, 74, 74, 0.64);
+  --opening-guide-weak-stroke: rgba(116, 28, 28, 0.64);
+  --opening-guide-strong-fill: rgba(168, 98, 224, 0.63);
+  --opening-guide-strong-stroke: rgba(89, 44, 128, 0.64);
+  --opening-guide-balanced-fill: rgba(74, 171, 102, 0.63);
+  --opening-guide-balanced-stroke: rgba(38, 102, 60, 0.64);
 }
 
 [data-theme="dark"] {
@@ -140,10 +142,12 @@
   --heatmap-tooltip-text: #f0f3ff;
   --heatmap-tooltip-border: #5f6b89;
 
-  --purple-shade-fill: rgba(255, 0, 255, 0.25);
-  --purple-shade-stroke: #d0d0ff;
-  --purple-shade-hover-fill: rgba(255, 0, 255, 0.35);
-  --purple-shade-hover-stroke: #b0b0ff;
+  --opening-guide-weak-fill: rgba(255, 126, 126, 0.64);
+  --opening-guide-weak-stroke: rgba(255, 219, 219, 0.63);
+  --opening-guide-strong-fill: rgba(223, 168, 255, 0.64);
+  --opening-guide-strong-stroke: rgba(245, 231, 255, 0.63);
+  --opening-guide-balanced-fill: rgba(123, 221, 142, 0.64);
+  --opening-guide-balanced-stroke: rgba(221, 255, 228, 0.63);
 }
 
 [data-color-scheme="wood"] {
@@ -212,6 +216,13 @@
   --heatmap-band-below-stroke: #dc7b7e;
   --heatmap-band-above-stroke: #6ad19b;
   --heatmap-band-even-stroke: #a8b7df;
+
+  --opening-guide-weak-fill: rgba(255, 150, 150, 0.35);
+  --opening-guide-weak-stroke: rgba(255, 234, 234, 0.34);
+  --opening-guide-strong-fill: rgba(232, 188, 255, 0.35);
+  --opening-guide-strong-stroke: rgba(251, 239, 255, 0.34);
+  --opening-guide-balanced-fill: rgba(134, 226, 154, 0.35);
+  --opening-guide-balanced-stroke: rgba(227, 255, 232, 0.35);
 }
 
 /* Base Styles */
@@ -549,16 +560,24 @@ h1 {
   stroke-width: 3;
 }
 
-/* Purple shading for central hexes on empty board */
-#board-container svg polygon.purple-shaded {
-  fill: var(--purple-shade-fill) !important;
-  stroke: var(--purple-shade-stroke);
+/* Opening guide markers for empty-board first move */
+#board-container svg circle.opening-guide-marker {
+  stroke-width: 1.1;
 }
 
-#board-container svg polygon.purple-shaded:hover {
-  fill: var(--purple-shade-hover-fill) !important;
-  stroke-width: 2;
-  stroke: var(--purple-shade-hover-stroke);
+#board-container svg circle.opening-guide-marker-weak {
+  fill: var(--opening-guide-weak-fill);
+  stroke: var(--opening-guide-weak-stroke);
+}
+
+#board-container svg circle.opening-guide-marker-strong {
+  fill: var(--opening-guide-strong-fill);
+  stroke: var(--opening-guide-strong-stroke);
+}
+
+#board-container svg circle.opening-guide-marker-balanced {
+  fill: var(--opening-guide-balanced-fill);
+  stroke: var(--opening-guide-balanced-stroke);
 }
 
 /* Controls - Touch Friendly */

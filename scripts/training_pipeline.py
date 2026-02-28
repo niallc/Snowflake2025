@@ -702,6 +702,7 @@ class TrainingStep:
             resume_mode=resume_mode,
             target_end_epoch=target_end_epoch,
             allow_missing_stream_sidecar_fallback=allow_missing_stream_sidecar_fallback,
+            skip_shard_range_validation=self.config.internal_training_chunk_run,
         )
 
     def _build_child_chunk_command(

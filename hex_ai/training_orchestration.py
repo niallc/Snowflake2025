@@ -391,15 +391,34 @@ def run_single_experiment(
                         )
                 else:
                     try:
+                        try:
+                            sidecar_size_mb = stream_state_path.stat().st_size / (1024**2)
+                            logger.info(
+                                f"Loading training stream-state sidecar: {stream_state_path} "
+                                f"({sidecar_size_mb:.2f} MB)"
+                            )
+                        except Exception:
+                            logger.info(
+                                f"Loading training stream-state sidecar: {stream_state_path}"
+                            )
                         load_start = time.time()
                         with gzip.open(stream_state_path, "rt", encoding="utf-8") as f:
                             stream_state = json.load(f)
+                        sidecar_read_elapsed = time.time() - load_start
+                        logger.info(
+                            f"Parsed stream-state sidecar in {sidecar_read_elapsed:.2f}s "
+                            f"({len(stream_state.get('position_pool_refs', [])):,} pooled refs). "
+                            "Importing into training dataset..."
+                        )
+                        import_start = time.time()
                         train_dataset.import_state(stream_state)
                         resume_with_stream_state = True
                         elapsed = time.time() - load_start
+                        import_elapsed = time.time() - import_start
                         logger.info(
                             f"Loaded training stream state from {stream_state_path} "
-                            f"({len(stream_state.get('position_pool_refs', [])):,} pooled positions, {elapsed:.2f}s)"
+                            f"({len(stream_state.get('position_pool_refs', [])):,} pooled positions, "
+                            f"import={import_elapsed:.2f}s, total={elapsed:.2f}s)"
                         )
                     except Exception as e:
                         msg = (
@@ -559,6 +578,7 @@ def run_hyperparameter_tuning_current_data(
     resume_mode: str = "next_epoch",
     target_end_epoch: Optional[int] = None,
     allow_missing_stream_sidecar_fallback: bool = False,
+    skip_shard_range_validation: bool = False,
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -593,6 +613,9 @@ def run_hyperparameter_tuning_current_data(
         target_end_epoch: Optional absolute end epoch number (1-based, inclusive)
         allow_missing_stream_sidecar_fallback: If True, allow same-epoch resume fallback
             when stream-state sidecar is unavailable.
+        skip_shard_range_validation: If True, skip preflight shard discovery validation.
+            Intended for internal chunked restarts where dataset initialization performs
+            equivalent fail-fast checks.
         
     Returns:
         Dictionary containing overall results
@@ -632,13 +655,19 @@ def run_hyperparameter_tuning_current_data(
         if len(resolved_validation_dirs) != len(resolved_validation_ranges):
             raise ValueError(f"Number of validation directories ({len(resolved_validation_dirs)}) must match number of validation shard ranges ({len(resolved_validation_ranges)})")
     
-    # Validate training shard ranges
-    from hex_ai.data_collection import validate_shard_ranges
-    validate_shard_ranges(data_dirs, shard_ranges, context_name="training", logger=logger)
-    
-    # Validate validation shard ranges if not empty
-    if resolved_validation_dirs and resolved_validation_ranges:
-        validate_shard_ranges(resolved_validation_dirs, resolved_validation_ranges, context_name="validation", logger=logger)
+    if skip_shard_range_validation:
+        logger.info(
+            "Skipping preflight shard-range validation (internal chunk restart mode). "
+            "Dataset initialization will still perform fail-fast shard discovery."
+        )
+    else:
+        # Validate training shard ranges
+        from hex_ai.data_collection import validate_shard_ranges
+        validate_shard_ranges(data_dirs, shard_ranges, context_name="training", logger=logger)
+        
+        # Validate validation shard ranges if not empty
+        if resolved_validation_dirs and resolved_validation_ranges:
+            validate_shard_ranges(resolved_validation_dirs, resolved_validation_ranges, context_name="validation", logger=logger)
     
     # Log validation summary
     log_validation_summary(resolved_validation_dirs, resolved_validation_ranges)
@@ -725,6 +754,7 @@ def run_hyperparameter_tuning_current_data(
                     'resume_mode': resume_mode,
                     'target_end_epoch': target_end_epoch,
                     'allow_missing_stream_sidecar_fallback': allow_missing_stream_sidecar_fallback,
+                    'skip_shard_range_validation': skip_shard_range_validation,
                 }
             )
             
