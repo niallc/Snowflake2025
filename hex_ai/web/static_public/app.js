@@ -386,7 +386,7 @@ class HexGame {
             return;
         }
         this.openingGuideEnabled = true;
-        localStorage.setItem(this.openingGuideStorageKey, 'true');
+        localStorage.setItem(this.openingGuideStorageKey, 'false');
     }
 
     isDiscPieceStyle() {
