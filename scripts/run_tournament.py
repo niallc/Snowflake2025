@@ -66,7 +66,7 @@ from hex_ai.config import (
 )
 from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
-from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
+from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters, to_list_if_needed
 from hex_ai.utils.tournament_logging import get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
 from hex_ai.utils.random_utils import set_deterministic_seeds
@@ -404,8 +404,7 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     temperatures = parsed_params['temperatures']
     
     try:
-        # Create unified config
-        unified_config = create_unified_config_from_args(
+        strategy_configs = create_strategy_configs_from_parameters(
             strategies=strategy_names,
             model_paths=model_paths,
             mcts_sims=mcts_sims,
@@ -418,67 +417,10 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_candidate_power_rates=gumbel_candidate_power_rates,
             gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             gumbel_c_scales=gumbel_c_scales,
-            # Keep strategy config metadata aligned with actual round-robin execution.
             num_games=args.round_robin_games,
             board_size=13,
-            pie_rule=False  # Deterministic tournaments don't use pie rule
+            pie_rule=False,
         )
-        
-        # Create strategy configs from unified config
-        strategy_configs = create_strategy_configs_from_unified_config(unified_config)
-        
-        # Create unique strategy names by combining model file names with strategy names and key parameters
-        # This ensures strategies with different parameters get different names even with the same model
-        for i, config in enumerate(strategy_configs):
-            model_path = config.model_path
-            model_file = os.path.basename(model_path)
-            model_name = os.path.splitext(model_file)[0]  # Remove .pt.gz extension
-            
-            # Create a parameter suffix to distinguish strategies with different parameters
-            param_parts = []
-            if config.temperature is not None:
-                param_parts.append(f"t{config.temperature}")
-            if config.config.get('enable_gumbel_root_selection'):
-                param_parts.append("gumbel")
-            if config.config.get('mcts_c_puct') is not None:
-                param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
-            if config.config.get('mcts_sims') is not None:
-                param_parts.append(f"sims{config.config['mcts_sims']}")
-            if config.config.get('gumbel_c_scale') is not None:
-                param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
-            
-            param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
-            unique_name = f"{model_name}_{config.original_name}{param_suffix}"
-            config.name = unique_name
-        
-        # Validate that all strategy configurations are unique
-        # Check for duplicates by considering strategy name, model path, and all configuration parameters
-        strategy_signatures = []
-        for config in strategy_configs:
-            # Create a comprehensive signature that includes all relevant parameters
-            signature_parts = [
-                config.original_name,
-                config.model_path,
-                str(config.temperature),
-                str(config.config.get('mcts_sims', '')),
-                str(config.config.get('mcts_c_puct', '')),
-                str(config.config.get('batch_size', '')),
-                str(config.config.get('enable_gumbel_root_selection', '')),
-                str(config.config.get('gumbel_sim_threshold', '')),
-                str(config.config.get('gumbel_candidate_power_scale', '')),
-                str(config.config.get('gumbel_candidate_power_rate', '')),
-                str(config.config.get('gumbel_candidate_power_offset', '')),
-                str(config.config.get('gumbel_c_scale', ''))
-            ]
-            signature = ':'.join(signature_parts)
-            strategy_signatures.append(signature)
-        
-        if len(strategy_signatures) != len(set(strategy_signatures)):
-            print("ERROR: Duplicate strategy configurations detected.")
-            print("Each strategy must be unique in name, model path, and all configuration parameters.")
-            print("Strategies that differ in any parameter (temperature, enable_gumbel, c_puct, etc.) are considered distinct.")
-            sys.exit(1)
-                
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -530,6 +472,109 @@ def print_round_robin_strategy_summary(strategy_configs: List[StrategyConfig]) -
                 )
 
         print(f"    {i}. {strategy.name}: {', '.join(summary_parts)}")
+
+
+def _dedupe_preserve_order(values: List[Any]) -> List[Any]:
+    """Return unique values while preserving first-seen order."""
+    deduped: List[Any] = []
+    for value in values:
+        if value not in deduped:
+            deduped.append(value)
+    return deduped
+
+
+def _collapse_single_or_list(values: List[Any]) -> Optional[Any]:
+    """Return a scalar when values are uniform, otherwise return unique list."""
+    if not values:
+        return None
+    unique_values = _dedupe_preserve_order(values)
+    if len(unique_values) == 1:
+        return unique_values[0]
+    return unique_values
+
+
+def _single_value_or_none(values: List[Any]) -> Optional[Any]:
+    """Return the single value when uniform, otherwise None."""
+    if not values:
+        return None
+    first = values[0]
+    if all(value == first for value in values):
+        return first
+    return None
+
+
+def _collect_resolved_logging_values(strategy_configs: List[StrategyConfig]) -> Dict[str, Any]:
+    """Collect resolved per-strategy values for transparent script logging."""
+    if not strategy_configs:
+        return {
+            "temperatures": None,
+            "batch_sizes": None,
+            "c_puct": None,
+            "mcts_sims": None,
+            "enable_gumbel": False,
+            "gumbel_sim_threshold": None,
+            "gumbel_c_visit": None,
+            "gumbel_c_scale": None,
+            "gumbel_candidate_power_scale": None,
+            "gumbel_candidate_power_rate": None,
+            "gumbel_candidate_power_offset": None,
+            "gumbel_m_candidates": None,
+        }
+
+    temperatures = _collapse_single_or_list([config.temperature for config in strategy_configs])
+    mcts_configs = [config.config for config in strategy_configs if config.strategy_type == "mcts"]
+    if not mcts_configs:
+        return {
+            "temperatures": temperatures,
+            "batch_sizes": None,
+            "c_puct": None,
+            "mcts_sims": None,
+            "enable_gumbel": False,
+            "gumbel_sim_threshold": None,
+            "gumbel_c_visit": None,
+            "gumbel_c_scale": None,
+            "gumbel_candidate_power_scale": None,
+            "gumbel_candidate_power_rate": None,
+            "gumbel_candidate_power_offset": None,
+            "gumbel_m_candidates": None,
+        }
+
+    batch_sizes = _dedupe_preserve_order([cfg["batch_size"] for cfg in mcts_configs])
+    c_puct = _collapse_single_or_list([cfg["mcts_c_puct"] for cfg in mcts_configs])
+    mcts_sims = _single_value_or_none([cfg["mcts_sims"] for cfg in mcts_configs])
+    enable_gumbel = any(bool(cfg["enable_gumbel_root_selection"]) for cfg in mcts_configs)
+    gumbel_enabled_configs = [
+        cfg for cfg in mcts_configs if bool(cfg["enable_gumbel_root_selection"])
+    ]
+
+    return {
+        "temperatures": temperatures,
+        "batch_sizes": batch_sizes,
+        "c_puct": c_puct,
+        "mcts_sims": mcts_sims,
+        "enable_gumbel": enable_gumbel,
+        "gumbel_sim_threshold": _single_value_or_none(
+            [cfg["gumbel_sim_threshold"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_c_visit": _single_value_or_none(
+            [cfg["gumbel_c_visit"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_c_scale": _single_value_or_none(
+            [cfg["gumbel_c_scale"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_candidate_power_scale": _single_value_or_none(
+            [cfg["gumbel_candidate_power_scale"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_candidate_power_rate": _single_value_or_none(
+            [cfg["gumbel_candidate_power_rate"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_candidate_power_offset": _single_value_or_none(
+            [cfg["gumbel_candidate_power_offset"] for cfg in gumbel_enabled_configs]
+        ),
+        "gumbel_m_candidates": _single_value_or_none(
+            [cfg.get("gumbel_m_candidates") for cfg in gumbel_enabled_configs]
+        ),
+    }
 
 
 
@@ -874,43 +919,9 @@ def main():
         print(f"Randomly selecting {openings_to_play} openings from pool of {len(all_openings)}...")
         openings = select_random_openings(all_openings, openings_to_play, seed=args.seed)
     
-    # Print configuration using unified logging
-    # Extract strategy names and Gumbel parameters
-    if strategy_configs:
-        strategy_names = [str(c) for c in strategy_configs]
-    else:
-        strategy_names = []
-    
-    # Extract Gumbel parameters from strategy configs
-    if strategy_configs:
-        enable_gumbel = any(c.config.get('enable_gumbel_root_selection', False) for c in strategy_configs)
-        gumbel_sim_threshold = None
-        gumbel_c_visit = None
-        gumbel_c_scale = None
-        gumbel_candidate_power_scale = None
-        gumbel_candidate_power_rate = None
-        gumbel_candidate_power_offset = None
-        gumbel_m_candidates = None
-        
-        for config in strategy_configs:
-            if config.config.get('enable_gumbel_root_selection', False):
-                gumbel_sim_threshold = config.config.get('gumbel_sim_threshold', gumbel_sim_threshold)
-                gumbel_c_visit = config.config.get('gumbel_c_visit', gumbel_c_visit)
-                gumbel_c_scale = config.config.get('gumbel_c_scale', gumbel_c_scale)
-                gumbel_candidate_power_scale = config.config.get('gumbel_candidate_power_scale', gumbel_candidate_power_scale)
-                gumbel_candidate_power_rate = config.config.get('gumbel_candidate_power_rate', gumbel_candidate_power_rate)
-                gumbel_candidate_power_offset = config.config.get('gumbel_candidate_power_offset', gumbel_candidate_power_offset)
-                gumbel_m_candidates = config.config.get('gumbel_m_candidates', gumbel_m_candidates)
-    else:
-        # No strategy configs for knockout-only tournaments
-        enable_gumbel = False
-        gumbel_sim_threshold = None
-        gumbel_c_visit = None
-        gumbel_c_scale = None
-        gumbel_candidate_power_scale = None
-        gumbel_candidate_power_rate = None
-        gumbel_candidate_power_offset = None
-        gumbel_m_candidates = None
+    # Print configuration using unified logging based on resolved strategy settings.
+    strategy_names = [str(config) for config in strategy_configs]
+    resolved_logging = _collect_resolved_logging_values(strategy_configs)
     
     # Create unified script config (skip for knockout-only tournaments)
     if not is_knockout_only_tournament(args):
@@ -920,19 +931,20 @@ def main():
             strategies=strategy_names,
             num_games=openings_to_play * 2,  # Each opening is played twice with swapped colors.
             strategy_config={},  # Strategy configs are handled individually
-            temperatures=args.temperatures if args.temperatures else args.temperature,
+            temperatures=resolved_logging["temperatures"],
             pie_rule=False,  # Deterministic tournaments don't use pie rule
             opening_length=args.opening_length,
-            batch_sizes=args.batch_sizes,
-            c_puct=args.c_puct,
-            enable_gumbel=enable_gumbel,
-            gumbel_sim_threshold=gumbel_sim_threshold,
-            gumbel_c_visit=gumbel_c_visit,
-            gumbel_c_scale=gumbel_c_scale,
-            gumbel_candidate_power_scale=gumbel_candidate_power_scale,
-            gumbel_candidate_power_rate=gumbel_candidate_power_rate,
-            gumbel_candidate_power_offset=gumbel_candidate_power_offset,
-            gumbel_m_candidates=gumbel_m_candidates,
+            batch_sizes=resolved_logging["batch_sizes"],
+            c_puct=resolved_logging["c_puct"],
+            mcts_sims=resolved_logging["mcts_sims"],
+            enable_gumbel=resolved_logging["enable_gumbel"],
+            gumbel_sim_threshold=resolved_logging["gumbel_sim_threshold"],
+            gumbel_c_visit=resolved_logging["gumbel_c_visit"],
+            gumbel_c_scale=resolved_logging["gumbel_c_scale"],
+            gumbel_candidate_power_scale=resolved_logging["gumbel_candidate_power_scale"],
+            gumbel_candidate_power_rate=resolved_logging["gumbel_candidate_power_rate"],
+            gumbel_candidate_power_offset=resolved_logging["gumbel_candidate_power_offset"],
+            gumbel_m_candidates=resolved_logging["gumbel_m_candidates"],
             confidence_termination_threshold=TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
         )
     else:

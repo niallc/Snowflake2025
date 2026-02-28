@@ -10,12 +10,20 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 
 from hex_ai.config import (
-    DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_GUMBEL_C_SCALE, BOARD_SIZE,
+    DEFAULT_BATCH_CAP,
+    DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_C_SCALE,
+    BOARD_SIZE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE, DEFAULT_GUMBEL_CANDIDATE_POWER_RATE, DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET
 )
 from hex_ai.inference.tournament_parameters import (
     TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
 )
+
+DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION = True
 
 
 @dataclass
@@ -68,32 +76,37 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
         strategy_name = unified_config.strategies[i]
         strategy_type = _determine_strategy_type(strategy_name)
         
-        # Build config dictionary
-        config_dict = {}
-        
-        # Add strategy-specific parameters
+        # Build config dictionary.
         if strategy_type == "mcts":
-            config_dict["mcts_sims"] = participant_config["mcts_sims"]
-            config_dict["mcts_c_puct"] = participant_config.get("c_puct", DEFAULT_C_PUCT)
-            config_dict["batch_size"] = participant_config.get("batch_size", 64)
-            
-            # Add Gumbel parameters if specified
-            if "enable_gumbel" in participant_config:
-                config_dict["enable_gumbel_root_selection"] = participant_config["enable_gumbel"]
-            if "gumbel_sim_threshold" in participant_config:
-                config_dict["gumbel_sim_threshold"] = participant_config["gumbel_sim_threshold"]
-            if "gumbel_candidate_power_scale" in participant_config:
-                config_dict["gumbel_candidate_power_scale"] = participant_config["gumbel_candidate_power_scale"]
-            if "gumbel_candidate_power_rate" in participant_config:
-                config_dict["gumbel_candidate_power_rate"] = participant_config["gumbel_candidate_power_rate"]
-            if "gumbel_candidate_power_offset" in participant_config:
-                config_dict["gumbel_candidate_power_offset"] = participant_config["gumbel_candidate_power_offset"]
-            if "gumbel_c_scale" in participant_config:
-                config_dict["gumbel_c_scale"] = participant_config["gumbel_c_scale"]
+            # Keep strategy configs explicit so runtime behavior and printed metadata match.
+            config_dict = {
+                "mcts_sims": participant_config["mcts_sims"],
+                "mcts_c_puct": participant_config.get("c_puct", DEFAULT_C_PUCT),
+                "batch_size": participant_config.get("batch_size", DEFAULT_BATCH_CAP),
+                "enable_gumbel_root_selection": participant_config.get(
+                    "enable_gumbel", DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION
+                ),
+                "gumbel_sim_threshold": participant_config.get(
+                    "gumbel_sim_threshold", DEFAULT_GUMBEL_SIM_THRESHOLD
+                ),
+                "gumbel_c_visit": participant_config.get("gumbel_c_visit", DEFAULT_GUMBEL_C_VISIT),
+                "gumbel_c_scale": participant_config.get("gumbel_c_scale", DEFAULT_GUMBEL_C_SCALE),
+                "gumbel_candidate_power_scale": participant_config.get(
+                    "gumbel_candidate_power_scale", DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE
+                ),
+                "gumbel_candidate_power_rate": participant_config.get(
+                    "gumbel_candidate_power_rate", DEFAULT_GUMBEL_CANDIDATE_POWER_RATE
+                ),
+                "gumbel_candidate_power_offset": participant_config.get(
+                    "gumbel_candidate_power_offset", DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET
+                ),
+            }
         elif strategy_type == "policy":
             # Policy strategies need minimal config - just temperature for consistency
             # The temperature is also stored as a separate field on StrategyConfig
-            pass  # Temperature is handled separately, policy strategies don't need other params
+            config_dict = {}  # Temperature is handled separately.
+        else:
+            config_dict = {}
         
         
         # Create StrategyConfig
@@ -207,7 +220,7 @@ def create_unified_config_from_args(
     batch_sizes_config = None
     if batch_sizes is not None:
         batch_sizes_config = TournamentParameterConfig(
-            default_value=64,  # Default batch size
+            default_value=DEFAULT_BATCH_CAP,
             per_strategy_values=to_list_if_needed(batch_sizes, num_strategies)
         )
     
@@ -221,14 +234,14 @@ def create_unified_config_from_args(
     enable_gumbel_config = None
     if enable_gumbel is not None:
         enable_gumbel_config = TournamentParameterConfig(
-            default_value=False,  # Default Gumbel disabled
+            default_value=DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION,
             per_strategy_values=to_list_if_needed(enable_gumbel, num_strategies)
         )
     
     gumbel_sim_thresholds_config = None
     if gumbel_sim_thresholds is not None:
         gumbel_sim_thresholds_config = TournamentParameterConfig(
-            default_value=200,  # Default Gumbel threshold
+            default_value=DEFAULT_GUMBEL_SIM_THRESHOLD,
             per_strategy_values=to_list_if_needed(gumbel_sim_thresholds, num_strategies)
         )
     
@@ -278,6 +291,101 @@ def create_unified_config_from_args(
         random_seed=random_seed,
         pie_rule=pie_rule
     )
+
+
+def _build_strategy_signature(config: StrategyConfig) -> str:
+    """Build a stable signature used for duplicate strategy detection."""
+    signature_parts = [
+        config.original_name,
+        config.model_path,
+        str(config.temperature),
+        str(config.config.get("mcts_sims", "")),
+        str(config.config.get("mcts_c_puct", "")),
+        str(config.config.get("batch_size", "")),
+        str(config.config.get("enable_gumbel_root_selection", "")),
+        str(config.config.get("gumbel_sim_threshold", "")),
+        str(config.config.get("gumbel_candidate_power_scale", "")),
+        str(config.config.get("gumbel_candidate_power_rate", "")),
+        str(config.config.get("gumbel_candidate_power_offset", "")),
+        str(config.config.get("gumbel_c_scale", "")),
+    ]
+    return ":".join(signature_parts)
+
+
+def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> None:
+    """Derive deterministic unique names from model + strategy + key params."""
+    for config in strategy_configs:
+        model_file = os.path.basename(config.model_path)
+        model_name = os.path.splitext(model_file)[0]
+
+        param_parts = []
+        if config.temperature is not None:
+            param_parts.append(f"t{config.temperature}")
+        if config.config.get("enable_gumbel_root_selection"):
+            param_parts.append("gumbel")
+        if config.config.get("mcts_c_puct") is not None:
+            param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
+        if config.config.get("mcts_sims") is not None:
+            param_parts.append(f"sims{config.config['mcts_sims']}")
+        if config.config.get("gumbel_c_scale") is not None:
+            param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
+
+        param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
+        config.name = f"{model_name}_{config.original_name}{param_suffix}"
+
+
+def _validate_unique_strategy_configs(strategy_configs: List[StrategyConfig]) -> None:
+    """Fail if any strategies are equivalent across all effective parameters."""
+    signatures = [_build_strategy_signature(config) for config in strategy_configs]
+    if len(signatures) != len(set(signatures)):
+        raise ValueError(
+            "Duplicate strategy configurations detected. "
+            "Each strategy must be unique in name, model path, and all configuration parameters."
+        )
+
+
+def create_strategy_configs_from_parameters(
+    *,
+    strategies: List[str],
+    model_paths: List[str],
+    mcts_sims: Optional[Union[int, List[int]]] = None,
+    temperatures: Optional[Union[float, List[float]]] = None,
+    batch_sizes: Optional[Union[int, List[int]]] = None,
+    c_pucts: Optional[Union[float, List[float]]] = None,
+    enable_gumbel: Optional[Union[bool, List[bool]]] = None,
+    gumbel_sim_thresholds: Optional[Union[int, List[int]]] = None,
+    gumbel_candidate_power_scales: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_rates: Optional[Union[float, List[float]]] = None,
+    gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
+    gumbel_c_scales: Optional[Union[float, List[float]]] = None,
+    num_games: int = 10,
+    board_size: int = BOARD_SIZE,
+    pie_rule: bool = False,
+) -> List[StrategyConfig]:
+    """
+    Create strategy configs from parsed parameter vectors with shared naming/validation.
+    """
+    unified_config = create_unified_config_from_args(
+        strategies=strategies,
+        model_paths=model_paths,
+        mcts_sims=mcts_sims,
+        temperatures=temperatures,
+        batch_sizes=batch_sizes,
+        c_pucts=c_pucts,
+        enable_gumbel=enable_gumbel,
+        gumbel_sim_thresholds=gumbel_sim_thresholds,
+        gumbel_candidate_power_scales=gumbel_candidate_power_scales,
+        gumbel_candidate_power_rates=gumbel_candidate_power_rates,
+        gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
+        gumbel_c_scales=gumbel_c_scales,
+        num_games=num_games,
+        board_size=board_size,
+        pie_rule=pie_rule,
+    )
+    strategy_configs = create_strategy_configs_from_unified_config(unified_config)
+    _assign_unique_strategy_names(strategy_configs)
+    _validate_unique_strategy_configs(strategy_configs)
+    return strategy_configs
 
 
 def to_list_if_needed(

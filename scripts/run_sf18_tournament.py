@@ -57,7 +57,7 @@ from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.inference.strategy_config import StrategyConfig, create_unified_config_from_args, create_strategy_configs_from_unified_config, to_list_if_needed
+from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters, to_list_if_needed
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import parse_tournament_parameters
@@ -661,8 +661,7 @@ def create_strategy_configurations(args, strategy_names, model_paths):
     temperatures = parsed_params['temperatures']
     
     try:
-        # Create unified config
-        unified_config = create_unified_config_from_args(
+        strategy_configs = create_strategy_configs_from_parameters(
             strategies=strategy_names,
             model_paths=model_paths,
             mcts_sims=mcts_sims,
@@ -676,60 +675,8 @@ def create_strategy_configurations(args, strategy_names, model_paths):
             gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
             num_games=args.num_openings,
             board_size=13,
-            pie_rule=False
+            pie_rule=False,
         )
-        
-        # Create strategy configs from unified config
-        strategy_configs = create_strategy_configs_from_unified_config(unified_config)
-        
-        # Create unique strategy names
-        for i, config in enumerate(strategy_configs):
-            model_path = config.model_path
-            model_file = os.path.basename(model_path)
-            model_name = os.path.splitext(model_file)[0]
-            
-            # Create a parameter suffix to distinguish strategies
-            param_parts = []
-            if config.temperature is not None:
-                param_parts.append(f"t{config.temperature}")
-            if config.config.get('enable_gumbel_root_selection'):
-                param_parts.append("gumbel")
-            if config.config.get('mcts_c_puct') is not None:
-                param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
-            if config.config.get('mcts_sims') is not None:
-                param_parts.append(f"sims{config.config['mcts_sims']}")
-            if config.config.get('gumbel_c_scale') is not None:
-                param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
-            
-            param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
-            unique_name = f"{model_name}_{config.original_name}{param_suffix}"
-            config.name = unique_name
-        
-        # Validate that all strategy configurations are unique
-        strategy_signatures = []
-        for config in strategy_configs:
-            signature_parts = [
-                config.original_name,
-                config.model_path,
-                str(config.temperature),
-                str(config.config.get('mcts_sims', '')),
-                str(config.config.get('mcts_c_puct', '')),
-                str(config.config.get('batch_size', '')),
-                str(config.config.get('enable_gumbel_root_selection', '')),
-                str(config.config.get('gumbel_sim_threshold', '')),
-                str(config.config.get('gumbel_candidate_power_scale', '')),
-                str(config.config.get('gumbel_candidate_power_rate', '')),
-                str(config.config.get('gumbel_candidate_power_offset', '')),
-                str(config.config.get('gumbel_c_scale', ''))
-            ]
-            signature = ':'.join(signature_parts)
-            strategy_signatures.append(signature)
-        
-        if len(strategy_signatures) != len(set(strategy_signatures)):
-            print("ERROR: Duplicate strategy configurations detected.")
-            print("Each strategy must be unique in name, model path, and all configuration parameters.")
-            sys.exit(1)
-                
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
