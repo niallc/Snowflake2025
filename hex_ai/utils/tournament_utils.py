@@ -364,14 +364,6 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     if args.gumbel_candidate_power_offset:
         gumbel_candidate_power_offsets = [float(s.strip()) for s in args.gumbel_candidate_power_offset.split(',')]
     
-    gumbel_progressive_widening = None
-    if hasattr(args, 'gumbel_progressive_widening') and args.gumbel_progressive_widening:
-        gumbel_progressive_widening = [s.strip().lower() == 'true' for s in args.gumbel_progressive_widening.split(',')]
-    
-    gumbel_batch_scaling_factors = None
-    if hasattr(args, 'gumbel_batch_scaling_factors') and args.gumbel_batch_scaling_factors:
-        gumbel_batch_scaling_factors = [float(s.strip()) for s in args.gumbel_batch_scaling_factors.split(',')]
-    
     gumbel_c_scales = None
     if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale:
         gumbel_c_scales = [float(s.strip()) for s in args.gumbel_c_scale.split(',')]
@@ -393,8 +385,6 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
         'gumbel_candidate_power_scales': gumbel_candidate_power_scales,
         'gumbel_candidate_power_rates': gumbel_candidate_power_rates,
         'gumbel_candidate_power_offsets': gumbel_candidate_power_offsets,
-        'gumbel_progressive_widening': gumbel_progressive_widening,
-        'gumbel_batch_scaling_factors': gumbel_batch_scaling_factors,
         'gumbel_c_scales': gumbel_c_scales,
         'temperatures': temperatures
     }

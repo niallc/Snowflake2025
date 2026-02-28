@@ -227,8 +227,6 @@ class UnifiedTournamentConfig:
                  gumbel_candidate_power_scales: Optional[TournamentParameterConfig] = None,
                  gumbel_candidate_power_rates: Optional[TournamentParameterConfig] = None,
                  gumbel_candidate_power_offsets: Optional[TournamentParameterConfig] = None,
-                 gumbel_progressive_widening: Optional[TournamentParameterConfig] = None,
-                 gumbel_batch_scaling_factors: Optional[TournamentParameterConfig] = None,
                  gumbel_c_scales: Optional[TournamentParameterConfig] = None,
                  
                  # Tournament settings
@@ -248,8 +246,6 @@ class UnifiedTournamentConfig:
         self.gumbel_candidate_power_scales = gumbel_candidate_power_scales
         self.gumbel_candidate_power_rates = gumbel_candidate_power_rates
         self.gumbel_candidate_power_offsets = gumbel_candidate_power_offsets
-        self.gumbel_progressive_widening = gumbel_progressive_widening
-        self.gumbel_batch_scaling_factors = gumbel_batch_scaling_factors
         self.gumbel_c_scales = gumbel_c_scales
         self.num_games = num_games
         self.board_size = board_size
@@ -285,10 +281,6 @@ class UnifiedTournamentConfig:
             self.gumbel_candidate_power_rates.validate(num_strategies, participant_labels)
         if self.gumbel_candidate_power_offsets:
             self.gumbel_candidate_power_offsets.validate(num_strategies, participant_labels)
-        if self.gumbel_progressive_widening:
-            self.gumbel_progressive_widening.validate(num_strategies, participant_labels)
-        if self.gumbel_batch_scaling_factors:
-            self.gumbel_batch_scaling_factors.validate(num_strategies, participant_labels)
         
         # Validate basic tournament settings
         if self.num_games <= 0:
@@ -329,10 +321,6 @@ class UnifiedTournamentConfig:
             config['gumbel_candidate_power_rate'] = self.gumbel_candidate_power_rates.get_value_for_participant(participant_label, strategy_index)
         if self.gumbel_candidate_power_offsets:
             config['gumbel_candidate_power_offset'] = self.gumbel_candidate_power_offsets.get_value_for_participant(participant_label, strategy_index)
-        if self.gumbel_progressive_widening:
-            config['gumbel_progressive_widening'] = self.gumbel_progressive_widening.get_value_for_participant(participant_label, strategy_index)
-        if self.gumbel_batch_scaling_factors:
-            config['gumbel_batch_scaling_factor'] = self.gumbel_batch_scaling_factors.get_value_for_participant(participant_label, strategy_index)
         if self.gumbel_c_scales:
             config['gumbel_c_scale'] = self.gumbel_c_scales.get_value_for_participant(participant_label, strategy_index)
         

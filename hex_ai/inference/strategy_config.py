@@ -88,10 +88,6 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 config_dict["gumbel_candidate_power_rate"] = participant_config["gumbel_candidate_power_rate"]
             if "gumbel_candidate_power_offset" in participant_config:
                 config_dict["gumbel_candidate_power_offset"] = participant_config["gumbel_candidate_power_offset"]
-            if "gumbel_progressive_widening" in participant_config:
-                config_dict["gumbel_progressive_widening"] = participant_config["gumbel_progressive_widening"]
-            if "gumbel_batch_scaling_factor" in participant_config:
-                config_dict["gumbel_batch_scaling_factor"] = participant_config["gumbel_batch_scaling_factor"]
             if "gumbel_c_scale" in participant_config:
                 config_dict["gumbel_c_scale"] = participant_config["gumbel_c_scale"]
         elif strategy_type == "policy":
@@ -149,8 +145,6 @@ def create_unified_config_from_args(
     gumbel_candidate_power_scales: Optional[Union[float, List[float]]] = None,
     gumbel_candidate_power_rates: Optional[Union[float, List[float]]] = None,
     gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
-    gumbel_progressive_widening: Optional[Union[bool, List[bool]]] = None,
-    gumbel_batch_scaling_factors: Optional[Union[float, List[float]]] = None,
     gumbel_c_scales: Optional[Union[float, List[float]]] = None,
     num_games: int = 10,
     board_size: int = BOARD_SIZE,
@@ -176,8 +170,6 @@ def create_unified_config_from_args(
         gumbel_candidate_power_scales: Gumbel candidate power scale(s)
         gumbel_candidate_power_rates: Gumbel candidate power rate(s)
         gumbel_candidate_power_offsets: Gumbel candidate power offset(s)
-        gumbel_progressive_widening: Gumbel progressive widening flag(s)
-        gumbel_batch_scaling_factors: Gumbel batch scaling factor(s)
         gumbel_c_scales: Gumbel c_scale parameter(s)
         num_games: Number of games per pair
         board_size: Board size
@@ -261,20 +253,6 @@ def create_unified_config_from_args(
             per_strategy_values=to_list_if_needed(gumbel_candidate_power_offsets, num_strategies)
         )
     
-    gumbel_progressive_widening_config = None
-    if gumbel_progressive_widening is not None:
-        gumbel_progressive_widening_config = TournamentParameterConfig(
-            default_value=False,  # Default progressive widening disabled
-            per_strategy_values=to_list_if_needed(gumbel_progressive_widening, num_strategies)
-        )
-    
-    gumbel_batch_scaling_factors_config = None
-    if gumbel_batch_scaling_factors is not None:
-        gumbel_batch_scaling_factors_config = TournamentParameterConfig(
-            default_value=1.0,  # Default scaling factor
-            per_strategy_values=to_list_if_needed(gumbel_batch_scaling_factors, num_strategies)
-        )
-    
     gumbel_c_scales_config = None
     if gumbel_c_scales is not None:
         gumbel_c_scales_config = TournamentParameterConfig(
@@ -292,9 +270,8 @@ def create_unified_config_from_args(
         enable_gumbel=enable_gumbel_config,
         gumbel_sim_thresholds=gumbel_sim_thresholds_config,
         gumbel_candidate_power_scales=gumbel_candidate_power_scales_config,
+        gumbel_candidate_power_rates=gumbel_candidate_power_rates_config,
         gumbel_candidate_power_offsets=gumbel_candidate_power_offsets_config,
-        gumbel_progressive_widening=gumbel_progressive_widening_config,
-        gumbel_batch_scaling_factors=gumbel_batch_scaling_factors_config,
         gumbel_c_scales=gumbel_c_scales_config,
         num_games=num_games,
         board_size=board_size,
