@@ -59,6 +59,8 @@ class HexGame {
         this.openingGuideStrongThreshold = 0.55;
         this.openingGuideStatusByMove = new Map();
         this.openingGuideMarkerElements = new Map();
+        this.openingGuideEnabled = false;
+        this.openingGuideStorageKey = 'hex_ai_opening_guide_enabled';
 
         this.initializeElements();
         this.defaultInstructionText = this.instructionText ? this.instructionText.textContent : '';
@@ -66,6 +68,7 @@ class HexGame {
         this.initializeDarkMode();
         this.initializeColorScheme();
         this.initializePieceStyle();
+        this.initializeOpeningGuidePreference();
         this.refreshThemeColors();
         this.loadGameConstants();
         this.updateHeatmapControls();
@@ -374,6 +377,16 @@ class HexGame {
         if (storedPieceStyle !== this.pieceStyle) {
             localStorage.setItem('hex_ai_piece_style', this.pieceStyle);
         }
+    }
+
+    initializeOpeningGuidePreference() {
+        const storedValue = localStorage.getItem(this.openingGuideStorageKey);
+        if (storedValue === 'true' || storedValue === 'false') {
+            this.openingGuideEnabled = storedValue === 'true';
+            return;
+        }
+        this.openingGuideEnabled = true;
+        localStorage.setItem(this.openingGuideStorageKey, 'true');
     }
 
     isDiscPieceStyle() {
@@ -992,12 +1005,14 @@ class HexGame {
         if (!this.instructionText) {
             return;
         }
-        if (this.validateBoardSize() === this.boardSize) {
-            this.instructionText.textContent = this.defaultInstructionText;
-        } else {
+        if (this.validateBoardSize() !== this.boardSize) {
             const size = this.validateBoardSize();
             this.instructionText.textContent = `Changed board size to ${size}`;
+            this.instructionText.style.display = 'block';
+            return;
         }
+        this.instructionText.textContent = this.defaultInstructionText;
+        this.instructionText.style.display = this.openingGuideEnabled ? 'block' : 'none';
     }
 
     getSessionStorage() {
@@ -1878,14 +1893,15 @@ class HexGame {
         const marker = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         marker.setAttribute('cx', String(cx));
         marker.setAttribute('cy', String(cy));
-        marker.setAttribute('r', String(Math.max(4.2, hexRadius * 0.3)));
+        marker.setAttribute('r', String(Math.max(4.2, hexRadius * 0.45)));
         marker.classList.add('opening-guide-marker', `opening-guide-marker-${status}`);
         marker.style.pointerEvents = 'none';
         return marker;
     }
 
     syncOpeningGuideMarkers(board, hexRadius) {
-        const shouldShow = !this.heatmapEnabled &&
+        const shouldShow = this.openingGuideEnabled &&
+            !this.heatmapEnabled &&
             this.validateBoardSize() === this.boardSize &&
             this.isBoardEmpty(board);
         if (!shouldShow) {
@@ -1919,6 +1935,10 @@ class HexGame {
     showInstructionText() {
         // Show the instruction text about opening guide markers.
         if (this.instructionText) {
+            if (this.validateBoardSize() === this.boardSize && !this.openingGuideEnabled) {
+                this.instructionText.style.display = 'none';
+                return;
+            }
             this.instructionText.style.display = 'block';
         }
     }

@@ -7,6 +7,7 @@ class UserSettingsPage {
         this.eloDisplay = document.getElementById('preferred-elo-display');
         this.colorSchemeSelect = document.getElementById('color-scheme');
         this.pieceStyleSelect = document.getElementById('piece-style');
+        this.openingGuideEnabledCheck = document.getElementById('opening-guide-enabled');
         this.resetDefaultsBtn = document.getElementById('reset-defaults-btn');
 
         this.defaultSettings = {
@@ -14,6 +15,7 @@ class UserSettingsPage {
             preferred_elo: 600,
             color_scheme: 'wood',
             piece_style: 'disc',
+            opening_guide_enabled: true,
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
@@ -29,12 +31,20 @@ class UserSettingsPage {
             preferredElo: 'hex_ai_preferred_elo',
             colorScheme: 'hex_ai_color_scheme',
             pieceStyle: 'hex_ai_piece_style',
+            openingGuideEnabled: 'hex_ai_opening_guide_enabled',
             darkMode: 'hex_ai_dark_mode',
         };
     }
 
     init() {
-        if (!this.form || !this.boardSizeSelect || !this.eloSlider || !this.colorSchemeSelect || !this.pieceStyleSelect) {
+        if (
+            !this.form ||
+            !this.boardSizeSelect ||
+            !this.eloSlider ||
+            !this.colorSchemeSelect ||
+            !this.pieceStyleSelect ||
+            !this.openingGuideEnabledCheck
+        ) {
             console.error('Settings page is missing required elements');
             return;
         }
@@ -116,6 +126,7 @@ class UserSettingsPage {
         this.eloSlider.value = String(settings.preferred_elo);
         this.colorSchemeSelect.value = this.normalizeColorScheme(settings.color_scheme);
         this.pieceStyleSelect.value = this.normalizePieceStyle(settings.piece_style);
+        this.openingGuideEnabledCheck.checked = this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled);
         this.updateEloDisplay();
     }
 
@@ -125,6 +136,7 @@ class UserSettingsPage {
             preferred_elo: parseInt(this.eloSlider.value, 10),
             color_scheme: this.normalizeColorScheme(this.colorSchemeSelect.value),
             piece_style: this.normalizePieceStyle(this.pieceStyleSelect.value),
+            opening_guide_enabled: this.openingGuideEnabledCheck.checked,
         };
     }
 
@@ -139,6 +151,19 @@ class UserSettingsPage {
     normalizePieceStyle(rawValue) {
         const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
         return allowedStyles.has(rawValue) ? rawValue : this.defaultSettings.piece_style;
+    }
+
+    normalizeOpeningGuideEnabled(rawValue) {
+        if (typeof rawValue === 'boolean') {
+            return rawValue;
+        }
+        if (rawValue === 'true') {
+            return true;
+        }
+        if (rawValue === 'false') {
+            return false;
+        }
+        return this.defaultSettings.opening_guide_enabled;
     }
 
     applySavedDarkModePreference() {
@@ -156,6 +181,9 @@ class UserSettingsPage {
         const storedElo = parseInt(localStorage.getItem(this.storageKeys.preferredElo), 10);
         const storedColorScheme = this.normalizeColorScheme(localStorage.getItem(this.storageKeys.colorScheme));
         const storedPieceStyle = this.normalizePieceStyle(localStorage.getItem(this.storageKeys.pieceStyle));
+        const storedOpeningGuideEnabled = this.normalizeOpeningGuideEnabled(
+            localStorage.getItem(this.storageKeys.openingGuideEnabled)
+        );
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
         const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
 
@@ -172,6 +200,7 @@ class UserSettingsPage {
             piece_style: allowedStyles.has(storedPieceStyle)
                 ? storedPieceStyle
                 : this.defaultSettings.piece_style,
+            opening_guide_enabled: storedOpeningGuideEnabled,
         };
     }
 
@@ -206,6 +235,7 @@ class UserSettingsPage {
                 preferred_elo: defaultElo,
                 color_scheme: 'wood',
                 piece_style: 'disc',
+                opening_guide_enabled: true,
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
@@ -239,12 +269,14 @@ class UserSettingsPage {
                 preferred_elo: settings.preferred_elo,
                 color_scheme: this.normalizeColorScheme(settings.color_scheme),
                 piece_style: this.normalizePieceStyle(settings.piece_style),
+                opening_guide_enabled: this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled),
             };
 
             localStorage.setItem(this.storageKeys.preferredBoardSize, String(normalizedSettings.preferred_board_size));
             localStorage.setItem(this.storageKeys.preferredElo, String(normalizedSettings.preferred_elo));
             localStorage.setItem(this.storageKeys.colorScheme, String(normalizedSettings.color_scheme));
             localStorage.setItem(this.storageKeys.pieceStyle, String(normalizedSettings.piece_style));
+            localStorage.setItem(this.storageKeys.openingGuideEnabled, String(normalizedSettings.opening_guide_enabled));
             this.applySettingsToForm(normalizedSettings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {

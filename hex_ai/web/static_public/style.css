@@ -85,12 +85,12 @@
   --heatmap-tooltip-shadow: rgba(0, 0, 0, 0.25);
 
   /* Opening-guide markers */
-  --opening-guide-weak-fill: rgba(216, 74, 74, 0.64);
-  --opening-guide-weak-stroke: rgba(116, 28, 28, 0.64);
-  --opening-guide-strong-fill: rgba(168, 98, 224, 0.63);
-  --opening-guide-strong-stroke: rgba(89, 44, 128, 0.64);
-  --opening-guide-balanced-fill: rgba(74, 171, 102, 0.63);
-  --opening-guide-balanced-stroke: rgba(38, 102, 60, 0.64);
+  --opening-guide-weak-fill: rgba(216, 74, 74, 0.32);
+  --opening-guide-weak-stroke: rgba(116, 28, 28, 0.32);
+  --opening-guide-strong-fill: rgba(168, 98, 224, 0.32);
+  --opening-guide-strong-stroke: rgba(89, 44, 128, 0.32);
+  --opening-guide-balanced-fill: rgba(74, 171, 102, 0.32);
+  --opening-guide-balanced-stroke: rgba(38, 102, 60, 0.32);
 }
 
 [data-theme="dark"] {
