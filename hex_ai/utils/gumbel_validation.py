@@ -4,7 +4,7 @@ Utility functions for validating Gumbel algorithm configurations.
 """
 
 import math
-from typing import Dict, List, Tuple, Set
+from typing import Any, Dict, List, Tuple
 from collections import defaultdict
 
 from hex_ai.utils.gumbel_utils import calculate_power_law_candidates
@@ -123,7 +123,7 @@ def simulate_sequential_halving(
 
 def validate_gumbel_configurations(
     sim_counts: List[int],
-    configs: List[Dict[str, any]],
+    configs: List[Dict[str, Any]],
     num_legal_actions: int = 164
 ) -> Dict[str, List[Dict]]:
     """
@@ -207,8 +207,6 @@ def check_tournament_gumbel_configs(sim_counts: List[int] = None):
     
     # Import defaults from config
     from hex_ai.config import (
-        DEFAULT_GUMBEL_CANDIDATE_LOG_BASE,
-        DEFAULT_GUMBEL_CANDIDATE_LOG_OFFSET,
         DEFAULT_GUMBEL_CANDIDATE_MIN,
         DEFAULT_GUMBEL_CANDIDATE_MAX
     )
@@ -239,8 +237,8 @@ def check_tournament_gumbel_configs(sim_counts: List[int] = None):
     
     return results
 
-def check_gumbel_configurations(args, strategy_configs):
-    """Check for potential Gumbel algorithm issues and print warnings."""
+def check_gumbel_configurations(strategy_configs):
+    """Check for potential Gumbel algorithm issues from resolved strategy configs."""
     
     # Extract unique simulation counts and Gumbel configurations from strategy configs
     sim_counts = set()
@@ -250,43 +248,37 @@ def check_gumbel_configurations(args, strategy_configs):
     # Check if any strategies use Gumbel
     has_gumbel_strategies = False
     
+    # Import here to avoid circular import
+    from hex_ai.inference.move_selection import MoveSelectionConfig
+
     for strategy_config in strategy_configs:
-        if hasattr(strategy_config, 'mcts_sims'):
-            sim_counts.add(strategy_config.mcts_sims)
-        
-        # Check if this is an MCTS strategy with Gumbel enabled
-        # The strategy type indicates if it's MCTS, and we check if Gumbel is enabled via args
-        is_mcts_strategy = hasattr(strategy_config, 'strategy_type') and 'mcts' in strategy_config.strategy_type.lower()
-        gumbel_enabled = hasattr(args, 'enable_gumbel') and args.enable_gumbel
-        
-        if is_mcts_strategy and gumbel_enabled:
-            has_gumbel_strategies = True
-            # Import here to avoid circular import
-            from hex_ai.inference.move_selection import MoveSelectionConfig
-            
-            # Create a config dict for this strategy
-            # Use command line values if specified, otherwise use defaults from config
-            config_dict = {
-                'candidate_power_scale': strategy_config.config.get('gumbel_candidate_power_scale', MoveSelectionConfig.gumbel_candidate_power_scale),
-                'candidate_power_rate': strategy_config.config.get('gumbel_candidate_power_rate', MoveSelectionConfig.gumbel_candidate_power_rate),
-                'candidate_power_offset': strategy_config.config.get('gumbel_candidate_power_offset', MoveSelectionConfig.gumbel_candidate_power_offset),
-                'candidate_min': MoveSelectionConfig.gumbel_candidate_min,  # Always use default from config
-                'candidate_max': MoveSelectionConfig.gumbel_candidate_max   # Always use default from config
-            }
-            
-            # Create a unique name for this configuration
-            config_name = f"power_scale={config_dict['candidate_power_scale']}, rate={config_dict['candidate_power_rate']}, offset={config_dict['candidate_power_offset']}"
-            
-            if config_name not in config_names:
-                config_dict['name'] = config_name
-                gumbel_configs.append(config_dict)
-                config_names.add(config_name)
-    
-    # Add any simulation counts from command line arguments
-    if hasattr(args, 'mcts_sims') and args.mcts_sims:
-        # Parse comma-separated mcts_sims values
-        parsed_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
-        sim_counts.update(parsed_sims)
+        if strategy_config.strategy_type != "mcts":
+            continue
+
+        cfg = strategy_config.config
+        gumbel_enabled = bool(cfg["enable_gumbel_root_selection"])
+        if not gumbel_enabled:
+            continue
+
+        has_gumbel_strategies = True
+        sim_counts.add(int(cfg["mcts_sims"]))
+        config_dict = {
+            "candidate_power_scale": cfg["gumbel_candidate_power_scale"],
+            "candidate_power_rate": cfg["gumbel_candidate_power_rate"],
+            "candidate_power_offset": cfg["gumbel_candidate_power_offset"],
+            "candidate_min": MoveSelectionConfig.gumbel_candidate_min,
+            "candidate_max": MoveSelectionConfig.gumbel_candidate_max,
+        }
+
+        config_name = (
+            f"power_scale={config_dict['candidate_power_scale']}, "
+            f"rate={config_dict['candidate_power_rate']}, "
+            f"offset={config_dict['candidate_power_offset']}"
+        )
+        if config_name not in config_names:
+            config_dict["name"] = config_name
+            gumbel_configs.append(config_dict)
+            config_names.add(config_name)
     
     # Convert to sorted list of integers
     sim_counts = sorted([int(s) for s in sim_counts])

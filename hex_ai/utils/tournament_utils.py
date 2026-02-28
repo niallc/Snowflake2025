@@ -8,6 +8,22 @@ in tournament-related functionality.
 import os
 from typing import List, Dict, Tuple, Optional, Union, Any
 
+from hex_ai.config import (
+    DEFAULT_BATCH_CAP,
+    DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_C_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+)
+from hex_ai.inference.model_config import get_model_path, validate_model_path
+from hex_ai.inference.strategy_config import (
+    DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION,
+    to_list_if_needed,
+)
+
 
 def generate_player_labels(checkpoint_paths: List[str]) -> Tuple[List[str], Dict[str, str]]:
     """
@@ -331,42 +347,62 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     Returns:
         Dictionary containing parsed parameters
     """
-    # Parse optional parameters using unified system
-    mcts_sims = None
-    if args.mcts_sims:
-        mcts_sims = [int(s.strip()) for s in args.mcts_sims.split(',')]
-    
-    batch_sizes = None
-    if args.batch_sizes:
-        batch_sizes = [int(s.strip()) for s in args.batch_sizes.split(',')]
-    
-    c_pucts = None
-    if args.c_puct:
-        c_pucts = [float(s.strip()) for s in args.c_puct.split(',')]
-    
-    enable_gumbel = None
-    if args.enable_gumbel:
-        enable_gumbel = [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
-    
-    gumbel_sim_thresholds = None
-    if args.gumbel_sim_threshold:
-        gumbel_sim_thresholds = [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
-    
-    gumbel_candidate_power_scales = None
-    if args.gumbel_candidate_power_scale:
-        gumbel_candidate_power_scales = [float(s.strip()) for s in args.gumbel_candidate_power_scale.split(',')]
-    
-    gumbel_candidate_power_rates = None
-    if args.gumbel_candidate_power_rate:
-        gumbel_candidate_power_rates = [float(s.strip()) for s in args.gumbel_candidate_power_rate.split(',')]
-    
-    gumbel_candidate_power_offsets = None
-    if args.gumbel_candidate_power_offset:
-        gumbel_candidate_power_offsets = [float(s.strip()) for s in args.gumbel_candidate_power_offset.split(',')]
-    
-    gumbel_c_scales = None
-    if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale:
-        gumbel_c_scales = [float(s.strip()) for s in args.gumbel_c_scale.split(',')]
+    # Parse optional parameters using unified system.
+    # Defaults come from hex_ai.config / strategy_config so tournament scripts
+    # can rely on explicit, centralized baseline values.
+    mcts_sims = (
+        [int(s.strip()) for s in args.mcts_sims.split(',')]
+        if args.mcts_sims
+        else [DEFAULT_MCTS_SIMS]
+    )
+
+    batch_sizes = (
+        [int(s.strip()) for s in args.batch_sizes.split(',')]
+        if args.batch_sizes
+        else [DEFAULT_BATCH_CAP]
+    )
+
+    c_pucts = (
+        [float(s.strip()) for s in args.c_puct.split(',')]
+        if args.c_puct
+        else [DEFAULT_C_PUCT]
+    )
+
+    enable_gumbel = (
+        [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
+        if args.enable_gumbel
+        else [DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION]
+    )
+
+    gumbel_sim_thresholds = (
+        [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
+        if args.gumbel_sim_threshold
+        else [DEFAULT_GUMBEL_SIM_THRESHOLD]
+    )
+
+    gumbel_candidate_power_scales = (
+        [float(s.strip()) for s in args.gumbel_candidate_power_scale.split(',')]
+        if args.gumbel_candidate_power_scale
+        else [DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE]
+    )
+
+    gumbel_candidate_power_rates = (
+        [float(s.strip()) for s in args.gumbel_candidate_power_rate.split(',')]
+        if args.gumbel_candidate_power_rate
+        else [DEFAULT_GUMBEL_CANDIDATE_POWER_RATE]
+    )
+
+    gumbel_candidate_power_offsets = (
+        [float(s.strip()) for s in args.gumbel_candidate_power_offset.split(',')]
+        if args.gumbel_candidate_power_offset
+        else [DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET]
+    )
+
+    gumbel_c_scales = (
+        [float(s.strip()) for s in args.gumbel_c_scale.split(',')]
+        if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale
+        else [DEFAULT_GUMBEL_C_SCALE]
+    )
     
     # Parse per-strategy temperatures
     temperatures = None
@@ -388,3 +424,62 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
         'gumbel_c_scales': gumbel_c_scales,
         'temperatures': temperatures
     }
+
+
+def parse_model_specifications(args: Any, strategy_names: List[str]) -> List[str]:
+    """Parse and validate model specifications from command line arguments."""
+    if args.models:
+        model_names = [name.strip() for name in args.models.split(',')]
+        original_model_names = model_names.copy()
+        model_names = to_list_if_needed(
+            model_names,
+            len(strategy_names),
+            parameter_name="models",
+            original_values=original_model_names,
+            strategy_names=strategy_names,
+        )
+
+        if len(original_model_names) == 1 and len(strategy_names) > 1:
+            print(f"INFO: Using single model '{model_names[0]}' for all {len(strategy_names)} strategies")
+
+        model_paths = []
+        for model_name in model_names:
+            try:
+                model_path = get_model_path(model_name)
+            except ValueError as e:
+                print(f"ERROR: {e}")
+                raise SystemExit(1)
+
+            if not validate_model_path(model_path):
+                print(f"ERROR: Model file does not exist: {model_path}")
+                raise SystemExit(1)
+
+            model_paths.append(model_path)
+        return model_paths
+
+    model_files = [file.strip() for file in args.model_files.split(',')]
+    model_dirs = [directory.strip() for directory in args.model_dirs.split(',')]
+
+    if strategy_names and (
+        len(model_files) != len(model_dirs) or len(model_files) != len(strategy_names)
+    ):
+        print(
+            f"ERROR: Number of model files ({len(model_files)}), directories ({len(model_dirs)}), "
+            f"and strategies ({len(strategy_names)}) must all match"
+        )
+        raise SystemExit(1)
+    if len(model_files) != len(model_dirs):
+        print(
+            f"ERROR: Number of model files ({len(model_files)}) must match number of model directories "
+            f"({len(model_dirs)})"
+        )
+        raise SystemExit(1)
+
+    model_paths = []
+    for model_file, model_dir in zip(model_files, model_dirs):
+        model_path = os.path.join(model_dir, model_file)
+        if not os.path.exists(model_path):
+            print(f"ERROR: Model file does not exist: {model_path}")
+            raise SystemExit(1)
+        model_paths.append(model_path)
+    return model_paths

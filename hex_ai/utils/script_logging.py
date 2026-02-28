@@ -243,25 +243,28 @@ def _generate_gumbel_summary(config: ScriptConfig) -> Optional[str]:
     else:
         # For tournaments, we need to extract strategy configs
         # This is a simplified version - in practice, you'd pass the actual StrategyConfig objects
-        if config.enable_gumbel and config.mcts_sims:
+        if config.enable_gumbel is True:
             summary_parts = []
-            summary_parts.append(f"Gumbel enabled (sims≤{config.gumbel_sim_threshold})")
-            if config.gumbel_c_visit:
+            if config.gumbel_sim_threshold is not None:
+                summary_parts.append(f"Gumbel enabled (sims≤{config.gumbel_sim_threshold})")
+            else:
+                summary_parts.append("Gumbel enabled")
+            if config.gumbel_c_visit is not None:
                 summary_parts.append(f"c_visit={config.gumbel_c_visit}")
-            if config.gumbel_c_scale:
+            if config.gumbel_c_scale is not None:
                 summary_parts.append(f"c_scale={config.gumbel_c_scale}")
             if config.gumbel_use_gumbel_in_final_eval is not None:
                 summary_parts.append(f"gumbel_in_eval={config.gumbel_use_gumbel_in_final_eval}")
-            if config.gumbel_candidate_power_scale:
+            if config.gumbel_candidate_power_scale is not None:
                 summary_parts.append(f"power_scale={config.gumbel_candidate_power_scale}")
-            if config.gumbel_candidate_power_rate:
+            if config.gumbel_candidate_power_rate is not None:
                 summary_parts.append(f"power_rate={config.gumbel_candidate_power_rate}")
-            if config.gumbel_candidate_power_offset:
+            if config.gumbel_candidate_power_offset is not None:
                 summary_parts.append(f"power_offset={config.gumbel_candidate_power_offset}")
-            if config.gumbel_m_candidates:
+            if config.gumbel_m_candidates is not None:
                 summary_parts.append(f"m_candidates={config.gumbel_m_candidates}")
             return f"Gumbel configuration: {', '.join(summary_parts)}"
-        elif not config.enable_gumbel:
+        if config.enable_gumbel is False:
             return "Gumbel configuration: disabled"
     
     return None

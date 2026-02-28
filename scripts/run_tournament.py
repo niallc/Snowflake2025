@@ -61,14 +61,19 @@ from hex_ai.memory_profiler import start_profiling, stop_profiling
 from hex_ai.config import (
     DEFAULT_BATCH_CAP,
     DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
     DEFAULT_GUMBEL_C_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
-from hex_ai.inference.model_config import get_model_path, validate_model_path, get_all_model_participants_from_generations
+from hex_ai.inference.model_config import get_all_model_participants_from_generations
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
-from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters, to_list_if_needed
+from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters
 from hex_ai.utils.tournament_logging import get_command_line
-from hex_ai.utils.tournament_utils import parse_tournament_parameters
+from hex_ai.utils.tournament_utils import parse_tournament_parameters, parse_model_specifications
 from hex_ai.utils.random_utils import set_deterministic_seeds
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 from hex_ai.inference.game_execution import (
@@ -172,21 +177,21 @@ Examples:
     parser.add_argument('--trmph-source', type=str, default=TRMPH_SOURCE_DIR,
                        help=f'Directory containing TRMPH files for opening generation (default: {TRMPH_SOURCE_DIR})')
     parser.add_argument('--mcts-sims', type=str,
-                       help='Comma-separated MCTS simulation counts (overrides strategy names)')
+                       help=f'Comma-separated MCTS simulation counts (default: {DEFAULT_MCTS_SIMS})')
     parser.add_argument('--batch-sizes', type=str,
                        help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
     parser.add_argument('--c-puct', type=str,
                        help=f'Comma-separated PUCT exploration constants for MCTS strategies (e.g., "2.4,2.8,3.6", default: {DEFAULT_C_PUCT})')
     parser.add_argument('--enable-gumbel', type=str,
-                       help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true")')
+                       help='Comma-separated boolean values to enable Gumbel AlphaZero root selection for MCTS strategies (e.g., "true,false,true", default: true)')
     parser.add_argument('--gumbel-sim-threshold', type=str,
-                       help='Comma-separated simulation thresholds for Gumbel AlphaZero root selection (e.g., "200,500,1000")')
+                       help=f'Comma-separated simulation thresholds for Gumbel AlphaZero root selection (e.g., "200,500,1000", default: {DEFAULT_GUMBEL_SIM_THRESHOLD})')
     parser.add_argument('--gumbel-candidate-power-scale', type=str,
-                       help='Comma-separated power scales for Gumbel candidate scaling (e.g., "60.0,80.0,100.0")')
+                       help=f'Comma-separated power scales for Gumbel candidate scaling (e.g., "60.0,80.0,100.0", default: {DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE})')
     parser.add_argument('--gumbel-candidate-power-rate', type=str,
-                       help='Comma-separated power rates for Gumbel candidate scaling (e.g., "0.39,0.45,0.50")')
+                       help=f'Comma-separated power rates for Gumbel candidate scaling (e.g., "0.39,0.45,0.50", default: {DEFAULT_GUMBEL_CANDIDATE_POWER_RATE})')
     parser.add_argument('--gumbel-candidate-power-offset', type=str,
-                       help='Comma-separated power offsets for Gumbel candidate scaling (e.g., "-4.0,-3.0,-2.0")')
+                       help=f'Comma-separated power offsets for Gumbel candidate scaling (e.g., "-4.0,-3.0,-2.0", default: {DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET})')
     parser.add_argument('--gumbel-c-scale', type=str,
                        help=f'Comma-separated c_scale parameters for Gumbel AlphaZero root selection (e.g., "1000,5000,10000", default: {DEFAULT_GUMBEL_C_SCALE})')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
@@ -321,68 +326,6 @@ def is_knockout_only_tournament(args) -> bool:
     """Check if this is a knockout-only tournament (no round-robin participants)."""
     has_knockout = args.knockout_dir or args.knockout_from_generations
     return has_knockout and not args.models and not args.model_files
-
-
-def parse_model_specifications(args, strategy_names):
-    """Parse and validate model specifications from command line arguments."""
-    if args.models:
-        # Use model registry names
-        model_names = [name.strip() for name in args.models.split(',')]
-        
-        # Use existing utility for consistency with other parameters
-        # This handles single value replication and validation automatically
-        original_model_names = model_names.copy()
-        model_names = to_list_if_needed(
-            model_names, 
-            len(strategy_names),
-            parameter_name="models",
-            original_values=original_model_names,
-            strategy_names=strategy_names
-        )
-        
-        # Show info message if single model was replicated
-        if len([name.strip() for name in args.models.split(',')]) == 1 and len(strategy_names) > 1:
-            print(f"INFO: Using single model '{model_names[0]}' for all {len(strategy_names)} strategies")
-        
-        # Validate model paths using registry
-        model_paths = []
-        for model_name in model_names:
-            try:
-                model_path = get_model_path(model_name)
-                if not validate_model_path(model_path):
-                    print(f"ERROR: Model file does not exist: {model_path}")
-                    sys.exit(1)
-                model_paths.append(model_path)
-            except ValueError as e:
-                print(f"ERROR: {e}")
-                sys.exit(1)
-        return model_paths
-    
-    else:
-        # Use direct model file specification
-        model_files = [file.strip() for file in args.model_files.split(',')]
-        model_dirs = [dir.strip() for dir in args.model_dirs.split(',')]
-        
-        # Validate that we have the same number of files, directories, and strategies (only if strategies are specified)
-        if strategy_names and (len(model_files) != len(model_dirs) or len(model_files) != len(strategy_names)):
-            print(f"ERROR: Number of model files ({len(model_files)}), directories ({len(model_dirs)}), and strategies ({len(strategy_names)}) must all match")
-            sys.exit(1)
-        elif len(model_files) != len(model_dirs):
-            print(f"ERROR: Number of model files ({len(model_files)}) must match number of model directories ({len(model_dirs)})")
-            sys.exit(1)
-        
-        # Build model paths
-        model_paths = []
-        for model_file, model_dir in zip(model_files, model_dirs):
-            model_path = os.path.join(model_dir, model_file)
-            
-            # Validate model path exists
-            if not os.path.exists(model_path):
-                print(f"ERROR: Model file does not exist: {model_path}")
-                sys.exit(1)
-            
-            model_paths.append(model_path)
-        return model_paths
 
 
 def create_strategy_configurations(args, strategy_names, model_paths):
@@ -871,7 +814,7 @@ def main():
         strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
         
         # Check for Gumbel algorithm issues and print warnings
-        check_gumbel_configurations(args, strategy_configs)
+        check_gumbel_configurations(strategy_configs)
     
     # Determine how many openings to play per pair.
     # Always use --round-robin-games for the unified tournament system
