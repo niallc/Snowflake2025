@@ -9,6 +9,7 @@ import csv
 import json
 import time
 import traceback
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
@@ -33,6 +34,21 @@ from hex_ai.validation_defaults import resolve_validation_config, log_validation
 logger = logging.getLogger(__name__)
 
 
+@contextmanager
+def _temporary_logger_levels(level_overrides: Dict[str, int]):
+    """Temporarily override logger levels, then restore previous values."""
+    previous_levels: Dict[str, int] = {}
+    try:
+        for logger_name, level in level_overrides.items():
+            module_logger = logging.getLogger(logger_name)
+            previous_levels[logger_name] = module_logger.level
+            module_logger.setLevel(level)
+        yield
+    finally:
+        for logger_name, previous_level in previous_levels.items():
+            logging.getLogger(logger_name).setLevel(previous_level)
+
+
 def create_datasets(data_dirs: List[str], 
                    shard_ranges: List[str],
                    validation_dirs: List[str],
@@ -46,6 +62,7 @@ def create_datasets(data_dirs: List[str],
                    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
                    verbose: int = 2,
+                   concise_restart_logging: bool = False,
                    shutdown_handler=None):
     """
     Create DataLoader objects from StreamingMixedShardDataset for train and val sets.
@@ -54,73 +71,104 @@ def create_datasets(data_dirs: List[str],
     from hex_ai.data_pipeline import StreamingMixedShardDataset
     
     try:
-        logger.info("Creating training dataset...")
-        train_dataset = StreamingMixedShardDataset(
-            data_dirs=data_dirs,
-            shard_ranges=shard_ranges,
-            pool_size=pool_size,
-            refill_threshold=refill_threshold,
-            max_memory_gb=max_memory_gb,
-            enable_augmentation=True,
-            max_examples_unaugmented=max_examples_unaugmented,
-            verbose=verbose,
-            random_seed=random_seed,
-            shutdown_handler=shutdown_handler
+        dataset_verbose = 0 if concise_restart_logging else verbose
+        data_pipeline_log_overrides = (
+            {"hex_ai.data_pipeline": logging.WARNING}
+            if concise_restart_logging
+            else {}
         )
-        logger.info("Training dataset created. Done.")
-        
-        if max_validation_examples and validation_dirs:
-            logger.info("Creating validation dataset...")
-            val_dataset = StreamingMixedShardDataset(
-                data_dirs=validation_dirs,
-                shard_ranges=validation_shard_ranges,
+
+        if concise_restart_logging:
+            logger.info("Restart setup: Loading training shards...")
+        else:
+            logger.info("Creating training dataset...")
+
+        with _temporary_logger_levels(data_pipeline_log_overrides):
+            train_dataset = StreamingMixedShardDataset(
+                data_dirs=data_dirs,
+                shard_ranges=shard_ranges,
                 pool_size=pool_size,
                 refill_threshold=refill_threshold,
                 max_memory_gb=max_memory_gb,
-                enable_augmentation=False,  # Validation dataset is not augmented
-                max_examples_unaugmented=max_validation_examples,
-                verbose=verbose,
+                enable_augmentation=True,
+                max_examples_unaugmented=max_examples_unaugmented,
+                verbose=dataset_verbose,
                 random_seed=random_seed,
-                is_validation=True,  # Enable validation-specific behavior
                 shutdown_handler=shutdown_handler
             )
-            logger.info("Validation dataset created. Done.")
-        else:
-            val_dataset = None
-        
+
+            if max_validation_examples and validation_dirs:
+                if concise_restart_logging:
+                    logger.info("Restart setup: Loading validation shards...")
+                else:
+                    logger.info("Creating validation dataset...")
+                val_dataset = StreamingMixedShardDataset(
+                    data_dirs=validation_dirs,
+                    shard_ranges=validation_shard_ranges,
+                    pool_size=pool_size,
+                    refill_threshold=refill_threshold,
+                    max_memory_gb=max_memory_gb,
+                    enable_augmentation=False,  # Validation dataset is not augmented
+                    max_examples_unaugmented=max_validation_examples,
+                    verbose=dataset_verbose,
+                    random_seed=random_seed,
+                    is_validation=True,  # Enable validation-specific behavior
+                    shutdown_handler=shutdown_handler
+                )
+            else:
+                val_dataset = None
+
         # Log data summary after shard discovery
         train_summary = train_dataset.get_data_summary()
-        logger.info("=" * 60)
-        logger.info("TRAINING DATA SUMMARY")
-        logger.info("=" * 60)
-        logger.info(f"Estimated total positions: ~{train_summary['estimated_total_positions']:,}")
-        logger.info(f"Estimated total games: ~{train_summary['estimated_total_games']:,}")
-        logger.info(f"Total shards: {train_summary['total_shards']}")
-        logger.info(f"Data directories: {train_summary['directories']}")
-        if max_examples_unaugmented is not None and train_summary['estimated_total_positions'] > 0:
-            estimated_positions = train_summary['estimated_total_positions']
-            coverage = min(1.0, max_examples_unaugmented / estimated_positions)
+        if concise_restart_logging:
             logger.info(
-                f"Per-epoch training cap: {max_examples_unaugmented:,} unaugmented samples "
-                f"(~{coverage:.1%} of estimated available positions)"
+                "Restart setup: Loading training shards... done "
+                f"({train_summary['directories']} dirs, {train_summary['total_shards']} shards, "
+                f"~{train_summary['estimated_total_positions']:,} positions)"
             )
-            if coverage < 0.5:
-                logger.warning(
-                    "Per-epoch cap is significantly below estimated available training data. "
-                    "Increase max_examples_unaugmented/--max_samples if you want longer epochs."
+        else:
+            logger.info("Training dataset created. Done.")
+            logger.info("=" * 60)
+            logger.info("TRAINING DATA SUMMARY")
+            logger.info("=" * 60)
+            logger.info(f"Estimated total positions: ~{train_summary['estimated_total_positions']:,}")
+            logger.info(f"Estimated total games: ~{train_summary['estimated_total_games']:,}")
+            logger.info(f"Total shards: {train_summary['total_shards']}")
+            logger.info(f"Data directories: {train_summary['directories']}")
+            if max_examples_unaugmented is not None and train_summary['estimated_total_positions'] > 0:
+                estimated_positions = train_summary['estimated_total_positions']
+                coverage = min(1.0, max_examples_unaugmented / estimated_positions)
+                logger.info(
+                    f"Per-epoch training cap: {max_examples_unaugmented:,} unaugmented samples "
+                    f"(~{coverage:.1%} of estimated available positions)"
                 )
-        logger.info("=" * 60)
-        
+                if coverage < 0.5:
+                    logger.warning(
+                        "Per-epoch cap is significantly below estimated available training data. "
+                        "Increase max_examples_unaugmented/--max_samples if you want longer epochs."
+                    )
+            logger.info("=" * 60)
+
         # Log validation data summary if validation dataset exists
         if val_dataset is not None:
             val_summary = val_dataset.get_data_summary()
-            logger.info("VALIDATION DATA SUMMARY")
-            logger.info("=" * 60)
-            logger.info(f"Estimated total positions: ~{val_summary['estimated_total_positions']:,}")
-            logger.info(f"Estimated total games: ~{val_summary['estimated_total_games']:,}")
-            logger.info(f"Total shards: {val_summary['total_shards']}")
-            logger.info(f"Data directories: {val_summary['directories']}")
-            logger.info("=" * 60)
+            if concise_restart_logging:
+                logger.info(
+                    "Restart setup: Loading validation shards... done "
+                    f"({val_summary['directories']} dirs, {val_summary['total_shards']} shards, "
+                    f"~{val_summary['estimated_total_positions']:,} positions)"
+                )
+            else:
+                logger.info("Validation dataset created. Done.")
+                logger.info("VALIDATION DATA SUMMARY")
+                logger.info("=" * 60)
+                logger.info(f"Estimated total positions: ~{val_summary['estimated_total_positions']:,}")
+                logger.info(f"Estimated total games: ~{val_summary['estimated_total_games']:,}")
+                logger.info(f"Total shards: {val_summary['total_shards']}")
+                logger.info(f"Data directories: {val_summary['directories']}")
+                logger.info("=" * 60)
+        elif concise_restart_logging:
+            logger.info("Restart setup: Validation dataset disabled.")
         
         # Create DataLoaders from the datasets
         train_loader = torch.utils.data.DataLoader(
@@ -579,6 +627,7 @@ def run_hyperparameter_tuning_current_data(
     target_end_epoch: Optional[int] = None,
     allow_missing_stream_sidecar_fallback: bool = False,
     skip_shard_range_validation: bool = False,
+    concise_restart_logging: bool = False,
 ) -> Dict:
     """
     Orchestrates the full hyperparameter sweep using modular helpers for data, dataset, and experiment logic.
@@ -616,6 +665,8 @@ def run_hyperparameter_tuning_current_data(
         skip_shard_range_validation: If True, skip preflight shard discovery validation.
             Intended for internal chunked restarts where dataset initialization performs
             equivalent fail-fast checks.
+        concise_restart_logging: If True, emit compact restart summaries and suppress
+            detailed per-shard/per-directory setup logs.
         
     Returns:
         Dictionary containing overall results
@@ -633,7 +684,13 @@ def run_hyperparameter_tuning_current_data(
     if experiment_name is None:
         experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    logger.info(f"\nGrabbing data from {len(data_dirs)} directories with random seed {random_seed}...")
+    if concise_restart_logging:
+        logger.info(
+            f"Restart setup: Rebuilding datasets from {len(data_dirs)} data directories "
+            f"(seed={random_seed})."
+        )
+    else:
+        logger.info(f"\nGrabbing data from {len(data_dirs)} directories with random seed {random_seed}...")
     
     # Validate directories and shard ranges
     if shard_ranges is None:
@@ -644,11 +701,17 @@ def run_hyperparameter_tuning_current_data(
         raise ValueError(f"Number of shard_ranges ({len(shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
     
     # Resolve validation configuration
-    resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
-        validation_dirs=validation_dirs,
-        validation_shard_ranges=validation_shard_ranges,
-        no_validation=False  # We don't support no_validation in this function
+    validation_log_overrides = (
+        {"hex_ai.validation_defaults": logging.WARNING}
+        if concise_restart_logging
+        else {}
     )
+    with _temporary_logger_levels(validation_log_overrides):
+        resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
+            validation_dirs=validation_dirs,
+            validation_shard_ranges=validation_shard_ranges,
+            no_validation=False  # We don't support no_validation in this function
+        )
     
     # Validate validation configuration if not empty
     if resolved_validation_dirs and resolved_validation_ranges:
@@ -656,10 +719,13 @@ def run_hyperparameter_tuning_current_data(
             raise ValueError(f"Number of validation directories ({len(resolved_validation_dirs)}) must match number of validation shard ranges ({len(resolved_validation_ranges)})")
     
     if skip_shard_range_validation:
-        logger.info(
-            "Skipping preflight shard-range validation (internal chunk restart mode). "
-            "Dataset initialization will still perform fail-fast shard discovery."
-        )
+        if concise_restart_logging:
+            logger.info("Restart setup: Skipping preflight shard-range validation (internal chunk mode).")
+        else:
+            logger.info(
+                "Skipping preflight shard-range validation (internal chunk restart mode). "
+                "Dataset initialization will still perform fail-fast shard discovery."
+            )
     else:
         # Validate training shard ranges
         from hex_ai.data_collection import validate_shard_ranges
@@ -670,14 +736,29 @@ def run_hyperparameter_tuning_current_data(
             validate_shard_ranges(resolved_validation_dirs, resolved_validation_ranges, context_name="validation", logger=logger)
     
     # Log validation summary
-    log_validation_summary(resolved_validation_dirs, resolved_validation_ranges)
+    if concise_restart_logging:
+        if resolved_validation_dirs and resolved_validation_ranges:
+            logger.info(
+                "Restart setup: Validation config ready "
+                f"({len(resolved_validation_dirs)} dirs, {len(resolved_validation_ranges)} ranges)."
+            )
+        else:
+            logger.info("Restart setup: Validation config ready (no validation data).")
+    else:
+        log_validation_summary(resolved_validation_dirs, resolved_validation_ranges)
     
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
     
     # Create datasets using the new mixed shard approach
-    logger.info(f"Using StreamingMixedShardDataset with pool_size={pool_size:,}, refill_threshold={refill_threshold:,}")
-    logger.info("Creating training and validation datasets...")
+    if concise_restart_logging:
+        logger.info(
+            "Restart setup: Initializing streaming datasets "
+            f"(pool_size={pool_size:,}, refill_threshold={refill_threshold:,})..."
+        )
+    else:
+        logger.info(f"Using StreamingMixedShardDataset with pool_size={pool_size:,}, refill_threshold={refill_threshold:,}")
+        logger.info("Creating training and validation datasets...")
     train_loader, val_loader = create_datasets(
         data_dirs=data_dirs,
         shard_ranges=shard_ranges,
@@ -691,13 +772,23 @@ def run_hyperparameter_tuning_current_data(
         refill_threshold=refill_threshold,
         max_memory_gb=max_memory_gb,
         random_seed=random_seed,
-        verbose=verbose,
+        verbose=0 if concise_restart_logging else verbose,
+        concise_restart_logging=concise_restart_logging,
         shutdown_handler=shutdown_handler
     )
-    logger.info("Datasets created. Done.")
+    if concise_restart_logging:
+        logger.info("Restart setup: Dataset initialization complete.")
+    else:
+        logger.info("Datasets created. Done.")
     
     # Log dataset information
-    logger.info(f"\nStreaming mixed dataset: up to {max_examples_unaugmented} training examples, up to {max_validation_examples} validation examples.")
+    if concise_restart_logging:
+        logger.info(
+            "Restart setup: Streaming dataset ready "
+            f"(train_cap={max_examples_unaugmented}, val_cap={max_validation_examples})."
+        )
+    else:
+        logger.info(f"\nStreaming mixed dataset: up to {max_examples_unaugmented} training examples, up to {max_validation_examples} validation examples.")
     
     if train_loader is None:
         return {'error': 'Failed to create datasets'}

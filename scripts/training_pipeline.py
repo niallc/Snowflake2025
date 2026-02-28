@@ -703,6 +703,7 @@ class TrainingStep:
             target_end_epoch=target_end_epoch,
             allow_missing_stream_sidecar_fallback=allow_missing_stream_sidecar_fallback,
             skip_shard_range_validation=self.config.internal_training_chunk_run,
+            concise_restart_logging=self.config.internal_training_chunk_run,
         )
 
     def _build_child_chunk_command(
@@ -907,12 +908,26 @@ class TrainingStep:
         results_dir = str(Path(self.config.results_dir) / f"pipeline_{self.config.run_timestamp}")
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        self.logger.info(f"New training data directory: {new_shuffled_dir}")
-        self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
-        self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
-        self.logger.info(f"Results directory: {results_dir}")
-        self.logger.info(f"Max samples: {self.config.max_samples}")
-        self.logger.info(f"Resume from: {self.config.model_full_path}")
+        if self.config.internal_training_chunk_run:
+            resolved_validation_dirs = self.config.resolved_validation_dirs or []
+            self.logger.info(
+                "Restart chunk summary: training_dirs=%d, validation_dirs=%d, max_mini_epochs=%s",
+                len(self.config.training_data_dirs),
+                len(resolved_validation_dirs),
+                (
+                    self.config.max_mini_epochs_per_run
+                    if self.config.max_mini_epochs_per_run is not None
+                    else "none"
+                ),
+            )
+            self.logger.info(f"Restart chunk summary: resume checkpoint {self.config.model_full_path}")
+        else:
+            self.logger.info(f"New training data directory: {new_shuffled_dir}")
+            self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
+            self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
+            self.logger.info(f"Results directory: {results_dir}")
+            self.logger.info(f"Max samples: {self.config.max_samples}")
+            self.logger.info(f"Resume from: {self.config.model_full_path}")
 
         experiments = self._build_experiments()
 
@@ -981,7 +996,10 @@ class TrainingPipeline:
         self.logger.info("=" * 60)
         self.logger.info(f"Run timestamp: {self.config.run_timestamp}")
         self.logger.info(f"Model: {self.config.model_full_path}")
-        self.logger.info(f"Configuration: {self.config}")
+        if self.config.internal_training_chunk_run:
+            self.logger.info("Configuration: internal training chunk restart mode")
+        else:
+            self.logger.info(f"Configuration: {self.config}")
         
         # Validate configuration
         self.config.validate(
@@ -997,6 +1015,52 @@ class TrainingPipeline:
             take_snapshot("pipeline_start")
         
         try:
+            if self.config.internal_training_chunk_run:
+                self.current_step = 5
+                self.logger.info("Internal chunk restart mode: running training only.")
+                unexpected_enabled_steps = [
+                    name
+                    for name, enabled in (
+                        ("run_game_collection", self.config.run_game_collection),
+                        ("run_selfplay", self.config.run_selfplay),
+                        ("run_preprocessing", self.config.run_preprocessing),
+                        ("run_trmph_processing", self.config.run_trmph_processing),
+                        ("run_shuffling", self.config.run_shuffling),
+                    )
+                    if enabled
+                ]
+                if unexpected_enabled_steps:
+                    raise ValueError(
+                        "internal_training_chunk_run only supports training. "
+                        f"Disable non-training steps: {unexpected_enabled_steps}"
+                    )
+                if not self.config.run_training:
+                    raise ValueError("internal_training_chunk_run requires training to be enabled")
+                if not self.config.training_data_dirs:
+                    raise ValueError(
+                        "internal_training_chunk_run requires --training-data-dirs to be provided"
+                    )
+
+                results_dir = self.training_step.run(None)
+                self.step_results['training'] = results_dir
+
+                # Cleanup intermediate files
+                if self.config.cleanup_intermediate:
+                    self._cleanup_intermediate_files()
+
+                elapsed_time = time.time() - start_time
+                self.logger.info(
+                    f"Internal chunk restart completed in {elapsed_time:.1f}s "
+                    f"({elapsed_time/60:.1f} minutes)"
+                )
+                self.logger.info(f"Results: {self.step_results}")
+
+                # Stop memory profiling if enabled
+                if self.config.enable_memory_profiling:
+                    take_snapshot("pipeline_end")
+                    stop_profiling()
+                return
+
             # Step 0: Game collection (optional)
             if self.config.run_game_collection:
                 self.current_step = 0
