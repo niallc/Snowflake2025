@@ -53,6 +53,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import List, Dict, Any, Optional, Tuple
@@ -71,9 +72,14 @@ from hex_ai.config import (
 )
 from hex_ai.inference.model_config import get_all_model_participants_from_generations
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
-from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters
+from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.utils.tournament_logging import get_command_line
-from hex_ai.utils.tournament_utils import parse_tournament_parameters, parse_model_specifications
+from hex_ai.utils.tournament_utils import (
+    parse_tournament_parameters,
+    parse_model_specifications,
+    create_strategy_configs_for_tournament,
+    format_strategy_configuration_details,
+)
 from hex_ai.utils.random_utils import set_deterministic_seeds
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
 from hex_ai.inference.game_execution import (
@@ -328,49 +334,6 @@ def is_knockout_only_tournament(args) -> bool:
     return has_knockout and not args.models and not args.model_files
 
 
-def create_strategy_configurations(args, strategy_names, model_paths):
-    """Create strategy configurations for the tournament."""
-    if is_knockout_only_tournament(args):
-        return []
-    
-    # Parse optional parameters using shared utility
-    parsed_params = parse_tournament_parameters(args)
-    mcts_sims = parsed_params['mcts_sims']
-    batch_sizes = parsed_params['batch_sizes']
-    c_pucts = parsed_params['c_pucts']
-    enable_gumbel = parsed_params['enable_gumbel']
-    gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
-    gumbel_candidate_power_scales = parsed_params['gumbel_candidate_power_scales']
-    gumbel_candidate_power_rates = parsed_params['gumbel_candidate_power_rates']
-    gumbel_candidate_power_offsets = parsed_params['gumbel_candidate_power_offsets']
-    gumbel_c_scales = parsed_params['gumbel_c_scales']
-    temperatures = parsed_params['temperatures']
-    
-    try:
-        strategy_configs = create_strategy_configs_from_parameters(
-            strategies=strategy_names,
-            model_paths=model_paths,
-            mcts_sims=mcts_sims,
-            temperatures=temperatures,
-            batch_sizes=batch_sizes,
-            c_pucts=c_pucts,
-            enable_gumbel=enable_gumbel,
-            gumbel_sim_thresholds=gumbel_sim_thresholds,
-            gumbel_candidate_power_scales=gumbel_candidate_power_scales,
-            gumbel_candidate_power_rates=gumbel_candidate_power_rates,
-            gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
-            gumbel_c_scales=gumbel_c_scales,
-            num_games=args.round_robin_games,
-            board_size=13,
-            pie_rule=False,
-        )
-    except ValueError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
-    
-    return strategy_configs
-
-
 def print_round_robin_strategy_summary(strategy_configs: List[StrategyConfig]) -> None:
     """Print key per-strategy settings for round-robin tournament participants."""
     if not strategy_configs:
@@ -378,43 +341,8 @@ def print_round_robin_strategy_summary(strategy_configs: List[StrategyConfig]) -
 
     print("  Round-robin strategy configurations:")
     for i, strategy in enumerate(strategy_configs, start=1):
-        if strategy.strategy_type != "mcts":
-            print(
-                f"    {i}. {strategy.name}: "
-                f"type={strategy.strategy_type}, "
-                f"temperature={strategy.temperature}"
-            )
-            continue
-
-        cfg = strategy.config
-        summary_parts = [
-            "type=mcts",
-            f"temperature={strategy.temperature}",
-            f"sims={cfg.get('mcts_sims')}",
-            f"c_puct={cfg.get('mcts_c_puct')}",
-            f"batch_size={cfg.get('batch_size')}",
-            f"gumbel={cfg.get('enable_gumbel_root_selection', False)}",
-        ]
-
-        if cfg.get("enable_gumbel_root_selection", False):
-            if cfg.get("gumbel_sim_threshold") is not None:
-                summary_parts.append(f"gumbel_sim_threshold={cfg.get('gumbel_sim_threshold')}")
-            if cfg.get("gumbel_c_scale") is not None:
-                summary_parts.append(f"gumbel_c_scale={cfg.get('gumbel_c_scale')}")
-            if cfg.get("gumbel_candidate_power_scale") is not None:
-                summary_parts.append(
-                    f"gumbel_power_scale={cfg.get('gumbel_candidate_power_scale')}"
-                )
-            if cfg.get("gumbel_candidate_power_rate") is not None:
-                summary_parts.append(
-                    f"gumbel_power_rate={cfg.get('gumbel_candidate_power_rate')}"
-                )
-            if cfg.get("gumbel_candidate_power_offset") is not None:
-                summary_parts.append(
-                    f"gumbel_power_offset={cfg.get('gumbel_candidate_power_offset')}"
-                )
-
-        print(f"    {i}. {strategy.name}: {', '.join(summary_parts)}")
+        details = format_strategy_configuration_details(strategy)
+        print(f"    {i}. {strategy.name}: {details}")
 
 
 def _dedupe_preserve_order(values: List[Any]) -> List[Any]:
@@ -549,7 +477,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     
     # Parse command-line MCTS parameters and merge into knockout_config
     # This allows users to specify --mcts-sims, --enable-gumbel, etc. directly
-    parsed_params = parse_tournament_parameters(args)
+    parsed_params = parse_tournament_parameters(args, include_defaults=False)
     
     # For knockout-only tournaments, validate that only single values are provided
     # (Multiple values are only meaningful for round-robin stage where different configs are compared)
@@ -589,8 +517,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         knockout_config['enable_gumbel_root_selection'] = parsed_params['enable_gumbel'][0]
     if parsed_params.get('temperatures') and isinstance(parsed_params['temperatures'], list) and len(parsed_params['temperatures']) > 0:
         knockout_config['temperature'] = parsed_params['temperatures'][0]
-    elif args.temperature is not None:
-        # Also check for singular --temperature argument
+    elif command_line and re.search(r"(^|\s)--temperature(?:=|\s|$)", command_line):
+        # Respect singular --temperature only when explicitly provided.
         knockout_config['temperature'] = args.temperature
     if parsed_params.get('c_pucts') and len(parsed_params['c_pucts']) > 0:
         knockout_config['c_puct'] = parsed_params['c_pucts'][0]
@@ -811,7 +739,18 @@ def main():
         model_paths = parse_model_specifications(args, strategy_names)
         
         # Create strategy configurations
-        strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
+        try:
+            strategy_configs = create_strategy_configs_for_tournament(
+                args,
+                strategy_names,
+                model_paths,
+                num_games=args.round_robin_games,
+                board_size=13,
+                pie_rule=False,
+            )
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
         
         # Check for Gumbel algorithm issues and print warnings
         check_gumbel_configurations(strategy_configs)

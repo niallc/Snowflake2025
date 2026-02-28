@@ -9,6 +9,7 @@ import os
 from typing import List, Dict, Tuple, Optional, Union, Any
 
 from hex_ai.config import (
+    BOARD_SIZE,
     DEFAULT_BATCH_CAP,
     DEFAULT_C_PUCT,
     DEFAULT_MCTS_SIMS,
@@ -21,6 +22,8 @@ from hex_ai.config import (
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.strategy_config import (
     DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION,
+    StrategyConfig,
+    create_strategy_configs_from_parameters,
     to_list_if_needed,
 )
 
@@ -334,7 +337,7 @@ def determine_winner_labels_simple(
     return winner_label, loser_label
 
 
-def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
+def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dict[str, Any]:
     """
     Parse tournament parameters from command line arguments.
     
@@ -344,71 +347,72 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
     Args:
         args: Parsed command line arguments
         
+        include_defaults: When True, missing parameters resolve to config defaults.
+            When False, missing parameters resolve to None (explicit CLI overrides only).
+
     Returns:
         Dictionary containing parsed parameters
     """
     # Parse optional parameters using unified system.
-    # Defaults come from hex_ai.config / strategy_config so tournament scripts
-    # can rely on explicit, centralized baseline values.
     mcts_sims = (
         [int(s.strip()) for s in args.mcts_sims.split(',')]
         if args.mcts_sims
-        else [DEFAULT_MCTS_SIMS]
+        else ([DEFAULT_MCTS_SIMS] if include_defaults else None)
     )
 
     batch_sizes = (
         [int(s.strip()) for s in args.batch_sizes.split(',')]
         if args.batch_sizes
-        else [DEFAULT_BATCH_CAP]
+        else ([DEFAULT_BATCH_CAP] if include_defaults else None)
     )
 
     c_pucts = (
         [float(s.strip()) for s in args.c_puct.split(',')]
         if args.c_puct
-        else [DEFAULT_C_PUCT]
+        else ([DEFAULT_C_PUCT] if include_defaults else None)
     )
 
     enable_gumbel = (
         [s.strip().lower() == 'true' for s in args.enable_gumbel.split(',')]
         if args.enable_gumbel
-        else [DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION]
+        else ([DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION] if include_defaults else None)
     )
 
     gumbel_sim_thresholds = (
         [int(s.strip()) for s in args.gumbel_sim_threshold.split(',')]
         if args.gumbel_sim_threshold
-        else [DEFAULT_GUMBEL_SIM_THRESHOLD]
+        else ([DEFAULT_GUMBEL_SIM_THRESHOLD] if include_defaults else None)
     )
 
     gumbel_candidate_power_scales = (
         [float(s.strip()) for s in args.gumbel_candidate_power_scale.split(',')]
         if args.gumbel_candidate_power_scale
-        else [DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE]
+        else ([DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE] if include_defaults else None)
     )
 
     gumbel_candidate_power_rates = (
         [float(s.strip()) for s in args.gumbel_candidate_power_rate.split(',')]
         if args.gumbel_candidate_power_rate
-        else [DEFAULT_GUMBEL_CANDIDATE_POWER_RATE]
+        else ([DEFAULT_GUMBEL_CANDIDATE_POWER_RATE] if include_defaults else None)
     )
 
     gumbel_candidate_power_offsets = (
         [float(s.strip()) for s in args.gumbel_candidate_power_offset.split(',')]
         if args.gumbel_candidate_power_offset
-        else [DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET]
+        else ([DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET] if include_defaults else None)
     )
 
     gumbel_c_scales = (
         [float(s.strip()) for s in args.gumbel_c_scale.split(',')]
         if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale
-        else [DEFAULT_GUMBEL_C_SCALE]
+        else ([DEFAULT_GUMBEL_C_SCALE] if include_defaults else None)
     )
     
     # Parse per-strategy temperatures
     temperatures = None
     if args.temperatures:
         temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
-    elif hasattr(args, 'temperature') and args.temperature is not None:
+    elif include_defaults and hasattr(args, 'temperature') and args.temperature is not None:
         # Use global temperature as default for all strategies
         temperatures = args.temperature
     
@@ -424,6 +428,61 @@ def parse_tournament_parameters(args: Any) -> Dict[str, Any]:
         'gumbel_c_scales': gumbel_c_scales,
         'temperatures': temperatures
     }
+
+
+def create_strategy_configs_for_tournament(
+    args: Any,
+    strategy_names: List[str],
+    model_paths: List[str],
+    num_games: int,
+    board_size: int = BOARD_SIZE,
+    pie_rule: bool = False,
+) -> List[StrategyConfig]:
+    """Create strategy configurations using parsed tournament arguments."""
+    parsed_params = parse_tournament_parameters(args, include_defaults=True)
+    return create_strategy_configs_from_parameters(
+        strategies=strategy_names,
+        model_paths=model_paths,
+        mcts_sims=parsed_params['mcts_sims'],
+        temperatures=parsed_params['temperatures'],
+        batch_sizes=parsed_params['batch_sizes'],
+        c_pucts=parsed_params['c_pucts'],
+        enable_gumbel=parsed_params['enable_gumbel'],
+        gumbel_sim_thresholds=parsed_params['gumbel_sim_thresholds'],
+        gumbel_candidate_power_scales=parsed_params['gumbel_candidate_power_scales'],
+        gumbel_candidate_power_rates=parsed_params['gumbel_candidate_power_rates'],
+        gumbel_candidate_power_offsets=parsed_params['gumbel_candidate_power_offsets'],
+        gumbel_c_scales=parsed_params['gumbel_c_scales'],
+        num_games=num_games,
+        board_size=board_size,
+        pie_rule=pie_rule,
+    )
+
+
+def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
+    """Format one strategy configuration for human-readable logging."""
+    details = [
+        f"type={strategy.strategy_type}",
+        f"temperature={strategy.temperature}",
+    ]
+    if strategy.strategy_type == "mcts":
+        cfg = strategy.config
+        details.append(f"sims={cfg.get('mcts_sims')}")
+        details.append(f"c_puct={cfg.get('mcts_c_puct')}")
+        details.append(f"batch_size={cfg.get('batch_size')}")
+        details.append(f"gumbel={cfg.get('enable_gumbel_root_selection', False)}")
+        if cfg.get("enable_gumbel_root_selection", False):
+            if cfg.get("gumbel_sim_threshold") is not None:
+                details.append(f"gumbel_sim_threshold={cfg.get('gumbel_sim_threshold')}")
+            if cfg.get("gumbel_c_scale") is not None:
+                details.append(f"gumbel_c_scale={cfg.get('gumbel_c_scale')}")
+            if cfg.get("gumbel_candidate_power_scale") is not None:
+                details.append(f"gumbel_power_scale={cfg.get('gumbel_candidate_power_scale')}")
+            if cfg.get("gumbel_candidate_power_rate") is not None:
+                details.append(f"gumbel_power_rate={cfg.get('gumbel_candidate_power_rate')}")
+            if cfg.get("gumbel_candidate_power_offset") is not None:
+                details.append(f"gumbel_power_offset={cfg.get('gumbel_candidate_power_offset')}")
+    return ", ".join(details)
 
 
 def parse_model_specifications(args: Any, strategy_names: List[str]) -> List[str]:

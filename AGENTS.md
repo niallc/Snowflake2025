@@ -29,6 +29,7 @@ This file captures project-specific guidance for Codex agents working in this re
 - Typical updates are append-only additions to `MODEL_GENERATIONS`.
 - Do not treat these updates as unexpected or concerning during unrelated cleanup/refactor work.
 - Ignore unrelated `model_config.py` changes unless the task explicitly requires editing that file.
+- If hex_ai/inference/model_config.py is dirty and not part of the task, continue without pausing or asking; treat it as expected background churn.
 
 ### 2026-02-25 - Fail-Fast and Explicit Override Policy
 - Prefer fail-fast behavior when restart/state assumptions are violated (missing files, incompatible state, unexpected invariants).

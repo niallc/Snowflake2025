@@ -1347,7 +1347,7 @@ Examples:
     parser.add_argument(
         "--restart-every-mini-epochs",
         type=int,
-        default=10,
+        default=50,
         help="Restart the training subprocess every N mini-epochs (default: 10, set 0 to disable).",
     )
     parser.add_argument(

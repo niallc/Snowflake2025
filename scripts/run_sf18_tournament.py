@@ -51,6 +51,7 @@ from hex_ai.config import (
     DEFAULT_C_PUCT,
     DEFAULT_MCTS_SIMS,
     DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_GUMBEL_C_SCALE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
@@ -61,10 +62,14 @@ from hex_ai.enums import Player, Winner
 from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
-from hex_ai.inference.strategy_config import StrategyConfig, create_strategy_configs_from_parameters
+from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
-from hex_ai.utils.tournament_utils import parse_tournament_parameters, parse_model_specifications
+from hex_ai.utils.tournament_utils import (
+    parse_model_specifications,
+    create_strategy_configs_for_tournament,
+    format_strategy_configuration_details,
+)
 from hex_ai.utils.deterministic_tournament_utils import (
     setup_tournament_output,
     save_opening_positions,
@@ -567,6 +572,8 @@ Examples:
                        help=f'Comma-separated power rates for Gumbel candidate scaling (e.g., "0.39,0.45,0.50", default: {DEFAULT_GUMBEL_CANDIDATE_POWER_RATE})')
     parser.add_argument('--gumbel-candidate-power-offset', type=str,
                        help=f'Comma-separated power offsets for Gumbel candidate scaling (e.g., "-4.0,-3.0,-2.0", default: {DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET})')
+    parser.add_argument('--gumbel-c-scale', type=str,
+                       help=f'Comma-separated c_scale parameters for Gumbel AlphaZero root selection (e.g., "1000,5000,10000", default: {DEFAULT_GUMBEL_C_SCALE})')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -589,45 +596,6 @@ Examples:
                        help='Description of this tournament run (e.g., "Testing c_scale = 1.5") - will be included in output headers')
     
     return parser.parse_args()
-
-
-def create_strategy_configurations(args, strategy_names, model_paths):
-    """Create strategy configurations for the tournament."""
-    # Parse optional parameters using shared utility
-    parsed_params = parse_tournament_parameters(args)
-    mcts_sims = parsed_params['mcts_sims']
-    batch_sizes = parsed_params['batch_sizes']
-    c_pucts = parsed_params['c_pucts']
-    enable_gumbel = parsed_params['enable_gumbel']
-    gumbel_sim_thresholds = parsed_params['gumbel_sim_thresholds']
-    gumbel_candidate_power_scales = parsed_params['gumbel_candidate_power_scales']
-    gumbel_candidate_power_rates = parsed_params['gumbel_candidate_power_rates']
-    gumbel_candidate_power_offsets = parsed_params['gumbel_candidate_power_offsets']
-    temperatures = parsed_params['temperatures']
-    
-    try:
-        strategy_configs = create_strategy_configs_from_parameters(
-            strategies=strategy_names,
-            model_paths=model_paths,
-            mcts_sims=mcts_sims,
-            temperatures=temperatures,
-            batch_sizes=batch_sizes,
-            c_pucts=c_pucts,
-            enable_gumbel=enable_gumbel,
-            gumbel_sim_thresholds=gumbel_sim_thresholds,
-            gumbel_candidate_power_scales=gumbel_candidate_power_scales,
-            gumbel_candidate_power_rates=gumbel_candidate_power_rates,
-            gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
-            num_games=args.num_openings,
-            board_size=13,
-            pie_rule=False,
-        )
-    except ValueError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
-    
-    return strategy_configs
-
 
 def main():
     args = parse_args()
@@ -663,7 +631,18 @@ def main():
     model_paths = parse_model_specifications(args, strategy_names)
     
     # Create strategy configurations
-    strategy_configs = create_strategy_configurations(args, strategy_names, model_paths)
+    try:
+        strategy_configs = create_strategy_configs_for_tournament(
+            args,
+            strategy_names,
+            model_paths,
+            num_games=args.num_openings,
+            board_size=13,
+            pie_rule=False,
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
     
     # Check SF18 server connectivity
     sf18_client = SF18Client(args.sf18_server_url, args.sf18_timeout)
@@ -719,25 +698,8 @@ def main():
         print(f"  - {config.name}")
     print("SF25 Strategy configurations:")
     for config in strategy_configs:
-        details = [
-            f"type={config.strategy_type}",
-            f"temperature={config.temperature}",
-        ]
-        if config.strategy_type == "mcts":
-            details.append(f"sims={config.config.get('mcts_sims')}")
-            details.append(f"c_puct={config.config.get('mcts_c_puct')}")
-            details.append(f"batch_size={config.config.get('batch_size')}")
-            details.append(f"gumbel={config.config.get('enable_gumbel_root_selection', False)}")
-            if config.config.get('enable_gumbel_root_selection', False):
-                if config.config.get('gumbel_sim_threshold') is not None:
-                    details.append(f"gumbel_sim_threshold={config.config.get('gumbel_sim_threshold')}")
-                if config.config.get('gumbel_candidate_power_scale') is not None:
-                    details.append(f"gumbel_power_scale={config.config.get('gumbel_candidate_power_scale')}")
-                if config.config.get('gumbel_candidate_power_rate') is not None:
-                    details.append(f"gumbel_power_rate={config.config.get('gumbel_candidate_power_rate')}")
-                if config.config.get('gumbel_candidate_power_offset') is not None:
-                    details.append(f"gumbel_power_offset={config.config.get('gumbel_candidate_power_offset')}")
-        print(f"  - {config.name}: {', '.join(details)}")
+        details = format_strategy_configuration_details(config)
+        print(f"  - {config.name}: {details}")
     print(f"SF18 Difficulty: {args.sf18_difficulty}")
     print(f"SF18 Server: {args.sf18_server_url}")
     print(f"Number of openings: {len(openings)}")
