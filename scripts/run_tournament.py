@@ -137,7 +137,6 @@ DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 DEFAULT_MOST_RECENT_ROOT = "checkpoints/hyperparameter_tuning"
 CHECKPOINT_FILE_REGEX = re.compile(r"epoch\d+_mini\d+\.pt\.gz$")
-DEFAULT_ROUND_ROBIN_GENERATION_COUNT = 3
 DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS = 1
 
 # TODO: Consider adding configuration for:
@@ -1033,36 +1032,28 @@ def main():
         strategy_configs = []
     else:
         if auto_default_round_robin_models:
+            default_model_count = len(strategy_names)
             try:
                 model_paths = get_primary_model_paths_from_recent_generations(
-                    count=DEFAULT_ROUND_ROBIN_GENERATION_COUNT,
+                    count=default_model_count,
                     skip_most_recent=DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS,
                 )
             except (ValueError, FileNotFoundError) as error:
                 print(f"ERROR: Failed to load default round-robin models from MODEL_GENERATIONS: {error}")
                 sys.exit(1)
 
-            if len(strategy_names) == 1 and len(model_paths) > 1:
-                strategy_names = strategy_names * len(model_paths)
-                print(
-                    f"INFO: Expanding single strategy '{strategy_names[0]}' "
-                    f"to {len(strategy_names)} round-robin participants."
-                )
-            elif len(strategy_names) != len(model_paths):
+            if len(strategy_names) != len(model_paths):
                 print(
                     "ERROR: Default round-robin model selection produced "
                     f"{len(model_paths)} models, but {len(strategy_names)} strategies were provided."
                 )
-                print(
-                    "Provide either exactly one strategy (to replicate) or exactly "
-                    f"{len(model_paths)} strategies."
-                )
+                print(f"Provide exactly {len(model_paths)} strategies.")
                 sys.exit(1)
 
             print(
                 "INFO: Using default round-robin models from MODEL_GENERATIONS "
                 f"(skip newest {DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS}, "
-                f"take next {DEFAULT_ROUND_ROBIN_GENERATION_COUNT})."
+                f"take next {default_model_count})."
             )
             for model_path in model_paths:
                 print(f"  - {model_path}")
