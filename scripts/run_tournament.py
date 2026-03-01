@@ -52,10 +52,12 @@ Examples:
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import sys
 import time
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
 from hex_ai.memory_profiler import start_profiling, stop_profiling
@@ -88,6 +90,7 @@ from hex_ai.inference.game_execution import (
     load_openings_from_file,
     select_random_openings,
 )
+from hex_ai.inference.checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from hex_ai.inference.two_stage_tournament import TwoStageTournament
 from hex_ai.inference.knockout_tournament import TournamentParticipant
 
@@ -129,6 +132,8 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_SEED = None  # Will be set to int(time.time()) if None
 DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
+DEFAULT_MOST_RECENT_ROOT = "checkpoints/hyperparameter_tuning"
+CHECKPOINT_FILE_REGEX = re.compile(r"epoch\d+_mini\d+\.pt\.gz$")
 
 # TODO: Consider adding configuration for:
 # Low priority: Timeout handling for long-running strategies
@@ -224,6 +229,12 @@ Examples:
                        help='Number of games per knockout match (default: 50)')
     parser.add_argument('--top-k', type=int, default=2,
                        help='Number of winners from knockout stage to advance (default: 2)')
+    parser.add_argument('--most-recent', type=int,
+                       help='Use the N most recent checkpoints from the latest run under --most-recent-root for knockout stage.')
+    parser.add_argument('--most-recent-biased', type=int,
+                       help='Use a recency-biased sample of N checkpoints from the latest run under --most-recent-root for knockout stage.')
+    parser.add_argument('--most-recent-root', type=str, default=DEFAULT_MOST_RECENT_ROOT,
+                       help=f'Root directory for --most-recent/--most-recent-biased (default: {DEFAULT_MOST_RECENT_ROOT})')
     parser.add_argument('--round-robin-games', type=int, default=DEFAULT_NUM_OPENINGS,
                        help='Number of openings per round-robin pair (actual games are doubled via color swap, default: 100)')
     parser.add_argument('--run-desc', type=str,
@@ -328,9 +339,200 @@ def parse_mini_epoch_range(mini_epoch_range_str: str) -> Tuple[int, int]:
     return start_mini_epoch, end_mini_epoch
 
 
+def build_recent_biased_checkpoint_offsets(count: int) -> List[int]:
+    """
+    Build recency-biased offsets from the latest checkpoint.
+
+    Offset semantics:
+      0 -> newest checkpoint
+      -1 -> second newest
+      -2 -> third newest
+      ...
+
+    Examples:
+      count=4  -> [0, -1, -2, -4]
+      count=8  -> [0, -1, -2, -3, -5, -7, -10, -13]
+      count=16 -> [0, -1, -2, -3, -4, -6, -8, -10, -12, -15, -18, -21, -25, -29, -33, -38]
+    """
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+
+    head_len = min(count, int(round(math.sqrt(count))) + 1)
+    distances = list(range(head_len))
+
+    remaining = count - head_len
+    step = 2
+    while remaining > 0:
+        repeats = max(1, int(round(count / (step + 2))))
+        take = min(repeats, remaining)
+        for _ in range(take):
+            distances.append(distances[-1] + step)
+        remaining -= take
+        step += 1
+
+    return [-distance for distance in distances]
+
+
+def _discover_latest_checkpoint_directory(root_dir: str) -> Tuple[Path, Path]:
+    """Find the latest run dir and its most recent checkpoint-containing directory."""
+    root_path = Path(root_dir)
+    if not root_path.exists():
+        raise FileNotFoundError(
+            f"Most-recent root directory does not exist: {root_dir}. "
+            "Please provide a valid directory with hyperparameter runs."
+        )
+    if not root_path.is_dir():
+        raise ValueError(
+            f"Most-recent root path is not a directory: {root_dir}. "
+            "Please provide a directory path."
+        )
+
+    run_dirs = [path for path in root_path.iterdir() if path.is_dir()]
+    if not run_dirs:
+        raise ValueError(
+            f"No run directories found in {root_dir}. "
+            "Please ensure the directory contains hyperparameter run subdirectories."
+        )
+
+    latest_run_dir: Optional[Path] = None
+    latest_checkpoint_dir: Optional[Path] = None
+    latest_mtime: Optional[float] = None
+
+    for run_dir in run_dirs:
+        checkpoint_files: List[Path] = []
+        for file_path in run_dir.rglob("epoch*_mini*.pt.gz"):
+            if file_path.is_file() and CHECKPOINT_FILE_REGEX.match(file_path.name):
+                checkpoint_files.append(file_path)
+
+        if not checkpoint_files:
+            continue
+
+        newest_checkpoint = max(checkpoint_files, key=lambda path: path.stat().st_mtime)
+        newest_checkpoint_mtime = newest_checkpoint.stat().st_mtime
+        if latest_mtime is None or newest_checkpoint_mtime > latest_mtime:
+            latest_mtime = newest_checkpoint_mtime
+            latest_run_dir = run_dir
+            latest_checkpoint_dir = newest_checkpoint.parent
+
+    if latest_run_dir is None or latest_checkpoint_dir is None:
+        raise ValueError(
+            f"No checkpoint files matching 'epochN_miniJ.pt.gz' were found under {root_dir}. "
+            "Please check that training has produced checkpoints in this tree."
+        )
+
+    return latest_run_dir, latest_checkpoint_dir
+
+
+def _select_checkpoints_from_offsets(
+    checkpoints: List[CheckpointInfo],
+    offsets: List[int],
+) -> List[CheckpointInfo]:
+    """Select checkpoints using offsets relative to latest checkpoint (offset 0)."""
+    if not offsets:
+        raise ValueError("Offset list cannot be empty")
+
+    selected_indices = []
+    latest_index = len(checkpoints) - 1
+
+    for offset in offsets:
+        if offset > 0:
+            raise ValueError(
+                f"Offset must be <= 0, got {offset}. "
+                "Offsets are relative to the latest checkpoint (0, -1, -2, ...)."
+            )
+
+        index = latest_index + offset
+        if index < 0 or index >= len(checkpoints):
+            raise ValueError(
+                f"Offset {offset} is out of range for {len(checkpoints)} available checkpoints. "
+                "Use fewer checkpoints or a less aggressive spacing pattern."
+            )
+        selected_indices.append(index)
+
+    if len(set(selected_indices)) != len(selected_indices):
+        raise ValueError(
+            f"Offset schedule produced duplicate checkpoint selections: {offsets}. "
+            "Please use a schedule with unique offsets."
+        )
+
+    selected = [checkpoints[index] for index in selected_indices]
+    selected.sort(key=lambda checkpoint: checkpoint.creation_time)
+    return selected
+
+
+def _build_checkpoint_participant(
+    checkpoint: CheckpointInfo,
+    knockout_config: Dict[str, Any],
+) -> TournamentParticipant:
+    """Build a knockout participant for one discovered checkpoint."""
+    participant_config = knockout_config.copy()
+    participant_config["strategy"] = "mcts"
+    participant_config["model_path"] = str(checkpoint.file_path)
+    if "temperature" not in participant_config:
+        participant_config["temperature"] = 1.0
+
+    return TournamentParticipant(
+        name=checkpoint.name,
+        strategy_config=participant_config,
+        metadata={
+            "checkpoint_file": str(checkpoint.file_path),
+            "epoch": checkpoint.epoch,
+            "mini_epoch": checkpoint.mini,
+            "checkpoint_number": checkpoint.checkpoint_number,
+        },
+    )
+
+
+def _build_most_recent_knockout_participants(
+    count: int,
+    biased: bool,
+    root_dir: str,
+    knockout_config: Dict[str, Any],
+) -> Tuple[List[TournamentParticipant], Dict[str, Any]]:
+    """Build knockout participants from the latest run's checkpoints."""
+    if count < 2:
+        raise ValueError(
+            f"Most-recent checkpoint mode requires at least 2 checkpoints, got {count}."
+        )
+
+    latest_run_dir, checkpoint_dir = _discover_latest_checkpoint_directory(root_dir)
+    discovery = CheckpointDiscovery(str(checkpoint_dir))
+    checkpoints = discovery.discover_checkpoints()
+
+    if len(checkpoints) < 2:
+        raise ValueError(
+            f"Latest checkpoint directory has only {len(checkpoints)} checkpoint(s): {checkpoint_dir}. "
+            "At least 2 checkpoints are required for knockout."
+        )
+
+    offsets = (
+        build_recent_biased_checkpoint_offsets(count)
+        if biased
+        else [-index for index in range(count)]
+    )
+    selected_checkpoints = _select_checkpoints_from_offsets(checkpoints, offsets)
+    participants = [
+        _build_checkpoint_participant(checkpoint, knockout_config)
+        for checkpoint in selected_checkpoints
+    ]
+
+    return participants, {
+        "latest_run_dir": str(latest_run_dir),
+        "checkpoint_dir": str(checkpoint_dir),
+        "offsets": offsets,
+        "selected_checkpoints": [checkpoint.name for checkpoint in selected_checkpoints],
+        "selection_mode": "biased" if biased else "most_recent",
+    }
+
+
 def is_knockout_only_tournament(args) -> bool:
     """Check if this is a knockout-only tournament (no round-robin participants)."""
-    has_knockout = args.knockout_dir or args.knockout_from_generations
+    has_knockout = (
+        args.knockout_dir
+        or args.knockout_from_generations
+        or args.most_recent is not None
+        or args.most_recent_biased is not None
+    )
     return has_knockout and not args.models and not args.model_files
 
 
@@ -569,12 +771,41 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         )
         round_robin_participants.append(participant)
     
-    # Handle knockout participants: either from directory or from MODEL_GENERATIONS
+    # Handle knockout participants: from MODEL_GENERATIONS, latest-run sampling, or directory discovery.
     knockout_participants = None
+    most_recent_selection_info = None
+    knockout_dir = args.knockout_dir if not args.knockout_from_generations else None
     if args.knockout_from_generations:
         # Get all participants from MODEL_GENERATIONS
         knockout_participants = get_all_model_participants_from_generations(knockout_config)
         print(f"Loaded {len(knockout_participants)} models from MODEL_GENERATIONS")
+    elif args.most_recent is not None or args.most_recent_biased is not None:
+        try:
+            use_biased_sampling = args.most_recent_biased is not None
+            checkpoint_count = (
+                args.most_recent_biased
+                if use_biased_sampling
+                else args.most_recent
+            )
+            knockout_participants, most_recent_selection_info = _build_most_recent_knockout_participants(
+                count=checkpoint_count,
+                biased=use_biased_sampling,
+                root_dir=args.most_recent_root,
+                knockout_config=knockout_config,
+            )
+            print(
+                "Loaded "
+                f"{len(knockout_participants)} checkpoints from latest run for knockout "
+                f"({most_recent_selection_info['selection_mode']} mode)"
+            )
+            print(f"  Latest run directory: {most_recent_selection_info['latest_run_dir']}")
+            print(f"  Checkpoint directory: {most_recent_selection_info['checkpoint_dir']}")
+            print(f"  Offsets from latest checkpoint: {most_recent_selection_info['offsets']}")
+            print(f"  Selected checkpoints: {most_recent_selection_info['selected_checkpoints']}")
+            knockout_dir = None
+        except (FileNotFoundError, ValueError) as error:
+            print(f"ERROR: {error}")
+            sys.exit(1)
     
     # Validate epoch/mini epoch ranges are not used with knockout-from-generations
     if args.knockout_from_generations and (epoch_range or mini_epoch_range):
@@ -584,7 +815,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     
     # Create and run two-stage tournament
     tournament = TwoStageTournament(
-        knockout_dir=args.knockout_dir if not args.knockout_from_generations else None,
+        knockout_dir=knockout_dir,
         knockout_participants=knockout_participants,
         knockout_config=knockout_config,
         round_robin_participants=round_robin_participants,
@@ -603,6 +834,14 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     print("Running 2-stage tournament...")
     if args.knockout_from_generations:
         print(f"  Knockout participants: {len(knockout_participants)} models from MODEL_GENERATIONS")
+    elif most_recent_selection_info:
+        print(
+            f"  Knockout participants: {len(knockout_participants)} checkpoints from latest run "
+            f"({most_recent_selection_info['selection_mode']})"
+        )
+        print(f"  Latest run directory: {most_recent_selection_info['latest_run_dir']}")
+        print(f"  Checkpoint directory: {most_recent_selection_info['checkpoint_dir']}")
+        print(f"  Checkpoint offsets: {most_recent_selection_info['offsets']}")
     else:
         print(f"  Knockout directory: {args.knockout_dir}")
     print(f"  Knockout config: {knockout_config}")
@@ -710,14 +949,36 @@ def main():
         print("ERROR: Cannot specify both --models and --model-files/--model-dirs. Use one or the other.")
         sys.exit(1)
     
-    # Validate knockout tournament arguments
-    if args.knockout_dir and args.knockout_from_generations:
-        print("ERROR: Cannot specify both --knockout-dir and --knockout-from-generations. Use one or the other.")
+    # Validate knockout tournament source arguments
+    knockout_sources = {
+        "--knockout-dir": bool(args.knockout_dir),
+        "--knockout-from-generations": bool(args.knockout_from_generations),
+        "--most-recent": args.most_recent is not None,
+        "--most-recent-biased": args.most_recent_biased is not None,
+    }
+    enabled_knockout_sources = [name for name, enabled in knockout_sources.items() if enabled]
+    if len(enabled_knockout_sources) > 1:
+        print("ERROR: Multiple knockout sources specified. Choose exactly one of:")
+        print("  --knockout-dir, --knockout-from-generations, --most-recent, --most-recent-biased")
+        print(f"  Provided: {', '.join(enabled_knockout_sources)}")
+        sys.exit(1)
+
+    if args.most_recent is not None and args.most_recent < 2:
+        print(f"ERROR: --most-recent must be >= 2, got {args.most_recent}")
+        sys.exit(1)
+    if args.most_recent_biased is not None and args.most_recent_biased < 2:
+        print(f"ERROR: --most-recent-biased must be >= 2, got {args.most_recent_biased}")
+        sys.exit(1)
+    if (args.most_recent is not None or args.most_recent_biased is not None) and (
+        args.epoch_range or args.mini_epoch_range
+    ):
+        print("ERROR: --epoch-range and --mini-epoch-range are not supported with --most-recent or --most-recent-biased")
+        print("Use --knockout-dir with explicit ranges if you need range filters.")
         sys.exit(1)
     
     # For 2-stage tournaments, models/strategies are optional (only for round-robin stage)
-    # Skip this check if using knockout-from-generations (which provides its own participants)
-    if not args.knockout_dir and not args.knockout_from_generations:
+    # Skip this check whenever a knockout source is configured.
+    if not enabled_knockout_sources:
         if not args.models and not (args.model_files and args.model_dirs):
             print("ERROR: Must specify either --models (registry) or both --model-files and --model-dirs (direct)")
             sys.exit(1)

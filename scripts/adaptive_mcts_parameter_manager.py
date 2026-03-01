@@ -16,7 +16,6 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +105,7 @@ class BatchResult:
     total_avg_time: float
     output_dir: str
     csv_path: str
+    resolved_model_path: Optional[str]
 
 
 @dataclass
@@ -190,6 +190,7 @@ def append_batch_result(path: Path, result: BatchResult) -> None:
             "total_avg_time",
             "output_dir",
             "csv_path",
+            "resolved_model_path",
         ],
     )
     with path.open("a", newline="") as f:
@@ -214,6 +215,7 @@ def append_batch_result(path: Path, result: BatchResult) -> None:
                 f"{result.total_avg_time:.6f}",
                 result.output_dir,
                 result.csv_path,
+                result.resolved_model_path or "",
             ]
         )
 
@@ -282,9 +284,12 @@ def summarize_tournament_csv(csv_path: Path) -> Dict[str, Any]:
 
     strategy_a = rows[0]["strategy_a"]
     strategy_b = rows[0]["strategy_b"]
+    model_a_key = "strategy_a_model" if "strategy_a_model" in rows[0] else "model_a"
+    model_b_key = "strategy_b_model" if "strategy_b_model" in rows[0] else "model_b"
     wins = {strategy_a: 0, strategy_b: 0}
     strategy_time = {strategy_a: 0.0, strategy_b: 0.0}
     total_game_time = 0.0
+    strategy_models = set()
 
     for row in rows:
         winner = row["winner_strategy"]
@@ -293,6 +298,10 @@ def summarize_tournament_csv(csv_path: Path) -> Dict[str, Any]:
         strategy_time[row["strategy_a"]] += float(row["strategy_a_time"])
         strategy_time[row["strategy_b"]] += float(row["strategy_b_time"])
         total_game_time += float(row["total_game_time"])
+        if model_a_key in row:
+            strategy_models.add(row[model_a_key])
+        if model_b_key in row:
+            strategy_models.add(row[model_b_key])
 
     total_games = len(rows)
     wa = wins[strategy_a]
@@ -310,6 +319,7 @@ def summarize_tournament_csv(csv_path: Path) -> Dict[str, Any]:
         "a_avg_time": strategy_time[strategy_a] / total_games,
         "b_avg_time": strategy_time[strategy_b] / total_games,
         "total_avg_time": total_game_time / total_games,
+        "strategy_model_files": sorted(strategy_models),
     }
 
 
@@ -363,8 +373,15 @@ def run_single_batch(
     challenger: Config,
     incumbent: Config,
     model_spec: str,
+    resolved_model_path: Optional[str],
 ) -> BatchResult:
-    if model_spec == "best":
+    if resolved_model_path is not None:
+        resolved = Path(resolved_model_path)
+        model_args = [
+            f"--model-dirs={resolved.parent},{resolved.parent}",
+            f"--model-files={resolved.name},{resolved.name}",
+        ]
+    elif model_spec == "best":
         model_args = ["--models=best,best"]
     else:
         raise ValueError(f"Unsupported model_spec: {model_spec}")
@@ -443,6 +460,15 @@ def run_single_batch(
     csv_path = csv_files[0]
 
     summary = summarize_tournament_csv(csv_path)
+    if resolved_model_path is not None:
+        expected_file = Path(resolved_model_path).name
+        observed = summary["strategy_model_files"]
+        if observed != [expected_file]:
+            raise RuntimeError(
+                "Resolved model drift detected inside a supposedly fixed-model batch. "
+                f"Expected only {expected_file}, observed {observed}."
+            )
+
     return BatchResult(
         job_id=job_id,
         batch_index=batch_index,
@@ -461,7 +487,41 @@ def run_single_batch(
         total_avg_time=summary["total_avg_time"],
         output_dir=str(output_dir),
         csv_path=str(csv_path),
+        resolved_model_path=resolved_model_path,
     )
+
+
+def resolve_best_model_path() -> str:
+    cmd = [
+        str(PYTHON_BIN),
+        "-c",
+        "from hex_ai.inference.model_config import get_model_path; print(get_model_path('best'))",
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        env={
+            **os.environ,
+            "VIRTUAL_ENV": str(VENV_DIR),
+            "PATH": f"{VENV_BIN}:{os.environ.get('PATH', '')}",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Failed to resolve best model path (code {proc.returncode}): {proc.stderr.strip()}"
+        )
+    resolved = proc.stdout.strip()
+    if not resolved:
+        raise RuntimeError("Resolved best model path is empty")
+    resolved_path = Path(resolved)
+    if not resolved_path.is_absolute():
+        resolved_path = REPO_ROOT / resolved_path
+    if not resolved_path.is_file():
+        raise RuntimeError(f"Resolved best model path does not exist: {resolved_path}")
+    return str(resolved_path)
 
 
 def default_jobs() -> List[Dict[str, Any]]:
@@ -583,6 +643,7 @@ def load_or_initialize_state(state_path: Path, *, seed_start: int) -> Dict[str, 
         loaded.setdefault("run_history", [])
         loaded.setdefault("branches", {})
         loaded.setdefault("next_seed", seed_start)
+        loaded.setdefault("model_selection", {})
         return loaded
 
     state = {
@@ -596,6 +657,7 @@ def load_or_initialize_state(state_path: Path, *, seed_start: int) -> Dict[str, 
         "jobs": default_jobs(),
         "job_results": {},
         "run_history": [],
+        "model_selection": {},
     }
     return state
 
@@ -614,6 +676,7 @@ def run_job(
     opening_schedule: List[int],
     max_games: int,
     model_spec: str,
+    resolved_model_path: Optional[str],
 ) -> None:
     job_id = job["job_id"]
     challenger, incumbent = resolve_job_configs(job, state["branches"])
@@ -638,6 +701,7 @@ def run_job(
         if row.get("job_id") == job_id
         and json.dumps(row.get("challenger", {}), sort_keys=True) == json.dumps(challenger.as_dict(), sort_keys=True)
         and json.dumps(row.get("incumbent", {}), sort_keys=True) == json.dumps(incumbent.as_dict(), sort_keys=True)
+        and row.get("resolved_model_path") == resolved_model_path
     ]
     completed_batches: List[BatchResult] = []
     for row in completed_batch_dicts:
@@ -660,6 +724,7 @@ def run_job(
                 total_avg_time=float(row["total_avg_time"]),
                 output_dir=row["output_dir"],
                 csv_path=row["csv_path"],
+                resolved_model_path=row.get("resolved_model_path"),
             )
         )
     completed_batches.sort(key=lambda b: b.batch_index)
@@ -697,6 +762,7 @@ def run_job(
             challenger=challenger,
             incumbent=incumbent,
             model_spec=model_spec,
+            resolved_model_path=resolved_model_path,
         )
         append_batch_result(batch_csv, batch)
 
@@ -720,6 +786,7 @@ def run_job(
                 "total_avg_time": batch.total_avg_time,
                 "output_dir": batch.output_dir,
                 "csv_path": batch.csv_path,
+                "resolved_model_path": batch.resolved_model_path,
             }
         )
         persist_state(out_dir / STATE_FILE, state)
@@ -782,6 +849,7 @@ def run_job(
         },
         "promoted": promoted,
         "finished_at_utc": utc_now_iso(),
+        "resolved_model_path": resolved_model_path,
     }
     persist_state(out_dir / STATE_FILE, state)
 
@@ -874,6 +942,22 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     state_path = out_dir / STATE_FILE
     state = load_or_initialize_state(state_path, seed_start=args.seed_start)
+
+    resolved_model_path: Optional[str] = None
+    if args.model_spec == "best":
+        model_selection = state.get("model_selection") or {}
+        existing_path = model_selection.get("resolved_model_path")
+        if existing_path:
+            resolved_model_path = str(existing_path)
+        else:
+            resolved_model_path = resolve_best_model_path()
+            state["model_selection"] = {
+                "mode": "best_frozen",
+                "resolved_model_path": resolved_model_path,
+                "resolved_at_utc": utc_now_iso(),
+            }
+        print(f"[model] fixed best checkpoint: {resolved_model_path}")
+
     persist_state(state_path, state)
 
     pending_jobs = [j for j in state.get("jobs", []) if j["job_id"] not in state.get("job_results", {})]
@@ -895,6 +979,7 @@ def main() -> int:
             opening_schedule=args.opening_schedule,
             max_games=args.max_games,
             model_spec=args.model_spec,
+            resolved_model_path=resolved_model_path,
         )
         result = state["job_results"][job_id]
         aggregate = result.get("aggregate")
