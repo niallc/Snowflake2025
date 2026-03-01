@@ -15,6 +15,8 @@ import tempfile
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
+from hex_ai.config import DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES
+
 from .checkpoint_discovery import CheckpointDiscovery, CheckpointInfo
 from .knockout_tournament import KnockoutTournament, TournamentParticipant, MatchResult
 from .game_execution import (
@@ -112,6 +114,7 @@ class TwoStageTournament:
         return {
             "enable_gumbel_root_selection": True,
             "mcts_sims": 220,
+            "base_fraction_mcts_moves": DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
             "temperature": 1.0
         }
     

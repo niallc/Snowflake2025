@@ -10,7 +10,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_PREFIX, TRMPH_RED_WIN, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
+from hex_ai.config import (
+    BOARD_SIZE,
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_C_PUCT,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+    DEFAULT_TEMPERATURE_END,
+    DEFAULT_TEMPERATURE_START,
+    TRMPH_BLUE_WIN,
+    TRMPH_PREFIX,
+    TRMPH_RED_WIN,
+)
 from hex_ai.enums import Winner
 from hex_ai.inference.game_engine import HexGameEngine, make_empty_hex_state
 from hex_ai.inference.mcts import BaselineMCTS, create_mcts_config
@@ -29,9 +40,12 @@ from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
 from hex_ai.utils.format_conversion import count_trmph_moves, rowcol_to_trmph
 from hex_ai.utils.tournament_logging import write_trmph_header
-from hex_ai.value_utils import validate_trmph_winner
+from hex_ai.utils.temperature import calculate_mcts_root_temperature
+from hex_ai.value_utils import select_policy_move, validate_trmph_winner
 
 DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
+# Policy-only moves use the non-trainable provenance code path.
+POLICY_ONLY_MOVE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
 SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
     "visit_counts": MOVE_CODE_VISIT_COUNT,
     "gumbel_root": MOVE_CODE_GUMBEL_ROOT,
@@ -85,11 +99,29 @@ class SelfPlayEngine:
         self._ensure_supported_board_size(requested_size)
         return requested_size
 
+    @staticmethod
+    def _normalize_base_fraction_mcts_moves(value: float) -> float:
+        """Normalize and validate MCTS-move fraction in [0, 1]."""
+        if isinstance(value, bool):
+            raise TypeError("base_fraction_mcts_moves must be numeric, got bool")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"base_fraction_mcts_moves must be numeric, got {type(value)}"
+            ) from exc
+        if not 0.0 <= numeric <= 1.0:
+            raise ValueError(
+                f"base_fraction_mcts_moves must be in [0, 1], got {numeric}"
+            )
+        return numeric
+
     def __init__(self, model_path: str,
                  cache_size: int = DEFAULT_CACHE_SIZE, temperature: float = DEFAULT_TEMPERATURE_START, temperature_end: float = DEFAULT_TEMPERATURE_END, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
+                 base_fraction_mcts_moves: float = DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
                  confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
                  write_provenance: bool = True,
                  command_line: str = None,
@@ -117,6 +149,7 @@ class SelfPlayEngine:
             mcts_sims: Number of MCTS simulations per move
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
+            base_fraction_mcts_moves: Fraction of moves that should run full MCTS
             confidence_termination_threshold: Early-termination confidence threshold
             write_provenance: Whether to write move-provenance sidecar data
             board_size: Board size for generated games (currently fail-fast restricted to 13)
@@ -132,6 +165,9 @@ class SelfPlayEngine:
         self.mcts_sims = mcts_sims
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
+        self.base_fraction_mcts_moves = self._normalize_base_fraction_mcts_moves(
+            base_fraction_mcts_moves
+        )
         self.confidence_termination_threshold = confidence_termination_threshold
         self.write_provenance = write_provenance
         self.command_line = command_line
@@ -229,6 +265,7 @@ class SelfPlayEngine:
                 "MCTS simulations": mcts_sims,
                 "C_PUCT": c_puct,
                 "Gumbel root selection": enable_gumbel,
+                "Base MCTS move fraction": self.base_fraction_mcts_moves,
                 "Early termination threshold": confidence_termination_threshold,
                 "Temperature": temperature,
                 "Temperature end": temperature_end,
@@ -293,7 +330,8 @@ class SelfPlayEngine:
             print(f"  Model: {model_path}")
             print(f"  Board size: {self.board_size}")
             print(f"  Cache size: {cache_size}")
-            print(f"  Search method: MCTS ({mcts_sims} simulations)")
+            print(f"  Search method: hybrid policy+MCTS ({mcts_sims} simulations on MCTS moves)")
+            print(f"  Base MCTS move fraction: {self.base_fraction_mcts_moves:.3f}")
             print(f"  C_PUCT: {c_puct}")
             print(f"  Gumbel root selection: {enable_gumbel}")
             print(f"  Early termination threshold: {confidence_termination_threshold}")
@@ -307,6 +345,29 @@ class SelfPlayEngine:
             print(f"  Verbose: {verbose}")
             
 
+    def _should_use_mcts_for_move(self) -> bool:
+        """Decide whether to run full MCTS for the next move."""
+        if self.base_fraction_mcts_moves >= 1.0:
+            return True
+        if self.base_fraction_mcts_moves <= 0.0:
+            return False
+        return random.random() < self.base_fraction_mcts_moves
+
+    def _select_policy_only_move(self, state) -> Tuple[Tuple[int, int], float]:
+        """
+        Select a move directly from the policy head for fast rollout moves.
+
+        Returns:
+            ((row, col), temperature_used)
+        """
+        move_idx = len(state.move_history)
+        policy_temperature = calculate_mcts_root_temperature(
+            move_count=move_idx,
+            cfg=self.mcts_config,
+            board_size=self.board_size,
+        )
+        move = select_policy_move(state, self.model, policy_temperature)
+        return move, policy_temperature
 
     def _generate_single_game(self, board_size: int, opening_move: Optional[Tuple[int, int]] = None, game_id: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -358,79 +419,108 @@ class SelfPlayEngine:
                 move_provenance_codes.append(MOVE_CODE_VISIT_COUNT)
         
         if self.verbose >= 3:
-            print(f"🎮 SELF-PLAY: Starting new game with MCTS ({self.mcts_sims} simulations)")
+            print(
+                "🎮 SELF-PLAY: Starting new game with hybrid policy+MCTS "
+                f"(mcts_sims={self.mcts_sims}, base_fraction={self.base_fraction_mcts_moves:.3f})"
+            )
             print(f"🎮 SELF-PLAY: MCTS config - decay_type: {self.mcts_config.temperature_decay_type}, "
                   f"start_temp: {self.mcts_config.temperature_start}, "
                   f"end_temp: {self.mcts_config.temperature_end}")
         
         while not state.game_over:
-            # Use MCTS for move generation
+            move_idx = len(state.move_history)
+            legal_moves = state.get_legal_moves()
             if self.verbose >= 3:
-                print(f"🎮 SELF-PLAY: Move {len(state.move_history)}, player {state.current_player}, legal moves: {len(state.get_legal_moves())}")
-
-            # Run MCTS
-            if self.verbose >= 3:
-                print(f"🎮 SELF-PLAY: Running MCTS with {self.mcts_sims} simulations")
-            
-            start_time = time.perf_counter()
-            mcts_result = self.mcts.run(state)
-            search_time = time.perf_counter() - start_time
-            self._accumulate_mcts_run_stats(mcts_result.stats, search_time)
-
-            if self.mcts_profile and self._mcts_profile_calls < self.mcts_profile_max_calls:
-                self._mcts_profile_calls += 1
-                if (self._mcts_profile_calls % self.mcts_profile_every) == 0:
-                    try:
-                        stats = mcts_result.stats or {}
-                        h2d_ms = float(stats.get("h2d_ms", 0.0))
-                        forward_ms = float(stats.get("forward_ms", 0.0))
-                        d2h_ms = float(stats.get("d2h_ms", 0.0))
-                        nn_ms = h2d_ms + forward_ms + d2h_ms
-                        cpu_ms = 0.0
-                        for k in ("select_ms", "encode_ms", "stack_ms", "expand_ms", "backprop_ms", "cache_lookup_ms", "state_creation_ms"):
-                            cpu_ms += float(stats.get(k, 0.0))
-                        total_ms = nn_ms + cpu_ms
-                        nn_pct = (nn_ms / total_ms * 100.0) if total_ms > 0 else 0.0
-                        batch_sizes = stats.get("batch_sizes", []) or []
-                        try:
-                            bs = [float(x) for x in batch_sizes]
-                        except Exception:
-                            bs = []
-                        avg_batch = (sum(bs) / max(1, len(bs))) if bs else 0.0
-                        device = stats.get("device", None)
-                        device_s = str(device) if device is not None else "unknown"
-                        print(
-                            f"[MCTS_PROFILE] device={device_s} move={len(state.move_history)} "
-                            f"batches={int(stats.get('batch_count', 0))} avg_batch={avg_batch:.1f} "
-                            f"NN_ms={nn_ms:.1f} CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f} "
-                            f"search_time_s={search_time:.3f}"
-                        )
-                    except Exception as e:
-                        print(f"[MCTS_PROFILE] failed to summarize stats: {e}")
-            
-            # Get the best move from the result
-            move = mcts_result.move
-            if self.write_provenance:
-                move_provenance_codes.append(
-                    self._get_move_provenance_code(mcts_result.stats)
-                )
-            
-            # Get root value (approximate from MCTS)
-            tree_data = mcts_result.tree_data
-            search_value = tree_data.get('v_curr_signed_root', 0.0)
-            
-            # Log MCTS statistics
-            if self.verbose >= 2:
-                cache_hit_rate = self.mcts.cache_hits / max(1, self.mcts.cache_hits + self.mcts.cache_misses)
                 print(
-                    f"[Move {len(state.move_history)}] MCTS: sims={self.mcts_sims}, "
-                    f"inferences={mcts_result.stats.get('total_simulations', 0)}, "
-                    f"cache_hit_rate={cache_hit_rate:.1%}, "
-                    f"time={search_time:.4f}s"
+                    f"🎮 SELF-PLAY: Move {move_idx}, player {state.current_player}, "
+                    f"legal moves: {len(legal_moves)}"
                 )
-            
-            if self.verbose >= 3:
-                print(f"🎮 SELF-PLAY: Selected move {move}, value {search_value:.4f}")
+
+            use_mcts = self._should_use_mcts_for_move()
+            if use_mcts:
+                if self.verbose >= 3:
+                    print(f"🎮 SELF-PLAY: Running MCTS with {self.mcts_sims} simulations")
+
+                start_time = time.perf_counter()
+                mcts_result = self.mcts.run(state)
+                search_time = time.perf_counter() - start_time
+                self._accumulate_mcts_run_stats(mcts_result.stats, search_time)
+
+                if self.mcts_profile and self._mcts_profile_calls < self.mcts_profile_max_calls:
+                    self._mcts_profile_calls += 1
+                    if (self._mcts_profile_calls % self.mcts_profile_every) == 0:
+                        try:
+                            stats = mcts_result.stats or {}
+                            h2d_ms = float(stats.get("h2d_ms", 0.0))
+                            forward_ms = float(stats.get("forward_ms", 0.0))
+                            d2h_ms = float(stats.get("d2h_ms", 0.0))
+                            nn_ms = h2d_ms + forward_ms + d2h_ms
+                            cpu_ms = 0.0
+                            for k in (
+                                "select_ms",
+                                "encode_ms",
+                                "stack_ms",
+                                "expand_ms",
+                                "backprop_ms",
+                                "cache_lookup_ms",
+                                "state_creation_ms",
+                            ):
+                                cpu_ms += float(stats.get(k, 0.0))
+                            total_ms = nn_ms + cpu_ms
+                            nn_pct = (nn_ms / total_ms * 100.0) if total_ms > 0 else 0.0
+                            batch_sizes = stats.get("batch_sizes", []) or []
+                            try:
+                                bs = [float(x) for x in batch_sizes]
+                            except Exception:
+                                bs = []
+                            avg_batch = (sum(bs) / max(1, len(bs))) if bs else 0.0
+                            device = stats.get("device", None)
+                            device_s = str(device) if device is not None else "unknown"
+                            print(
+                                f"[MCTS_PROFILE] device={device_s} move={move_idx} "
+                                f"batches={int(stats.get('batch_count', 0))} avg_batch={avg_batch:.1f} "
+                                f"NN_ms={nn_ms:.1f} CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f} "
+                                f"search_time_s={search_time:.3f}"
+                            )
+                        except Exception as e:
+                            print(f"[MCTS_PROFILE] failed to summarize stats: {e}")
+
+                move = mcts_result.move
+                if self.write_provenance:
+                    move_provenance_codes.append(
+                        self._get_move_provenance_code(mcts_result.stats)
+                    )
+
+                # Get root value (approximate from MCTS)
+                tree_data = mcts_result.tree_data
+                search_value = tree_data.get('v_curr_signed_root', 0.0)
+
+                # Log MCTS statistics
+                if self.verbose >= 2:
+                    cache_hit_rate = self.mcts.cache_hits / max(
+                        1, self.mcts.cache_hits + self.mcts.cache_misses
+                    )
+                    print(
+                        f"[Move {move_idx}] MCTS: sims={self.mcts_sims}, "
+                        f"inferences={mcts_result.stats.get('total_simulations', 0)}, "
+                        f"cache_hit_rate={cache_hit_rate:.1%}, "
+                        f"time={search_time:.4f}s"
+                    )
+
+                if self.verbose >= 3:
+                    print(f"🎮 SELF-PLAY: Selected move {move}, value {search_value:.4f}")
+            else:
+                move, policy_temperature = self._select_policy_only_move(state)
+                if self.write_provenance:
+                    # Policy-only rollout moves are intentionally excluded from policy-target training.
+                    move_provenance_codes.append(POLICY_ONLY_MOVE_PROVENANCE_CODE)
+                if self.verbose >= 2:
+                    print(
+                        f"[Move {move_idx}] POLICY_ONLY: temp={policy_temperature:.3f}, "
+                        f"legal_moves={len(legal_moves)}"
+                    )
+                if self.verbose >= 3:
+                    print(f"🎮 SELF-PLAY: Selected policy-only move {move}")
             
             # Apply move
             state = state.make_move(*move)
@@ -1002,6 +1092,7 @@ class SelfPlayEngine:
                 f.write(f"# MCTS simulations: {self.mcts_sims}\n")
                 f.write(f"# C_PUCT: {self.c_puct}\n")
                 f.write(f"# Gumbel root selection: {self.enable_gumbel}\n")
+                f.write(f"# Base MCTS move fraction: {self.base_fraction_mcts_moves}\n")
                 f.write(f"# Temperature: {self.temperature}\n")
                 f.write(f"# Temperature end: {self.temperature_end}\n")
                 f.write(f"# Git commit: {git_info['status']}\n")

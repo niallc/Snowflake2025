@@ -18,6 +18,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
 )
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.strategy_config import (
@@ -360,6 +361,19 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         else ([DEFAULT_MCTS_SIMS] if include_defaults else None)
     )
 
+    base_fraction_mcts_moves = (
+        [float(s.strip()) for s in args.base_fraction_mcts_moves.split(',')]
+        if hasattr(args, 'base_fraction_mcts_moves') and args.base_fraction_mcts_moves
+        else ([DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES] if include_defaults else None)
+    )
+    if base_fraction_mcts_moves is not None:
+        invalid_fractions = [v for v in base_fraction_mcts_moves if not 0.0 <= v <= 1.0]
+        if invalid_fractions:
+            raise ValueError(
+                "base_fraction_mcts_moves values must be in [0, 1], "
+                f"got {invalid_fractions}"
+            )
+
     batch_sizes = (
         [int(s.strip()) for s in args.batch_sizes.split(',')]
         if args.batch_sizes
@@ -418,6 +432,7 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
     
     return {
         'mcts_sims': mcts_sims,
+        'base_fraction_mcts_moves': base_fraction_mcts_moves,
         'batch_sizes': batch_sizes,
         'c_pucts': c_pucts,
         'enable_gumbel': enable_gumbel,
@@ -444,6 +459,7 @@ def create_strategy_configs_for_tournament(
         strategies=strategy_names,
         model_paths=model_paths,
         mcts_sims=parsed_params['mcts_sims'],
+        base_fraction_mcts_moves=parsed_params['base_fraction_mcts_moves'],
         temperatures=parsed_params['temperatures'],
         batch_sizes=parsed_params['batch_sizes'],
         c_pucts=parsed_params['c_pucts'],
@@ -468,6 +484,7 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
     if strategy.strategy_type == "mcts":
         cfg = strategy.config
         details.append(f"sims={cfg.get('mcts_sims')}")
+        details.append(f"mcts_fraction={cfg.get('base_fraction_mcts_moves')}")
         details.append(f"c_puct={cfg.get('mcts_c_puct')}")
         details.append(f"batch_size={cfg.get('batch_size')}")
         details.append(f"gumbel={cfg.get('enable_gumbel_root_selection', False)}")

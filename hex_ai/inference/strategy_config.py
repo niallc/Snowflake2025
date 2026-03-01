@@ -10,14 +10,17 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 
 from hex_ai.config import (
+    BOARD_SIZE,
     DEFAULT_BATCH_CAP,
     DEFAULT_C_PUCT,
-    DEFAULT_MCTS_SIMS,
-    DEFAULT_GUMBEL_SIM_THRESHOLD,
-    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
+    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
     DEFAULT_GUMBEL_C_SCALE,
-    BOARD_SIZE,
-    DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE, DEFAULT_GUMBEL_CANDIDATE_POWER_RATE, DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET
+    DEFAULT_GUMBEL_C_VISIT,
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
 )
 from hex_ai.inference.tournament_parameters import (
     TournamentParameterConfig, TournamentModelConfig, UnifiedTournamentConfig
@@ -81,6 +84,10 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
             # Keep strategy configs explicit so runtime behavior and printed metadata match.
             config_dict = {
                 "mcts_sims": participant_config["mcts_sims"],
+                "base_fraction_mcts_moves": participant_config.get(
+                    "base_fraction_mcts_moves",
+                    DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
+                ),
                 "mcts_c_puct": participant_config.get("c_puct", DEFAULT_C_PUCT),
                 "batch_size": participant_config.get("batch_size", DEFAULT_BATCH_CAP),
                 "enable_gumbel_root_selection": participant_config.get(
@@ -150,6 +157,7 @@ def create_unified_config_from_args(
     models: Optional[List[str]] = None,
     model_paths: Optional[List[str]] = None,
     mcts_sims: Optional[Union[int, List[int]]] = None,
+    base_fraction_mcts_moves: Optional[Union[float, List[float]]] = None,
     temperatures: Optional[Union[float, List[float]]] = None,
     batch_sizes: Optional[Union[int, List[int]]] = None,
     c_pucts: Optional[Union[float, List[float]]] = None,
@@ -175,6 +183,7 @@ def create_unified_config_from_args(
         models: Optional list of model registry names
         model_paths: Optional list of direct model paths
         mcts_sims: MCTS simulation count(s)
+        base_fraction_mcts_moves: Fraction(s) of moves that run full MCTS
         temperatures: Temperature value(s)
         batch_sizes: Batch size value(s)
         c_pucts: C_PUCT value(s)
@@ -210,6 +219,15 @@ def create_unified_config_from_args(
         default_value=DEFAULT_MCTS_SIMS,  # Default MCTS simulations
         per_strategy_values=to_list_if_needed(mcts_sims, num_strategies)
     )
+
+    base_fraction_mcts_moves_config = None
+    if base_fraction_mcts_moves is not None:
+        base_fraction_mcts_moves_config = TournamentParameterConfig(
+            default_value=DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
+            per_strategy_values=to_list_if_needed(
+                base_fraction_mcts_moves, num_strategies
+            ),
+        )
     
     temperatures_config = TournamentParameterConfig(
         default_value=0.0,  # Default temperature
@@ -277,6 +295,7 @@ def create_unified_config_from_args(
         models=model_config,
         strategies=strategies,
         mcts_sims=mcts_sims_config,
+        base_fraction_mcts_moves=base_fraction_mcts_moves_config,
         temperatures=temperatures_config,
         batch_sizes=batch_sizes_config,
         c_pucts=c_pucts_config,
@@ -300,6 +319,7 @@ def _build_strategy_signature(config: StrategyConfig) -> str:
         config.model_path,
         str(config.temperature),
         str(config.config.get("mcts_sims", "")),
+        str(config.config.get("base_fraction_mcts_moves", "")),
         str(config.config.get("mcts_c_puct", "")),
         str(config.config.get("batch_size", "")),
         str(config.config.get("enable_gumbel_root_selection", "")),
@@ -329,6 +349,12 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
             param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
         if config.config.get("mcts_sims") is not None:
             param_parts.append(f"sims{config.config['mcts_sims']}")
+        if (
+            config.config.get("base_fraction_mcts_moves") is not None
+            and config.config["base_fraction_mcts_moves"]
+            != DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES
+        ):
+            param_parts.append(f"mf{config.config['base_fraction_mcts_moves']}")
         if config.config.get("gumbel_sim_threshold") is not None:
             param_parts.append(f"gthr{config.config['gumbel_sim_threshold']}")
         if config.config.get("gumbel_c_visit") is not None:
@@ -361,6 +387,7 @@ def create_strategy_configs_from_parameters(
     strategies: List[str],
     model_paths: List[str],
     mcts_sims: Optional[Union[int, List[int]]] = None,
+    base_fraction_mcts_moves: Optional[Union[float, List[float]]] = None,
     temperatures: Optional[Union[float, List[float]]] = None,
     batch_sizes: Optional[Union[int, List[int]]] = None,
     c_pucts: Optional[Union[float, List[float]]] = None,
@@ -381,6 +408,7 @@ def create_strategy_configs_from_parameters(
         strategies=strategies,
         model_paths=model_paths,
         mcts_sims=mcts_sims,
+        base_fraction_mcts_moves=base_fraction_mcts_moves,
         temperatures=temperatures,
         batch_sizes=batch_sizes,
         c_pucts=c_pucts,

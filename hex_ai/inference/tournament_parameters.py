@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass
 import os
 
-from hex_ai.config import BOARD_SIZE
+from hex_ai.config import BOARD_SIZE, DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES
 from hex_ai.inference.model_config import get_model_path, validate_model_path, get_available_models
 
 
@@ -220,6 +220,7 @@ class UnifiedTournamentConfig:
                  # Parameter configurations
                  mcts_sims: TournamentParameterConfig,
                  temperatures: TournamentParameterConfig,
+                 base_fraction_mcts_moves: Optional[TournamentParameterConfig] = None,
                  batch_sizes: Optional[TournamentParameterConfig] = None,
                  c_pucts: Optional[TournamentParameterConfig] = None,
                  enable_gumbel: Optional[TournamentParameterConfig] = None,
@@ -238,6 +239,7 @@ class UnifiedTournamentConfig:
         self.models = models
         self.strategies = strategies
         self.mcts_sims = mcts_sims
+        self.base_fraction_mcts_moves = base_fraction_mcts_moves
         self.temperatures = temperatures
         self.batch_sizes = batch_sizes
         self.c_pucts = c_pucts
@@ -266,7 +268,9 @@ class UnifiedTournamentConfig:
         self.models.validate(num_strategies, participant_labels)
         self.mcts_sims.validate(num_strategies, participant_labels)
         self.temperatures.validate(num_strategies, participant_labels)
-        
+        if self.base_fraction_mcts_moves:
+            self.base_fraction_mcts_moves.validate(num_strategies, participant_labels)
+
         if self.batch_sizes:
             self.batch_sizes.validate(num_strategies, participant_labels)
         if self.c_pucts:
@@ -305,6 +309,13 @@ class UnifiedTournamentConfig:
             'mcts_sims': self.mcts_sims.get_value_for_participant(participant_label, strategy_index),
             'temperature': self.temperatures.get_value_for_participant(participant_label, strategy_index),
         }
+
+        if self.base_fraction_mcts_moves:
+            config['base_fraction_mcts_moves'] = self.base_fraction_mcts_moves.get_value_for_participant(
+                participant_label, strategy_index
+            )
+        else:
+            config['base_fraction_mcts_moves'] = DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES
         
         # Add optional parameters if they exist
         if self.batch_sizes:

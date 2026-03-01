@@ -32,6 +32,7 @@ class ScriptConfig:
     batch_sizes: Optional[List[int]] = None
     cache_size: Optional[int] = None
     mcts_sims: Optional[int] = None
+    base_fraction_mcts_moves: Optional[float] = None
     c_puct: Optional[float] = None
     enable_gumbel: Optional[bool] = None
     gumbel_sim_threshold: Optional[int] = None
@@ -182,7 +183,9 @@ class SelfplayPrinter(ConfigurationPrinter):
         print(f"  Games: {config.num_games}")
     
     def print_strategy(self, config: ScriptConfig) -> None:
-        print(f"  Search method: MCTS ({config.mcts_sims} simulations)")
+        print(f"  Search method: hybrid policy+MCTS ({config.mcts_sims} simulations on MCTS moves)")
+        if config.base_fraction_mcts_moves is not None:
+            print(f"  Base MCTS move fraction: {config.base_fraction_mcts_moves}")
         if config.c_puct:
             print(f"  C_PUCT: {config.c_puct}")
     

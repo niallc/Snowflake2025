@@ -7,6 +7,7 @@ allowing tournaments to easily compare MCTS, fixed tree search, and policy-based
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import random
 from typing import Tuple, Optional, Dict, Any, List
 
 from hex_ai.inference.game_engine import HexGameState, HexGameEngine
@@ -29,6 +30,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_C_VISIT,
     DEFAULT_GUMBEL_C_SCALE,
     DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL,
+    DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
 
@@ -108,6 +110,7 @@ class MoveSelectionConfig:
     temperature: float  # No default - must be specified
     # For MCTS
     mcts_sims: int = DEFAULT_MCTS_SIMS
+    base_fraction_mcts_moves: float = DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES
     mcts_c_puct: float = DEFAULT_C_PUCT
     mcts_dirichlet_alpha: float = DEFAULT_MCTS_DIRICHLET_ALPHA
     mcts_dirichlet_eps: float = DEFAULT_MCTS_DIRICHLET_EPS
@@ -203,6 +206,22 @@ class MCTSStrategy(MoveSelectionStrategy):
 
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
+        if not 0.0 <= config.base_fraction_mcts_moves <= 1.0:
+            raise ValueError(
+                "base_fraction_mcts_moves must be in [0, 1], "
+                f"got {config.base_fraction_mcts_moves}"
+            )
+
+        if config.base_fraction_mcts_moves < 1.0:
+            use_mcts = random.random() < config.base_fraction_mcts_moves
+            if not use_mcts:
+                if verbose >= 3:
+                    print(
+                        "🎮 TOURNAMENT: Using policy-only move "
+                        f"(base_fraction_mcts_moves={config.base_fraction_mcts_moves:.3f})"
+                    )
+                return select_policy_move(state, model, config.temperature)
+
         # Create MCTS configuration optimized for tournament play
         # Pass all parameters through create_mcts_config for consistency
         mcts_config = create_mcts_config("tournament",
@@ -278,7 +297,14 @@ class MCTSStrategy(MoveSelectionStrategy):
         gumbel_info = ""
         if config.enable_gumbel_root_selection:
             gumbel_info = f", gumbel(c_visit={config.gumbel_c_visit}, c_scale={config.gumbel_c_scale}, m={config.gumbel_m_candidates})"
-        return f"mcts(sims={config.mcts_sims}, c_puct={config.mcts_c_puct}, t={config.temperature}{batch_info}{gumbel_info})"
+        return (
+            "mcts("
+            f"sims={config.mcts_sims}, "
+            f"mcts_fraction={config.base_fraction_mcts_moves}, "
+            f"c_puct={config.mcts_c_puct}, "
+            f"t={config.temperature}"
+            f"{batch_info}{gumbel_info})"
+        )
 
 
 # Strategy registry

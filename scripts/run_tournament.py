@@ -70,6 +70,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_RATE,
     DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
+    DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
 from hex_ai.inference.model_config import (
@@ -193,6 +194,14 @@ Examples:
                        help=f'Directory containing TRMPH files for opening generation (default: {TRMPH_SOURCE_DIR})')
     parser.add_argument('--mcts-sims', type=str,
                        help=f'Comma-separated MCTS simulation counts (default: {DEFAULT_MCTS_SIMS})')
+    parser.add_argument(
+        '--base-fraction-mcts-moves',
+        type=str,
+        help=(
+            "Comma-separated fraction of moves that run full MCTS for MCTS strategies "
+            f"(default: {DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES})"
+        ),
+    )
     parser.add_argument('--batch-sizes', type=str,
                        help=f'Comma-separated batch sizes for MCTS strategies (e.g., "64,128,256", default: {DEFAULT_BATCH_CAP})')
     parser.add_argument('--c-puct', type=str,
@@ -618,6 +627,7 @@ def _collect_resolved_logging_values(strategy_configs: List[StrategyConfig]) -> 
             "batch_sizes": None,
             "c_puct": None,
             "mcts_sims": None,
+            "base_fraction_mcts_moves": None,
             "enable_gumbel": False,
             "gumbel_sim_threshold": None,
             "gumbel_c_visit": None,
@@ -636,6 +646,7 @@ def _collect_resolved_logging_values(strategy_configs: List[StrategyConfig]) -> 
             "batch_sizes": None,
             "c_puct": None,
             "mcts_sims": None,
+            "base_fraction_mcts_moves": None,
             "enable_gumbel": False,
             "gumbel_sim_threshold": None,
             "gumbel_c_visit": None,
@@ -649,6 +660,9 @@ def _collect_resolved_logging_values(strategy_configs: List[StrategyConfig]) -> 
     batch_sizes = _dedupe_preserve_order([cfg["batch_size"] for cfg in mcts_configs])
     c_puct = _collapse_single_or_list([cfg["mcts_c_puct"] for cfg in mcts_configs])
     mcts_sims = _single_value_or_none([cfg["mcts_sims"] for cfg in mcts_configs])
+    base_fraction_mcts_moves = _single_value_or_none(
+        [cfg.get("base_fraction_mcts_moves") for cfg in mcts_configs]
+    )
     enable_gumbel = any(bool(cfg["enable_gumbel_root_selection"]) for cfg in mcts_configs)
     gumbel_enabled_configs = [
         cfg for cfg in mcts_configs if bool(cfg["enable_gumbel_root_selection"])
@@ -659,6 +673,7 @@ def _collect_resolved_logging_values(strategy_configs: List[StrategyConfig]) -> 
         "batch_sizes": batch_sizes,
         "c_puct": c_puct,
         "mcts_sims": mcts_sims,
+        "base_fraction_mcts_moves": base_fraction_mcts_moves,
         "enable_gumbel": enable_gumbel,
         "gumbel_sim_threshold": _single_value_or_none(
             [cfg["gumbel_sim_threshold"] for cfg in gumbel_enabled_configs]
@@ -722,6 +737,14 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         params_with_multiple_values = []
         if parsed_params.get('mcts_sims') and len(parsed_params['mcts_sims']) > 1:
             params_with_multiple_values.append(f"mcts_sims (got {len(parsed_params['mcts_sims'])} values: {parsed_params['mcts_sims']})")
+        if (
+            parsed_params.get('base_fraction_mcts_moves')
+            and len(parsed_params['base_fraction_mcts_moves']) > 1
+        ):
+            params_with_multiple_values.append(
+                "base_fraction_mcts_moves "
+                f"(got {len(parsed_params['base_fraction_mcts_moves'])} values: {parsed_params['base_fraction_mcts_moves']})"
+            )
         if parsed_params.get('enable_gumbel') and len(parsed_params['enable_gumbel']) > 1:
             params_with_multiple_values.append(f"enable_gumbel (got {len(parsed_params['enable_gumbel'])} values: {parsed_params['enable_gumbel']})")
         if parsed_params.get('temperatures') and isinstance(parsed_params['temperatures'], list) and len(parsed_params['temperatures']) > 1:
@@ -748,6 +771,11 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     # Only override if the parameter was actually provided (non-empty list)
     if parsed_params.get('mcts_sims') and len(parsed_params['mcts_sims']) > 0:
         knockout_config['mcts_sims'] = parsed_params['mcts_sims'][0]
+    if (
+        parsed_params.get('base_fraction_mcts_moves')
+        and len(parsed_params['base_fraction_mcts_moves']) > 0
+    ):
+        knockout_config['base_fraction_mcts_moves'] = parsed_params['base_fraction_mcts_moves'][0]
     if parsed_params.get('enable_gumbel') and len(parsed_params['enable_gumbel']) > 0:
         # enable_gumbel is already a list of booleans from parse_tournament_parameters
         knockout_config['enable_gumbel_root_selection'] = parsed_params['enable_gumbel'][0]
@@ -1142,6 +1170,7 @@ def main():
             batch_sizes=resolved_logging["batch_sizes"],
             c_puct=resolved_logging["c_puct"],
             mcts_sims=resolved_logging["mcts_sims"],
+            base_fraction_mcts_moves=resolved_logging["base_fraction_mcts_moves"],
             enable_gumbel=resolved_logging["enable_gumbel"],
             gumbel_sim_threshold=resolved_logging["gumbel_sim_threshold"],
             gumbel_c_visit=resolved_logging["gumbel_c_visit"],

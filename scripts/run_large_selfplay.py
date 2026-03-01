@@ -15,7 +15,16 @@ from typing import Any, Dict, List, Optional
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
-from hex_ai.config import DEFAULT_GUMBEL_SIM_THRESHOLD, DEFAULT_C_PUCT, DEFAULT_MCTS_SIMS, DEFAULT_CACHE_SIZE, BOARD_SIZE, DEFAULT_TEMPERATURE_START, DEFAULT_TEMPERATURE_END
+from hex_ai.config import (
+    BOARD_SIZE,
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_C_PUCT,
+    DEFAULT_GUMBEL_SIM_THRESHOLD,
+    DEFAULT_MCTS_SIMS,
+    DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+    DEFAULT_TEMPERATURE_END,
+    DEFAULT_TEMPERATURE_START,
+)
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.move_provenance import (
     MOVE_CODE_VISIT_COUNT,
@@ -72,6 +81,17 @@ def parse_args() -> argparse.Namespace:
                        help=f'PUCT exploration constant for MCTS (default: {DEFAULT_C_PUCT})')
     parser.add_argument('--disable-gumbel', action='store_true',
                        help='Disable Gumbel-AlphaZero root selection for MCTS (enabled by default)')
+    parser.add_argument(
+        '--base-fraction-mcts-moves',
+        '--fraction-mcts-moves',
+        dest='base_fraction_mcts_moves',
+        type=float,
+        default=DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+        help=(
+            'Fraction of moves that should run full MCTS (remaining moves use '
+            f'policy-head-only rollout, default: {DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES})'
+        ),
+    )
     parser.add_argument(
         '--temperature',
         type=float,
@@ -231,6 +251,7 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "output_dir": args.output_dir,
         "cache_size": args.cache_size,
         "mcts_sims": args.mcts_sims,
+        "base_fraction_mcts_moves": args.base_fraction_mcts_moves,
         "c_puct": args.c_puct,
         "disable_gumbel": args.disable_gumbel,
         "temperature": args.temperature,
@@ -265,6 +286,8 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         str(args.cache_size),
         "--mcts_sims",
         str(args.mcts_sims),
+        "--base-fraction-mcts-moves",
+        str(args.base_fraction_mcts_moves),
         "--c-puct",
         str(args.c_puct),
         "--temperature",
@@ -623,10 +646,11 @@ def _run_single_process(args: argparse.Namespace) -> None:
     script_config = ScriptConfig(
         script_type="selfplay",
         models=[args.model_path],
-        strategies=[f"mcts_{args.mcts_sims}"],
+        strategies=[f"hybrid_mcts_{args.mcts_sims}"],
         num_games=args.num_games,
         strategy_config={
             "mcts_sims": args.mcts_sims,
+            "base_fraction_mcts_moves": args.base_fraction_mcts_moves,
             "c_puct": args.c_puct,
             "board_size": args.board_size,
         },
@@ -635,6 +659,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         opening_strategy=args.opening_strategy,
         cache_size=args.cache_size,
         mcts_sims=args.mcts_sims,
+        base_fraction_mcts_moves=args.base_fraction_mcts_moves,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         gumbel_sim_threshold=DEFAULT_GUMBEL_SIM_THRESHOLD,
@@ -693,6 +718,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         mcts_sims=args.mcts_sims,
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
+        base_fraction_mcts_moves=args.base_fraction_mcts_moves,
         confidence_termination_threshold=args.confidence_termination_threshold,
         command_line=command_line,
         mcts_profile=args.mcts_profile,
@@ -826,6 +852,8 @@ def main():
         raise ValueError("--mcts-profile-every must be > 0")
     if args.mcts_profile_max_calls < 0:
         raise ValueError("--mcts-profile-max-calls must be >= 0")
+    if not 0.0 <= args.base_fraction_mcts_moves <= 1.0:
+        raise ValueError("--base-fraction-mcts-moves must be in [0, 1]")
     if args.restart_every_games < 0:
         raise ValueError("--restart-every-games cannot be negative")
 
