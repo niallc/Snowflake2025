@@ -323,12 +323,24 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
             param_parts.append(f"t{config.temperature}")
         if config.config.get("enable_gumbel_root_selection"):
             param_parts.append("gumbel")
+        if config.config.get("batch_size") is not None:
+            param_parts.append(f"bs{config.config['batch_size']}")
         if config.config.get("mcts_c_puct") is not None:
             param_parts.append(f"cpuct{config.config['mcts_c_puct']}")
         if config.config.get("mcts_sims") is not None:
             param_parts.append(f"sims{config.config['mcts_sims']}")
+        if config.config.get("gumbel_sim_threshold") is not None:
+            param_parts.append(f"gthr{config.config['gumbel_sim_threshold']}")
+        if config.config.get("gumbel_c_visit") is not None:
+            param_parts.append(f"cvisit{config.config['gumbel_c_visit']}")
         if config.config.get("gumbel_c_scale") is not None:
             param_parts.append(f"cscale{config.config['gumbel_c_scale']}")
+        if config.config.get("gumbel_candidate_power_scale") is not None:
+            param_parts.append(f"gps{config.config['gumbel_candidate_power_scale']}")
+        if config.config.get("gumbel_candidate_power_rate") is not None:
+            param_parts.append(f"gpr{config.config['gumbel_candidate_power_rate']}")
+        if config.config.get("gumbel_candidate_power_offset") is not None:
+            param_parts.append(f"gpo{config.config['gumbel_candidate_power_offset']}")
 
         param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
         config.name = f"{model_name}_{config.original_name}{param_suffix}"

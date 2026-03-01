@@ -72,7 +72,10 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
 )
-from hex_ai.inference.model_config import get_all_model_participants_from_generations
+from hex_ai.inference.model_config import (
+    get_all_model_participants_from_generations,
+    get_primary_model_paths_from_recent_generations,
+)
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
 from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.utils.tournament_logging import get_command_line
@@ -134,6 +137,8 @@ DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 DEFAULT_MOST_RECENT_ROOT = "checkpoints/hyperparameter_tuning"
 CHECKPOINT_FILE_REGEX = re.compile(r"epoch\d+_mini\d+\.pt\.gz$")
+DEFAULT_ROUND_ROBIN_GENERATION_COUNT = 3
+DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS = 1
 
 # TODO: Consider adding configuration for:
 # Low priority: Timeout handling for long-running strategies
@@ -172,7 +177,7 @@ Examples:
     parser.add_argument('--models', type=str,
                        help='Comma-separated list of model registry names (e.g., "best,model2"). If only one model is provided, it will be used for all strategies.')
     parser.add_argument('--model-files', type=str,
-                       help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz")')
+                       help='Comma-separated list of model file names (e.g., "epoch13_mini31.pt.gz,epoch13_mini27.pt.gz"). Optional for 2-stage runs: when omitted with knockout + --strategies, defaults to previous generation primaries from MODEL_GENERATIONS.')
     parser.add_argument('--model-dirs', type=str,
                        help='Comma-separated list of model directories (used with --model-files)')
     parser.add_argument('--strategies', type=str,
@@ -525,15 +530,45 @@ def _build_most_recent_knockout_participants(
     }
 
 
+def _has_knockout_source(args) -> bool:
+    """Return True when any knockout source is configured."""
+    return bool(
+        getattr(args, "knockout_dir", None)
+        or getattr(args, "knockout_from_generations", False)
+        or getattr(args, "most_recent", None) is not None
+        or getattr(args, "most_recent_biased", None) is not None
+    )
+
+
+def _should_auto_default_round_robin_models(args, strategy_names: List[str]) -> bool:
+    """
+    Decide whether to auto-populate round-robin models from recent generations.
+
+    We only do this for 2-stage runs (knockout source present) when:
+      - user provided round-robin strategies
+      - user did not explicitly provide any round-robin model source
+    """
+    if not _has_knockout_source(args):
+        return False
+    if not strategy_names:
+        return False
+    if getattr(args, "models", None):
+        return False
+    if getattr(args, "model_files", None) or getattr(args, "model_dirs", None):
+        return False
+    return True
+
+
 def is_knockout_only_tournament(args) -> bool:
     """Check if this is a knockout-only tournament (no round-robin participants)."""
-    has_knockout = (
-        args.knockout_dir
-        or args.knockout_from_generations
-        or args.most_recent is not None
-        or args.most_recent_biased is not None
+    has_knockout = _has_knockout_source(args)
+    has_round_robin_strategy_intent = bool(getattr(args, "strategies", None))
+    has_round_robin_model_intent = bool(
+        getattr(args, "models", None)
+        or getattr(args, "model_files", None)
+        or getattr(args, "model_dirs", None)
     )
-    return has_knockout and not args.models and not args.model_files
+    return has_knockout and not has_round_robin_strategy_intent and not has_round_robin_model_intent
 
 
 def print_round_robin_strategy_summary(strategy_configs: List[StrategyConfig]) -> None:
@@ -989,6 +1024,7 @@ def main():
         strategy_names = [name.strip() for name in args.strategies.split(',')]
     else:
         strategy_names = []
+    auto_default_round_robin_models = _should_auto_default_round_robin_models(args, strategy_names)
     
     # Parse model specifications (only needed if not knockout-only tournament)
     if is_knockout_only_tournament(args):
@@ -996,8 +1032,43 @@ def main():
         model_paths = []
         strategy_configs = []
     else:
-        # Parse model specifications
-        model_paths = parse_model_specifications(args, strategy_names)
+        if auto_default_round_robin_models:
+            try:
+                model_paths = get_primary_model_paths_from_recent_generations(
+                    count=DEFAULT_ROUND_ROBIN_GENERATION_COUNT,
+                    skip_most_recent=DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS,
+                )
+            except (ValueError, FileNotFoundError) as error:
+                print(f"ERROR: Failed to load default round-robin models from MODEL_GENERATIONS: {error}")
+                sys.exit(1)
+
+            if len(strategy_names) == 1 and len(model_paths) > 1:
+                strategy_names = strategy_names * len(model_paths)
+                print(
+                    f"INFO: Expanding single strategy '{strategy_names[0]}' "
+                    f"to {len(strategy_names)} round-robin participants."
+                )
+            elif len(strategy_names) != len(model_paths):
+                print(
+                    "ERROR: Default round-robin model selection produced "
+                    f"{len(model_paths)} models, but {len(strategy_names)} strategies were provided."
+                )
+                print(
+                    "Provide either exactly one strategy (to replicate) or exactly "
+                    f"{len(model_paths)} strategies."
+                )
+                sys.exit(1)
+
+            print(
+                "INFO: Using default round-robin models from MODEL_GENERATIONS "
+                f"(skip newest {DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS}, "
+                f"take next {DEFAULT_ROUND_ROBIN_GENERATION_COUNT})."
+            )
+            for model_path in model_paths:
+                print(f"  - {model_path}")
+        else:
+            # Parse model specifications
+            model_paths = parse_model_specifications(args, strategy_names)
         
         # Create strategy configurations
         try:

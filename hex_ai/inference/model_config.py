@@ -273,6 +273,72 @@ def _get_previous_best_model() -> Optional[Tuple[str, str]]:
     return gen_data["dir"], gen_data["models"][0]
 
 
+def get_primary_model_paths_from_recent_generations(
+    *,
+    count: int,
+    skip_most_recent: int = 0,
+) -> List[str]:
+    """
+    Get primary model checkpoint paths from recent generations.
+
+    Args:
+        count: Number of generations to return.
+        skip_most_recent: Number of newest generations to skip first.
+            Example: skip_most_recent=1 returns generations immediately before current.
+
+    Returns:
+        List of full checkpoint paths ordered newest -> oldest among the selected set.
+
+    Raises:
+        ValueError: If parameters are invalid or generation metadata is incomplete.
+        FileNotFoundError: If any selected checkpoint file does not exist.
+    """
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+    if skip_most_recent < 0:
+        raise ValueError(f"skip_most_recent must be >= 0, got {skip_most_recent}")
+
+    sorted_generations_desc = sorted(MODEL_GENERATIONS.keys(), reverse=True)
+    if skip_most_recent >= len(sorted_generations_desc):
+        raise ValueError(
+            f"Cannot skip {skip_most_recent} generations; only {len(sorted_generations_desc)} generation(s) configured."
+        )
+
+    selected_generations = sorted_generations_desc[skip_most_recent: skip_most_recent + count]
+    if len(selected_generations) < count:
+        raise ValueError(
+            f"Requested {count} generation(s) after skipping {skip_most_recent}, "
+            f"but only {len(selected_generations)} are available."
+        )
+
+    model_paths: List[str] = []
+    for generation in selected_generations:
+        generation_data = MODEL_GENERATIONS[generation]
+        generation_models = generation_data.get("models", [])
+        if not generation_models:
+            raise ValueError(
+                f"Generation {generation} has no models configured in MODEL_GENERATIONS."
+            )
+
+        primary_model = generation_models[0]
+        if not primary_model.endswith(".pt.gz"):
+            primary_model = f"{primary_model}.pt.gz"
+
+        model_path = os.path.join(
+            CHECKPOINTS_BASE_DIR,
+            generation_data["dir"],
+            primary_model,
+        )
+        if not validate_model_path(model_path):
+            raise FileNotFoundError(
+                f"Primary model for generation {generation} does not exist: {model_path}"
+            )
+
+        model_paths.append(model_path)
+
+    return model_paths
+
+
 # Derive current best model from highest generation
 _current_dir, _current_file = _get_current_best_model()
 CURRENT_BEST_MODEL_DIR = _current_dir
