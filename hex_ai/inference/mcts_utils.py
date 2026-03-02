@@ -17,7 +17,7 @@ from hex_ai.utils.temperature import calculate_mcts_root_temperature
 # =============================
 
 # Threshold for detailed exploration tracking (when simulations <= this value)
-DETAILED_EXPLORATION_THRESHOLD = 47
+DETAILED_EXPLORATION_THRESHOLD = 199
 
 
 def _validate_board_size_value(board_size, *, source: str) -> int:

@@ -2572,7 +2572,7 @@ function displayDetailedExploration(debugInfo) {
       }
     } else if (!detailedExploration.enabled) {
       output += `Reason: Detailed exploration is disabled\n`;
-      output += `Simulation threshold: ${detailedExploration.simulation_threshold || '≤47'}\n`;
+      output += `Simulation threshold: ${detailedExploration.simulation_threshold || '199'}\n`;
       output += `Current simulations: ${mctsData?.search_stats?.num_simulations || 'unknown'}\n`;
     }
     

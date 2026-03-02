@@ -101,7 +101,7 @@ TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.90
 # Gumbel candidate scaling defaults (power-law scaling)
 DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE = 75.0  # Scale factor for power-law candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_POWER_RATE = 0.42  # Rate (exponent) for power-law candidate scaling
-DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = 0.0  # Offset for power-law candidate scaling
+DEFAULT_GUMBEL_CANDIDATE_POWER_OFFSET = -15.0  # Offset for power-law candidate scaling
 DEFAULT_GUMBEL_CANDIDATE_MIN = 4  # Minimum number of candidates
 DEFAULT_GUMBEL_CANDIDATE_MAX = 80  # Maximum number of candidates
 
