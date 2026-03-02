@@ -16,6 +16,9 @@ from hex_ai.config import (
     DEFAULT_C_PUCT,
     DEFAULT_MCTS_SIMS,
     DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+    DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
     DEFAULT_TEMPERATURE_END,
     DEFAULT_TEMPERATURE_START,
     TRMPH_BLUE_WIN,
@@ -42,10 +45,17 @@ from hex_ai.utils.format_conversion import count_trmph_moves, rowcol_to_trmph
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.value_utils import select_policy_move, validate_trmph_winner
+from hex_ai.virtual_board import (
+    MAX_VIRTUAL_DISPLAY_BOARD_SIZE,
+    MIN_VIRTUAL_DISPLAY_BOARD_SIZE,
+    get_virtual_prefill_move_coords,
+)
 
 DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
 # Policy-only moves use the non-trainable provenance code path.
 POLICY_ONLY_MOVE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
+# Virtual-board prefill moves are externally injected and should not be policy-trainable.
+VIRTUAL_PREFILL_MOVE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
 SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
     "visit_counts": MOVE_CODE_VISIT_COUNT,
     "gumbel_root": MOVE_CODE_GUMBEL_ROOT,
@@ -116,12 +126,144 @@ class SelfPlayEngine:
             )
         return numeric
 
+    @staticmethod
+    def _normalize_small_board_fraction(value: float) -> float:
+        """Normalize and validate virtual small-board sampling fraction in [0, 1]."""
+        if isinstance(value, bool):
+            raise TypeError("small_board_fraction must be numeric, got bool")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"small_board_fraction must be numeric, got {type(value)}"
+            ) from exc
+        if not 0.0 <= numeric <= 1.0:
+            raise ValueError(f"small_board_fraction must be in [0, 1], got {numeric}")
+        return numeric
+
+    @staticmethod
+    def _normalize_small_board_size_range(
+        min_display_board_size: int,
+        max_display_board_size: int,
+        *,
+        network_board_size: int,
+    ) -> Tuple[int, int]:
+        """Normalize and validate configured virtual small-board size range."""
+        min_size = SelfPlayEngine._normalize_board_size(
+            min_display_board_size,
+            source="small_board_min_display_size",
+        )
+        max_size = SelfPlayEngine._normalize_board_size(
+            max_display_board_size,
+            source="small_board_max_display_size",
+        )
+        if min_size < MIN_VIRTUAL_DISPLAY_BOARD_SIZE:
+            raise ValueError(
+                "small_board_min_display_size must be >= "
+                f"{MIN_VIRTUAL_DISPLAY_BOARD_SIZE}, got {min_size}"
+            )
+        if max_size > MAX_VIRTUAL_DISPLAY_BOARD_SIZE:
+            raise ValueError(
+                "small_board_max_display_size must be <= "
+                f"{MAX_VIRTUAL_DISPLAY_BOARD_SIZE}, got {max_size}"
+            )
+        if max_size >= network_board_size:
+            raise ValueError(
+                "small_board_max_display_size must be strictly smaller than "
+                f"network board size {network_board_size}, got {max_size}"
+            )
+        if min_size > max_size:
+            raise ValueError(
+                "small_board_min_display_size must be <= "
+                f"small_board_max_display_size, got {min_size} > {max_size}"
+            )
+        return min_size, max_size
+
+    @staticmethod
+    def _build_small_board_sampling_plan(
+        min_display_board_size: int,
+        max_display_board_size: int,
+    ) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+        """
+        Build display-size candidates and linear preference weights.
+
+        Weights are `(size - min_size + 1)`, which yields 12x12 probability 25%
+        for the default 6..12 range.
+        """
+        sizes = tuple(range(min_display_board_size, max_display_board_size + 1))
+        if not sizes:
+            raise ValueError(
+                "No small-board display sizes configured for sampling "
+                f"({min_display_board_size}..{max_display_board_size})"
+            )
+        weights = tuple(size - min_display_board_size + 1 for size in sizes)
+        if any(weight <= 0 for weight in weights):
+            raise RuntimeError(f"Invalid non-positive small-board weights: {weights}")
+        return sizes, weights
+
+    def _compute_game_seed(self, game_id: Optional[int]) -> int:
+        """Compute deterministic per-game seed used across all game-level sampling."""
+        if game_id is not None:
+            return int(self.run_seed + int(game_id) * 1000)
+        return int(time.time() * 1000000) % (2**32)
+
+    def _sample_virtual_display_board_size(self, game_id: Optional[int]) -> Optional[int]:
+        """Sample optional virtual display board size for one game."""
+        if self.small_board_fraction <= 0.0:
+            return None
+        seed = self._compute_game_seed(game_id)
+        rng = random.Random(seed + 104729)
+        if rng.random() >= self.small_board_fraction:
+            return None
+        sampled = rng.choices(
+            self.small_board_display_sizes,
+            weights=self.small_board_display_size_weights,
+            k=1,
+        )[0]
+        return int(sampled)
+
+    @staticmethod
+    def _maybe_filter_opening_for_virtual_display(
+        opening_move: Optional[Tuple[int, int]],
+        display_board_size: Optional[int],
+    ) -> Optional[Tuple[int, int]]:
+        """Drop opening moves that are outside the active virtual display board."""
+        if opening_move is None or display_board_size is None:
+            return opening_move
+        row, col = opening_move
+        if row < 0 or col < 0:
+            raise ValueError(f"Opening move contains negative coordinates: {opening_move}")
+        if row >= display_board_size or col >= display_board_size:
+            return None
+        return opening_move
+
+    @staticmethod
+    def _format_small_board_sampling_description(
+        counts_by_size: Dict[int, int],
+        total_games: int,
+    ) -> str:
+        """Build a compact human-readable summary for virtual small-board sampling."""
+        sampled_games = sum(counts_by_size.values())
+        sampled_fraction = (sampled_games / total_games) if total_games > 0 else 0.0
+        parts = [
+            f"{size}x{size}={count}" for size, count in sorted(counts_by_size.items())
+        ]
+        distribution = ", ".join(parts)
+        return (
+            "Virtual small-board games: "
+            f"{sampled_games}/{total_games} ({sampled_fraction:.2%})"
+            + (f" [{distribution}]" if distribution else "")
+        )
+
     def __init__(self, model_path: str,
                  cache_size: int = DEFAULT_CACHE_SIZE, temperature: float = DEFAULT_TEMPERATURE_START, temperature_end: float = DEFAULT_TEMPERATURE_END, 
                  verbose: int = 1, streaming_save: bool = False, streaming_file: str = None,
                  output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
                  base_fraction_mcts_moves: float = DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+                 small_board_fraction: float = DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+                 small_board_min_display_size: int = DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
+                 small_board_max_display_size: int = DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
                  confidence_termination_threshold: float = DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD,
                  write_provenance: bool = True,
                  command_line: str = None,
@@ -150,6 +292,9 @@ class SelfPlayEngine:
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
             base_fraction_mcts_moves: Fraction of moves that should run full MCTS
+            small_board_fraction: Fraction of games that start from a virtual small-board prefill
+            small_board_min_display_size: Small-board display-size lower bound (inclusive)
+            small_board_max_display_size: Small-board display-size upper bound (inclusive)
             confidence_termination_threshold: Early-termination confidence threshold
             write_provenance: Whether to write move-provenance sidecar data
             board_size: Board size for generated games (currently fail-fast restricted to 13)
@@ -178,6 +323,40 @@ class SelfPlayEngine:
             board_size, source="SelfPlayEngine.board_size"
         )
         self._ensure_supported_board_size(self.board_size)
+        self.small_board_fraction = self._normalize_small_board_fraction(
+            small_board_fraction
+        )
+        (
+            self.small_board_min_display_size,
+            self.small_board_max_display_size,
+        ) = self._normalize_small_board_size_range(
+            small_board_min_display_size,
+            small_board_max_display_size,
+            network_board_size=self.board_size,
+        )
+        (
+            self.small_board_display_sizes,
+            self.small_board_display_size_weights,
+        ) = self._build_small_board_sampling_plan(
+            self.small_board_min_display_size,
+            self.small_board_max_display_size,
+        )
+        self._small_board_prefill_moves_by_size: Dict[int, Tuple[Tuple[int, int], ...]] = {}
+        for display_size in self.small_board_display_sizes:
+            prefill_moves = get_virtual_prefill_move_coords(
+                display_size,
+                network_board_size=self.board_size,
+            )
+            if not prefill_moves:
+                raise ValueError(
+                    "Virtual small-board prefill must be non-empty for display size "
+                    f"{display_size}"
+                )
+            self._small_board_prefill_moves_by_size[display_size] = prefill_moves
+
+        if self.small_board_fraction > 0.0:
+            self._validate_small_board_prefill_sequences()
+
         self._mcts_profile_calls = 0
         self.streaming_provenance_file: Optional[str] = None
         self._streaming_games_written = 0
@@ -341,9 +520,29 @@ class SelfPlayEngine:
                     "  Note: Gumbel root selection uses fixed root temperature=1.0; "
                     "configured temperature applies to non-Gumbel visit-count sampling."
                 )
+            print(
+                "  Virtual small-board sampling: "
+                f"{self.small_board_fraction:.2%} on "
+                f"{self.small_board_min_display_size}..{self.small_board_max_display_size} "
+                "(linear larger-board preference)"
+            )
             print(f"  Write provenance sidecar: {write_provenance}")
             print(f"  Verbose: {verbose}")
             
+
+    def _validate_small_board_prefill_sequences(self) -> None:
+        """Fail fast if configured virtual-prefill sequences are invalid or terminal."""
+        for display_size, prefill_moves in self._small_board_prefill_moves_by_size.items():
+            state = make_empty_hex_state(board_size=self.board_size)
+            for move_index, move in enumerate(prefill_moves):
+                row, col = move
+                state = state.make_move(row, col)
+                if state.game_over:
+                    raise RuntimeError(
+                        "Virtual prefill reached terminal state unexpectedly for "
+                        f"display size {display_size} at move index {move_index}: "
+                        f"{move}"
+                    )
 
     def _should_use_mcts_for_move(self) -> bool:
         """Decide whether to run full MCTS for the next move."""
@@ -369,7 +568,15 @@ class SelfPlayEngine:
         move = select_policy_move(state, self.model, policy_temperature)
         return move, policy_temperature
 
-    def _generate_single_game(self, board_size: int, opening_move: Optional[Tuple[int, int]] = None, game_id: Optional[int] = None) -> Dict[str, Any]:
+    def _generate_single_game(
+        self,
+        board_size: int,
+        opening_move: Optional[Tuple[int, int]] = None,
+        game_id: Optional[int] = None,
+        *,
+        prefill_moves: Optional[Tuple[Tuple[int, int], ...]] = None,
+        virtual_display_board_size: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Generate a single self-play game.
         
@@ -377,19 +584,16 @@ class SelfPlayEngine:
             board_size: Size of the board
             opening_move: Optional opening move as (row, col) tuple
             game_id: Optional game ID for setting unique random seed
+            prefill_moves: Optional virtual-board prefill move sequence applied before play
+            virtual_display_board_size: Optional virtual display size metadata for diagnostics
             
         Returns:
             Dictionary containing game data with TRMPH string and winner
         """
         self._ensure_supported_board_size(board_size)
 
-        # Set unique random seed for this game to ensure diversity
-        if game_id is not None:
-            # Combine run seed with game_id to ensure uniqueness across runs
-            seed = self.run_seed + game_id * 1000
-        else:
-            # Use time-based seed for uniqueness
-            seed = int(time.time() * 1000000) % (2**32)
+        # Set deterministic per-game seed for reproducible stochastic decisions.
+        seed = self._compute_game_seed(game_id)
         
         # Set both Python and numpy random seeds to ensure MCTS uses the correct randomness
         random.seed(seed)
@@ -397,9 +601,35 @@ class SelfPlayEngine:
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game {game_id} using seed {seed}")
+            if virtual_display_board_size is not None:
+                print(
+                    "🎮 SELF-PLAY: Virtual display board "
+                    f"{virtual_display_board_size}x{virtual_display_board_size}"
+                )
         
         state = make_empty_hex_state(board_size=board_size)
         move_provenance_codes: List[str] = []
+
+        if prefill_moves:
+            if self.verbose >= 3:
+                print(
+                    "🎮 SELF-PLAY: Applying virtual-board prefill "
+                    f"({len(prefill_moves)} moves)"
+                )
+            for prefill_index, (row, col) in enumerate(prefill_moves):
+                if not (0 <= row < board_size and 0 <= col < board_size):
+                    raise ValueError(
+                        "Virtual prefill move is out of bounds for "
+                        f"{board_size}x{board_size} board: {(row, col)}"
+                    )
+                state = state.make_move(row, col)
+                if self.write_provenance:
+                    move_provenance_codes.append(VIRTUAL_PREFILL_MOVE_PROVENANCE_CODE)
+                if state.game_over:
+                    raise RuntimeError(
+                        "Virtual prefill reached terminal state unexpectedly at "
+                        f"prefill index {prefill_index}: {(row, col)}"
+                    )
         
         # Apply opening move if provided
         if opening_move is not None:
@@ -542,6 +772,8 @@ class SelfPlayEngine:
             'trmph': state.to_trmph(),
             'winner': winner_char
         }
+        if virtual_display_board_size is not None:
+            game_data['virtual_display_board_size'] = int(virtual_display_board_size)
         if self.write_provenance:
             game_data['move_provenance_codes'] = ''.join(move_provenance_codes)
             expected_move_count = count_trmph_moves(game_data['trmph'])
@@ -709,13 +941,34 @@ class SelfPlayEngine:
         last_report_time = start_time
         last_report_game_count = 0
         last_report_move_count = 0
+        virtual_small_board_counts: Dict[int, int] = {}
 
         for i in range(num_games):
+            virtual_display_board_size = self._sample_virtual_display_board_size(i)
+            prefill_moves = None
+            if virtual_display_board_size is not None:
+                prefill_moves = self._small_board_prefill_moves_by_size[
+                    virtual_display_board_size
+                ]
+                virtual_small_board_counts[virtual_display_board_size] = (
+                    virtual_small_board_counts.get(virtual_display_board_size, 0) + 1
+                )
+
             opening_move = None
             if opening_strategy is not None:
                 opening_move = opening_strategy.get_opening_move(i)
+                opening_move = self._maybe_filter_opening_for_virtual_display(
+                    opening_move,
+                    virtual_display_board_size,
+                )
 
-            game_data = self._generate_single_game(board_size, opening_move, game_id=i)
+            game_data = self._generate_single_game(
+                board_size,
+                opening_move,
+                game_id=i,
+                prefill_moves=prefill_moves,
+                virtual_display_board_size=virtual_display_board_size,
+            )
             self._validate_game_data(game_data, i)
             winner = game_data['winner']
             if winner == TRMPH_RED_WIN:
@@ -746,6 +999,14 @@ class SelfPlayEngine:
                 last_report_game_count,
                 last_report_move_count,
                 progress_interval,
+            )
+
+        if self.verbose >= 1 and self.small_board_fraction > 0.0:
+            print(
+                self._format_small_board_sampling_description(
+                    virtual_small_board_counts,
+                    num_games,
+                )
             )
 
         total_time = time.time() - start_time

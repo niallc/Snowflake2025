@@ -29,7 +29,14 @@ from dataclasses import dataclass, field
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 import hex_ai
-from hex_ai.config import BOARD_SIZE, DEFAULT_CACHE_SIZE, DEFAULT_TEMPERATURE_START
+from hex_ai.config import (
+    BOARD_SIZE,
+    DEFAULT_CACHE_SIZE,
+    DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
+    DEFAULT_TEMPERATURE_START,
+)
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.trmph_processing.cli import create_config_from_args, process_files
 from hex_ai.file_utils import GracefulShutdown
@@ -63,6 +70,9 @@ class PipelineConfig:
     temperature: float = DEFAULT_TEMPERATURE_START
     cache_size: int = DEFAULT_CACHE_SIZE
     write_provenance: bool = True
+    small_board_fraction: float = DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION
+    small_board_min_size: int = DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE
+    small_board_max_size: int = DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE
     
     # Data directories - explicit types to avoid confusion
     base_data_dir: str = "data"
@@ -203,6 +213,26 @@ class PipelineConfig:
         if self.board_size <= 0:
             raise ValueError(f"board_size must be > 0, got {self.board_size}")
 
+        if not 0.0 <= self.small_board_fraction <= 1.0:
+            raise ValueError(
+                f"small_board_fraction must be in [0, 1], got {self.small_board_fraction}"
+            )
+        if self.small_board_fraction > 0.0:
+            if self.small_board_min_size < 2:
+                raise ValueError(
+                    f"small_board_min_size must be >= 2, got {self.small_board_min_size}"
+                )
+            if self.small_board_max_size >= self.board_size:
+                raise ValueError(
+                    "small_board_max_size must be < board_size when small-board "
+                    f"sampling is enabled, got {self.small_board_max_size} vs {self.board_size}"
+                )
+            if self.small_board_min_size > self.small_board_max_size:
+                raise ValueError(
+                    "small_board_min_size must be <= small_board_max_size, "
+                    f"got {self.small_board_min_size} > {self.small_board_max_size}"
+                )
+
         if self.policy_provenance_mode not in {"off", "optional", "require"}:
             raise ValueError(
                 "policy_provenance_mode must be 'off', 'optional', or 'require', "
@@ -286,6 +316,11 @@ class SelfPlayStep:
         self.logger.info(f"Total games: {self.config.num_games}")
         self.logger.info(f"Workers: {self.config.num_workers}")
         self.logger.info(f"Board size: {self.config.board_size}")
+        self.logger.info(
+            "Virtual small-board sampling: "
+            f"{self.config.small_board_fraction:.2%} on "
+            f"{self.config.small_board_min_size}..{self.config.small_board_max_size}"
+        )
         self.logger.info(f"Games per worker: {games_per_worker}")
         self.logger.info(f"Output directory: {self.config.selfplay_dir}")
         
@@ -338,6 +373,9 @@ class SelfPlayStep:
                 model_path=self.config.model_full_path,
                 cache_size=self.config.cache_size,
                 temperature=self.config.temperature,
+                small_board_fraction=self.config.small_board_fraction,
+                small_board_min_display_size=self.config.small_board_min_size,
+                small_board_max_display_size=self.config.small_board_max_size,
                 verbose=1,
                 streaming_save=True,
                 write_provenance=self.config.write_provenance,
@@ -1279,6 +1317,33 @@ Examples:
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE_START, help=f"Temperature for move sampling (default: {DEFAULT_TEMPERATURE_START})")
     parser.add_argument("--cache-size", type=int, default=DEFAULT_CACHE_SIZE, help=f"Cache size for model inference (default: {DEFAULT_CACHE_SIZE})")
     parser.add_argument(
+        "--small-board-fraction",
+        type=float,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+        help=(
+            "Fraction of self-play games to start from virtual small-board prefills "
+            f"(default: {DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION}). Set to 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--small-board-min-size",
+        type=int,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
+        help=(
+            "Minimum virtual display-board size (inclusive) for small-board sampling "
+            f"(default: {DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE})."
+        ),
+    )
+    parser.add_argument(
+        "--small-board-max-size",
+        type=int,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
+        help=(
+            "Maximum virtual display-board size (inclusive) for small-board sampling "
+            f"(default: {DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE})."
+        ),
+    )
+    parser.add_argument(
         "--no-write-provenance",
         action="store_true",
         help="Disable move-provenance sidecar writing during self-play generation.",
@@ -1479,6 +1544,9 @@ def main():
             board_size=args.board_size,
             temperature=args.temperature,
             cache_size=args.cache_size,
+            small_board_fraction=args.small_board_fraction,
+            small_board_min_size=args.small_board_min_size,
+            small_board_max_size=args.small_board_max_size,
             write_provenance=not args.no_write_provenance,
             base_data_dir=args.base_data_dir,
             raw_trmph_data_dirs=args.raw_trmph_data_dirs,

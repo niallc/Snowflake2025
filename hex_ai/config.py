@@ -94,6 +94,9 @@ DEFAULT_GUMBEL_C_VISIT = 50.0  # Default Gumbel-AlphaZero c_visit parameter
 DEFAULT_GUMBEL_C_SCALE = 100  # Default Gumbel-AlphaZero c_scale parameter
 DEFAULT_MCTS_ENABLE_TERMINAL_MOVE_DETECTION = True  # Default terminal move detection parameter
 DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES = 0.25  # Fraction of self-play moves that use full MCTS
+DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION = 0.02  # Fraction of self-play games that use virtual small-board prefills
+DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE = 6  # Small-board lower bound (inclusive)
+DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE = 12  # Small-board upper bound (inclusive)
 DEFAULT_TOURNAMENT_BASE_FRACTION_MCTS_MOVES = 1.0  # Keep tournaments fully MCTS by default
 # Tournament-specific confidence-based termination threshold (higher confidence for tournament play)
 TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD = 0.90

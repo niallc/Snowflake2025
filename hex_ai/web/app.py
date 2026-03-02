@@ -61,6 +61,10 @@ from hex_ai.web.interactive_core import (
 from hex_ai.utils.opening_strategies import (
     PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13,
 )
+from hex_ai.virtual_board import (
+    VIRTUAL_BOARD_PREFILL_MOVES,
+    get_virtual_prefill_moves,
+)
 
 CORS_ALLOW_ALL = os.getenv("SF25_CORS_ALLOW_ALL", "0").lower() not in ("0", "false", "no")
 CORS_ALLOWED_ORIGINS = tuple(
@@ -179,23 +183,7 @@ MIN_DISPLAY_BOARD_SIZE = 2
 DEFAULT_DISPLAY_BOARD_SIZE = BOARD_SIZE
 DISPLAY_BOARD_SIZE_OPTIONS = list(range(BOARD_SIZE, MIN_DISPLAY_BOARD_SIZE - 1, -1))
 
-# Derived from legacy_code/FileConversion.py and existing rules.html guidance.
-# Values are bare TRMPH move strings (no "#13," prefix).
 TRMPH_BOARD_SHARE_BASE_URL = "https://trmph.com/hex/board"
-VIRTUAL_BOARD_PREFILL_MOVES = {
-    13: "",
-    12: "a13m1b13m2c13m3d13m4e13m5f13m6g13m7h13m8i13m9j13m10k13m11l13m12",
-    11: "a12l1b12l2c12l3d12l4e12l5f12l6g12l7h12l8i12l9j12l10k12l11k13m11",
-    10: "a11k1b11k2c11k3d11k4e11k5f11k6g11k7h11k8i11k9j11k10j12l10j13m10",
-    9: "a10j1b10j2c10j3d10j4e10j5f10j6g10j7h10j8i10j9i11k9i12l9i13m9",
-    8: "a9i1b9i2c9i3d9i4e9i5f9i6g9i7h9i8h10j8h11k8h12l8h13m8",
-    7: "a8h1b8h2c8h3d8h4e8h5f8h6g8h7g9i7g10j7g11k7g12l7g13m7",
-    6: "a7g1b7g2c7g3d7g4e7g5f7g6f8h6f9i6f10j6f11k6f12l6f13m6",
-    5: "a6f1b6f2c6f3d6f4e6f5e7g5e8h5e9i5e10j5e11k5e12l5e13m5",
-    4: "a5e1b5e2c5e3d5e4d6f4d7g4d8h4d9i4d10j4d11k4d12l4d13m4",
-    3: "a4d1b4d2c4d3c5e3c6f3c7g3c8h3c9i3c10j3c11k3c12l3c13m3",
-    2: "a3c1b3c2b4d2b5e2b6f2b7g2b8h2b9i2b10j2b11k2b12l2b13m2",
-}
 
 _DISPLAY_MASK_CACHE = {}
 
@@ -214,13 +202,6 @@ def validate_display_board_size(value) -> int:
             f"display_board_size must be between {MIN_DISPLAY_BOARD_SIZE} and {BOARD_SIZE}"
         )
     return size
-
-def get_virtual_prefill_moves(display_board_size: int) -> str:
-    """Get prefill move sequence that makes KxK play equivalent on BOARD_SIZE board."""
-    try:
-        return VIRTUAL_BOARD_PREFILL_MOVES[display_board_size]
-    except KeyError as e:
-        raise ValueError(f"Unsupported display_board_size: {display_board_size}") from e
 
 def _strip_virtual_prefill_prefix_if_present(bare_moves: str, display_board_size: int) -> str:
     """

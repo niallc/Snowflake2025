@@ -22,11 +22,15 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_SIM_THRESHOLD,
     DEFAULT_MCTS_SIMS,
     DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
+    DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
+    DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
     DEFAULT_TEMPERATURE_END,
     DEFAULT_TEMPERATURE_START,
 )
 from hex_ai.inference.model_config import get_model_path
 from hex_ai.move_provenance import (
+    MOVE_CODE_CONFIDENCE_TERMINATION,
     MOVE_CODE_VISIT_COUNT,
     make_move_provenance_record,
     sidecar_path_for_trmph,
@@ -52,6 +56,7 @@ from hex_ai.utils.run_state_store import (
     utc_now_iso,
 )
 from hex_ai.utils.script_logging import ScriptConfig, print_script_configuration, print_script_results
+from hex_ai.virtual_board import get_virtual_prefill_prefix_move_count_for_trmph
 
 
 DEFAULT_RESTART_STATE_FILENAME = "selfplay_restart_state.json"
@@ -90,6 +95,34 @@ def parse_args() -> argparse.Namespace:
         help=(
             'Fraction of moves that should run full MCTS (remaining moves use '
             f'policy-head-only rollout, default: {DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES})'
+        ),
+    )
+    parser.add_argument(
+        '--small-board-fraction',
+        type=float,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
+        help=(
+            "Fraction of games to generate from virtual small-board prefills "
+            f"(default: {DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION}). "
+            "Set to 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        '--small-board-min-size',
+        type=int,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
+        help=(
+            "Minimum virtual display-board size (inclusive) when small-board "
+            f"sampling is enabled (default: {DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE})."
+        ),
+    )
+    parser.add_argument(
+        '--small-board-max-size',
+        type=int,
+        default=DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
+        help=(
+            "Maximum virtual display-board size (inclusive) when small-board "
+            f"sampling is enabled (default: {DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE})."
         ),
     )
     parser.add_argument(
@@ -252,6 +285,9 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "cache_size": args.cache_size,
         "mcts_sims": args.mcts_sims,
         "base_fraction_mcts_moves": args.base_fraction_mcts_moves,
+        "small_board_fraction": args.small_board_fraction,
+        "small_board_min_size": args.small_board_min_size,
+        "small_board_max_size": args.small_board_max_size,
         "c_puct": args.c_puct,
         "disable_gumbel": args.disable_gumbel,
         "temperature": args.temperature,
@@ -288,6 +324,12 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         str(args.mcts_sims),
         "--base-fraction-mcts-moves",
         str(args.base_fraction_mcts_moves),
+        "--small-board-fraction",
+        str(args.small_board_fraction),
+        "--small-board-min-size",
+        str(args.small_board_min_size),
+        "--small-board-max-size",
+        str(args.small_board_max_size),
         "--c-puct",
         str(args.c_puct),
         "--temperature",
@@ -585,7 +627,21 @@ def _run_single_process(args: argparse.Namespace) -> None:
             )
         trmph_text = parts[0]
         move_count = count_trmph_moves(trmph_text)
-        move_codes = MOVE_CODE_VISIT_COUNT * move_count
+        prefill_prefix_move_count = get_virtual_prefill_prefix_move_count_for_trmph(
+            trmph_text,
+            min_display_board_size=args.small_board_min_size,
+            max_display_board_size=args.small_board_max_size,
+        )
+        if prefill_prefix_move_count > move_count:
+            raise RuntimeError(
+                "Detected virtual-prefill prefix longer than total move count while "
+                f"repairing streaming sidecar: prefill={prefill_prefix_move_count}, "
+                f"moves={move_count}"
+            )
+        move_codes = (
+            MOVE_CODE_CONFIDENCE_TERMINATION * prefill_prefix_move_count
+            + MOVE_CODE_VISIT_COUNT * (move_count - prefill_prefix_move_count)
+        )
         recovery_record = make_move_provenance_record(
             game_index=provenance_records,
             move_codes=move_codes,
@@ -622,7 +678,9 @@ def _run_single_process(args: argparse.Namespace) -> None:
 
         print(
             "WARNING: repaired one missing terminal streaming provenance line "
-            f"using all-trainable fallback codes. Backups: {trmph_backup}, "
+            "using fallback codes "
+            f"(virtual-prefill masked prefix length={prefill_prefix_move_count}). "
+            f"Backups: {trmph_backup}, "
             f"{provenance_backup}"
         )
     
@@ -651,6 +709,9 @@ def _run_single_process(args: argparse.Namespace) -> None:
         strategy_config={
             "mcts_sims": args.mcts_sims,
             "base_fraction_mcts_moves": args.base_fraction_mcts_moves,
+            "small_board_fraction": args.small_board_fraction,
+            "small_board_min_size": args.small_board_min_size,
+            "small_board_max_size": args.small_board_max_size,
             "c_puct": args.c_puct,
             "board_size": args.board_size,
         },
@@ -679,6 +740,10 @@ def _run_single_process(args: argparse.Namespace) -> None:
     elif args.opening_strategy == 'pie_rule_legacy':
         print("  Pie-rule mode: legacy")
     print(f"  Board size: {args.board_size}")
+    print(
+        "  Virtual small-board sampling: "
+        f"{args.small_board_fraction:.2%} on {args.small_board_min_size}..{args.small_board_max_size}"
+    )
     print(f"  Output directory: {args.output_dir}")
     print(f"  Timestamp: {timestamp}")
     print()
@@ -719,6 +784,9 @@ def _run_single_process(args: argparse.Namespace) -> None:
         c_puct=args.c_puct,
         enable_gumbel=not args.disable_gumbel,
         base_fraction_mcts_moves=args.base_fraction_mcts_moves,
+        small_board_fraction=args.small_board_fraction,
+        small_board_min_display_size=args.small_board_min_size,
+        small_board_max_display_size=args.small_board_max_size,
         confidence_termination_threshold=args.confidence_termination_threshold,
         command_line=command_line,
         mcts_profile=args.mcts_profile,
@@ -854,6 +922,21 @@ def main():
         raise ValueError("--mcts-profile-max-calls must be >= 0")
     if not 0.0 <= args.base_fraction_mcts_moves <= 1.0:
         raise ValueError("--base-fraction-mcts-moves must be in [0, 1]")
+    if not 0.0 <= args.small_board_fraction <= 1.0:
+        raise ValueError("--small-board-fraction must be in [0, 1]")
+    if args.small_board_fraction > 0.0:
+        if args.small_board_min_size < 2:
+            raise ValueError("--small-board-min-size must be >= 2 when enabled")
+        if args.small_board_max_size >= args.board_size:
+            raise ValueError(
+                "--small-board-max-size must be < --board-size when enabled "
+                f"(got {args.small_board_max_size} vs {args.board_size})"
+            )
+        if args.small_board_min_size > args.small_board_max_size:
+            raise ValueError(
+                "--small-board-min-size must be <= --small-board-max-size "
+                f"(got {args.small_board_min_size} > {args.small_board_max_size})"
+            )
     if args.restart_every_games < 0:
         raise ValueError("--restart-every-games cannot be negative")
 
