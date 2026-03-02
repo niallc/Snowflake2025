@@ -444,10 +444,19 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
             param_parts.append(f"gpo{config.config['gumbel_candidate_power_offset']}")
         if config.config.get("enable_dead_cell_pruning", False):
             param_parts.append("deadmask")
-            if config.config.get("dead_cell_enable_two_two_split", True) is False:
-                param_parts.append("no22")
-            if config.config.get("dead_cell_enable_three_plus_one", True) is False:
-                param_parts.append("no31")
+            two_two_enabled = config.config.get(
+                "dead_cell_enable_two_two_split",
+                DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
+            )
+            if two_two_enabled != DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT:
+                param_parts.append("no22" if two_two_enabled is False else "yes22")
+
+            three_plus_one_enabled = config.config.get(
+                "dead_cell_enable_three_plus_one",
+                DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE,
+            )
+            if three_plus_one_enabled != DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE:
+                param_parts.append("yes31" if three_plus_one_enabled is True else "no31")
             if (
                 config.config.get(
                     "dead_cell_three_plus_one_requires_adjacent_opposite",
@@ -456,8 +465,12 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
                 is True
             ):
                 param_parts.append("strict31")
-            if config.config.get("dead_cell_enable_double_dead_pairs", True) is False:
-                param_parts.append("no2cell")
+            double_pair_enabled = config.config.get(
+                "dead_cell_enable_double_dead_pairs",
+                DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+            )
+            if double_pair_enabled != DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS:
+                param_parts.append("no2cell" if double_pair_enabled is False else "yes2cell")
 
         param_suffix = f"_{'_'.join(param_parts)}" if param_parts else ""
         config.name = f"{model_name}_{config.original_name}{param_suffix}"

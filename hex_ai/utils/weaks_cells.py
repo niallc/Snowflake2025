@@ -103,24 +103,49 @@ def _has_three_plus_one_opposite(
 ) -> bool:
     """Detect a 3+1 motif around one color.
 
-    With `require_adjacent_opposite=True`, this is the strict pattern:
-    `ccc` with adjacent opposite on either end.
+    With `require_adjacent_opposite=False`, detect the D3 pattern:
+    `AAAXBX` (cyclic), where:
+    - `A` is `color`
+    - `B` is the opposite color
+    - `X` is empty
 
-    With `False`, a looser practical variant is used:
-    any run of at least 3 of one color plus at least one opposite anywhere.
+    With `require_adjacent_opposite=True`, use a stricter adjacent-opposite
+    variant where the opposite color is directly next to the `AAA` run and the
+    remaining two ring cells are empty:
+    - `AAABXX` or `AAAXXB` (cyclic)
     """
     opp = _opp(color)
-    if require_adjacent_opposite:
-        for i in range(6):
+    for i in range(6):
+        if (
+            ring[i] != color
+            or ring[(i + 1) % 6] != color
+            or ring[(i + 2) % 6] != color
+        ):
+            continue
+
+        if require_adjacent_opposite:
             if (
-                ring[i] == color
-                and ring[(i + 1) % 6] == color
-                and ring[(i + 2) % 6] == color
-                and (ring[(i - 1) % 6] == opp or ring[(i + 3) % 6] == opp)
+                ring[(i + 3) % 6] == opp
+                and ring[(i + 4) % 6] == _EMPTY
+                and ring[(i + 5) % 6] == _EMPTY
             ):
                 return True
-        return False
-    return _max_samecolor_run_cyclic(ring, color) >= 3 and opp in ring
+            if (
+                ring[(i + 3) % 6] == _EMPTY
+                and ring[(i + 4) % 6] == _EMPTY
+                and ring[(i + 5) % 6] == opp
+            ):
+                return True
+            continue
+
+        if (
+            ring[(i + 3) % 6] == _EMPTY
+            and ring[(i + 4) % 6] == opp
+            and ring[(i + 5) % 6] == _EMPTY
+        ):
+            return True
+
+    return False
 
 
 def _is_dead_cell_single_motifs(

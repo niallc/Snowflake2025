@@ -22,6 +22,10 @@ from hex_ai.config import (
 )
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.strategy_config import (
+    DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+    DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE,
+    DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
+    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
     DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION,
     StrategyConfig,
     create_strategy_configs_from_parameters,
@@ -431,26 +435,26 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
     dead_cell_enable_two_two_split = (
         [s.strip().lower() == 'true' for s in args.dead_cell_enable_two_two_split.split(',')]
         if hasattr(args, 'dead_cell_enable_two_two_split') and args.dead_cell_enable_two_two_split
-        else ([True] if include_defaults else None)
+        else ([DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT] if include_defaults else None)
     )
 
     dead_cell_enable_three_plus_one = (
         [s.strip().lower() == 'true' for s in args.dead_cell_enable_three_plus_one.split(',')]
         if hasattr(args, 'dead_cell_enable_three_plus_one') and args.dead_cell_enable_three_plus_one
-        else ([True] if include_defaults else None)
+        else ([DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE] if include_defaults else None)
     )
 
     dead_cell_three_plus_one_requires_adjacent_opposite = (
         [s.strip().lower() == 'true' for s in args.dead_cell_three_plus_one_requires_adjacent_opposite.split(',')]
         if hasattr(args, 'dead_cell_three_plus_one_requires_adjacent_opposite')
         and args.dead_cell_three_plus_one_requires_adjacent_opposite
-        else ([False] if include_defaults else None)
+        else ([DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE] if include_defaults else None)
     )
 
     dead_cell_enable_double_dead_pairs = (
         [s.strip().lower() == 'true' for s in args.dead_cell_enable_double_dead_pairs.split(',')]
         if hasattr(args, 'dead_cell_enable_double_dead_pairs') and args.dead_cell_enable_double_dead_pairs
-        else ([True] if include_defaults else None)
+        else ([DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS] if include_defaults else None)
     )
     
     # Parse per-strategy temperatures
@@ -546,14 +550,18 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
                 details.append(f"gumbel_power_offset={cfg.get('gumbel_candidate_power_offset')}")
         details.append(f"dead_cell_pruning={cfg.get('enable_dead_cell_pruning', False)}")
         if cfg.get("enable_dead_cell_pruning", False):
-            details.append(f"dead_cell_two_two_split={cfg.get('dead_cell_enable_two_two_split', True)}")
-            details.append(f"dead_cell_three_plus_one={cfg.get('dead_cell_enable_three_plus_one', True)}")
             details.append(
-                "dead_cell_strict_three_plus_one="
-                f"{cfg.get('dead_cell_three_plus_one_requires_adjacent_opposite', False)}"
+                f"dead_cell_two_two_split={cfg.get('dead_cell_enable_two_two_split', DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT)}"
             )
             details.append(
-                f"dead_cell_double_pairs={cfg.get('dead_cell_enable_double_dead_pairs', True)}"
+                f"dead_cell_three_plus_one={cfg.get('dead_cell_enable_three_plus_one', DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE)}"
+            )
+            details.append(
+                "dead_cell_strict_three_plus_one="
+                f"{cfg.get('dead_cell_three_plus_one_requires_adjacent_opposite', DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE)}"
+            )
+            details.append(
+                f"dead_cell_double_pairs={cfg.get('dead_cell_enable_double_dead_pairs', DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS)}"
             )
     return ", ".join(details)
 
