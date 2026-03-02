@@ -49,3 +49,15 @@ This file captures project-specific guidance for Codex agents working in this re
 - There is no project-wide rule to always prefer one context; choose based on task safety/performance needs.
 - If GPU usage needs to be explicit/verified for long runs, launch from a normal terminal (`source hex_ai_env/bin/activate`) and sanity-check with a short probe:
   - `python -c "import torch; print(torch.backends.mps.is_built(), torch.backends.mps.is_available())"`
+
+### 2026-03-02 - Tournament Launch Reliability in Codex Shell
+- In this environment, backgrounding jobs from `zsh` may fail immediately with `nice(5) failed: operation not permitted` when `BG_NICE` is enabled.
+- If that happens, either:
+  - run `unsetopt BG_NICE` before background launches, or
+  - keep long-running managers attached in persistent PTY sessions.
+- Always verify launches via `ps` and by checking that new tournament output directories are created.
+
+### 2026-03-02 - Model Selection Policy for Parameter Sweeps
+- For ongoing exploratory sweeps, using the current `best` model is acceptable (and often preferred by the user for practical relevance).
+- Important behavior: `scripts/adaptive_mcts_parameter_manager.py --model-spec best` freezes a resolved model path into each state file at first run; each new `out-dir` can therefore lock a different checkpoint if `best` changes.
+- If strict apples-to-apples parameter comparison is required, pin the same resolved model path across compared states (or reuse the same state/out-dir lineage).
