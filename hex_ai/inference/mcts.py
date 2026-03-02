@@ -72,6 +72,7 @@ from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
 from hex_ai.utils.timing import MCTSTimingTracker
+from hex_ai.utils.weaks_cells import find_dead_cells
 from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.mcts_gumbel import MCTSGumbelMixin
 from hex_ai.inference.mcts_support import (
@@ -251,6 +252,8 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_distinct_leaves_evaluated = 0
         self._gumbel_candidates_m = 0
         self._gumbel_rounds_R = 0
+        self._dead_cell_pruned_moves_total = 0
+        self._dead_cell_pruned_nodes_total = 0
 
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -521,6 +524,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         """Prepare and initialize the root node for MCTS search."""
         board_size = board_size_from_state(root_state)
         root = MCTSNode(root_state, board_size)
+        self._apply_dead_cell_pruning(root)
         
         # Expand root if not terminal
         if expand_root and not root.is_terminal and not root.is_expanded:
@@ -582,6 +586,9 @@ class BaselineMCTS(MCTSGumbelMixin):
         stats["effective_sims_total"] = int(self._effective_sims_total)
         stats["unique_evals_per_sec"] = 0.0
         stats["effective_sims_per_sec"] = 0.0
+        stats["dead_cell_pruning_enabled"] = bool(self.cfg.enable_dead_cell_pruning)
+        stats["dead_cell_pruned_moves"] = int(self._dead_cell_pruned_moves_total)
+        stats["dead_cell_pruned_nodes"] = int(self._dead_cell_pruned_nodes_total)
         stats["selected_move_source"] = termination_info.reason
 
         return MCTSResult(
@@ -670,6 +677,8 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_distinct_leaves_evaluated = 0
         self._gumbel_candidates_m = 0
         self._gumbel_rounds_R = 0
+        self._dead_cell_pruned_moves_total = 0
+        self._dead_cell_pruned_nodes_total = 0
         self._gumbel_timing_breakdown = {}
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
 
@@ -718,6 +727,9 @@ class BaselineMCTS(MCTSGumbelMixin):
             timing_stats, self.cfg.sims, timing_stats.get("total_search_time", 0.0)
         )
         stats["selected_move_source"] = selected_move_source
+        stats["dead_cell_pruning_enabled"] = bool(self.cfg.enable_dead_cell_pruning)
+        stats["dead_cell_pruned_moves"] = int(self._dead_cell_pruned_moves_total)
+        stats["dead_cell_pruned_nodes"] = int(self._dead_cell_pruned_nodes_total)
 
         if getattr(self, "_used_gumbel_root_selection", False):
             # Use actual MCTS metrics for distinct leaves evaluation.
@@ -955,6 +967,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         timing_tracker.end_timing("make_move")
         child = MCTSNode(child_state, board_size)
         child.depth = node.depth + 1
+        self._apply_dead_cell_pruning(child)
         timing_tracker.end_timing("state_creation")
         node.children[loc_idx] = child
 
@@ -962,6 +975,49 @@ class BaselineMCTS(MCTSGumbelMixin):
             move_str = rowcol_to_trmph(r, c, board_size)
             self._record_node_realized(child.depth, move_str, child.state_hash)
         return child
+
+    def _apply_dead_cell_pruning(self, node: MCTSNode) -> None:
+        """Apply configured dead-cell hard masks to an unexpanded node."""
+        if not self.cfg.enable_dead_cell_pruning:
+            return
+        if node.is_terminal:
+            return
+        if not node.legal_moves:
+            return
+
+        dead_cells = find_dead_cells(
+            node.state.board,
+            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+            three_plus_one_requires_adjacent_opposite=(
+                self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+            ),
+            enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+        )
+        if not dead_cells:
+            return
+
+        keep_indices = [i for i, move in enumerate(node.legal_moves) if move not in dead_cells]
+        pruned_count = len(node.legal_moves) - len(keep_indices)
+        if pruned_count <= 0:
+            return
+        if not keep_indices:
+            raise RuntimeError(
+                "Dead-cell pruning removed all legal moves from a non-terminal state. "
+                "This likely indicates an incorrect dead-cell motif."
+            )
+
+        node.legal_moves = [node.legal_moves[i] for i in keep_indices]
+        node.legal_indices = [node.legal_indices[i] for i in keep_indices]
+        node.children = [node.children[i] for i in keep_indices]
+        node.N = node.N[keep_indices]
+        node.W = node.W[keep_indices]
+        node.Q = node.Q[keep_indices]
+        node.P = node.P[keep_indices]
+        node.terminal_moves = [node.terminal_moves[i] for i in keep_indices]
+
+        self._dead_cell_pruned_moves_total += int(pruned_count)
+        self._dead_cell_pruned_nodes_total += 1
 
     def _build_root_pv_hint(self, root: MCTSNode) -> Optional[List[str]]:
         """Build a short principal-variation hint for detailed exploration traces."""

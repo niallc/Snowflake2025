@@ -115,6 +115,13 @@ class BaselineMCTSConfig:
     distinct_target: int = 32
     enable_low_distinct_ratio_flush: bool = False
 
+    # Dead-cell hard-pruning parameters
+    enable_dead_cell_pruning: bool = False
+    dead_cell_enable_two_two_split: bool = True
+    dead_cell_enable_three_plus_one: bool = True
+    dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
+    dead_cell_enable_double_dead_pairs: bool = True
+
     def __post_init__(self):
         if self.sims <= 0:
             raise ValueError(f"sims must be positive, got {self.sims}")
@@ -302,6 +309,11 @@ def create_mcts_config(
         "gumbel_temperature_deterministic_cutoff": DEFAULT_GUMBEL_TEMPERATURE_DETERMINISTIC_CUTOFF,
         "distinct_target": 32,
         "enable_low_distinct_ratio_flush": False,
+        "enable_dead_cell_pruning": False,
+        "dead_cell_enable_two_two_split": True,
+        "dead_cell_enable_three_plus_one": True,
+        "dead_cell_three_plus_one_requires_adjacent_opposite": False,
+        "dead_cell_enable_double_dead_pairs": True,
     }
 
     explicit_distinct_target = "distinct_target" in config_params
