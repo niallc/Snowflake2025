@@ -42,3 +42,10 @@ This file captures project-specific guidance for Codex agents working in this re
 - Preferred invocation for scripts/tests: `source hex_ai_env/bin/activate && python ...` from the repository root.
 - For subprocess launches that do not source a shell profile, set both `VIRTUAL_ENV=<repo>/hex_ai_env` and prepend `<repo>/hex_ai_env/bin` to `PATH`.
 - If you see `ImportError: hex_ai requires hex_ai_env virtual environment`, treat it as an environment setup issue first (not a code/runtime bug).
+
+### 2026-03-02 - Codex Sandbox vs GPU/MPS Availability
+- Observed behavior on this machine: when launched inside Codex sandbox, PyTorch may report `torch.backends.mps.is_built() == True` but `torch.backends.mps.is_available() == False`, which causes normal auto-device logic to fall back to CPU.
+- The same interpreter/venv launched from a normal terminal outside sandbox can report `mps_available == True` and use GPU/MPS without special tournament flags.
+- There is no project-wide rule to always prefer one context; choose based on task safety/performance needs.
+- If GPU usage needs to be explicit/verified for long runs, launch from a normal terminal (`source hex_ai_env/bin/activate`) and sanity-check with a short probe:
+  - `python -c "import torch; print(torch.backends.mps.is_built(), torch.backends.mps.is_available())"`
