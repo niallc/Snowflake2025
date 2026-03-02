@@ -421,6 +421,37 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         if hasattr(args, 'gumbel_c_scale') and args.gumbel_c_scale
         else ([DEFAULT_GUMBEL_C_SCALE] if include_defaults else None)
     )
+
+    enable_dead_cell_pruning = (
+        [s.strip().lower() == 'true' for s in args.enable_dead_cell_pruning.split(',')]
+        if hasattr(args, 'enable_dead_cell_pruning') and args.enable_dead_cell_pruning
+        else ([False] if include_defaults else None)
+    )
+
+    dead_cell_enable_two_two_split = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_enable_two_two_split.split(',')]
+        if hasattr(args, 'dead_cell_enable_two_two_split') and args.dead_cell_enable_two_two_split
+        else ([True] if include_defaults else None)
+    )
+
+    dead_cell_enable_three_plus_one = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_enable_three_plus_one.split(',')]
+        if hasattr(args, 'dead_cell_enable_three_plus_one') and args.dead_cell_enable_three_plus_one
+        else ([True] if include_defaults else None)
+    )
+
+    dead_cell_three_plus_one_requires_adjacent_opposite = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_three_plus_one_requires_adjacent_opposite.split(',')]
+        if hasattr(args, 'dead_cell_three_plus_one_requires_adjacent_opposite')
+        and args.dead_cell_three_plus_one_requires_adjacent_opposite
+        else ([False] if include_defaults else None)
+    )
+
+    dead_cell_enable_double_dead_pairs = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_enable_double_dead_pairs.split(',')]
+        if hasattr(args, 'dead_cell_enable_double_dead_pairs') and args.dead_cell_enable_double_dead_pairs
+        else ([True] if include_defaults else None)
+    )
     
     # Parse per-strategy temperatures
     temperatures = None
@@ -441,6 +472,13 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         'gumbel_candidate_power_rates': gumbel_candidate_power_rates,
         'gumbel_candidate_power_offsets': gumbel_candidate_power_offsets,
         'gumbel_c_scales': gumbel_c_scales,
+        'enable_dead_cell_pruning': enable_dead_cell_pruning,
+        'dead_cell_enable_two_two_split': dead_cell_enable_two_two_split,
+        'dead_cell_enable_three_plus_one': dead_cell_enable_three_plus_one,
+        'dead_cell_three_plus_one_requires_adjacent_opposite': (
+            dead_cell_three_plus_one_requires_adjacent_opposite
+        ),
+        'dead_cell_enable_double_dead_pairs': dead_cell_enable_double_dead_pairs,
         'temperatures': temperatures
     }
 
@@ -469,6 +507,13 @@ def create_strategy_configs_for_tournament(
         gumbel_candidate_power_rates=parsed_params['gumbel_candidate_power_rates'],
         gumbel_candidate_power_offsets=parsed_params['gumbel_candidate_power_offsets'],
         gumbel_c_scales=parsed_params['gumbel_c_scales'],
+        enable_dead_cell_pruning=parsed_params['enable_dead_cell_pruning'],
+        dead_cell_enable_two_two_split=parsed_params['dead_cell_enable_two_two_split'],
+        dead_cell_enable_three_plus_one=parsed_params['dead_cell_enable_three_plus_one'],
+        dead_cell_three_plus_one_requires_adjacent_opposite=(
+            parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']
+        ),
+        dead_cell_enable_double_dead_pairs=parsed_params['dead_cell_enable_double_dead_pairs'],
         num_games=num_games,
         board_size=board_size,
         pie_rule=pie_rule,
@@ -499,6 +544,17 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
                 details.append(f"gumbel_power_rate={cfg.get('gumbel_candidate_power_rate')}")
             if cfg.get("gumbel_candidate_power_offset") is not None:
                 details.append(f"gumbel_power_offset={cfg.get('gumbel_candidate_power_offset')}")
+        details.append(f"dead_cell_pruning={cfg.get('enable_dead_cell_pruning', False)}")
+        if cfg.get("enable_dead_cell_pruning", False):
+            details.append(f"dead_cell_two_two_split={cfg.get('dead_cell_enable_two_two_split', True)}")
+            details.append(f"dead_cell_three_plus_one={cfg.get('dead_cell_enable_three_plus_one', True)}")
+            details.append(
+                "dead_cell_strict_three_plus_one="
+                f"{cfg.get('dead_cell_three_plus_one_requires_adjacent_opposite', False)}"
+            )
+            details.append(
+                f"dead_cell_double_pairs={cfg.get('dead_cell_enable_double_dead_pairs', True)}"
+            )
     return ", ".join(details)
 
 

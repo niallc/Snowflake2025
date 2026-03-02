@@ -129,6 +129,12 @@ class MoveSelectionConfig:
     gumbel_candidate_max: int = DEFAULT_GUMBEL_CANDIDATE_MAX  # Maximum number of candidates
     # Gumbel ranking stabilization parameters
     gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
+    # Dead-cell hard pruning parameters
+    enable_dead_cell_pruning: bool = False
+    dead_cell_enable_two_two_split: bool = True
+    dead_cell_enable_three_plus_one: bool = True
+    dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
+    dead_cell_enable_double_dead_pairs: bool = True
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -242,7 +248,14 @@ class MCTSStrategy(MoveSelectionStrategy):
             gumbel_candidate_power_rate=config.gumbel_candidate_power_rate,
             gumbel_candidate_power_offset=config.gumbel_candidate_power_offset,
             gumbel_candidate_min=config.gumbel_candidate_min,
-            gumbel_candidate_max=config.gumbel_candidate_max
+            gumbel_candidate_max=config.gumbel_candidate_max,
+            enable_dead_cell_pruning=config.enable_dead_cell_pruning,
+            dead_cell_enable_two_two_split=config.dead_cell_enable_two_two_split,
+            dead_cell_enable_three_plus_one=config.dead_cell_enable_three_plus_one,
+            dead_cell_three_plus_one_requires_adjacent_opposite=(
+                config.dead_cell_three_plus_one_requires_adjacent_opposite
+            ),
+            dead_cell_enable_double_dead_pairs=config.dead_cell_enable_double_dead_pairs,
         )
         
         # Override batch size if specified in config
@@ -297,13 +310,16 @@ class MCTSStrategy(MoveSelectionStrategy):
         gumbel_info = ""
         if config.enable_gumbel_root_selection:
             gumbel_info = f", gumbel(c_visit={config.gumbel_c_visit}, c_scale={config.gumbel_c_scale}, m={config.gumbel_m_candidates})"
+        dead_cell_info = ""
+        if config.enable_dead_cell_pruning:
+            dead_cell_info = ", dead_cells=on"
         return (
             "mcts("
             f"sims={config.mcts_sims}, "
             f"mcts_fraction={config.base_fraction_mcts_moves}, "
             f"c_puct={config.mcts_c_puct}, "
             f"t={config.temperature}"
-            f"{batch_info}{gumbel_info})"
+            f"{batch_info}{gumbel_info}{dead_cell_info})"
         )
 
 
