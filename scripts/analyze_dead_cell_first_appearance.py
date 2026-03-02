@@ -28,8 +28,6 @@ def _rule_cfg(**overrides: bool) -> Dict[str, bool]:
         "three_plus_one_requires_adjacent_opposite": False,
         "enable_a1b2a3_discouraged": False,
         "enable_double_dead_pairs": False,
-        "enable_double_dead_pair_support_template": False,
-        "enable_double_dead_pair_triple_flank_template": False,
     }
     cfg.update(overrides)
     return cfg
@@ -42,33 +40,18 @@ RULE_PRESETS: Dict[str, Dict[str, bool]] = {
         enable_three_plus_one=True,
         enable_a1b2a3_discouraged=True,
         enable_double_dead_pairs=True,
-        enable_double_dead_pair_support_template=True,
-        enable_double_dead_pair_triple_flank_template=True,
     ),
     "d1": _rule_cfg(enable_four_run=True),
     "d2": _rule_cfg(enable_two_two_split=True),
     "d3": _rule_cfg(enable_three_plus_one=True),
     "a1b2a3": _rule_cfg(enable_a1b2a3_discouraged=True),
-    "pair_any": _rule_cfg(
-        enable_double_dead_pairs=True,
-        enable_double_dead_pair_support_template=True,
-        enable_double_dead_pair_triple_flank_template=True,
-    ),
-    "pair_support": _rule_cfg(
-        enable_double_dead_pairs=True,
-        enable_double_dead_pair_support_template=True,
-    ),
-    "pair_triple": _rule_cfg(
-        enable_double_dead_pairs=True,
-        enable_double_dead_pair_triple_flank_template=True,
-    ),
+    "pair_triple": _rule_cfg(enable_double_dead_pairs=True),
 }
 MASKED_RULE_SEQUENCE: Tuple[str, ...] = (
     "d1",
     "d2",
     "d3",
     "a1b2a3",
-    "pair_support",
     "pair_triple",
 )
 
@@ -229,7 +212,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Generate separate files for each masked motif in sequence: "
-            "d1, d2, d3, a1b2a3, pair_support, pair_triple"
+            "d1, d2, d3, a1b2a3, pair_triple"
         ),
     )
     parser.add_argument(

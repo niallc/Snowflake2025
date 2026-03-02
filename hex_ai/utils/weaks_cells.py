@@ -25,14 +25,6 @@ _RING_OFFSETS: List[Tuple[int, int]] = [
     (-1, 1),
 ]
 _CANONICAL_PAIR_DIRS: Tuple[int, int, int] = (0, 1, 2)  # E, SE, SW
-_DOUBLE_PAIR_SUPPORT_OFFSETS = {
-    # Pair axis E/W -> supports on SW/NE
-    0: ((1, -1), (-1, 1)),
-    # Pair axis SE/NW -> supports on E/W
-    1: ((0, 1), (0, -1)),
-    # Pair axis SW/NE -> supports on SE/NW
-    2: ((1, 0), (-1, 0)),
-}
 
 _EMPTY = Piece.EMPTY.value
 _RED = Piece.RED.value
@@ -280,45 +272,6 @@ def _matches_aaa_star_bbb_star(tokens: List[str], color: str) -> bool:
     return False
 
 
-def _is_double_dead_pair_support_template(
-    board: np.ndarray,
-    r: int,
-    c: int,
-    dir_idx: int,
-) -> bool:
-    """Check 2+2 support template around an empty adjacent pair."""
-    n = int(board.shape[0])
-    dr, dc = _RING_OFFSETS[dir_idx]
-    r2, c2 = r + dr, c + dc
-    if not _in_bounds(n, r2, c2):
-        return False
-    if str(board[r, c]) != _EMPTY or str(board[r2, c2]) != _EMPTY:
-        return False
-
-    (s1r, s1c), (s2r, s2c) = _DOUBLE_PAIR_SUPPORT_OFFSETS[dir_idx]
-    p1 = (r + s1r, c + s1c)
-    q1 = (r2 + s1r, c2 + s1c)
-    p2 = (r + s2r, c + s2c)
-    q2 = (r2 + s2r, c2 + s2c)
-    for rr, cc in (p1, q1, p2, q2):
-        if not _in_bounds(n, rr, cc):
-            return False
-
-    c11 = str(board[p1])
-    c12 = str(board[q1])
-    c21 = str(board[p2])
-    c22 = str(board[q2])
-    if c11 == _EMPTY or c21 == _EMPTY:
-        return False
-    if c11 != c12 or c21 != c22:
-        return False
-    if c11 == c21:
-        return False
-    if c11 not in (_RED, _BLUE) or c21 not in (_RED, _BLUE):
-        return False
-    return True
-
-
 def _is_double_dead_pair_triple_flank_template(
     board: np.ndarray,
     r: int,
@@ -347,20 +300,9 @@ def _is_double_dead_pair(
     r: int,
     c: int,
     dir_idx: int,
-    *,
-    enable_support_template: bool,
-    enable_triple_flank_template: bool,
 ) -> bool:
-    """Check supported two-cell dead-pair templates around an empty pair."""
-    if enable_support_template and _is_double_dead_pair_support_template(
-        board, r, c, dir_idx
-    ):
-        return True
-    if enable_triple_flank_template and _is_double_dead_pair_triple_flank_template(
-        board, r, c, dir_idx
-    ):
-        return True
-    return False
+    """Check the triple-flank two-cell dead-pair template around an empty pair."""
+    return _is_double_dead_pair_triple_flank_template(board, r, c, dir_idx)
 
 
 def is_dead_cell(
@@ -396,9 +338,6 @@ def is_dead_cell(
 
 def _find_double_dead_pairs_on_normalized_board(
     board_np: np.ndarray,
-    *,
-    enable_support_template: bool = True,
-    enable_triple_flank_template: bool = True,
 ) -> Set[Tuple[Tuple[int, int], Tuple[int, int]]]:
     n = int(board_np.shape[0])
     dead_pairs: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
@@ -412,8 +351,6 @@ def _find_double_dead_pairs_on_normalized_board(
                     r,
                     c,
                     dir_idx,
-                    enable_support_template=enable_support_template,
-                    enable_triple_flank_template=enable_triple_flank_template,
                 ):
                     continue
                 dr, dc = _RING_OFFSETS[dir_idx]
@@ -428,17 +365,11 @@ def find_double_dead_pairs(
     board: BoardLike,
     *,
     red_connects_rows: bool = True,
-    enable_support_template: bool = True,
-    enable_triple_flank_template: bool = True,
 ) -> Set[Tuple[Tuple[int, int], Tuple[int, int]]]:
     """Return adjacent empty pairs matching the double-dead template."""
     _ = red_connects_rows
     board_np = _normalize_board(board)
-    return _find_double_dead_pairs_on_normalized_board(
-        board_np,
-        enable_support_template=enable_support_template,
-        enable_triple_flank_template=enable_triple_flank_template,
-    )
+    return _find_double_dead_pairs_on_normalized_board(board_np)
 
 
 def find_dead_cells(
@@ -452,8 +383,6 @@ def find_dead_cells(
     three_plus_one_requires_adjacent_opposite: bool = False,
     enable_a1b2a3_discouraged: bool = True,
     enable_double_dead_pairs: bool = True,
-    enable_double_dead_pair_support_template: bool = True,
-    enable_double_dead_pair_triple_flank_template: bool = True,
 ) -> Set[Tuple[int, int]]:
     """Return all empty coordinates currently matched by configured motifs."""
     _ = red_connects_rows
@@ -476,11 +405,7 @@ def find_dead_cells(
                 dead.add((r, c))
 
     if enable_double_dead_pairs:
-        for a, b in _find_double_dead_pairs_on_normalized_board(
-            board_np,
-            enable_support_template=enable_double_dead_pair_support_template,
-            enable_triple_flank_template=enable_double_dead_pair_triple_flank_template,
-        ):
+        for a, b in _find_double_dead_pairs_on_normalized_board(board_np):
             dead.add(a)
             dead.add(b)
 
