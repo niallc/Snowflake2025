@@ -153,6 +153,11 @@ def parse_args() -> argparse.Namespace:
             "1.0 is the most conservative setting."
         ),
     )
+    parser.add_argument(
+        '--enable-dead-cell-pruning',
+        action='store_true',
+        help='Enable dead-cell hard masking in self-play MCTS (default: off).',
+    )
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'pie_rule_legacy', 'random', 'none'],
                        help='Opening strategy: pie_rule (value-balanced, default), pie_rule_legacy, random, or none')
@@ -277,7 +282,7 @@ def _resolve_chunked_state_file(args: argparse.Namespace, config_fingerprint: st
 
 
 def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
-    return {
+    config_snapshot = {
         "num_games_total": args.num_games,
         "board_size": args.board_size,
         "model_path": args.model_path,
@@ -304,6 +309,10 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         "mcts_profile_max_calls": args.mcts_profile_max_calls,
         "restart_every_games": args.restart_every_games,
     }
+    # Keep legacy fingerprint compatibility for default behavior (dead-cell pruning off).
+    if args.enable_dead_cell_pruning:
+        config_snapshot["enable_dead_cell_pruning"] = True
+    return config_snapshot
 
 
 def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str]:
@@ -362,6 +371,8 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         cmd.append("--no-write-provenance")
     if args.mcts_profile:
         cmd.append("--mcts-profile")
+    if args.enable_dead_cell_pruning:
+        cmd.append("--enable-dead-cell-pruning")
     return cmd
 
 
@@ -714,6 +725,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
             "small_board_max_size": args.small_board_max_size,
             "c_puct": args.c_puct,
             "board_size": args.board_size,
+            "enable_dead_cell_pruning": args.enable_dead_cell_pruning,
         },
         temperatures=args.temperature,
         pie_rule=False,  # Not applicable to selfplay
@@ -740,6 +752,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
     elif args.opening_strategy == 'pie_rule_legacy':
         print("  Pie-rule mode: legacy")
     print(f"  Board size: {args.board_size}")
+    print(f"  Dead-cell pruning: {args.enable_dead_cell_pruning}")
     print(
         "  Virtual small-board sampling: "
         f"{args.small_board_fraction:.2%} on {args.small_board_min_size}..{args.small_board_max_size}"
@@ -793,6 +806,7 @@ def _run_single_process(args: argparse.Namespace) -> None:
         mcts_profile_every=args.mcts_profile_every,
         mcts_profile_max_calls=args.mcts_profile_max_calls,
         board_size=args.board_size,
+        enable_dead_cell_pruning=args.enable_dead_cell_pruning,
     )
     
     start_time = time.time()

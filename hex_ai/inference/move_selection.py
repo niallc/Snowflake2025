@@ -95,12 +95,20 @@ def _summarize_mcts_stats_for_gpu_debug(stats: Dict[str, Any]) -> str:
     uniq = int(stats.get("unique_evals_total", 0))
     device = stats.get("device", None)
     device_s = str(device) if device is not None else "unknown"
+    dead_enabled = bool(stats.get("dead_cell_pruning_enabled", False))
+    dead_pruned_moves = int(stats.get("dead_cell_pruned_moves", 0))
+    dead_pruned_nodes = int(stats.get("dead_cell_pruned_nodes", 0))
+    dead_cell_info = (
+        f" deadmask=on pruned_moves={dead_pruned_moves} pruned_nodes={dead_pruned_nodes}"
+        if dead_enabled
+        else " deadmask=off"
+    )
 
     return (
         f"[MCTS_PROFILE] device={device_s} sims={eff_sims} uniq={uniq} "
         f"batches={batch_count} avg_batch={avg_batch:.1f} "
         f"NN_ms={nn_ms:.1f} (h2d={h2d_ms:.1f} fwd={forward_ms:.1f} d2h={d2h_ms:.1f}) "
-        f"CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f}"
+        f"CPU_ms={cpu_ms:.1f} NN%={nn_pct:.1f}{dead_cell_info}"
     )
 
 
@@ -134,7 +142,7 @@ class MoveSelectionConfig:
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
-    dead_cell_enable_double_dead_pairs: bool = True
+    dead_cell_enable_double_dead_pairs: bool = False
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection

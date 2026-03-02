@@ -39,7 +39,7 @@ RULE_PRESETS: Dict[str, Dict[str, bool]] = {
         enable_two_two_split=True,
         enable_three_plus_one=True,
         enable_a1b2a3_discouraged=True,
-        enable_double_dead_pairs=True,
+        enable_double_dead_pairs=False,
     ),
     "d1": _rule_cfg(enable_four_run=True),
     "d2": _rule_cfg(enable_two_two_split=True),

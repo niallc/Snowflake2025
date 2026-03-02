@@ -227,7 +227,7 @@ Examples:
     parser.add_argument('--dead-cell-three-plus-one-requires-adjacent-opposite', type=str,
                        help='Comma-separated boolean values for strict D3 (adjacent-opposite required) (default: false)')
     parser.add_argument('--dead-cell-enable-double-dead-pairs', type=str,
-                       help='Comma-separated boolean values to enable two-cell dead-pair motif (default: true)')
+                       help='Comma-separated boolean values to enable two-cell dead-pair motif (default: false)')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,

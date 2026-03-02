@@ -120,7 +120,7 @@ class BaselineMCTSConfig:
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
-    dead_cell_enable_double_dead_pairs: bool = True
+    dead_cell_enable_double_dead_pairs: bool = False
 
     def __post_init__(self):
         if self.sims <= 0:
@@ -313,7 +313,7 @@ def create_mcts_config(
         "dead_cell_enable_two_two_split": True,
         "dead_cell_enable_three_plus_one": True,
         "dead_cell_three_plus_one_requires_adjacent_opposite": False,
-        "dead_cell_enable_double_dead_pairs": True,
+        "dead_cell_enable_double_dead_pairs": False,
     }
 
     explicit_distinct_target = "distinct_target" in config_params

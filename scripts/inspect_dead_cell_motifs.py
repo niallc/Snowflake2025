@@ -73,7 +73,7 @@ def _isolated_rule_kwargs() -> Dict[str, Dict[str, bool]]:
             enable_two_two_split=True,
             enable_three_plus_one=True,
             enable_a1b2a3_discouraged=True,
-            enable_double_dead_pairs=True,
+            enable_double_dead_pairs=False,
         ),
         "d1": with_overrides(enable_four_run=True),
         "d2": with_overrides(enable_two_two_split=True),

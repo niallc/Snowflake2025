@@ -382,7 +382,7 @@ def find_dead_cells(
     enable_three_plus_one: bool = True,
     three_plus_one_requires_adjacent_opposite: bool = False,
     enable_a1b2a3_discouraged: bool = True,
-    enable_double_dead_pairs: bool = True,
+    enable_double_dead_pairs: bool = False,
 ) -> Set[Tuple[int, int]]:
     """Return all empty coordinates currently matched by configured motifs."""
     _ = red_connects_rows
