@@ -6,7 +6,7 @@ dead-cell motifs suitable for hard masking in MCTS.
 
 from __future__ import annotations
 
-from typing import List, Sequence, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -30,6 +30,13 @@ _EMPTY = Piece.EMPTY.value
 _RED = Piece.RED.value
 _BLUE = Piece.BLUE.value
 _OFFBOARD = "#"
+
+
+_RULE_D1 = "D1"
+_RULE_D2 = "D2"
+_RULE_D3 = "D3"
+_RULE_A1B2A3 = "A1B2A3"
+_RULE_PAIR_TRIPLE = "pair_triple"
 
 
 def _normalize_board(board: BoardLike) -> np.ndarray:
@@ -214,6 +221,54 @@ def _is_dead_cell_single_motifs(
             return True
 
     return False
+
+
+def _dead_cell_single_motif_reasons(
+    board: np.ndarray,
+    r: int,
+    c: int,
+    *,
+    enable_four_run: bool,
+    enable_two_two_split: bool,
+    enable_three_plus_one: bool,
+    three_plus_one_requires_adjacent_opposite: bool,
+    enable_a1b2a3_discouraged: bool,
+) -> Set[str]:
+    """Return rule names matched by enabled single-cell motifs."""
+    if str(board[r, c]) != _EMPTY:
+        return set()
+
+    ring = _ring_tokens(board, r, c)
+    reasons: Set[str] = set()
+
+    if enable_four_run:
+        if _max_samecolor_run_cyclic(ring, _RED) >= 4 or _max_samecolor_run_cyclic(ring, _BLUE) >= 4:
+            reasons.add(_RULE_D1)
+
+    if enable_two_two_split and _has_adjacent_pair(ring, _RED) and _has_adjacent_pair(ring, _BLUE):
+        reasons.add(_RULE_D2)
+
+    if enable_three_plus_one:
+        red_d3 = _has_three_plus_one_opposite(
+            ring,
+            _RED,
+            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
+        )
+        blue_d3 = _has_three_plus_one_opposite(
+            ring,
+            _BLUE,
+            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
+        )
+        if red_d3 or blue_d3:
+            reasons.add(_RULE_D3)
+
+    if enable_a1b2a3_discouraged:
+        red_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _RED)
+        blue_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _BLUE)
+        if red_a1b2a3 or blue_a1b2a3:
+            reasons.add(_RULE_A1B2A3)
+
+    return reasons
 
 
 def _pair_boundary_tokens(
@@ -410,3 +465,43 @@ def find_dead_cells(
             dead.add(b)
 
     return dead
+
+
+def find_dead_cells_with_reasons(
+    board: BoardLike,
+    *,
+    red_connects_rows: bool = True,
+    enable_four_run: bool = True,
+    enable_two_two_split: bool = True,
+    enable_three_plus_one: bool = True,
+    three_plus_one_requires_adjacent_opposite: bool = False,
+    enable_a1b2a3_discouraged: bool = True,
+    enable_double_dead_pairs: bool = False,
+) -> Dict[Tuple[int, int], Set[str]]:
+    """Return dead-cell matches annotated with the rule names that triggered each cell."""
+    _ = red_connects_rows
+    board_np = _normalize_board(board)
+    n = int(board_np.shape[0])
+    dead_with_reasons: Dict[Tuple[int, int], Set[str]] = {}
+
+    for r in range(n):
+        for c in range(n):
+            reasons = _dead_cell_single_motif_reasons(
+                board_np,
+                r,
+                c,
+                enable_four_run=enable_four_run,
+                enable_two_two_split=enable_two_two_split,
+                enable_three_plus_one=enable_three_plus_one,
+                three_plus_one_requires_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
+                enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
+            )
+            if reasons:
+                dead_with_reasons[(r, c)] = reasons
+
+    if enable_double_dead_pairs:
+        for a, b in _find_double_dead_pairs_on_normalized_board(board_np):
+            dead_with_reasons.setdefault(a, set()).add(_RULE_PAIR_TRIPLE)
+            dead_with_reasons.setdefault(b, set()).add(_RULE_PAIR_TRIPLE)
+
+    return dead_with_reasons

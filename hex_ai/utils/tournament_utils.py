@@ -563,6 +563,8 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
             details.append(
                 f"dead_cell_double_pairs={cfg.get('dead_cell_enable_double_dead_pairs', DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS)}"
             )
+            if cfg.get("dead_cell_debug_log_path"):
+                details.append(f"dead_cell_debug_log={cfg.get('dead_cell_debug_log_path')}")
     return ", ".join(details)
 
 

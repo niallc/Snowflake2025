@@ -143,6 +143,9 @@ class MoveSelectionConfig:
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
     dead_cell_enable_double_dead_pairs: bool = False
+    dead_cell_debug_log_path: Optional[str] = None
+    dead_cell_debug_strategy_label: Optional[str] = None
+    dead_cell_debug_max_records_per_move: int = 200
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -264,6 +267,9 @@ class MCTSStrategy(MoveSelectionStrategy):
                 config.dead_cell_three_plus_one_requires_adjacent_opposite
             ),
             dead_cell_enable_double_dead_pairs=config.dead_cell_enable_double_dead_pairs,
+            dead_cell_debug_log_path=config.dead_cell_debug_log_path,
+            dead_cell_debug_strategy_label=config.dead_cell_debug_strategy_label,
+            dead_cell_debug_max_records_per_move=config.dead_cell_debug_max_records_per_move,
         )
         
         # Override batch size if specified in config

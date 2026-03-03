@@ -121,6 +121,9 @@ class BaselineMCTSConfig:
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
     dead_cell_enable_double_dead_pairs: bool = False
+    dead_cell_debug_log_path: Optional[str] = None
+    dead_cell_debug_strategy_label: Optional[str] = None
+    dead_cell_debug_max_records_per_move: int = 200
 
     def __post_init__(self):
         if self.sims <= 0:
@@ -224,6 +227,12 @@ class BaselineMCTSConfig:
             if not all(0 < v <= 1 for v in self.temperature_step_values):
                 raise ValueError("All temperature_step_values must be between 0 and 1")
 
+        if self.dead_cell_debug_max_records_per_move < 0:
+            raise ValueError(
+                "dead_cell_debug_max_records_per_move must be non-negative, "
+                f"got {self.dead_cell_debug_max_records_per_move}"
+            )
+
 
 def create_mcts_config(
     config_type: str = "tournament",
@@ -314,6 +323,9 @@ def create_mcts_config(
         "dead_cell_enable_three_plus_one": True,
         "dead_cell_three_plus_one_requires_adjacent_opposite": False,
         "dead_cell_enable_double_dead_pairs": False,
+        "dead_cell_debug_log_path": None,
+        "dead_cell_debug_strategy_label": None,
+        "dead_cell_debug_max_records_per_move": 200,
     }
 
     explicit_distinct_target = "distinct_target" in config_params

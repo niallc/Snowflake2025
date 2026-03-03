@@ -228,6 +228,23 @@ Examples:
                        help='Comma-separated boolean values for strict D3 (adjacent-opposite required) (default: false)')
     parser.add_argument('--dead-cell-enable-double-dead-pairs', type=str,
                        help='Comma-separated boolean values to enable two-cell dead-pair motif (default: false)')
+    parser.add_argument(
+        '--dead-cell-debug-log-path',
+        type=str,
+        help=(
+            "Optional JSONL path for root dead-cell pruning debug records. "
+            "When set, masked MCTS strategies append state snapshots and triggering rules."
+        ),
+    )
+    parser.add_argument(
+        '--dead-cell-debug-max-records-per-move',
+        type=int,
+        default=200,
+        help=(
+            "Maximum dead-cell debug records written per root move "
+            "(default: 200, <=0 means no cap)."
+        ),
+    )
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -1039,6 +1056,52 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     return TwoStageTournamentResult(results), tournament.output_dir
 
 
+def _apply_dead_cell_debug_logging_to_strategies(
+    args,
+    strategy_configs: List[StrategyConfig],
+) -> None:
+    """Apply optional dead-cell root-debug logging settings to masked MCTS strategies."""
+    if not args.dead_cell_debug_log_path:
+        return
+    if args.dead_cell_debug_max_records_per_move < 0:
+        print(
+            "ERROR: --dead-cell-debug-max-records-per-move must be >= 0, "
+            f"got {args.dead_cell_debug_max_records_per_move}"
+        )
+        sys.exit(1)
+
+    configured_count = 0
+    for strategy_config in strategy_configs:
+        if strategy_config.strategy_type != "mcts":
+            continue
+        if not strategy_config.config.get("enable_dead_cell_pruning", False):
+            continue
+        strategy_config.config["dead_cell_debug_log_path"] = args.dead_cell_debug_log_path
+        strategy_config.config["dead_cell_debug_strategy_label"] = strategy_config.name
+        strategy_config.config["dead_cell_debug_max_records_per_move"] = (
+            args.dead_cell_debug_max_records_per_move
+        )
+        configured_count += 1
+
+    if configured_count == 0:
+        print(
+            "WARNING: --dead-cell-debug-log-path was set, but no masked MCTS strategies "
+            "were found. No dead-cell debug records will be written."
+        )
+        return
+
+    print(
+        "Dead-cell debug logging enabled for "
+        f"{configured_count} masked MCTS strateg{'y' if configured_count == 1 else 'ies'}."
+    )
+    print(f"  JSONL path: {args.dead_cell_debug_log_path}")
+    print(
+        "  Max records per move: "
+        f"{args.dead_cell_debug_max_records_per_move} "
+        "(0 means unlimited)"
+    )
+
+
 def main():
     args = parse_args()
     
@@ -1181,6 +1244,8 @@ def main():
         except ValueError as e:
             print(f"ERROR: {e}")
             sys.exit(1)
+
+        _apply_dead_cell_debug_logging_to_strategies(args, strategy_configs)
         
         # Check for Gumbel algorithm issues and print warnings
         check_gumbel_configurations(strategy_configs)

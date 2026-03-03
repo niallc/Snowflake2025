@@ -41,10 +41,13 @@
 from __future__ import annotations
 
 import math
+import json
+import os
 import numpy as np
 import torch
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
 from collections import OrderedDict, deque
+from datetime import datetime, timezone
 
 # ---- Package imports ----
 from hex_ai.enums import Player, Winner
@@ -72,7 +75,7 @@ from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
 from hex_ai.utils.timing import MCTSTimingTracker
-from hex_ai.utils.weaks_cells import find_dead_cells
+from hex_ai.utils.weaks_cells import find_dead_cells, find_dead_cells_with_reasons
 from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.mcts_gumbel import MCTSGumbelMixin
 from hex_ai.inference.mcts_support import (
@@ -254,6 +257,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_rounds_R = 0
         self._dead_cell_pruned_moves_total = 0
         self._dead_cell_pruned_nodes_total = 0
+        self._dead_cell_debug_records_written = 0
 
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -679,6 +683,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_rounds_R = 0
         self._dead_cell_pruned_moves_total = 0
         self._dead_cell_pruned_nodes_total = 0
+        self._dead_cell_debug_records_written = 0
         self._gumbel_timing_breakdown = {}
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
 
@@ -985,19 +990,34 @@ class BaselineMCTS(MCTSGumbelMixin):
         if not node.legal_moves:
             return
 
-        dead_cells = find_dead_cells(
-            node.state.board,
-            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
-            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
-            three_plus_one_requires_adjacent_opposite=(
-                self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-            ),
-            enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
-        )
+        should_log_root_debug = bool(self.cfg.dead_cell_debug_log_path) and node.depth == 0
+        dead_cell_reasons: Dict[Tuple[int, int], Set[str]] | None = None
+        if should_log_root_debug:
+            dead_cell_reasons = find_dead_cells_with_reasons(
+                node.state.board,
+                enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+                enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+                three_plus_one_requires_adjacent_opposite=(
+                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                ),
+                enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+            )
+            dead_cells = set(dead_cell_reasons.keys())
+        else:
+            dead_cells = find_dead_cells(
+                node.state.board,
+                enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+                enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+                three_plus_one_requires_adjacent_opposite=(
+                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                ),
+                enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+            )
         if not dead_cells:
             return
 
-        keep_indices = [i for i, move in enumerate(node.legal_moves) if move not in dead_cells]
+        legal_moves_before = list(node.legal_moves)
+        keep_indices = [i for i, move in enumerate(legal_moves_before) if move not in dead_cells]
         pruned_count = len(node.legal_moves) - len(keep_indices)
         if pruned_count <= 0:
             return
@@ -1018,6 +1038,73 @@ class BaselineMCTS(MCTSGumbelMixin):
 
         self._dead_cell_pruned_moves_total += int(pruned_count)
         self._dead_cell_pruned_nodes_total += 1
+
+        if should_log_root_debug and dead_cell_reasons is not None:
+            pruned_moves = [move for move in legal_moves_before if move in dead_cells]
+            self._log_root_dead_cell_pruning_event(
+                node=node,
+                dead_cell_reasons=dead_cell_reasons,
+                pruned_moves=pruned_moves,
+                legal_moves_before_count=len(legal_moves_before),
+            )
+
+    def _log_root_dead_cell_pruning_event(
+        self,
+        *,
+        node: MCTSNode,
+        dead_cell_reasons: Dict[Tuple[int, int], Set[str]],
+        pruned_moves: List[Tuple[int, int]],
+        legal_moves_before_count: int,
+    ) -> None:
+        """Append JSONL debug records for root dead-cell pruning events."""
+        log_path = self.cfg.dead_cell_debug_log_path
+        if not log_path:
+            return
+
+        max_records = int(self.cfg.dead_cell_debug_max_records_per_move)
+        move_records_written = 0
+        for row, col in pruned_moves:
+            if max_records > 0 and move_records_written >= max_records:
+                break
+
+            move_records_written += 1
+            self._dead_cell_debug_records_written += 1
+            rules = sorted(dead_cell_reasons.get((row, col), set()))
+            event = {
+                "event_type": "dead_cell_prune_root",
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "strategy_label": self.cfg.dead_cell_debug_strategy_label,
+                "state_trmph": node.state.to_trmph(),
+                "move_index_to_play": int(len(node.state.move_history) + 1),
+                "current_player": str(node.state.current_player_enum.name).lower(),
+                "dead_cell": {
+                    "row": int(row),
+                    "col": int(col),
+                    "trmph": rowcol_to_trmph(row, col, node.board_size),
+                },
+                "rules": rules,
+                "dead_cells_detected_total": int(len(dead_cell_reasons)),
+                "pruned_moves_total": int(len(pruned_moves)),
+                "legal_moves_before_count": int(legal_moves_before_count),
+                "mask_config": {
+                    "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
+                    "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
+                    "three_plus_one_requires_adjacent_opposite": bool(
+                        self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                    ),
+                    "enable_double_dead_pairs": bool(self.cfg.dead_cell_enable_double_dead_pairs),
+                },
+            }
+            self._append_dead_cell_debug_event(log_path, event)
+
+    def _append_dead_cell_debug_event(self, log_path: str, event: Dict[str, Any]) -> None:
+        """Write one dead-cell debug event to JSONL."""
+        log_dir = os.path.dirname(log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, sort_keys=True))
+            handle.write("\n")
 
     def _build_root_pv_hint(self, root: MCTSNode) -> Optional[List[str]]:
         """Build a short principal-variation hint for detailed exploration traces."""
