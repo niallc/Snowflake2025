@@ -43,6 +43,8 @@ from __future__ import annotations
 import math
 import json
 import os
+import random
+import copy
 import numpy as np
 import torch
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Set
@@ -258,6 +260,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._dead_cell_pruned_moves_total = 0
         self._dead_cell_pruned_nodes_total = 0
         self._dead_cell_debug_records_written = 0
+        self._dead_cell_counterfactual_matches_total = 0
 
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -474,17 +477,21 @@ class BaselineMCTS(MCTSGumbelMixin):
 
         maybe_terminated = self._termination_result_if_any(root, verbose)
         if maybe_terminated is not None:
+            self._maybe_log_dead_cell_counterfactual_choice(root_state, maybe_terminated, verbose)
             return maybe_terminated
 
         self._expand_root_for_search(root, root_state)
 
         maybe_terminated = self._termination_result_if_any(root, verbose)
         if maybe_terminated is not None:
+            self._maybe_log_dead_cell_counterfactual_choice(root_state, maybe_terminated, verbose)
             return maybe_terminated
 
         timing_stats = self._run_simulation_loop(root, verbose)
         self._annotate_search_timing_stats(timing_stats)
-        return self._build_completed_search_result(root, root_state, timing_stats, verbose)
+        result = self._build_completed_search_result(root, root_state, timing_stats, verbose)
+        self._maybe_log_dead_cell_counterfactual_choice(root_state, result, verbose)
+        return result
 
     # ---------- Data Access (Getters) ----------
     
@@ -593,6 +600,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         stats["dead_cell_pruning_enabled"] = bool(self.cfg.enable_dead_cell_pruning)
         stats["dead_cell_pruned_moves"] = int(self._dead_cell_pruned_moves_total)
         stats["dead_cell_pruned_nodes"] = int(self._dead_cell_pruned_nodes_total)
+        stats["dead_cell_counterfactual_matches"] = int(self._dead_cell_counterfactual_matches_total)
         stats["selected_move_source"] = termination_info.reason
 
         return MCTSResult(
@@ -684,6 +692,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._dead_cell_pruned_moves_total = 0
         self._dead_cell_pruned_nodes_total = 0
         self._dead_cell_debug_records_written = 0
+        self._dead_cell_counterfactual_matches_total = 0
         self._gumbel_timing_breakdown = {}
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
 
@@ -735,6 +744,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         stats["dead_cell_pruning_enabled"] = bool(self.cfg.enable_dead_cell_pruning)
         stats["dead_cell_pruned_moves"] = int(self._dead_cell_pruned_moves_total)
         stats["dead_cell_pruned_nodes"] = int(self._dead_cell_pruned_nodes_total)
+        stats["dead_cell_counterfactual_matches"] = int(self._dead_cell_counterfactual_matches_total)
 
         if getattr(self, "_used_gumbel_root_selection", False):
             # Use actual MCTS metrics for distinct leaves evaluation.
@@ -1105,6 +1115,155 @@ class BaselineMCTS(MCTSGumbelMixin):
         with open(log_path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, sort_keys=True))
             handle.write("\n")
+
+    @staticmethod
+    def _move_to_debug_payload(move: Tuple[int, int], board_size: int) -> Dict[str, Any]:
+        """Serialize one move for JSONL debug records."""
+        row, col = move
+        return {
+            "row": int(row),
+            "col": int(col),
+            "trmph": rowcol_to_trmph(int(row), int(col), board_size),
+        }
+
+    @staticmethod
+    def _extract_root_move_metrics(result: MCTSResult, move: Tuple[int, int]) -> Optional[Dict[str, Any]]:
+        """Extract N/Q/P metrics for a root move from one MCTS result."""
+        root = result.root_node
+        try:
+            move_idx = root.legal_moves.index(move)
+        except ValueError:
+            return None
+        return {
+            "visits": int(root.N[move_idx]),
+            "q": float(root.Q[move_idx]),
+            "prior": float(root.P[move_idx]),
+        }
+
+    @staticmethod
+    def _capture_rng_state() -> Tuple[Any, Any, Any, Any]:
+        """Capture Python/NumPy/Torch RNG state for side-effect-free debug probes."""
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        torch_state = torch.random.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        return py_state, np_state, torch_state, cuda_states
+
+    @staticmethod
+    def _restore_rng_state(rng_state: Tuple[Any, Any, Any, Any]) -> None:
+        """Restore Python/NumPy/Torch RNG state previously captured by _capture_rng_state."""
+        py_state, np_state, torch_state, cuda_states = rng_state
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+        torch.random.set_rng_state(torch_state)
+        if cuda_states is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_states)
+
+    def _run_counterfactual_unmasked_root_search(
+        self,
+        root_state: HexGameState,
+        verbose: int,
+    ) -> MCTSResult:
+        """Run a debug-only counterfactual root search with dead-cell pruning disabled."""
+        counterfactual_cfg = copy.deepcopy(self.cfg)
+        counterfactual_cfg.enable_dead_cell_pruning = False
+        counterfactual_cfg.dead_cell_debug_log_path = None
+        counterfactual_cfg.dead_cell_counterfactual_debug_log_path = None
+        counterfactual_mcts = BaselineMCTS(self.engine, self.model, counterfactual_cfg)
+        # Warm-start from current cache without mutating this instance's LRU state.
+        counterfactual_mcts.eval_cache = OrderedDict(self.eval_cache)
+        return counterfactual_mcts.run(root_state, verbose=verbose)
+
+    def _maybe_log_dead_cell_counterfactual_choice(
+        self,
+        root_state: HexGameState,
+        masked_result: MCTSResult,
+        verbose: int,
+    ) -> None:
+        """
+        Log root positions where unmasked MCTS would choose a currently masked move.
+
+        This intentionally probes only root disagreements. It does not diagnose deeper
+        tree-level effects from masking.
+        """
+        log_path = self.cfg.dead_cell_counterfactual_debug_log_path
+        if not log_path:
+            return
+        if not self.cfg.enable_dead_cell_pruning:
+            return
+
+        dead_cell_reasons = find_dead_cells_with_reasons(
+            root_state.board,
+            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+            three_plus_one_requires_adjacent_opposite=(
+                self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+            ),
+            enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+        )
+        if not dead_cell_reasons:
+            return
+
+        rng_state = self._capture_rng_state()
+        try:
+            counterfactual_result = self._run_counterfactual_unmasked_root_search(
+                root_state,
+                verbose=max(0, int(verbose) - 1),
+            )
+        finally:
+            self._restore_rng_state(rng_state)
+
+        counterfactual_move = counterfactual_result.move
+        rules = sorted(dead_cell_reasons.get(counterfactual_move, set()))
+        if not rules:
+            return
+
+        self._dead_cell_counterfactual_matches_total += 1
+        board_size = board_size_from_state(root_state)
+        event = {
+            "event_type": "dead_cell_counterfactual_root_choice",
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "strategy_label": self.cfg.dead_cell_debug_strategy_label,
+            "state_trmph": root_state.to_trmph(),
+            "move_index_to_play": int(len(root_state.move_history) + 1),
+            "current_player": str(root_state.current_player_enum.name).lower(),
+            "masked_strategy_move": self._move_to_debug_payload(masked_result.move, board_size),
+            "counterfactual_unmasked_move": self._move_to_debug_payload(
+                counterfactual_move, board_size
+            ),
+            "counterfactual_move_rules": rules,
+            "dead_cells_detected_total": int(len(dead_cell_reasons)),
+            "masked_root_win_probability": float(masked_result.win_probability),
+            "counterfactual_root_win_probability": float(counterfactual_result.win_probability),
+            "masked_abs_distance_from_0p5": float(abs(masked_result.win_probability - 0.5)),
+            "counterfactual_abs_distance_from_0p5": float(
+                abs(counterfactual_result.win_probability - 0.5)
+            ),
+            "win_probability_delta_unmasked_minus_masked": float(
+                counterfactual_result.win_probability - masked_result.win_probability
+            ),
+            "masked_selected_move_source": str(masked_result.stats.get("selected_move_source", "")),
+            "counterfactual_selected_move_source": str(
+                counterfactual_result.stats.get("selected_move_source", "")
+            ),
+            "masked_selected_move_metrics": self._extract_root_move_metrics(
+                masked_result, masked_result.move
+            ),
+            "counterfactual_move_metrics": self._extract_root_move_metrics(
+                counterfactual_result, counterfactual_move
+            ),
+            "legal_moves_after_mask_count": int(len(masked_result.root_node.legal_moves)),
+            "legal_moves_unmasked_count": int(len(counterfactual_result.root_node.legal_moves)),
+            "mask_config": {
+                "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
+                "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
+                "three_plus_one_requires_adjacent_opposite": bool(
+                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                ),
+                "enable_double_dead_pairs": bool(self.cfg.dead_cell_enable_double_dead_pairs),
+            },
+        }
+        self._append_dead_cell_debug_event(log_path, event)
 
     def _build_root_pv_hint(self, root: MCTSNode) -> Optional[List[str]]:
         """Build a short principal-variation hint for detailed exploration traces."""

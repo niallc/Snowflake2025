@@ -565,6 +565,11 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
             )
             if cfg.get("dead_cell_debug_log_path"):
                 details.append(f"dead_cell_debug_log={cfg.get('dead_cell_debug_log_path')}")
+            if cfg.get("dead_cell_counterfactual_debug_log_path"):
+                details.append(
+                    "dead_cell_counterfactual_debug_log="
+                    f"{cfg.get('dead_cell_counterfactual_debug_log_path')}"
+                )
     return ", ".join(details)
 
 

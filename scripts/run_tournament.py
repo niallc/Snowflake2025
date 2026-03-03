@@ -245,6 +245,15 @@ Examples:
             "(default: 200, <=0 means no cap)."
         ),
     )
+    parser.add_argument(
+        '--dead-cell-counterfactual-debug-log-path',
+        type=str,
+        help=(
+            "Optional JSONL path for root counterfactual debug records. "
+            "When set for masked MCTS, each move also runs an unmasked root probe "
+            "and logs cases where unmasked MCTS would choose a masked move."
+        ),
+    )
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
                        help=f'Global temperature for move selection (0.0 = deterministic, default: {DEFAULT_TEMPERATURE})')
     parser.add_argument('--temperatures', type=str,
@@ -1102,6 +1111,39 @@ def _apply_dead_cell_debug_logging_to_strategies(
     )
 
 
+def _apply_dead_cell_counterfactual_logging_to_strategies(
+    args,
+    strategy_configs: List[StrategyConfig],
+) -> None:
+    """Apply optional counterfactual root-choice debug logging to masked MCTS strategies."""
+    if not args.dead_cell_counterfactual_debug_log_path:
+        return
+
+    configured_count = 0
+    for strategy_config in strategy_configs:
+        if strategy_config.strategy_type != "mcts":
+            continue
+        if not strategy_config.config.get("enable_dead_cell_pruning", False):
+            continue
+        strategy_config.config["dead_cell_counterfactual_debug_log_path"] = (
+            args.dead_cell_counterfactual_debug_log_path
+        )
+        configured_count += 1
+
+    if configured_count == 0:
+        print(
+            "WARNING: --dead-cell-counterfactual-debug-log-path was set, but no masked MCTS "
+            "strategies were found. No counterfactual dead-cell debug records will be written."
+        )
+        return
+
+    print(
+        "Dead-cell counterfactual debug logging enabled for "
+        f"{configured_count} masked MCTS strateg{'y' if configured_count == 1 else 'ies'}."
+    )
+    print(f"  JSONL path: {args.dead_cell_counterfactual_debug_log_path}")
+
+
 def main():
     args = parse_args()
     
@@ -1246,6 +1288,7 @@ def main():
             sys.exit(1)
 
         _apply_dead_cell_debug_logging_to_strategies(args, strategy_configs)
+        _apply_dead_cell_counterfactual_logging_to_strategies(args, strategy_configs)
         
         # Check for Gumbel algorithm issues and print warnings
         check_gumbel_configurations(strategy_configs)

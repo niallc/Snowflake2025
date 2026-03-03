@@ -146,6 +146,7 @@ class MoveSelectionConfig:
     dead_cell_debug_log_path: Optional[str] = None
     dead_cell_debug_strategy_label: Optional[str] = None
     dead_cell_debug_max_records_per_move: int = 200
+    dead_cell_counterfactual_debug_log_path: Optional[str] = None
     # For fixed tree search
     search_widths: Optional[list] = None
     # For policy-based selection
@@ -270,6 +271,7 @@ class MCTSStrategy(MoveSelectionStrategy):
             dead_cell_debug_log_path=config.dead_cell_debug_log_path,
             dead_cell_debug_strategy_label=config.dead_cell_debug_strategy_label,
             dead_cell_debug_max_records_per_move=config.dead_cell_debug_max_records_per_move,
+            dead_cell_counterfactual_debug_log_path=config.dead_cell_counterfactual_debug_log_path,
         )
         
         # Override batch size if specified in config
@@ -327,6 +329,8 @@ class MCTSStrategy(MoveSelectionStrategy):
         dead_cell_info = ""
         if config.enable_dead_cell_pruning:
             dead_cell_info = ", dead_cells=on"
+        if config.dead_cell_counterfactual_debug_log_path:
+            dead_cell_info += ", dead_cells_cf_debug=on"
         return (
             "mcts("
             f"sims={config.mcts_sims}, "

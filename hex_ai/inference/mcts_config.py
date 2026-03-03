@@ -124,6 +124,7 @@ class BaselineMCTSConfig:
     dead_cell_debug_log_path: Optional[str] = None
     dead_cell_debug_strategy_label: Optional[str] = None
     dead_cell_debug_max_records_per_move: int = 200
+    dead_cell_counterfactual_debug_log_path: Optional[str] = None
 
     def __post_init__(self):
         if self.sims <= 0:
@@ -326,6 +327,7 @@ def create_mcts_config(
         "dead_cell_debug_log_path": None,
         "dead_cell_debug_strategy_label": None,
         "dead_cell_debug_max_records_per_move": 200,
+        "dead_cell_counterfactual_debug_log_path": None,
     }
 
     explicit_distinct_target = "distinct_target" in config_params
