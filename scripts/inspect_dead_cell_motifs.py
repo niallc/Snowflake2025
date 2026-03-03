@@ -57,7 +57,6 @@ def _isolated_rule_kwargs() -> Dict[str, Dict[str, bool]]:
         enable_four_run=False,
         enable_two_two_split=False,
         enable_three_plus_one=False,
-        three_plus_one_requires_adjacent_opposite=False,
         enable_a1b2a3_discouraged=False,
         enable_double_dead_pairs=False,
     )

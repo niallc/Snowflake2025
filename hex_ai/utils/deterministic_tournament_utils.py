@@ -19,7 +19,6 @@ from hex_ai.inference.strategy_config import (
     DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
     DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
     DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE,
-    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
     DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
     DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
 )
@@ -122,14 +121,6 @@ def _build_strategy_pair_token(strategy: Any) -> str:
                 is False
             ):
                 parts.append("no31")
-            if (
-                cfg.get(
-                    "dead_cell_three_plus_one_requires_adjacent_opposite",
-                    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
-                )
-                is True
-            ):
-                parts.append("strict31")
             if (
                 cfg.get(
                     "dead_cell_enable_a1b2a3_discouraged",

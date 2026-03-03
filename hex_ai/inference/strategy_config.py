@@ -31,7 +31,6 @@ DEFAULT_ENABLE_DEAD_CELL_PRUNING = False
 DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN = True
 DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT = True
 DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE = True
-DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE = False
 DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED = True
 DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS = False
 
@@ -126,10 +125,6 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 "dead_cell_enable_three_plus_one": participant_config.get(
                     "dead_cell_enable_three_plus_one", DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE
                 ),
-                "dead_cell_three_plus_one_requires_adjacent_opposite": participant_config.get(
-                    "dead_cell_three_plus_one_requires_adjacent_opposite",
-                    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
-                ),
                 "dead_cell_enable_a1b2a3_discouraged": participant_config.get(
                     "dead_cell_enable_a1b2a3_discouraged",
                     DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
@@ -201,7 +196,6 @@ def create_unified_config_from_args(
     dead_cell_enable_four_run: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_two_two_split: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_three_plus_one: Optional[Union[bool, List[bool]]] = None,
-    dead_cell_three_plus_one_requires_adjacent_opposite: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_a1b2a3_discouraged: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_double_dead_pairs: Optional[Union[bool, List[bool]]] = None,
     num_games: int = 10,
@@ -356,15 +350,6 @@ def create_unified_config_from_args(
             per_strategy_values=to_list_if_needed(dead_cell_enable_three_plus_one, num_strategies),
         )
 
-    dead_cell_three_plus_one_requires_adjacent_opposite_config = None
-    if dead_cell_three_plus_one_requires_adjacent_opposite is not None:
-        dead_cell_three_plus_one_requires_adjacent_opposite_config = TournamentParameterConfig(
-            default_value=DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
-            per_strategy_values=to_list_if_needed(
-                dead_cell_three_plus_one_requires_adjacent_opposite, num_strategies
-            ),
-        )
-
     dead_cell_enable_a1b2a3_discouraged_config = None
     if dead_cell_enable_a1b2a3_discouraged is not None:
         dead_cell_enable_a1b2a3_discouraged_config = TournamentParameterConfig(
@@ -399,9 +384,6 @@ def create_unified_config_from_args(
         dead_cell_enable_four_run=dead_cell_enable_four_run_config,
         dead_cell_enable_two_two_split=dead_cell_enable_two_two_split_config,
         dead_cell_enable_three_plus_one=dead_cell_enable_three_plus_one_config,
-        dead_cell_three_plus_one_requires_adjacent_opposite=(
-            dead_cell_three_plus_one_requires_adjacent_opposite_config
-        ),
         dead_cell_enable_a1b2a3_discouraged=dead_cell_enable_a1b2a3_discouraged_config,
         dead_cell_enable_double_dead_pairs=dead_cell_enable_double_dead_pairs_config,
         num_games=num_games,
@@ -431,7 +413,6 @@ def _build_strategy_signature(config: StrategyConfig) -> str:
         str(config.config.get("dead_cell_enable_four_run", "")),
         str(config.config.get("dead_cell_enable_two_two_split", "")),
         str(config.config.get("dead_cell_enable_three_plus_one", "")),
-        str(config.config.get("dead_cell_three_plus_one_requires_adjacent_opposite", "")),
         str(config.config.get("dead_cell_enable_a1b2a3_discouraged", "")),
         str(config.config.get("dead_cell_enable_double_dead_pairs", "")),
     ]
@@ -494,14 +475,6 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
             )
             if three_plus_one_enabled != DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE:
                 param_parts.append("yes31" if three_plus_one_enabled is True else "no31")
-            if (
-                config.config.get(
-                    "dead_cell_three_plus_one_requires_adjacent_opposite",
-                    False,
-                )
-                is True
-            ):
-                param_parts.append("strict31")
             a1b2a3_enabled = config.config.get(
                 "dead_cell_enable_a1b2a3_discouraged",
                 DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
@@ -548,7 +521,6 @@ def create_strategy_configs_from_parameters(
     dead_cell_enable_four_run: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_two_two_split: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_three_plus_one: Optional[Union[bool, List[bool]]] = None,
-    dead_cell_three_plus_one_requires_adjacent_opposite: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_a1b2a3_discouraged: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_double_dead_pairs: Optional[Union[bool, List[bool]]] = None,
     num_games: int = 10,
@@ -576,9 +548,6 @@ def create_strategy_configs_from_parameters(
         dead_cell_enable_four_run=dead_cell_enable_four_run,
         dead_cell_enable_two_two_split=dead_cell_enable_two_two_split,
         dead_cell_enable_three_plus_one=dead_cell_enable_three_plus_one,
-        dead_cell_three_plus_one_requires_adjacent_opposite=(
-            dead_cell_three_plus_one_requires_adjacent_opposite
-        ),
         dead_cell_enable_a1b2a3_discouraged=dead_cell_enable_a1b2a3_discouraged,
         dead_cell_enable_double_dead_pairs=dead_cell_enable_double_dead_pairs,
         num_games=num_games,

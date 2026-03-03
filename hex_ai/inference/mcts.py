@@ -1049,9 +1049,6 @@ class BaselineMCTS(MCTSGumbelMixin):
                 enable_four_run=self.cfg.dead_cell_enable_four_run,
                 enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
-                three_plus_one_requires_adjacent_opposite=(
-                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-                ),
                 enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
             )
@@ -1062,9 +1059,6 @@ class BaselineMCTS(MCTSGumbelMixin):
                 enable_four_run=self.cfg.dead_cell_enable_four_run,
                 enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
-                three_plus_one_requires_adjacent_opposite=(
-                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-                ),
                 enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
             )
@@ -1141,9 +1135,6 @@ class BaselineMCTS(MCTSGumbelMixin):
                     "enable_four_run": bool(self.cfg.dead_cell_enable_four_run),
                     "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
                     "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
-                    "three_plus_one_requires_adjacent_opposite": bool(
-                        self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-                    ),
                     "enable_a1b2a3_discouraged": bool(
                         self.cfg.dead_cell_enable_a1b2a3_discouraged
                     ),
@@ -1242,9 +1233,6 @@ class BaselineMCTS(MCTSGumbelMixin):
             enable_four_run=self.cfg.dead_cell_enable_four_run,
             enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
             enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
-            three_plus_one_requires_adjacent_opposite=(
-                self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-            ),
             enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
             enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
         )
@@ -1305,9 +1293,6 @@ class BaselineMCTS(MCTSGumbelMixin):
                 "enable_four_run": bool(self.cfg.dead_cell_enable_four_run),
                 "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
                 "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
-                "three_plus_one_requires_adjacent_opposite": bool(
-                    self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
-                ),
                 "enable_a1b2a3_discouraged": bool(
                     self.cfg.dead_cell_enable_a1b2a3_discouraged
                 ),

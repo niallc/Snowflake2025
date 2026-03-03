@@ -142,7 +142,6 @@ class MoveSelectionConfig:
     dead_cell_enable_four_run: bool = True
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
-    dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
     dead_cell_enable_a1b2a3_discouraged: bool = True
     dead_cell_enable_double_dead_pairs: bool = False
     dead_cell_debug_log_path: Optional[str] = None
@@ -267,9 +266,6 @@ class MCTSStrategy(MoveSelectionStrategy):
             dead_cell_enable_four_run=config.dead_cell_enable_four_run,
             dead_cell_enable_two_two_split=config.dead_cell_enable_two_two_split,
             dead_cell_enable_three_plus_one=config.dead_cell_enable_three_plus_one,
-            dead_cell_three_plus_one_requires_adjacent_opposite=(
-                config.dead_cell_three_plus_one_requires_adjacent_opposite
-            ),
             dead_cell_enable_a1b2a3_discouraged=config.dead_cell_enable_a1b2a3_discouraged,
             dead_cell_enable_double_dead_pairs=config.dead_cell_enable_double_dead_pairs,
             dead_cell_debug_log_path=config.dead_cell_debug_log_path,

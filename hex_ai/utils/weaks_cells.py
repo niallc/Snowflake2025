@@ -112,22 +112,8 @@ def _has_two_two_split_with_single_gaps(ring: List[str], color: str) -> bool:
 def _has_three_plus_one_opposite(
     ring: List[str],
     color: str,
-    *,
-    require_adjacent_opposite: bool,
 ) -> bool:
-    """Detect a 3+1 motif around one color.
-
-    With `require_adjacent_opposite=False`, detect the D3 pattern:
-    `AAAXBX` (cyclic), where:
-    - `A` is `color`
-    - `B` is the opposite color
-    - `X` is empty
-
-    With `require_adjacent_opposite=True`, use a stricter adjacent-opposite
-    variant where the opposite color is directly next to the `AAA` run and the
-    remaining two ring cells are empty:
-    - `AAABXX` or `AAAXXB` (cyclic)
-    """
+    """Detect the canonical D3 motif `AAA*B*` in cyclic ring order."""
     opp = _opp(color)
     for i in range(6):
         if (
@@ -137,26 +123,7 @@ def _has_three_plus_one_opposite(
         ):
             continue
 
-        if require_adjacent_opposite:
-            if (
-                ring[(i + 3) % 6] == opp
-                and ring[(i + 4) % 6] == _EMPTY
-                and ring[(i + 5) % 6] == _EMPTY
-            ):
-                return True
-            if (
-                ring[(i + 3) % 6] == _EMPTY
-                and ring[(i + 4) % 6] == _EMPTY
-                and ring[(i + 5) % 6] == opp
-            ):
-                return True
-            continue
-
-        if (
-            ring[(i + 3) % 6] == _EMPTY
-            and ring[(i + 4) % 6] == opp
-            and ring[(i + 5) % 6] == _EMPTY
-        ):
+        if ring[(i + 4) % 6] == opp:
             return True
 
     return False
@@ -194,7 +161,6 @@ def _is_dead_cell_single_motifs(
     enable_four_run: bool,
     enable_two_two_split: bool,
     enable_three_plus_one: bool,
-    three_plus_one_requires_adjacent_opposite: bool,
     enable_a1b2a3_discouraged: bool,
 ) -> bool:
     if str(board[r, c]) != _EMPTY:
@@ -221,13 +187,11 @@ def _is_dead_cell_single_motifs(
         if _has_three_plus_one_opposite(
             ring,
             _RED,
-            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
         ):
             return True
         if _has_three_plus_one_opposite(
             ring,
             _BLUE,
-            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
         ):
             return True
 
@@ -249,7 +213,6 @@ def _dead_cell_single_motif_reasons(
     enable_four_run: bool,
     enable_two_two_split: bool,
     enable_three_plus_one: bool,
-    three_plus_one_requires_adjacent_opposite: bool,
     enable_a1b2a3_discouraged: bool,
 ) -> Set[str]:
     """Return rule names matched by enabled single-cell motifs."""
@@ -273,12 +236,10 @@ def _dead_cell_single_motif_reasons(
         red_d3 = _has_three_plus_one_opposite(
             ring,
             _RED,
-            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
         )
         blue_d3 = _has_three_plus_one_opposite(
             ring,
             _BLUE,
-            require_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
         )
         if red_d3 or blue_d3:
             reasons.add(_RULE_D3)
@@ -391,7 +352,6 @@ def is_dead_cell(
     enable_four_run: bool = True,
     enable_two_two_split: bool = True,
     enable_three_plus_one: bool = True,
-    three_plus_one_requires_adjacent_opposite: bool = False,
     enable_a1b2a3_discouraged: bool = True,
 ) -> bool:
     """Return True when an empty cell matches single-cell dead motifs."""
@@ -407,7 +367,6 @@ def is_dead_cell(
         enable_four_run=enable_four_run,
         enable_two_two_split=enable_two_two_split,
         enable_three_plus_one=enable_three_plus_one,
-        three_plus_one_requires_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
         enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
     )
 
@@ -456,7 +415,6 @@ def find_dead_cells(
     enable_four_run: bool = True,
     enable_two_two_split: bool = True,
     enable_three_plus_one: bool = True,
-    three_plus_one_requires_adjacent_opposite: bool = False,
     enable_a1b2a3_discouraged: bool = True,
     enable_double_dead_pairs: bool = False,
 ) -> Set[Tuple[int, int]]:
@@ -475,7 +433,6 @@ def find_dead_cells(
                 enable_four_run=enable_four_run,
                 enable_two_two_split=enable_two_two_split,
                 enable_three_plus_one=enable_three_plus_one,
-                three_plus_one_requires_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
                 enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
             ):
                 dead.add((r, c))
@@ -495,7 +452,6 @@ def find_dead_cells_with_reasons(
     enable_four_run: bool = True,
     enable_two_two_split: bool = True,
     enable_three_plus_one: bool = True,
-    three_plus_one_requires_adjacent_opposite: bool = False,
     enable_a1b2a3_discouraged: bool = True,
     enable_double_dead_pairs: bool = False,
 ) -> Dict[Tuple[int, int], Set[str]]:
@@ -514,7 +470,6 @@ def find_dead_cells_with_reasons(
                 enable_four_run=enable_four_run,
                 enable_two_two_split=enable_two_two_split,
                 enable_three_plus_one=enable_three_plus_one,
-                three_plus_one_requires_adjacent_opposite=three_plus_one_requires_adjacent_opposite,
                 enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
             )
             if reasons:

@@ -226,8 +226,6 @@ Examples:
                        help='Comma-separated boolean values to enable dead-cell D2 (2+2 split) motif (default: true)')
     parser.add_argument('--dead-cell-enable-three-plus-one', type=str,
                        help='Comma-separated boolean values to enable dead-cell D3 motif (default: true)')
-    parser.add_argument('--dead-cell-three-plus-one-requires-adjacent-opposite', type=str,
-                       help='Comma-separated boolean values for strict D3 (adjacent-opposite required) (default: false)')
     parser.add_argument('--dead-cell-enable-a1b2a3-discouraged', type=str,
                        help='Comma-separated boolean values to enable A1B2A3 discouraged motif (default: true)')
     parser.add_argument('--dead-cell-enable-double-dead-pairs', type=str,
@@ -830,16 +828,6 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 f"(got {len(parsed_params['dead_cell_enable_three_plus_one'])} values: {parsed_params['dead_cell_enable_three_plus_one']})"
             )
         if (
-            parsed_params.get('dead_cell_three_plus_one_requires_adjacent_opposite')
-            and len(parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']) > 1
-        ):
-            params_with_multiple_values.append(
-                "dead_cell_three_plus_one_requires_adjacent_opposite "
-                "(got "
-                f"{len(parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite'])} values: "
-                f"{parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']})"
-            )
-        if (
             parsed_params.get('dead_cell_enable_a1b2a3_discouraged')
             and len(parsed_params['dead_cell_enable_a1b2a3_discouraged']) > 1
         ):
@@ -912,13 +900,6 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         and len(parsed_params['dead_cell_enable_three_plus_one']) > 0
     ):
         knockout_config['dead_cell_enable_three_plus_one'] = parsed_params['dead_cell_enable_three_plus_one'][0]
-    if (
-        parsed_params.get('dead_cell_three_plus_one_requires_adjacent_opposite')
-        and len(parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']) > 0
-    ):
-        knockout_config['dead_cell_three_plus_one_requires_adjacent_opposite'] = (
-            parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite'][0]
-        )
     if (
         parsed_params.get('dead_cell_enable_a1b2a3_discouraged')
         and len(parsed_params['dead_cell_enable_a1b2a3_discouraged']) > 0
