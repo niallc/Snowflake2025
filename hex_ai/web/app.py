@@ -49,6 +49,7 @@ from hex_ai.web.gameplay_response import (
 )
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
+    get_interactive_dead_cell_config,
     run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
@@ -798,6 +799,7 @@ def _build_mcts_config_response_fields(difficulty_params, temperature_end=None):
         "enable_gumbel": difficulty_params["enable_gumbel"],
         "gumbel_max_sims": difficulty_params.get("gumbel_max_sims", 0),
         "algorithm": difficulty_params["algorithm"],
+        **get_interactive_dead_cell_config(),
     }
 
 
@@ -1816,7 +1818,8 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             'temperature': mcts_params['temperature'],
             'temperature_end': mcts_params['temperature_end'],
             'enable_gumbel': mcts_params['enable_gumbel'],
-            'gumbel_max_sims': mcts_params['gumbel_max_sims']
+            'gumbel_max_sims': mcts_params['gumbel_max_sims'],
+            **get_interactive_dead_cell_config(),
         }
         
         # app.logger.debug(f"=== MCTS MOVE COMPLETE ===")

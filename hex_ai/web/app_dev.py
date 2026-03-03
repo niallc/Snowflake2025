@@ -44,6 +44,7 @@ from hex_ai.web.gameplay_response import (
 )
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
+    get_interactive_dead_cell_config,
     run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
@@ -353,6 +354,7 @@ def _build_pie_rule_balanced_opening_response(
         "enable_gumbel": enable_gumbel,
         "gumbel_max_sims": gumbel_max_sims,
         "algorithm": "mcts",
+        **get_interactive_dead_cell_config(),
     }
     return result
 

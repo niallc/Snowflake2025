@@ -6,6 +6,21 @@ from hex_ai.inference.game_engine import HexGameEngine
 from hex_ai.inference.mcts import create_mcts_config, run_mcts_move
 
 
+INTERACTIVE_DEAD_CELL_CONFIG = {
+    "enable_dead_cell_pruning": True,
+    "dead_cell_enable_four_run": True,
+    "dead_cell_enable_two_two_split": True,
+    "dead_cell_enable_three_plus_one": True,
+    "dead_cell_enable_a1b2a3_discouraged": True,
+    "dead_cell_enable_double_dead_pairs": False,
+}
+
+
+def get_interactive_dead_cell_config() -> dict:
+    """Return dead-cell rule defaults used by interactive web MCTS."""
+    return dict(INTERACTIVE_DEAD_CELL_CONFIG)
+
+
 def create_interactive_mcts_config(
     *,
     num_simulations: int,
@@ -48,6 +63,7 @@ def create_interactive_mcts_config(
         temperature_end=adjusted_temperature_end,
         enable_gumbel_root_selection=enable_gumbel,
         gumbel_sim_threshold=gumbel_max_sims,
+        **INTERACTIVE_DEAD_CELL_CONFIG,
     )
     return mcts_config, adjusted_temperature_end
 
