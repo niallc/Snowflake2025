@@ -73,6 +73,26 @@ def _ring_tokens(board: np.ndarray, r: int, c: int) -> List[str]:
     return ring
 
 
+def _normalize_a1b2a3_mask_for_player(
+    a1b2a3_mask_for_player: str | Piece | None,
+) -> str | None:
+    """Normalize optional A1B2A3 player filter to a piece token."""
+    if a1b2a3_mask_for_player is None:
+        return None
+
+    if isinstance(a1b2a3_mask_for_player, Piece):
+        token = a1b2a3_mask_for_player.value
+    else:
+        token = str(a1b2a3_mask_for_player).strip().lower()
+
+    if token not in (_RED, _BLUE):
+        raise ValueError(
+            "a1b2a3_mask_for_player must be one of {'r', 'b'} when provided, "
+            f"got {a1b2a3_mask_for_player!r}"
+        )
+    return token
+
+
 def _max_samecolor_run_cyclic(ring: List[str], color: str) -> int:
     """Longest cyclic run (0-6) of the given color token."""
     doubled = ring + ring
@@ -162,6 +182,7 @@ def _is_dead_cell_single_motifs(
     enable_two_two_split: bool,
     enable_three_plus_one: bool,
     enable_a1b2a3_discouraged: bool,
+    a1b2a3_mask_for_player: str | None = None,
 ) -> bool:
     if str(board[r, c]) != _EMPTY:
         return False
@@ -197,10 +218,16 @@ def _is_dead_cell_single_motifs(
 
     # A1B2A3 central taboo motif.
     if enable_a1b2a3_discouraged:
-        if _has_a1b2a3_gap_pattern(ring, _RED):
-            return True
-        if _has_a1b2a3_gap_pattern(ring, _BLUE):
-            return True
+        if a1b2a3_mask_for_player is None:
+            if _has_a1b2a3_gap_pattern(ring, _RED):
+                return True
+            if _has_a1b2a3_gap_pattern(ring, _BLUE):
+                return True
+        else:
+            # A1B2A3 is only hard-taboo for the opponent color.
+            bridge_color = _opp(a1b2a3_mask_for_player)
+            if _has_a1b2a3_gap_pattern(ring, bridge_color):
+                return True
 
     return False
 
@@ -214,6 +241,7 @@ def _dead_cell_single_motif_reasons(
     enable_two_two_split: bool,
     enable_three_plus_one: bool,
     enable_a1b2a3_discouraged: bool,
+    a1b2a3_mask_for_player: str | None = None,
 ) -> Set[str]:
     """Return rule names matched by enabled single-cell motifs."""
     if str(board[r, c]) != _EMPTY:
@@ -245,10 +273,15 @@ def _dead_cell_single_motif_reasons(
             reasons.add(_RULE_D3)
 
     if enable_a1b2a3_discouraged:
-        red_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _RED)
-        blue_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _BLUE)
-        if red_a1b2a3 or blue_a1b2a3:
-            reasons.add(_RULE_A1B2A3)
+        if a1b2a3_mask_for_player is None:
+            red_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _RED)
+            blue_a1b2a3 = _has_a1b2a3_gap_pattern(ring, _BLUE)
+            if red_a1b2a3 or blue_a1b2a3:
+                reasons.add(_RULE_A1B2A3)
+        else:
+            bridge_color = _opp(a1b2a3_mask_for_player)
+            if _has_a1b2a3_gap_pattern(ring, bridge_color):
+                reasons.add(_RULE_A1B2A3)
 
     return reasons
 
@@ -353,10 +386,12 @@ def is_dead_cell(
     enable_two_two_split: bool = True,
     enable_three_plus_one: bool = True,
     enable_a1b2a3_discouraged: bool = True,
+    a1b2a3_mask_for_player: str | Piece | None = None,
 ) -> bool:
     """Return True when an empty cell matches single-cell dead motifs."""
     _ = red_connects_rows
     board_np = _normalize_board(board)
+    mask_for_player = _normalize_a1b2a3_mask_for_player(a1b2a3_mask_for_player)
     n = int(board_np.shape[0])
     if not _in_bounds(n, r, c):
         raise ValueError(f"Cell ({r}, {c}) is out of bounds for board size {n}")
@@ -368,6 +403,7 @@ def is_dead_cell(
         enable_two_two_split=enable_two_two_split,
         enable_three_plus_one=enable_three_plus_one,
         enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
+        a1b2a3_mask_for_player=mask_for_player,
     )
 
 
@@ -417,10 +453,12 @@ def find_dead_cells(
     enable_three_plus_one: bool = True,
     enable_a1b2a3_discouraged: bool = True,
     enable_double_dead_pairs: bool = False,
+    a1b2a3_mask_for_player: str | Piece | None = None,
 ) -> Set[Tuple[int, int]]:
     """Return all empty coordinates currently matched by configured motifs."""
     _ = red_connects_rows
     board_np = _normalize_board(board)
+    mask_for_player = _normalize_a1b2a3_mask_for_player(a1b2a3_mask_for_player)
     n = int(board_np.shape[0])
     dead: Set[Tuple[int, int]] = set()
 
@@ -434,6 +472,7 @@ def find_dead_cells(
                 enable_two_two_split=enable_two_two_split,
                 enable_three_plus_one=enable_three_plus_one,
                 enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
+                a1b2a3_mask_for_player=mask_for_player,
             ):
                 dead.add((r, c))
 
@@ -454,10 +493,12 @@ def find_dead_cells_with_reasons(
     enable_three_plus_one: bool = True,
     enable_a1b2a3_discouraged: bool = True,
     enable_double_dead_pairs: bool = False,
+    a1b2a3_mask_for_player: str | Piece | None = None,
 ) -> Dict[Tuple[int, int], Set[str]]:
     """Return dead-cell matches annotated with the rule names that triggered each cell."""
     _ = red_connects_rows
     board_np = _normalize_board(board)
+    mask_for_player = _normalize_a1b2a3_mask_for_player(a1b2a3_mask_for_player)
     n = int(board_np.shape[0])
     dead_with_reasons: Dict[Tuple[int, int], Set[str]] = {}
 
@@ -471,6 +512,7 @@ def find_dead_cells_with_reasons(
                 enable_two_two_split=enable_two_two_split,
                 enable_three_plus_one=enable_three_plus_one,
                 enable_a1b2a3_discouraged=enable_a1b2a3_discouraged,
+                a1b2a3_mask_for_player=mask_for_player,
             )
             if reasons:
                 dead_with_reasons[(r, c)] = reasons

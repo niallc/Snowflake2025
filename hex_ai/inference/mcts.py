@@ -52,7 +52,7 @@ from collections import OrderedDict, deque
 from datetime import datetime, timezone
 
 # ---- Package imports ----
-from hex_ai.enums import Player, Winner
+from hex_ai.enums import Piece, Player, Winner
 from hex_ai.value_utils import red_ref_signed_to_ptm_ref_signed, apply_depth_discount_signed, distance_to_leaf
 from hex_ai.inference.mcts_utils import (
     compute_win_probability_from_tree_data,
@@ -1043,6 +1043,9 @@ class BaselineMCTS(MCTSGumbelMixin):
 
         should_log_root_debug = bool(self.cfg.dead_cell_debug_log_path) and node.depth == 0
         dead_cell_reasons: Dict[Tuple[int, int], Set[str]] | None = None
+        a1b2a3_mask_for_player = (
+            Piece.BLUE.value if node.to_play == Player.BLUE else Piece.RED.value
+        )
         if should_log_root_debug:
             dead_cell_reasons = find_dead_cells_with_reasons(
                 node.state.board,
@@ -1051,6 +1054,7 @@ class BaselineMCTS(MCTSGumbelMixin):
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
                 enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+                a1b2a3_mask_for_player=a1b2a3_mask_for_player,
             )
             dead_cells = set(dead_cell_reasons.keys())
         else:
@@ -1061,6 +1065,7 @@ class BaselineMCTS(MCTSGumbelMixin):
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
                 enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+                a1b2a3_mask_for_player=a1b2a3_mask_for_player,
             )
         if not dead_cells:
             return
@@ -1235,6 +1240,11 @@ class BaselineMCTS(MCTSGumbelMixin):
             enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
             enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
             enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
+            a1b2a3_mask_for_player=(
+                Piece.BLUE.value
+                if root_state.current_player_enum == Player.BLUE
+                else Piece.RED.value
+            ),
         )
         if not dead_cell_reasons:
             return
