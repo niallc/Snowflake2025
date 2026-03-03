@@ -88,20 +88,12 @@ def _max_samecolor_run_cyclic(ring: List[str], color: str) -> int:
 
 
 def _has_two_two_split_with_single_gaps(ring: List[str], color: str) -> bool:
-    """Detect cyclic *AA*BB around the focal cell for one orientation.
-
-    Off-board sentinels are never accepted in wildcard gap slots. This keeps
-    the motif strictly local to in-bounds ring cells and avoids border-driven
-    false positives.
-    """
+    """Detect canonical cyclic *AA*BB around the focal cell."""
     opp = _opp(color)
     for i in range(6):
         if (
-            ring[i] != _OFFBOARD
-            and
             ring[(i + 1) % 6] == color
             and ring[(i + 2) % 6] == color
-            and ring[(i + 3) % 6] != _OFFBOARD
             and ring[(i + 4) % 6] == opp
             and ring[(i + 5) % 6] == opp
         ):
