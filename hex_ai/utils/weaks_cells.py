@@ -87,9 +87,16 @@ def _max_samecolor_run_cyclic(ring: List[str], color: str) -> int:
     return min(best, 6)
 
 
-def _has_adjacent_pair(ring: List[str], color: str) -> bool:
+def _has_two_two_split_with_single_gaps(ring: List[str], color: str) -> bool:
+    """Detect cyclic *AA*BB around the focal cell for one orientation."""
+    opp = _opp(color)
     for i in range(6):
-        if ring[i] == color and ring[(i + 1) % 6] == color:
+        if (
+            ring[(i + 1) % 6] == color
+            and ring[(i + 2) % 6] == color
+            and ring[(i + 4) % 6] == opp
+            and ring[(i + 5) % 6] == opp
+        ):
             return True
     return False
 
@@ -194,8 +201,11 @@ def _is_dead_cell_single_motifs(
         if _max_samecolor_run_cyclic(ring, _BLUE) >= 4:
             return True
 
-    # D2: adjacent pair of red and adjacent pair of blue.
-    if enable_two_two_split and _has_adjacent_pair(ring, _RED) and _has_adjacent_pair(ring, _BLUE):
+    # D2: cyclic *AA*BB (single-cell gap between the color-pairs on both sides).
+    if enable_two_two_split and (
+        _has_two_two_split_with_single_gaps(ring, _RED)
+        or _has_two_two_split_with_single_gaps(ring, _BLUE)
+    ):
         return True
 
     # D3: 3+1 opposite motif.
@@ -245,7 +255,10 @@ def _dead_cell_single_motif_reasons(
         if _max_samecolor_run_cyclic(ring, _RED) >= 4 or _max_samecolor_run_cyclic(ring, _BLUE) >= 4:
             reasons.add(_RULE_D1)
 
-    if enable_two_two_split and _has_adjacent_pair(ring, _RED) and _has_adjacent_pair(ring, _BLUE):
+    if enable_two_two_split and (
+        _has_two_two_split_with_single_gaps(ring, _RED)
+        or _has_two_two_split_with_single_gaps(ring, _BLUE)
+    ):
         reasons.add(_RULE_D2)
 
     if enable_three_plus_one:
