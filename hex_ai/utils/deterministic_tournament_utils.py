@@ -7,17 +7,31 @@ function into smaller, focused components.
 
 import os
 import itertools
+import hashlib
+import json
 from datetime import datetime
 from typing import List, Dict, Any, Set, Tuple, Optional
 from pathlib import Path
 
-from hex_ai.inference.strategy_config import StrategyConfig
+from hex_ai.file_utils import sanitize_filename
+from hex_ai.inference.strategy_config import (
+    StrategyConfig,
+    DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
+    DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
+    DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE,
+    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
+    DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
+    DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+)
 from hex_ai.inference.tournament import TournamentPlayConfig
 from hex_ai.utils.tournament_logging import (
     write_tournament_trmph_header, 
     find_available_csv_filename,
     append_trmph_winner_line
 )
+
+PAIR_TOKEN_MAX_HUMAN_LEN = 64
+PAIR_TOKEN_HASH_LEN = 10
 
 
 def setup_tournament_output(output_dir_prefix: str) -> Tuple[str, str]:
@@ -64,11 +78,108 @@ def setup_strategy_pair_files(output_dir: str, strategy_a: StrategyConfig, strat
     Returns:
         Tuple of (trmph_file_path, csv_file_path)
     """
-    pair_name = f"{strategy_a.name}_vs_{strategy_b.name}"
+    pair_name = f"{_build_strategy_pair_token(strategy_a)}_vs_{_build_strategy_pair_token(strategy_b)}"
     trmph_file = os.path.join(output_dir, f"{pair_name}.trmph")
     csv_file = os.path.join(output_dir, f"{pair_name}.csv")
     
     return trmph_file, csv_file
+
+
+def _build_strategy_pair_token(strategy: Any) -> str:
+    """
+    Build a short, readable token for filenames with a stable hash suffix.
+
+    The human-readable section intentionally contains only high-signal fields;
+    full strategy details remain available in file headers/metadata.
+    """
+    model_path = str(getattr(strategy, "model_path", "unknown"))
+    model_stem = os.path.splitext(os.path.basename(model_path))[0] or "unknown"
+    strategy_type = str(getattr(strategy, "strategy_type", "unknown"))
+    temperature = getattr(strategy, "temperature", None)
+    cfg = dict(getattr(strategy, "config", {}) or {})
+
+    parts: List[str] = [model_stem, strategy_type]
+    if temperature is not None:
+        parts.append(f"t{_format_token_value(temperature)}")
+
+    if strategy_type == "mcts":
+        mcts_sims = cfg.get("mcts_sims")
+        if mcts_sims is not None:
+            parts.append(f"s{_format_token_value(mcts_sims)}")
+        if cfg.get("enable_gumbel_root_selection", False):
+            parts.append("g")
+        if cfg.get("enable_dead_cell_pruning", False):
+            parts.append("dm")
+            if cfg.get("dead_cell_enable_four_run", DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN) is False:
+                parts.append("noD1")
+            if (
+                cfg.get("dead_cell_enable_two_two_split", DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT)
+                is False
+            ):
+                parts.append("no22")
+            if (
+                cfg.get("dead_cell_enable_three_plus_one", DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE)
+                is False
+            ):
+                parts.append("no31")
+            if (
+                cfg.get(
+                    "dead_cell_three_plus_one_requires_adjacent_opposite",
+                    DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
+                )
+                is True
+            ):
+                parts.append("strict31")
+            if (
+                cfg.get(
+                    "dead_cell_enable_a1b2a3_discouraged",
+                    DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
+                )
+                is False
+            ):
+                parts.append("noA1B2A3")
+            if (
+                cfg.get(
+                    "dead_cell_enable_double_dead_pairs",
+                    DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+                )
+                is True
+            ):
+                parts.append("dbl2cell")
+
+    human_part = sanitize_filename("_".join(parts))
+    if len(human_part) > PAIR_TOKEN_MAX_HUMAN_LEN:
+        human_part = human_part[:PAIR_TOKEN_MAX_HUMAN_LEN].rstrip("_")
+    if not human_part:
+        human_part = "strategy"
+
+    digest = _stable_strategy_token_hash(strategy, cfg)[:PAIR_TOKEN_HASH_LEN]
+    return f"{human_part}_{digest}"
+
+
+def _stable_strategy_token_hash(strategy: Any, cfg: Dict[str, Any]) -> str:
+    """Compute deterministic hash over full effective strategy config."""
+    payload = {
+        "name": getattr(strategy, "name", None),
+        "original_name": getattr(strategy, "original_name", None),
+        "strategy_type": getattr(strategy, "strategy_type", None),
+        "model_path": getattr(strategy, "model_path", None),
+        "temperature": getattr(strategy, "temperature", None),
+        "config": cfg,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _format_token_value(value: Any) -> str:
+    """Format numeric/bool values compactly for readable filename tokens."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return format(value, "g")
+    return str(value)
 
 
 def create_play_config_for_pair(
