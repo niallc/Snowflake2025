@@ -28,9 +28,11 @@ from hex_ai.inference.tournament_parameters import (
 
 DEFAULT_ENABLE_GUMBEL_ROOT_SELECTION = True
 DEFAULT_ENABLE_DEAD_CELL_PRUNING = False
+DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN = True
 DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT = True
 DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE = True
 DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE = False
+DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED = True
 DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS = False
 
 
@@ -115,6 +117,9 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 "enable_dead_cell_pruning": participant_config.get(
                     "enable_dead_cell_pruning", DEFAULT_ENABLE_DEAD_CELL_PRUNING
                 ),
+                "dead_cell_enable_four_run": participant_config.get(
+                    "dead_cell_enable_four_run", DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN
+                ),
                 "dead_cell_enable_two_two_split": participant_config.get(
                     "dead_cell_enable_two_two_split", DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT
                 ),
@@ -124,6 +129,10 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 "dead_cell_three_plus_one_requires_adjacent_opposite": participant_config.get(
                     "dead_cell_three_plus_one_requires_adjacent_opposite",
                     DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
+                ),
+                "dead_cell_enable_a1b2a3_discouraged": participant_config.get(
+                    "dead_cell_enable_a1b2a3_discouraged",
+                    DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
                 ),
                 "dead_cell_enable_double_dead_pairs": participant_config.get(
                     "dead_cell_enable_double_dead_pairs", DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS
@@ -189,9 +198,11 @@ def create_unified_config_from_args(
     gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
     gumbel_c_scales: Optional[Union[float, List[float]]] = None,
     enable_dead_cell_pruning: Optional[Union[bool, List[bool]]] = None,
+    dead_cell_enable_four_run: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_two_two_split: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_three_plus_one: Optional[Union[bool, List[bool]]] = None,
     dead_cell_three_plus_one_requires_adjacent_opposite: Optional[Union[bool, List[bool]]] = None,
+    dead_cell_enable_a1b2a3_discouraged: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_double_dead_pairs: Optional[Union[bool, List[bool]]] = None,
     num_games: int = 10,
     board_size: int = BOARD_SIZE,
@@ -324,6 +335,13 @@ def create_unified_config_from_args(
             per_strategy_values=to_list_if_needed(enable_dead_cell_pruning, num_strategies),
         )
 
+    dead_cell_enable_four_run_config = None
+    if dead_cell_enable_four_run is not None:
+        dead_cell_enable_four_run_config = TournamentParameterConfig(
+            default_value=DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
+            per_strategy_values=to_list_if_needed(dead_cell_enable_four_run, num_strategies),
+        )
+
     dead_cell_enable_two_two_split_config = None
     if dead_cell_enable_two_two_split is not None:
         dead_cell_enable_two_two_split_config = TournamentParameterConfig(
@@ -344,6 +362,15 @@ def create_unified_config_from_args(
             default_value=DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
             per_strategy_values=to_list_if_needed(
                 dead_cell_three_plus_one_requires_adjacent_opposite, num_strategies
+            ),
+        )
+
+    dead_cell_enable_a1b2a3_discouraged_config = None
+    if dead_cell_enable_a1b2a3_discouraged is not None:
+        dead_cell_enable_a1b2a3_discouraged_config = TournamentParameterConfig(
+            default_value=DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
+            per_strategy_values=to_list_if_needed(
+                dead_cell_enable_a1b2a3_discouraged, num_strategies
             ),
         )
 
@@ -369,11 +396,13 @@ def create_unified_config_from_args(
         gumbel_candidate_power_offsets=gumbel_candidate_power_offsets_config,
         gumbel_c_scales=gumbel_c_scales_config,
         enable_dead_cell_pruning=enable_dead_cell_pruning_config,
+        dead_cell_enable_four_run=dead_cell_enable_four_run_config,
         dead_cell_enable_two_two_split=dead_cell_enable_two_two_split_config,
         dead_cell_enable_three_plus_one=dead_cell_enable_three_plus_one_config,
         dead_cell_three_plus_one_requires_adjacent_opposite=(
             dead_cell_three_plus_one_requires_adjacent_opposite_config
         ),
+        dead_cell_enable_a1b2a3_discouraged=dead_cell_enable_a1b2a3_discouraged_config,
         dead_cell_enable_double_dead_pairs=dead_cell_enable_double_dead_pairs_config,
         num_games=num_games,
         board_size=board_size,
@@ -399,9 +428,11 @@ def _build_strategy_signature(config: StrategyConfig) -> str:
         str(config.config.get("gumbel_candidate_power_offset", "")),
         str(config.config.get("gumbel_c_scale", "")),
         str(config.config.get("enable_dead_cell_pruning", "")),
+        str(config.config.get("dead_cell_enable_four_run", "")),
         str(config.config.get("dead_cell_enable_two_two_split", "")),
         str(config.config.get("dead_cell_enable_three_plus_one", "")),
         str(config.config.get("dead_cell_three_plus_one_requires_adjacent_opposite", "")),
+        str(config.config.get("dead_cell_enable_a1b2a3_discouraged", "")),
         str(config.config.get("dead_cell_enable_double_dead_pairs", "")),
     ]
     return ":".join(signature_parts)
@@ -444,6 +475,12 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
             param_parts.append(f"gpo{config.config['gumbel_candidate_power_offset']}")
         if config.config.get("enable_dead_cell_pruning", False):
             param_parts.append("deadmask")
+            four_run_enabled = config.config.get(
+                "dead_cell_enable_four_run",
+                DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
+            )
+            if four_run_enabled != DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN:
+                param_parts.append("no_d1" if four_run_enabled is False else "yes_d1")
             two_two_enabled = config.config.get(
                 "dead_cell_enable_two_two_split",
                 DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
@@ -465,6 +502,12 @@ def _assign_unique_strategy_names(strategy_configs: List[StrategyConfig]) -> Non
                 is True
             ):
                 param_parts.append("strict31")
+            a1b2a3_enabled = config.config.get(
+                "dead_cell_enable_a1b2a3_discouraged",
+                DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
+            )
+            if a1b2a3_enabled != DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED:
+                param_parts.append("no_a1b2a3" if a1b2a3_enabled is False else "yes_a1b2a3")
             double_pair_enabled = config.config.get(
                 "dead_cell_enable_double_dead_pairs",
                 DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
@@ -502,9 +545,11 @@ def create_strategy_configs_from_parameters(
     gumbel_candidate_power_offsets: Optional[Union[float, List[float]]] = None,
     gumbel_c_scales: Optional[Union[float, List[float]]] = None,
     enable_dead_cell_pruning: Optional[Union[bool, List[bool]]] = None,
+    dead_cell_enable_four_run: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_two_two_split: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_three_plus_one: Optional[Union[bool, List[bool]]] = None,
     dead_cell_three_plus_one_requires_adjacent_opposite: Optional[Union[bool, List[bool]]] = None,
+    dead_cell_enable_a1b2a3_discouraged: Optional[Union[bool, List[bool]]] = None,
     dead_cell_enable_double_dead_pairs: Optional[Union[bool, List[bool]]] = None,
     num_games: int = 10,
     board_size: int = BOARD_SIZE,
@@ -528,11 +573,13 @@ def create_strategy_configs_from_parameters(
         gumbel_candidate_power_offsets=gumbel_candidate_power_offsets,
         gumbel_c_scales=gumbel_c_scales,
         enable_dead_cell_pruning=enable_dead_cell_pruning,
+        dead_cell_enable_four_run=dead_cell_enable_four_run,
         dead_cell_enable_two_two_split=dead_cell_enable_two_two_split,
         dead_cell_enable_three_plus_one=dead_cell_enable_three_plus_one,
         dead_cell_three_plus_one_requires_adjacent_opposite=(
             dead_cell_three_plus_one_requires_adjacent_opposite
         ),
+        dead_cell_enable_a1b2a3_discouraged=dead_cell_enable_a1b2a3_discouraged,
         dead_cell_enable_double_dead_pairs=dead_cell_enable_double_dead_pairs,
         num_games=num_games,
         board_size=board_size,

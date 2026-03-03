@@ -22,7 +22,9 @@ from hex_ai.config import (
 )
 from hex_ai.inference.model_config import get_model_path, validate_model_path
 from hex_ai.inference.strategy_config import (
+    DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
     DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+    DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
     DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE,
     DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT,
     DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE,
@@ -432,6 +434,12 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         else ([False] if include_defaults else None)
     )
 
+    dead_cell_enable_four_run = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_enable_four_run.split(',')]
+        if hasattr(args, 'dead_cell_enable_four_run') and args.dead_cell_enable_four_run
+        else ([DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN] if include_defaults else None)
+    )
+
     dead_cell_enable_two_two_split = (
         [s.strip().lower() == 'true' for s in args.dead_cell_enable_two_two_split.split(',')]
         if hasattr(args, 'dead_cell_enable_two_two_split') and args.dead_cell_enable_two_two_split
@@ -449,6 +457,12 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         if hasattr(args, 'dead_cell_three_plus_one_requires_adjacent_opposite')
         and args.dead_cell_three_plus_one_requires_adjacent_opposite
         else ([DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE] if include_defaults else None)
+    )
+
+    dead_cell_enable_a1b2a3_discouraged = (
+        [s.strip().lower() == 'true' for s in args.dead_cell_enable_a1b2a3_discouraged.split(',')]
+        if hasattr(args, 'dead_cell_enable_a1b2a3_discouraged') and args.dead_cell_enable_a1b2a3_discouraged
+        else ([DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED] if include_defaults else None)
     )
 
     dead_cell_enable_double_dead_pairs = (
@@ -477,11 +491,13 @@ def parse_tournament_parameters(args: Any, include_defaults: bool = True) -> Dic
         'gumbel_candidate_power_offsets': gumbel_candidate_power_offsets,
         'gumbel_c_scales': gumbel_c_scales,
         'enable_dead_cell_pruning': enable_dead_cell_pruning,
+        'dead_cell_enable_four_run': dead_cell_enable_four_run,
         'dead_cell_enable_two_two_split': dead_cell_enable_two_two_split,
         'dead_cell_enable_three_plus_one': dead_cell_enable_three_plus_one,
         'dead_cell_three_plus_one_requires_adjacent_opposite': (
             dead_cell_three_plus_one_requires_adjacent_opposite
         ),
+        'dead_cell_enable_a1b2a3_discouraged': dead_cell_enable_a1b2a3_discouraged,
         'dead_cell_enable_double_dead_pairs': dead_cell_enable_double_dead_pairs,
         'temperatures': temperatures
     }
@@ -512,11 +528,13 @@ def create_strategy_configs_for_tournament(
         gumbel_candidate_power_offsets=parsed_params['gumbel_candidate_power_offsets'],
         gumbel_c_scales=parsed_params['gumbel_c_scales'],
         enable_dead_cell_pruning=parsed_params['enable_dead_cell_pruning'],
+        dead_cell_enable_four_run=parsed_params['dead_cell_enable_four_run'],
         dead_cell_enable_two_two_split=parsed_params['dead_cell_enable_two_two_split'],
         dead_cell_enable_three_plus_one=parsed_params['dead_cell_enable_three_plus_one'],
         dead_cell_three_plus_one_requires_adjacent_opposite=(
             parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']
         ),
+        dead_cell_enable_a1b2a3_discouraged=parsed_params['dead_cell_enable_a1b2a3_discouraged'],
         dead_cell_enable_double_dead_pairs=parsed_params['dead_cell_enable_double_dead_pairs'],
         num_games=num_games,
         board_size=board_size,
@@ -551,6 +569,9 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
         details.append(f"dead_cell_pruning={cfg.get('enable_dead_cell_pruning', False)}")
         if cfg.get("enable_dead_cell_pruning", False):
             details.append(
+                f"dead_cell_four_run={cfg.get('dead_cell_enable_four_run', DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN)}"
+            )
+            details.append(
                 f"dead_cell_two_two_split={cfg.get('dead_cell_enable_two_two_split', DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT)}"
             )
             details.append(
@@ -559,6 +580,10 @@ def format_strategy_configuration_details(strategy: StrategyConfig) -> str:
             details.append(
                 "dead_cell_strict_three_plus_one="
                 f"{cfg.get('dead_cell_three_plus_one_requires_adjacent_opposite', DEFAULT_DEAD_CELL_THREE_PLUS_ONE_REQUIRES_ADJACENT_OPPOSITE)}"
+            )
+            details.append(
+                "dead_cell_a1b2a3_discouraged="
+                f"{cfg.get('dead_cell_enable_a1b2a3_discouraged', DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED)}"
             )
             details.append(
                 f"dead_cell_double_pairs={cfg.get('dead_cell_enable_double_dead_pairs', DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS)}"

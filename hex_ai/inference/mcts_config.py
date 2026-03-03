@@ -117,9 +117,11 @@ class BaselineMCTSConfig:
 
     # Dead-cell hard-pruning parameters
     enable_dead_cell_pruning: bool = False
+    dead_cell_enable_four_run: bool = True
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
+    dead_cell_enable_a1b2a3_discouraged: bool = True
     dead_cell_enable_double_dead_pairs: bool = False
     dead_cell_debug_log_path: Optional[str] = None
     dead_cell_debug_strategy_label: Optional[str] = None
@@ -320,9 +322,11 @@ def create_mcts_config(
         "distinct_target": 32,
         "enable_low_distinct_ratio_flush": False,
         "enable_dead_cell_pruning": False,
+        "dead_cell_enable_four_run": True,
         "dead_cell_enable_two_two_split": True,
         "dead_cell_enable_three_plus_one": True,
         "dead_cell_three_plus_one_requires_adjacent_opposite": False,
+        "dead_cell_enable_a1b2a3_discouraged": True,
         "dead_cell_enable_double_dead_pairs": False,
         "dead_cell_debug_log_path": None,
         "dead_cell_debug_strategy_label": None,

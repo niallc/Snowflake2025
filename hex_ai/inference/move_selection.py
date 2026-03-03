@@ -139,9 +139,11 @@ class MoveSelectionConfig:
     gumbel_use_gumbel_in_final_eval: bool = DEFAULT_GUMBEL_USE_GUMBEL_IN_FINAL_EVAL  # Remove Gumbel noise in final evaluation
     # Dead-cell hard pruning parameters
     enable_dead_cell_pruning: bool = False
+    dead_cell_enable_four_run: bool = True
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
     dead_cell_three_plus_one_requires_adjacent_opposite: bool = False
+    dead_cell_enable_a1b2a3_discouraged: bool = True
     dead_cell_enable_double_dead_pairs: bool = False
     dead_cell_debug_log_path: Optional[str] = None
     dead_cell_debug_strategy_label: Optional[str] = None
@@ -262,11 +264,13 @@ class MCTSStrategy(MoveSelectionStrategy):
             gumbel_candidate_min=config.gumbel_candidate_min,
             gumbel_candidate_max=config.gumbel_candidate_max,
             enable_dead_cell_pruning=config.enable_dead_cell_pruning,
+            dead_cell_enable_four_run=config.dead_cell_enable_four_run,
             dead_cell_enable_two_two_split=config.dead_cell_enable_two_two_split,
             dead_cell_enable_three_plus_one=config.dead_cell_enable_three_plus_one,
             dead_cell_three_plus_one_requires_adjacent_opposite=(
                 config.dead_cell_three_plus_one_requires_adjacent_opposite
             ),
+            dead_cell_enable_a1b2a3_discouraged=config.dead_cell_enable_a1b2a3_discouraged,
             dead_cell_enable_double_dead_pairs=config.dead_cell_enable_double_dead_pairs,
             dead_cell_debug_log_path=config.dead_cell_debug_log_path,
             dead_cell_debug_strategy_label=config.dead_cell_debug_strategy_label,
@@ -329,8 +333,12 @@ class MCTSStrategy(MoveSelectionStrategy):
         dead_cell_info = ""
         if config.enable_dead_cell_pruning:
             dead_cell_info = ", dead_cells=on"
-        if config.dead_cell_counterfactual_debug_log_path:
-            dead_cell_info += ", dead_cells_cf_debug=on"
+            if config.dead_cell_enable_four_run is False:
+                dead_cell_info += ", no_d1"
+            if config.dead_cell_counterfactual_debug_log_path:
+                dead_cell_info += ", dead_cells_cf_debug=on"
+            if config.dead_cell_enable_a1b2a3_discouraged is False:
+                dead_cell_info += ", no_a1b2a3"
         return (
             "mcts("
             f"sims={config.mcts_sims}, "

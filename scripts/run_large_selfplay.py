@@ -63,6 +63,18 @@ DEFAULT_RESTART_STATE_FILENAME = "selfplay_restart_state.json"
 CHUNKED_RUN_TYPE = "selfplay_chunked"
 
 
+def _parse_bool_flag(raw: str) -> bool:
+    """Parse a CLI boolean token with explicit fail-fast semantics."""
+    normalized = str(raw).strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(
+        f"Invalid boolean value {raw!r}. Expected one of: true,false,1,0,yes,no,on,off."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate large-scale self-play games")
     parser.add_argument('--num_games', type=int, default=1000, help='Number of games to generate')
@@ -157,6 +169,42 @@ def parse_args() -> argparse.Namespace:
         '--enable-dead-cell-pruning',
         action='store_true',
         help='Enable dead-cell hard masking in self-play MCTS (default: off).',
+    )
+    parser.add_argument(
+        '--dead-cell-enable-four-run',
+        type=_parse_bool_flag,
+        default=True,
+        help='Enable dead-cell D1 (4-run) motif when pruning is active (default: true).',
+    )
+    parser.add_argument(
+        '--dead-cell-enable-two-two-split',
+        type=_parse_bool_flag,
+        default=True,
+        help='Enable dead-cell D2 (2+2 split) motif when pruning is active (default: true).',
+    )
+    parser.add_argument(
+        '--dead-cell-enable-three-plus-one',
+        type=_parse_bool_flag,
+        default=True,
+        help='Enable dead-cell D3 motif when pruning is active (default: true).',
+    )
+    parser.add_argument(
+        '--dead-cell-three-plus-one-requires-adjacent-opposite',
+        type=_parse_bool_flag,
+        default=False,
+        help='Use strict D3 variant requiring adjacent opposite stone (default: false).',
+    )
+    parser.add_argument(
+        '--dead-cell-enable-a1b2a3-discouraged',
+        type=_parse_bool_flag,
+        default=True,
+        help='Enable A1B2A3 discouraged motif when pruning is active (default: true).',
+    )
+    parser.add_argument(
+        '--dead-cell-enable-double-dead-pairs',
+        type=_parse_bool_flag,
+        default=False,
+        help='Enable two-cell dead-pair motif when pruning is active (default: false).',
     )
     parser.add_argument('--opening_strategy', type=str, default='pie_rule', 
                        choices=['pie_rule', 'pie_rule_legacy', 'random', 'none'],
@@ -312,6 +360,18 @@ def _build_chunked_config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
     # Keep legacy fingerprint compatibility for default behavior (dead-cell pruning off).
     if args.enable_dead_cell_pruning:
         config_snapshot["enable_dead_cell_pruning"] = True
+    if args.dead_cell_enable_four_run is not True:
+        config_snapshot["dead_cell_enable_four_run"] = False
+    if args.dead_cell_enable_two_two_split is not True:
+        config_snapshot["dead_cell_enable_two_two_split"] = False
+    if args.dead_cell_enable_three_plus_one is not True:
+        config_snapshot["dead_cell_enable_three_plus_one"] = False
+    if args.dead_cell_three_plus_one_requires_adjacent_opposite is not False:
+        config_snapshot["dead_cell_three_plus_one_requires_adjacent_opposite"] = True
+    if args.dead_cell_enable_a1b2a3_discouraged is not True:
+        config_snapshot["dead_cell_enable_a1b2a3_discouraged"] = False
+    if args.dead_cell_enable_double_dead_pairs is not False:
+        config_snapshot["dead_cell_enable_double_dead_pairs"] = True
     return config_snapshot
 
 
@@ -373,6 +433,18 @@ def _build_chunk_command(args: argparse.Namespace, chunk_games: int) -> List[str
         cmd.append("--mcts-profile")
     if args.enable_dead_cell_pruning:
         cmd.append("--enable-dead-cell-pruning")
+    if args.dead_cell_enable_four_run is not True:
+        cmd.extend(["--dead-cell-enable-four-run", "false"])
+    if args.dead_cell_enable_two_two_split is not True:
+        cmd.extend(["--dead-cell-enable-two-two-split", "false"])
+    if args.dead_cell_enable_three_plus_one is not True:
+        cmd.extend(["--dead-cell-enable-three-plus-one", "false"])
+    if args.dead_cell_three_plus_one_requires_adjacent_opposite is not False:
+        cmd.extend(["--dead-cell-three-plus-one-requires-adjacent-opposite", "true"])
+    if args.dead_cell_enable_a1b2a3_discouraged is not True:
+        cmd.extend(["--dead-cell-enable-a1b2a3-discouraged", "false"])
+    if args.dead_cell_enable_double_dead_pairs is not False:
+        cmd.extend(["--dead-cell-enable-double-dead-pairs", "true"])
     return cmd
 
 
@@ -726,6 +798,14 @@ def _run_single_process(args: argparse.Namespace) -> None:
             "c_puct": args.c_puct,
             "board_size": args.board_size,
             "enable_dead_cell_pruning": args.enable_dead_cell_pruning,
+            "dead_cell_enable_four_run": args.dead_cell_enable_four_run,
+            "dead_cell_enable_two_two_split": args.dead_cell_enable_two_two_split,
+            "dead_cell_enable_three_plus_one": args.dead_cell_enable_three_plus_one,
+            "dead_cell_three_plus_one_requires_adjacent_opposite": (
+                args.dead_cell_three_plus_one_requires_adjacent_opposite
+            ),
+            "dead_cell_enable_a1b2a3_discouraged": args.dead_cell_enable_a1b2a3_discouraged,
+            "dead_cell_enable_double_dead_pairs": args.dead_cell_enable_double_dead_pairs,
         },
         temperatures=args.temperature,
         pie_rule=False,  # Not applicable to selfplay
@@ -753,6 +833,16 @@ def _run_single_process(args: argparse.Namespace) -> None:
         print("  Pie-rule mode: legacy")
     print(f"  Board size: {args.board_size}")
     print(f"  Dead-cell pruning: {args.enable_dead_cell_pruning}")
+    if args.enable_dead_cell_pruning:
+        print(f"    D1 four-run: {args.dead_cell_enable_four_run}")
+        print(f"    D2 two-two split: {args.dead_cell_enable_two_two_split}")
+        print(f"    D3 three-plus-one: {args.dead_cell_enable_three_plus_one}")
+        print(
+            "    D3 strict adjacent opposite: "
+            f"{args.dead_cell_three_plus_one_requires_adjacent_opposite}"
+        )
+        print(f"    A1B2A3 discouraged: {args.dead_cell_enable_a1b2a3_discouraged}")
+        print(f"    Two-cell dead pairs: {args.dead_cell_enable_double_dead_pairs}")
     print(
         "  Virtual small-board sampling: "
         f"{args.small_board_fraction:.2%} on {args.small_board_min_size}..{args.small_board_max_size}"
@@ -807,6 +897,14 @@ def _run_single_process(args: argparse.Namespace) -> None:
         mcts_profile_max_calls=args.mcts_profile_max_calls,
         board_size=args.board_size,
         enable_dead_cell_pruning=args.enable_dead_cell_pruning,
+        dead_cell_enable_four_run=args.dead_cell_enable_four_run,
+        dead_cell_enable_two_two_split=args.dead_cell_enable_two_two_split,
+        dead_cell_enable_three_plus_one=args.dead_cell_enable_three_plus_one,
+        dead_cell_three_plus_one_requires_adjacent_opposite=(
+            args.dead_cell_three_plus_one_requires_adjacent_opposite
+        ),
+        dead_cell_enable_a1b2a3_discouraged=args.dead_cell_enable_a1b2a3_discouraged,
+        dead_cell_enable_double_dead_pairs=args.dead_cell_enable_double_dead_pairs,
     )
     
     start_time = time.time()

@@ -224,6 +224,47 @@ class MCTSNode:
         self._terminal_moves_detected: bool = False  # Track if terminal moves have been detected
         self.depth: int = 0  # Track node depth in the tree
 
+    def assert_action_alignment(self, context: str) -> None:
+        """Fail fast if action-aligned node fields have diverged in length."""
+        expected = len(self.legal_moves)
+        observed_lengths = {
+            "legal_indices": len(self.legal_indices),
+            "children": len(self.children),
+            "N": int(self.N.shape[0]),
+            "W": int(self.W.shape[0]),
+            "Q": int(self.Q.shape[0]),
+            "P": int(self.P.shape[0]),
+            "terminal_moves": len(self.terminal_moves),
+        }
+        for field_name, observed in observed_lengths.items():
+            if observed != expected:
+                raise RuntimeError(
+                    f"{context}: node action alignment mismatch for {field_name}: "
+                    f"expected {expected}, got {observed}"
+                )
+
+    def filter_actions_by_keep_indices(self, keep_indices: List[int], *, context: str) -> None:
+        """Apply one consistent action filter across all action-aligned node fields."""
+        self.assert_action_alignment(f"{context} (before filter)")
+        action_count = len(self.legal_moves)
+        if len(set(keep_indices)) != len(keep_indices):
+            raise RuntimeError(f"{context}: keep_indices contains duplicates: {keep_indices}")
+        for idx in keep_indices:
+            if idx < 0 or idx >= action_count:
+                raise RuntimeError(
+                    f"{context}: keep index {idx} out of bounds for action count {action_count}"
+                )
+
+        self.legal_moves = [self.legal_moves[i] for i in keep_indices]
+        self.legal_indices = [self.legal_indices[i] for i in keep_indices]
+        self.children = [self.children[i] for i in keep_indices]
+        self.N = self.N[keep_indices]
+        self.W = self.W[keep_indices]
+        self.Q = self.Q[keep_indices]
+        self.P = self.P[keep_indices]
+        self.terminal_moves = [self.terminal_moves[i] for i in keep_indices]
+        self.assert_action_alignment(f"{context} (after filter)")
+
 # ------------------ Core MCTS ------------------
 
 class BaselineMCTS(MCTSGumbelMixin):
@@ -1005,22 +1046,26 @@ class BaselineMCTS(MCTSGumbelMixin):
         if should_log_root_debug:
             dead_cell_reasons = find_dead_cells_with_reasons(
                 node.state.board,
+                enable_four_run=self.cfg.dead_cell_enable_four_run,
                 enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
                 three_plus_one_requires_adjacent_opposite=(
                     self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
                 ),
+                enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
             )
             dead_cells = set(dead_cell_reasons.keys())
         else:
             dead_cells = find_dead_cells(
                 node.state.board,
+                enable_four_run=self.cfg.dead_cell_enable_four_run,
                 enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
                 enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
                 three_plus_one_requires_adjacent_opposite=(
                     self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
                 ),
+                enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
                 enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
             )
         if not dead_cells:
@@ -1037,14 +1082,10 @@ class BaselineMCTS(MCTSGumbelMixin):
                 "This likely indicates an incorrect dead-cell motif."
             )
 
-        node.legal_moves = [node.legal_moves[i] for i in keep_indices]
-        node.legal_indices = [node.legal_indices[i] for i in keep_indices]
-        node.children = [node.children[i] for i in keep_indices]
-        node.N = node.N[keep_indices]
-        node.W = node.W[keep_indices]
-        node.Q = node.Q[keep_indices]
-        node.P = node.P[keep_indices]
-        node.terminal_moves = [node.terminal_moves[i] for i in keep_indices]
+        node.filter_actions_by_keep_indices(
+            keep_indices,
+            context="dead-cell pruning",
+        )
 
         self._dead_cell_pruned_moves_total += int(pruned_count)
         self._dead_cell_pruned_nodes_total += 1
@@ -1097,10 +1138,14 @@ class BaselineMCTS(MCTSGumbelMixin):
                 "pruned_moves_total": int(len(pruned_moves)),
                 "legal_moves_before_count": int(legal_moves_before_count),
                 "mask_config": {
+                    "enable_four_run": bool(self.cfg.dead_cell_enable_four_run),
                     "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
                     "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
                     "three_plus_one_requires_adjacent_opposite": bool(
                         self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                    ),
+                    "enable_a1b2a3_discouraged": bool(
+                        self.cfg.dead_cell_enable_a1b2a3_discouraged
                     ),
                     "enable_double_dead_pairs": bool(self.cfg.dead_cell_enable_double_dead_pairs),
                 },
@@ -1194,11 +1239,13 @@ class BaselineMCTS(MCTSGumbelMixin):
 
         dead_cell_reasons = find_dead_cells_with_reasons(
             root_state.board,
+            enable_four_run=self.cfg.dead_cell_enable_four_run,
             enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
             enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
             three_plus_one_requires_adjacent_opposite=(
                 self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
             ),
+            enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
             enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
         )
         if not dead_cell_reasons:
@@ -1255,10 +1302,14 @@ class BaselineMCTS(MCTSGumbelMixin):
             "legal_moves_after_mask_count": int(len(masked_result.root_node.legal_moves)),
             "legal_moves_unmasked_count": int(len(counterfactual_result.root_node.legal_moves)),
             "mask_config": {
+                "enable_four_run": bool(self.cfg.dead_cell_enable_four_run),
                 "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
                 "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
                 "three_plus_one_requires_adjacent_opposite": bool(
                     self.cfg.dead_cell_three_plus_one_requires_adjacent_opposite
+                ),
+                "enable_a1b2a3_discouraged": bool(
+                    self.cfg.dead_cell_enable_a1b2a3_discouraged
                 ),
                 "enable_double_dead_pairs": bool(self.cfg.dead_cell_enable_double_dead_pairs),
             },

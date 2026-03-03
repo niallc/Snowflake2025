@@ -220,12 +220,16 @@ Examples:
                        help=f'Comma-separated c_scale parameters for Gumbel AlphaZero root selection (e.g., "1000,5000,10000", default: {DEFAULT_GUMBEL_C_SCALE})')
     parser.add_argument('--enable-dead-cell-pruning', type=str,
                        help='Comma-separated boolean values to enable dead-cell hard masking in MCTS strategies (e.g., "true,false,true", default: false)')
+    parser.add_argument('--dead-cell-enable-four-run', type=str,
+                       help='Comma-separated boolean values to enable dead-cell D1 (4-run) motif (default: true)')
     parser.add_argument('--dead-cell-enable-two-two-split', type=str,
                        help='Comma-separated boolean values to enable dead-cell D2 (2+2 split) motif (default: true)')
     parser.add_argument('--dead-cell-enable-three-plus-one', type=str,
                        help='Comma-separated boolean values to enable dead-cell D3 motif (default: true)')
     parser.add_argument('--dead-cell-three-plus-one-requires-adjacent-opposite', type=str,
                        help='Comma-separated boolean values for strict D3 (adjacent-opposite required) (default: false)')
+    parser.add_argument('--dead-cell-enable-a1b2a3-discouraged', type=str,
+                       help='Comma-separated boolean values to enable A1B2A3 discouraged motif (default: true)')
     parser.add_argument('--dead-cell-enable-double-dead-pairs', type=str,
                        help='Comma-separated boolean values to enable two-cell dead-pair motif (default: false)')
     parser.add_argument(
@@ -802,6 +806,14 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 f"(got {len(parsed_params['enable_dead_cell_pruning'])} values: {parsed_params['enable_dead_cell_pruning']})"
             )
         if (
+            parsed_params.get('dead_cell_enable_four_run')
+            and len(parsed_params['dead_cell_enable_four_run']) > 1
+        ):
+            params_with_multiple_values.append(
+                "dead_cell_enable_four_run "
+                f"(got {len(parsed_params['dead_cell_enable_four_run'])} values: {parsed_params['dead_cell_enable_four_run']})"
+            )
+        if (
             parsed_params.get('dead_cell_enable_two_two_split')
             and len(parsed_params['dead_cell_enable_two_two_split']) > 1
         ):
@@ -826,6 +838,16 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 "(got "
                 f"{len(parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite'])} values: "
                 f"{parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite']})"
+            )
+        if (
+            parsed_params.get('dead_cell_enable_a1b2a3_discouraged')
+            and len(parsed_params['dead_cell_enable_a1b2a3_discouraged']) > 1
+        ):
+            params_with_multiple_values.append(
+                "dead_cell_enable_a1b2a3_discouraged "
+                "(got "
+                f"{len(parsed_params['dead_cell_enable_a1b2a3_discouraged'])} values: "
+                f"{parsed_params['dead_cell_enable_a1b2a3_discouraged']})"
             )
         if (
             parsed_params.get('dead_cell_enable_double_dead_pairs')
@@ -876,6 +898,11 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     ):
         knockout_config['enable_dead_cell_pruning'] = parsed_params['enable_dead_cell_pruning'][0]
     if (
+        parsed_params.get('dead_cell_enable_four_run')
+        and len(parsed_params['dead_cell_enable_four_run']) > 0
+    ):
+        knockout_config['dead_cell_enable_four_run'] = parsed_params['dead_cell_enable_four_run'][0]
+    if (
         parsed_params.get('dead_cell_enable_two_two_split')
         and len(parsed_params['dead_cell_enable_two_two_split']) > 0
     ):
@@ -891,6 +918,13 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     ):
         knockout_config['dead_cell_three_plus_one_requires_adjacent_opposite'] = (
             parsed_params['dead_cell_three_plus_one_requires_adjacent_opposite'][0]
+        )
+    if (
+        parsed_params.get('dead_cell_enable_a1b2a3_discouraged')
+        and len(parsed_params['dead_cell_enable_a1b2a3_discouraged']) > 0
+    ):
+        knockout_config['dead_cell_enable_a1b2a3_discouraged'] = (
+            parsed_params['dead_cell_enable_a1b2a3_discouraged'][0]
         )
     if (
         parsed_params.get('dead_cell_enable_double_dead_pairs')

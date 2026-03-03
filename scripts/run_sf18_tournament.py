@@ -576,12 +576,16 @@ Examples:
                        help=f'Comma-separated c_scale parameters for Gumbel AlphaZero root selection (e.g., "1000,5000,10000", default: {DEFAULT_GUMBEL_C_SCALE})')
     parser.add_argument('--enable-dead-cell-pruning', type=str,
                        help='Comma-separated boolean values to enable dead-cell hard masking in MCTS strategies (default: false)')
+    parser.add_argument('--dead-cell-enable-four-run', type=str,
+                       help='Comma-separated boolean values to enable dead-cell D1 (4-run) motif (default: true)')
     parser.add_argument('--dead-cell-enable-two-two-split', type=str,
                        help='Comma-separated boolean values to enable dead-cell D2 (2+2 split) motif (default: true)')
     parser.add_argument('--dead-cell-enable-three-plus-one', type=str,
                        help='Comma-separated boolean values to enable dead-cell D3 motif (default: true)')
     parser.add_argument('--dead-cell-three-plus-one-requires-adjacent-opposite', type=str,
                        help='Comma-separated boolean values for strict D3 (adjacent-opposite required) (default: false)')
+    parser.add_argument('--dead-cell-enable-a1b2a3-discouraged', type=str,
+                       help='Comma-separated boolean values to enable A1B2A3 discouraged motif (default: true)')
     parser.add_argument('--dead-cell-enable-double-dead-pairs', type=str,
                        help='Comma-separated boolean values to enable two-cell dead-pair motif (default: false)')
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,

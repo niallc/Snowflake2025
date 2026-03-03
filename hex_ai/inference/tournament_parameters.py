@@ -230,9 +230,11 @@ class UnifiedTournamentConfig:
                  gumbel_candidate_power_offsets: Optional[TournamentParameterConfig] = None,
                  gumbel_c_scales: Optional[TournamentParameterConfig] = None,
                  enable_dead_cell_pruning: Optional[TournamentParameterConfig] = None,
+                 dead_cell_enable_four_run: Optional[TournamentParameterConfig] = None,
                  dead_cell_enable_two_two_split: Optional[TournamentParameterConfig] = None,
                  dead_cell_enable_three_plus_one: Optional[TournamentParameterConfig] = None,
                  dead_cell_three_plus_one_requires_adjacent_opposite: Optional[TournamentParameterConfig] = None,
+                 dead_cell_enable_a1b2a3_discouraged: Optional[TournamentParameterConfig] = None,
                  dead_cell_enable_double_dead_pairs: Optional[TournamentParameterConfig] = None,
                  
                  # Tournament settings
@@ -255,11 +257,13 @@ class UnifiedTournamentConfig:
         self.gumbel_candidate_power_offsets = gumbel_candidate_power_offsets
         self.gumbel_c_scales = gumbel_c_scales
         self.enable_dead_cell_pruning = enable_dead_cell_pruning
+        self.dead_cell_enable_four_run = dead_cell_enable_four_run
         self.dead_cell_enable_two_two_split = dead_cell_enable_two_two_split
         self.dead_cell_enable_three_plus_one = dead_cell_enable_three_plus_one
         self.dead_cell_three_plus_one_requires_adjacent_opposite = (
             dead_cell_three_plus_one_requires_adjacent_opposite
         )
+        self.dead_cell_enable_a1b2a3_discouraged = dead_cell_enable_a1b2a3_discouraged
         self.dead_cell_enable_double_dead_pairs = dead_cell_enable_double_dead_pairs
         self.num_games = num_games
         self.board_size = board_size
@@ -299,6 +303,8 @@ class UnifiedTournamentConfig:
             self.gumbel_candidate_power_offsets.validate(num_strategies, participant_labels)
         if self.enable_dead_cell_pruning:
             self.enable_dead_cell_pruning.validate(num_strategies, participant_labels)
+        if self.dead_cell_enable_four_run:
+            self.dead_cell_enable_four_run.validate(num_strategies, participant_labels)
         if self.dead_cell_enable_two_two_split:
             self.dead_cell_enable_two_two_split.validate(num_strategies, participant_labels)
         if self.dead_cell_enable_three_plus_one:
@@ -307,6 +313,8 @@ class UnifiedTournamentConfig:
             self.dead_cell_three_plus_one_requires_adjacent_opposite.validate(
                 num_strategies, participant_labels
             )
+        if self.dead_cell_enable_a1b2a3_discouraged:
+            self.dead_cell_enable_a1b2a3_discouraged.validate(num_strategies, participant_labels)
         if self.dead_cell_enable_double_dead_pairs:
             self.dead_cell_enable_double_dead_pairs.validate(num_strategies, participant_labels)
         
@@ -362,6 +370,10 @@ class UnifiedTournamentConfig:
             config['enable_dead_cell_pruning'] = self.enable_dead_cell_pruning.get_value_for_participant(
                 participant_label, strategy_index
             )
+        if self.dead_cell_enable_four_run:
+            config['dead_cell_enable_four_run'] = self.dead_cell_enable_four_run.get_value_for_participant(
+                participant_label, strategy_index
+            )
         if self.dead_cell_enable_two_two_split:
             config['dead_cell_enable_two_two_split'] = self.dead_cell_enable_two_two_split.get_value_for_participant(
                 participant_label, strategy_index
@@ -375,6 +387,10 @@ class UnifiedTournamentConfig:
                 self.dead_cell_three_plus_one_requires_adjacent_opposite.get_value_for_participant(
                     participant_label, strategy_index
                 )
+            )
+        if self.dead_cell_enable_a1b2a3_discouraged:
+            config['dead_cell_enable_a1b2a3_discouraged'] = self.dead_cell_enable_a1b2a3_discouraged.get_value_for_participant(
+                participant_label, strategy_index
             )
         if self.dead_cell_enable_double_dead_pairs:
             config['dead_cell_enable_double_dead_pairs'] = self.dead_cell_enable_double_dead_pairs.get_value_for_participant(

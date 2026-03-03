@@ -261,6 +261,12 @@ class SelfPlayEngine:
                  output_dir: str = None,
                  mcts_sims: int = DEFAULT_MCTS_SIMS, c_puct: float = DEFAULT_C_PUCT, enable_gumbel: bool = True,
                  enable_dead_cell_pruning: bool = False,
+                 dead_cell_enable_four_run: bool = True,
+                 dead_cell_enable_two_two_split: bool = True,
+                 dead_cell_enable_three_plus_one: bool = True,
+                 dead_cell_three_plus_one_requires_adjacent_opposite: bool = False,
+                 dead_cell_enable_a1b2a3_discouraged: bool = True,
+                 dead_cell_enable_double_dead_pairs: bool = False,
                  base_fraction_mcts_moves: float = DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
                  small_board_fraction: float = DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
                  small_board_min_display_size: int = DEFAULT_SELFPLAY_SMALL_BOARD_MIN_DISPLAY_SIZE,
@@ -293,6 +299,12 @@ class SelfPlayEngine:
             c_puct: PUCT exploration constant for MCTS
             enable_gumbel: Enable Gumbel-AlphaZero root selection for MCTS
             enable_dead_cell_pruning: Enable dead-cell hard masking in MCTS
+            dead_cell_enable_four_run: Enable dead-cell D1 (4-run) motif
+            dead_cell_enable_two_two_split: Enable dead-cell D2 motif
+            dead_cell_enable_three_plus_one: Enable dead-cell D3 motif
+            dead_cell_three_plus_one_requires_adjacent_opposite: Enable strict D3 variant
+            dead_cell_enable_a1b2a3_discouraged: Enable A1B2A3 discouraged motif
+            dead_cell_enable_double_dead_pairs: Enable two-cell dead-pair motif
             base_fraction_mcts_moves: Fraction of moves that should run full MCTS
             small_board_fraction: Fraction of games that start from a virtual small-board prefill
             small_board_min_display_size: Small-board display-size lower bound (inclusive)
@@ -313,6 +325,14 @@ class SelfPlayEngine:
         self.c_puct = c_puct
         self.enable_gumbel = enable_gumbel
         self.enable_dead_cell_pruning = bool(enable_dead_cell_pruning)
+        self.dead_cell_enable_four_run = bool(dead_cell_enable_four_run)
+        self.dead_cell_enable_two_two_split = bool(dead_cell_enable_two_two_split)
+        self.dead_cell_enable_three_plus_one = bool(dead_cell_enable_three_plus_one)
+        self.dead_cell_three_plus_one_requires_adjacent_opposite = bool(
+            dead_cell_three_plus_one_requires_adjacent_opposite
+        )
+        self.dead_cell_enable_a1b2a3_discouraged = bool(dead_cell_enable_a1b2a3_discouraged)
+        self.dead_cell_enable_double_dead_pairs = bool(dead_cell_enable_double_dead_pairs)
         self.base_fraction_mcts_moves = self._normalize_base_fraction_mcts_moves(
             base_fraction_mcts_moves
         )
@@ -404,6 +424,14 @@ class SelfPlayEngine:
             temperature_end=self.temperature_end,
             enable_gumbel_root_selection=self.enable_gumbel,  # Enable/disable Gumbel root selection
             enable_dead_cell_pruning=self.enable_dead_cell_pruning,
+            dead_cell_enable_four_run=self.dead_cell_enable_four_run,
+            dead_cell_enable_two_two_split=self.dead_cell_enable_two_two_split,
+            dead_cell_enable_three_plus_one=self.dead_cell_enable_three_plus_one,
+            dead_cell_three_plus_one_requires_adjacent_opposite=(
+                self.dead_cell_three_plus_one_requires_adjacent_opposite
+            ),
+            dead_cell_enable_a1b2a3_discouraged=self.dead_cell_enable_a1b2a3_discouraged,
+            dead_cell_enable_double_dead_pairs=self.dead_cell_enable_double_dead_pairs,
         )
         # Reuse one MCTS instance so eval_cache can persist across moves/games in this process.
         self.mcts = BaselineMCTS(self.game_engine, self.model_wrapper, self.mcts_config)
@@ -449,6 +477,14 @@ class SelfPlayEngine:
                 "C_PUCT": c_puct,
                 "Gumbel root selection": enable_gumbel,
                 "Dead-cell pruning": self.enable_dead_cell_pruning,
+                "Dead-cell D1 four-run": self.dead_cell_enable_four_run,
+                "Dead-cell D2 two-two split": self.dead_cell_enable_two_two_split,
+                "Dead-cell D3 three-plus-one": self.dead_cell_enable_three_plus_one,
+                "Dead-cell D3 strict adjacent opposite": (
+                    self.dead_cell_three_plus_one_requires_adjacent_opposite
+                ),
+                "Dead-cell A1B2A3 discouraged": self.dead_cell_enable_a1b2a3_discouraged,
+                "Dead-cell two-cell dead pairs": self.dead_cell_enable_double_dead_pairs,
                 "Base MCTS move fraction": self.base_fraction_mcts_moves,
                 "Early termination threshold": confidence_termination_threshold,
                 "Temperature": temperature,
@@ -519,6 +555,16 @@ class SelfPlayEngine:
             print(f"  C_PUCT: {c_puct}")
             print(f"  Gumbel root selection: {enable_gumbel}")
             print(f"  Dead-cell pruning: {self.enable_dead_cell_pruning}")
+            if self.enable_dead_cell_pruning:
+                print(f"    D1 four-run: {self.dead_cell_enable_four_run}")
+                print(f"    D2 two-two split: {self.dead_cell_enable_two_two_split}")
+                print(f"    D3 three-plus-one: {self.dead_cell_enable_three_plus_one}")
+                print(
+                    "    D3 strict adjacent opposite: "
+                    f"{self.dead_cell_three_plus_one_requires_adjacent_opposite}"
+                )
+                print(f"    A1B2A3 discouraged: {self.dead_cell_enable_a1b2a3_discouraged}")
+                print(f"    Two-cell dead pairs: {self.dead_cell_enable_double_dead_pairs}")
             print(f"  Early termination threshold: {confidence_termination_threshold}")
             print(f"  Temperature: {temperature} -> {temperature_end}")
             if enable_gumbel and self.mcts_sims <= self.mcts_config.gumbel_sim_threshold:
