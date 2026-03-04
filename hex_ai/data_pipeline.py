@@ -140,6 +140,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         verbose: Verbose level (2=default, 3=detailed pool/shard info)
         random_seed: Random seed for reproducible behavior
         is_validation: Whether this is a validation dataset (enables special validation behavior)
+        use_policy_search_targets: Whether to train on per-position policy_search_target
+            distributions instead of legacy played-move one-hot targets.
         shutdown_handler: Optional graceful shutdown handler to check for interrupts during pool refill
     """
     
@@ -154,6 +156,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                  verbose: int = 2,
                  random_seed: Optional[int] = None,
                  is_validation: bool = False,
+                 use_policy_search_targets: bool = False,
                  shutdown_handler: Optional[Any] = None):
         super().__init__()
         
@@ -181,6 +184,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.verbose = verbose
         self.random_seed = random_seed
         self.is_validation = is_validation
+        self.use_policy_search_targets = bool(use_policy_search_targets)
         self.shutdown_handler = shutdown_handler
         
         # Set up random seed
@@ -238,6 +242,10 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             dataset_type = "validation" if self.is_validation else "training"
             self.logger.info(f"[StreamingMixedShardDataset] Initialized {dataset_type} dataset with {len(self.data_dirs)} directories, "
                            f"pool_size={self.pool_size:,}, refill_threshold={self.refill_threshold:,}")
+            self.logger.info(
+                f"[StreamingMixedShardDataset] policy target source: "
+                f"{'policy_search_target' if self.use_policy_search_targets else 'policy'}"
+            )
             for i, (dir_path, weight, shard_count) in enumerate(zip(self.data_dirs, self.directory_weights, [len(q) for q in self.shard_queues])):
                 if self.verbose >= 3:
                     self.logger.info(f"  Directory {i+1}: {dir_path} (weight={weight:.3f}, {shard_count} shards)")
@@ -597,12 +605,39 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         training loop only consumes board/policy/value/player_to_move.
         """
         board = example.get('board')
-        policy = example.get('policy')
+        if self.use_policy_search_targets:
+            legacy_policy = example.get('policy')
+            policy = example.get('policy_search_target')
+            # Terminal positions intentionally have no policy target.
+            if policy is None and legacy_policy is not None:
+                source_info = (
+                    f"source_ref={source_ref}" if source_ref is not None else "unknown source"
+                )
+                raise ValueError(
+                    "Missing policy_search_target while use_policy_search_targets=True "
+                    f"({source_info}). This indicates mixed/legacy data and strict "
+                    "search-target mode requires v2-annotated examples."
+                )
+        else:
+            policy = example.get('policy')
 
         if copy_arrays and isinstance(board, np.ndarray):
             board = board.copy()
         if copy_arrays and isinstance(policy, np.ndarray):
             policy = policy.copy()
+
+        if policy is not None:
+            policy_arr = np.asarray(policy, dtype=np.float32)
+            expected_shape = self.policy_shape
+            if policy_arr.shape != expected_shape:
+                raise ValueError(
+                    f"Policy target shape mismatch: expected {expected_shape}, got {policy_arr.shape}"
+                )
+            if not np.isfinite(policy_arr).all():
+                raise ValueError("Policy target contains non-finite values")
+            if (policy_arr < 0.0).any():
+                raise ValueError("Policy target contains negative values")
+            policy = policy_arr
 
         return (
             board,

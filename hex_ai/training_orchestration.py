@@ -62,6 +62,7 @@ def create_datasets(data_dirs: List[str],
                    max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,
                    random_seed: Optional[int] = None,
                    verbose: int = 2,
+                   use_policy_search_targets: bool = False,
                    concise_restart_logging: bool = False,
                    shutdown_handler=None):
     """
@@ -94,6 +95,7 @@ def create_datasets(data_dirs: List[str],
                 max_examples_unaugmented=max_examples_unaugmented,
                 verbose=dataset_verbose,
                 random_seed=random_seed,
+                use_policy_search_targets=use_policy_search_targets,
                 shutdown_handler=shutdown_handler
             )
 
@@ -112,6 +114,7 @@ def create_datasets(data_dirs: List[str],
                     max_examples_unaugmented=max_validation_examples,
                     verbose=dataset_verbose,
                     random_seed=random_seed,
+                    use_policy_search_targets=use_policy_search_targets,
                     is_validation=True,  # Enable validation-specific behavior
                     shutdown_handler=shutdown_handler
                 )
@@ -749,6 +752,20 @@ def run_hyperparameter_tuning_current_data(
     
     # Get batch_size from hyperparameters for the first experiment (they should all be the same)
     batch_size = experiments[0]['hyperparameters'].get('batch_size', 256) if experiments else 256
+    use_policy_search_targets = bool(
+        experiments[0]['hyperparameters'].get('use_policy_search_targets', False)
+    ) if experiments else False
+
+    # Dataset policy-target mode is shared across experiments because we create one
+    # streaming dataset/DataLoader pair for the full run.
+    for exp in experiments:
+        exp_mode = bool(exp['hyperparameters'].get('use_policy_search_targets', False))
+        if exp_mode != use_policy_search_targets:
+            raise ValueError(
+                "All experiments in a single run must share use_policy_search_targets, "
+                f"but found mixed values (first={use_policy_search_targets}, "
+                f"experiment {exp.get('experiment_name', '<unknown>')}={exp_mode})."
+            )
     
     # Create datasets using the new mixed shard approach
     if concise_restart_logging:
@@ -773,6 +790,7 @@ def run_hyperparameter_tuning_current_data(
         max_memory_gb=max_memory_gb,
         random_seed=random_seed,
         verbose=0 if concise_restart_logging else verbose,
+        use_policy_search_targets=use_policy_search_targets,
         concise_restart_logging=concise_restart_logging,
         shutdown_handler=shutdown_handler
     )
@@ -780,6 +798,12 @@ def run_hyperparameter_tuning_current_data(
         logger.info("Restart setup: Dataset initialization complete.")
     else:
         logger.info("Datasets created. Done.")
+    logger.info(
+        "Policy target source for training: %s",
+        "policy_search_target (MCTS distribution)"
+        if use_policy_search_targets
+        else "policy (played move one-hot)",
+    )
     
     # Log dataset information
     if concise_restart_logging:
@@ -846,6 +870,7 @@ def run_hyperparameter_tuning_current_data(
                     'target_end_epoch': target_end_epoch,
                     'allow_missing_stream_sidecar_fallback': allow_missing_stream_sidecar_fallback,
                     'skip_shard_range_validation': skip_shard_range_validation,
+                    'use_policy_search_targets': use_policy_search_targets,
                 }
             )
             

@@ -813,11 +813,16 @@ class TrainingStep:
             "max_grad_norm": "--max-grad-norm",
             "value_learning_rate_factor": "--value-learning-rate-factor",
             "value_weight_decay_factor": "--value-weight-decay-factor",
+            "use_policy_search_targets": "--use-policy-search-targets",
         }
         for key, arg_name in override_arg_map.items():
             values = self.config.hyperparameter_overrides.get(key)
             if values:
-                cmd.extend([arg_name, str(values[0])])
+                if key == "use_policy_search_targets":
+                    if bool(values[0]):
+                        cmd.append(arg_name)
+                else:
+                    cmd.extend([arg_name, str(values[0])])
 
         return cmd
 
@@ -1434,6 +1439,11 @@ Examples:
     parser.add_argument("--max-grad-norm", type=float, help="Override max gradient norm")
     parser.add_argument("--value-learning-rate-factor", type=float, help="Override value learning rate factor")
     parser.add_argument("--value-weight-decay-factor", type=float, help="Override value weight decay factor")
+    parser.add_argument(
+        "--use-policy-search-targets",
+        action="store_true",
+        help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
+    )
     
     # Pipeline control
     parser.add_argument("--run-game-collection", action="store_true", help="Run game collection from multiple sources")
@@ -1533,6 +1543,8 @@ def main():
             hyperparameter_overrides["value_learning_rate_factor"] = [args.value_learning_rate_factor]
         if args.value_weight_decay_factor is not None:
             hyperparameter_overrides["value_weight_decay_factor"] = [args.value_weight_decay_factor]
+        if args.use_policy_search_targets:
+            hyperparameter_overrides["use_policy_search_targets"] = [True]
 
         # Create configuration
         config = PipelineConfig(

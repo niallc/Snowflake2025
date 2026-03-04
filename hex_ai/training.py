@@ -19,7 +19,6 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
@@ -592,42 +591,58 @@ class PolicyValueLoss(nn.Module):
             mean_legal = (logits.clamp_min(-1e3) * legal_mask).sum(dim=1, keepdim=True) / denom
         logits = torch.where(legal_mask, logits - mean_legal, logits)
         
-        # ----- Policy loss with label smoothing over legal moves -----
-        B, V = logits.shape
-        target_indices = policy_target.argmax(dim=1)  # (batch_size,)
-        
-        # CRITICAL: Check for target-mask mismatch and handle illegal targets
-        batch = torch.arange(B, device=logits.device)
-        target_is_legal = legal_mask[batch, target_indices]  # (B,)
-        bad_count = int((~target_is_legal).sum().item())
-        
-        if bad_count > 0:
-            # CRITICAL: This is a bug that needs to be found and fixed!
-            # Don't mask the error - fail immediately with detailed debugging info
-            self._debug_illegal_targets(board, policy_target, legal_mask, target_indices, target_is_legal)
+        # ----- Policy loss with optional soft targets over legal moves -----
+        if policy_target.ndim != 2 or policy_target.shape != logits.shape:
             raise RuntimeError(
-                f"CRITICAL BUG: Found {bad_count} samples with illegal targets out of {B} total samples! "
-                f"This indicates a data pipeline issue where policy targets point to illegal moves. "
-                f"Training stopped to prevent silent failures. Check debug output above for details."
+                "CRITICAL BUG: policy_target shape mismatch in _compute_policy_loss(). "
+                f"Expected {tuple(logits.shape)}, got {tuple(policy_target.shape)}"
             )
-        
-        # All targets are legal - proceed with normal computation
+
+        target = policy_target.to(dtype=logits.dtype)
+        if not torch.isfinite(target).all():
+            raise RuntimeError(
+                "CRITICAL BUG: policy_target contains non-finite values in _compute_policy_loss()."
+            )
+        if (target < 0).any():
+            raise RuntimeError(
+                "CRITICAL BUG: policy_target contains negative values in _compute_policy_loss()."
+            )
+
+        target_mass = target.sum(dim=1, keepdim=True)  # (batch_size, 1)
+        if (target_mass <= 0).any():
+            raise RuntimeError(
+                "CRITICAL BUG: policy_target has non-positive probability mass in _compute_policy_loss(). "
+                "Zero-vector targets should have been filtered before this call."
+            )
+        target = target / target_mass.clamp_min(1e-12)
+
+        B, _V = logits.shape
+        batch = torch.arange(B, device=logits.device)
+        illegal_mass = (target * (~legal_mask).float()).sum(dim=1)  # (batch_size,)
+        illegal_target_samples = illegal_mass > 1e-6
+        bad_count = int(illegal_target_samples.sum().item())
+        if bad_count > 0:
+            target_indices = target.argmax(dim=1)
+            target_is_legal = legal_mask[batch, target_indices]
+            self._debug_illegal_targets(
+                board, target, legal_mask, target_indices, target_is_legal
+            )
+            max_illegal_mass = float(illegal_mass[illegal_target_samples].max().item())
+            raise RuntimeError(
+                f"CRITICAL BUG: Found {bad_count} samples with illegal policy-target mass out of {B} total samples "
+                f"(max illegal mass={max_illegal_mass:.6e}). "
+                "This indicates a data pipeline issue where policy targets include illegal moves. "
+                "Training stopped to prevent silent failures. Check debug output above for details."
+            )
+
         if self.label_smoothing > 0:
-            # Build smoothed targets strictly over legal moves
-            target = torch.zeros_like(logits)
-            target[batch, target_indices] = 1.0
-            
             legal_counts = legal_mask.sum(dim=1).clamp_min(1)
             epsilon = self.label_smoothing
-            # Uniform over legal moves
             uniform = legal_mask.float() / legal_counts.unsqueeze(1)
-            # Final smoothed distribution
             target = (1 - epsilon) * target + epsilon * uniform
-            
-            logp = torch.log_softmax(logits, dim=1)
-            policy_loss = -(target * logp).sum(dim=1).mean()
-        else:
-            policy_loss = F.cross_entropy(logits, target_indices, reduction='mean')
+
+        logp = torch.log_softmax(logits, dim=1)
+        policy_loss = -(target * logp).sum(dim=1).mean()
         
         # ----- Entropy bonus (encourages spread) -----
         if self.entropy_weight > 0:
@@ -757,7 +772,8 @@ class Trainer:
                  run_timestamp: Optional[str] = None,
                  shutdown_handler=None,
                  betas: Tuple[float, float] = (0.9, 0.999),
-                 eps: float = 1e-8):
+                 eps: float = 1e-8,
+                 use_policy_search_targets: bool = False):
         """
         Args:
             model: The neural network model to train.
@@ -781,6 +797,8 @@ class Trainer:
             run_timestamp: Optional timestamp for the entire run to use in log filenames
             betas: Coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
             eps: Term added to the denominator to improve numerical stability (default: 1e-8)
+            use_policy_search_targets: If True, training expects data loader policy
+                tensors to come from per-position MCTS search targets.
 
         """
         if device is None:
@@ -793,6 +811,7 @@ class Trainer:
         self.max_grad_norm = max_grad_norm
         self.run_timestamp = run_timestamp
         self.shutdown_handler = shutdown_handler
+        self.use_policy_search_targets = bool(use_policy_search_targets)
 
         
         # Store hyperparameters for logging
@@ -962,6 +981,18 @@ class Trainer:
         logger.info(f"Initialized trainer with streaming DataLoader (batches unknown)")
         if val_loader:
             logger.info(f"Validation set with streaming DataLoader (batches unknown)")
+        logger.info(
+            "Trainer policy target source: %s",
+            "policy_search_target (MCTS distribution)"
+            if self.use_policy_search_targets
+            else "policy (played move one-hot)",
+        )
+        if self.use_policy_search_targets and label_smoothing > 0:
+            logger.info(
+                "Label smoothing is enabled (%.4f) while using policy_search_target; "
+                "training targets will be smoothed over legal moves.",
+                label_smoothing,
+            )
         
         # Log parameter group info
         logger.info(f"Value head learning rate: {learning_rate * value_learning_rate_factor:.6f} (factor: {value_learning_rate_factor})")

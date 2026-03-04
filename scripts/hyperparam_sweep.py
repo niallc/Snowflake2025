@@ -227,6 +227,11 @@ Examples:
     parser.add_argument("--target_samples_per_mini_epoch", type=int, default=TARGET_SAMPLES_PER_MINI_EPOCH,
                        help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
+    parser.add_argument(
+        "--use-policy-search-targets",
+        action="store_true",
+        help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
+    )
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
     parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
@@ -322,6 +327,8 @@ Examples:
         config = dict(config)  # Make a copy to avoid mutating the sweep dict
         if "policy_weight" in config:
             config["value_weight"] = 1.0 - config["policy_weight"]
+        if args.use_policy_search_targets:
+            config["use_policy_search_targets"] = True
         exp_name = make_experiment_name(config, i, tag = "loss_weight_sweep")
         experiments.append({
             'experiment_name': exp_name,

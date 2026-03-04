@@ -38,6 +38,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
     "trunk_channels": [128],  # Number of channels in trunk
     "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
+    "use_policy_search_targets": [False],  # Consume per-position MCTS policy targets when available
     
     # Note: Value head parameters (bottleneck_channels=32, hidden_dim=256, k_outputs=4) 
     # are currently fixed in the architecture but could be made configurable later
@@ -58,6 +59,7 @@ HYPERPARAMETER_SHORT_LABELS = {
     "trunk_channels": "tc",
     "betas": "betas",
     "eps": "eps",
+    "use_policy_search_targets": "psrch",
 }
 
 
