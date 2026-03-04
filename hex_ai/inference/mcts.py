@@ -724,6 +724,9 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_selected_tensor_action = None
         self._gumbel_final_rank_top_move_trmph = None
         self._gumbel_final_rank_top5 = None
+        self._gumbel_final_rank_rows = None
+        self._gumbel_final_score_gap_top1_top2 = None
+        self._gumbel_final_score_gap_top1_top3 = None
         self._gumbel_v_pi_01 = None
         self._gumbel_nn_calls_per_move = 0
         self._gumbel_total_leaves_evaluated = 0
@@ -804,6 +807,9 @@ class BaselineMCTS(MCTSGumbelMixin):
                 "gumbel_final_rank_top_move": self._gumbel_final_rank_top_move_trmph,
                 "gumbel_v_pi_01": self._gumbel_v_pi_01,
                 "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
+                "gumbel_final_rank_rows": self._gumbel_final_rank_rows,
+                "gumbel_final_score_gap_top1_top2": self._gumbel_final_score_gap_top1_top2,
+                "gumbel_final_score_gap_top1_top3": self._gumbel_final_score_gap_top1_top3,
             })
 
         return MCTSResult(

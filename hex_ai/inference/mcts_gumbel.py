@@ -509,6 +509,35 @@ class MCTSGumbelMixin:
             final_rows = self._decorate_gumbel_score_rows_with_moves(final_rows_raw, board_size)
             self._gumbel_final_rank_top5 = final_rows[:5] if final_rows else None
             self._gumbel_final_rank_top_move_trmph = final_rows[0]["move"] if final_rows else None
+            compact_rows: List[Dict[str, Any]] = []
+            for row in final_rows_raw:
+                action = row.get("tensor_action", None)
+                score_without_gumbel = row.get("score_without_gumbel", None)
+                if action is None or score_without_gumbel is None:
+                    continue
+                compact_rows.append(
+                    {
+                        "tensor_action": int(action),
+                        "score_without_gumbel": float(score_without_gumbel),
+                    }
+                )
+            self._gumbel_final_rank_rows = compact_rows if compact_rows else None
+
+            if compact_rows and len(compact_rows) >= 2:
+                self._gumbel_final_score_gap_top1_top2 = float(
+                    compact_rows[0]["score_without_gumbel"]
+                    - compact_rows[1]["score_without_gumbel"]
+                )
+            else:
+                self._gumbel_final_score_gap_top1_top2 = None
+
+            if compact_rows and len(compact_rows) >= 3:
+                self._gumbel_final_score_gap_top1_top3 = float(
+                    compact_rows[0]["score_without_gumbel"]
+                    - compact_rows[2]["score_without_gumbel"]
+                )
+            else:
+                self._gumbel_final_score_gap_top1_top3 = None
 
             if self.detailed_exploration_enabled:
                 dive_actions: List[int] = []
@@ -544,6 +573,9 @@ class MCTSGumbelMixin:
             # Best-effort debug only: do not risk crashing inference due to debug formatting.
             self._gumbel_final_rank_top5 = None
             self._gumbel_final_rank_top_move_trmph = None
+            self._gumbel_final_rank_rows = None
+            self._gumbel_final_score_gap_top1_top2 = None
+            self._gumbel_final_score_gap_top1_top3 = None
             self._gumbel_v_pi_01 = None
 
     def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int,

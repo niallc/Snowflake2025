@@ -454,6 +454,13 @@ class SelfPlayEngine:
             'batch_count': 0,
             'batch_size_sum': 0.0,
             'algorithm_termination_reason_counts': {},
+            'gumbel_moves': 0,
+            'gumbel_score_gap_top1_top2_sum': 0.0,
+            'gumbel_score_gap_top1_top2_count': 0,
+            'gumbel_score_gap_top1_top2_min': None,
+            'gumbel_score_gap_top1_top2_max': None,
+            'gumbel_score_gap_top1_top3_sum': 0.0,
+            'gumbel_score_gap_top1_top3_count': 0,
         }
         
         # Streaming save setup
@@ -769,9 +776,14 @@ class SelfPlayEngine:
                 if self.write_provenance:
                     provenance_code = self._get_move_provenance_code(mcts_result.stats)
                     move_provenance_codes.append(provenance_code)
-                    if provenance_code in {
+                    if provenance_code == MOVE_CODE_GUMBEL_ROOT:
+                        policy_target_rows.append(
+                            self._build_policy_target_vector_from_gumbel_final_scores(
+                                mcts_result, board_size=board_size
+                            )
+                        )
+                    elif provenance_code in {
                         MOVE_CODE_VISIT_COUNT,
-                        MOVE_CODE_GUMBEL_ROOT,
                         MOVE_CODE_TERMINAL_TERMINATION,
                     }:
                         policy_target_rows.append(
@@ -912,8 +924,7 @@ class SelfPlayEngine:
         """
         Build dense policy-target row from MCTS root visit distribution.
 
-        This is additive Phase-A instrumentation and does not change active training
-        behavior yet; training still consumes the legacy `policy` field from TRMPH extraction.
+        Used for non-Gumbel MCTS sources (`V`/`T`).
         """
         tree_data = mcts_result.tree_data or {}
         mcts_probs_raw = tree_data.get("mcts_probabilities")
@@ -943,6 +954,92 @@ class SelfPlayEngine:
                 "MCTS policy target vector has zero mass despite trainable MCTS move source."
             )
         if not np.isclose(total, 1.0, atol=1e-5):
+            vec /= total
+        return vec
+
+    def _build_policy_target_vector_from_gumbel_final_scores(
+        self, mcts_result: Any, *, board_size: int
+    ) -> np.ndarray:
+        """
+        Build dense policy target from final noise-free Gumbel ranking scores.
+
+        Contract:
+        - Uses `stats["gumbel_final_rank_rows"]` entries (tensor_action + score_without_gumbel).
+        - Applies softmax over the scored action set only.
+        - Leaves all non-scored legal actions at probability 0.
+        - Enforces that the top score action is exactly the selected move.
+        """
+        stats = getattr(mcts_result, "stats", {}) or {}
+        rows = stats.get("gumbel_final_rank_rows")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(
+                "Gumbel move is missing gumbel_final_rank_rows in MCTS stats; "
+                "cannot build Gumbel-specific policy target."
+            )
+
+        action_count = board_size * board_size
+        action_indices: List[int] = []
+        raw_scores: List[float] = []
+        seen_indices: set[int] = set()
+
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TypeError(
+                    f"gumbel_final_rank_rows entries must be dict, got {type(row)}"
+                )
+            action_raw = row.get("tensor_action")
+            score_raw = row.get("score_without_gumbel")
+            if action_raw is None or score_raw is None:
+                raise ValueError(
+                    "gumbel_final_rank_rows entries must include tensor_action and score_without_gumbel"
+                )
+            action_idx = int(action_raw)
+            if action_idx < 0 or action_idx >= action_count:
+                raise ValueError(
+                    f"Invalid tensor_action {action_idx} for board size {board_size}"
+                )
+            if action_idx in seen_indices:
+                raise ValueError(
+                    f"Duplicate tensor_action {action_idx} in gumbel_final_rank_rows"
+                )
+            score = float(score_raw)
+            if not np.isfinite(score):
+                raise ValueError(
+                    f"Non-finite score_without_gumbel for tensor_action {action_idx}: {score_raw!r}"
+                )
+            seen_indices.add(action_idx)
+            action_indices.append(action_idx)
+            raw_scores.append(score)
+
+        selected_move = mcts_result.move
+        selected_idx = rowcol_to_tensor_with_size(
+            int(selected_move[0]), int(selected_move[1]), board_size
+        )
+        top_idx = action_indices[int(np.argmax(np.asarray(raw_scores, dtype=np.float64)))]
+        if selected_idx != top_idx:
+            raise RuntimeError(
+                "Gumbel target construction mismatch: selected move is not the top noise-free "
+                f"Gumbel score action (selected={selected_idx}, top={top_idx})."
+            )
+
+        scores_arr = np.asarray(raw_scores, dtype=np.float64)
+        max_score = float(np.max(scores_arr))
+        exp_scores = np.exp(scores_arr - max_score)
+        exp_sum = float(np.sum(exp_scores))
+        if exp_sum <= 0.0 or not np.isfinite(exp_sum):
+            raise RuntimeError(
+                "Invalid Gumbel final-score normalization (non-positive/invalid softmax denominator)."
+            )
+        probs = exp_scores / exp_sum
+
+        vec = np.zeros(action_count, dtype=np.float32)
+        for action_idx, prob in zip(action_indices, probs):
+            vec[action_idx] = float(prob)
+
+        total = float(vec.sum())
+        if total <= 0.0:
+            raise RuntimeError("Gumbel policy target vector has zero mass.")
+        if not np.isclose(total, 1.0, atol=1e-6):
             vec /= total
         return vec
 
@@ -1416,6 +1513,33 @@ class SelfPlayEngine:
         counts = aggregate['algorithm_termination_reason_counts']
         counts[reason] = counts.get(reason, 0) + 1
 
+        if str(stats.get("selected_move_source", "")) == "gumbel_root":
+            aggregate['gumbel_moves'] += 1
+
+            gap_top12 = self._safe_float(
+                stats.get("gumbel_final_score_gap_top1_top2"),
+                default=float("nan"),
+            )
+            if np.isfinite(gap_top12):
+                aggregate['gumbel_score_gap_top1_top2_sum'] += float(gap_top12)
+                aggregate['gumbel_score_gap_top1_top2_count'] += 1
+                min_gap = aggregate['gumbel_score_gap_top1_top2_min']
+                max_gap = aggregate['gumbel_score_gap_top1_top2_max']
+                aggregate['gumbel_score_gap_top1_top2_min'] = (
+                    float(gap_top12) if min_gap is None else min(float(min_gap), float(gap_top12))
+                )
+                aggregate['gumbel_score_gap_top1_top2_max'] = (
+                    float(gap_top12) if max_gap is None else max(float(max_gap), float(gap_top12))
+                )
+
+            gap_top13 = self._safe_float(
+                stats.get("gumbel_final_score_gap_top1_top3"),
+                default=float("nan"),
+            )
+            if np.isfinite(gap_top13):
+                aggregate['gumbel_score_gap_top1_top3_sum'] += float(gap_top13)
+                aggregate['gumbel_score_gap_top1_top3_count'] += 1
+
     def _build_mcts_summary_stats(self) -> Dict[str, Any]:
         """Return normalized process-level MCTS summary stats."""
         aggregate = self.mcts_run_stats
@@ -1427,6 +1551,9 @@ class SelfPlayEngine:
         batch_size_sum = float(aggregate['batch_size_sum'])
         reason_counts = aggregate['algorithm_termination_reason_counts']
         sorted_reason_counts = dict(sorted(reason_counts.items()))
+
+        gap_top12_count = int(aggregate['gumbel_score_gap_top1_top2_count'])
+        gap_top13_count = int(aggregate['gumbel_score_gap_top1_top3_count'])
 
         return {
             'moves_searched': moves_searched,
@@ -1440,6 +1567,21 @@ class SelfPlayEngine:
             'batch_count': total_batches,
             'avg_batch_size': batch_size_sum / max(1, total_batches),
             'algorithm_termination_reason_counts': sorted_reason_counts,
+            'gumbel_moves': int(aggregate['gumbel_moves']),
+            'gumbel_score_gap_top1_top2_avg': (
+                float(aggregate['gumbel_score_gap_top1_top2_sum']) / max(1, gap_top12_count)
+                if gap_top12_count > 0
+                else None
+            ),
+            'gumbel_score_gap_top1_top2_min': aggregate['gumbel_score_gap_top1_top2_min'],
+            'gumbel_score_gap_top1_top2_max': aggregate['gumbel_score_gap_top1_top2_max'],
+            'gumbel_score_gap_top1_top2_count': gap_top12_count,
+            'gumbel_score_gap_top1_top3_avg': (
+                float(aggregate['gumbel_score_gap_top1_top3_sum']) / max(1, gap_top13_count)
+                if gap_top13_count > 0
+                else None
+            ),
+            'gumbel_score_gap_top1_top3_count': gap_top13_count,
         }
 
     def print_mcts_run_summary(self) -> None:
@@ -1469,6 +1611,24 @@ class SelfPlayEngine:
         else:
             reason_summary = "none"
         print(f"Algorithm termination reasons: {reason_summary}")
+        gumbel_moves = int(stats.get('gumbel_moves', 0))
+        if gumbel_moves > 0:
+            gap12_avg = stats.get('gumbel_score_gap_top1_top2_avg')
+            gap12_min = stats.get('gumbel_score_gap_top1_top2_min')
+            gap12_max = stats.get('gumbel_score_gap_top1_top2_max')
+            gap12_count = int(stats.get('gumbel_score_gap_top1_top2_count', 0))
+            gap13_avg = stats.get('gumbel_score_gap_top1_top3_avg')
+            gap13_count = int(stats.get('gumbel_score_gap_top1_top3_count', 0))
+            print(
+                "Gumbel score gaps: "
+                f"moves={gumbel_moves}, "
+                f"top1-top2 avg={gap12_avg if gap12_avg is not None else float('nan'):.6f}, "
+                f"min={gap12_min if gap12_min is not None else float('nan'):.6f}, "
+                f"max={gap12_max if gap12_max is not None else float('nan'):.6f}, "
+                f"samples={gap12_count}; "
+                f"top1-top3 avg={gap13_avg if gap13_avg is not None else float('nan'):.6f}, "
+                f"samples={gap13_count}"
+            )
         print("================================\n")
 
     def _simple_inference_summary_has_activity(self) -> bool:

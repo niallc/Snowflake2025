@@ -11,6 +11,7 @@ import os
 import gzip
 import pickle
 import json
+from types import SimpleNamespace
 import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from hex_ai.move_provenance import (
     MOVE_PROVENANCE_SCHEMA_VERSION_V2,
     sidecar_path_for_trmph,
 )
+from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.trmph_processing.processor import TRMPHProcessor
 from hex_ai.trmph_processing.config import ProcessingConfig
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
@@ -947,3 +949,41 @@ class TestTRMPHProcessor:
             assert isinstance(search_target, np.ndarray)
             assert search_target.shape == (169,)
             np.testing.assert_allclose(search_target, targets[pos], rtol=1e-3, atol=1e-3)
+
+    def test_gumbel_policy_target_vector_uses_final_scores_and_normalizes(self):
+        """Gumbel policy target should be softmax(score_without_gumbel) over ranked actions."""
+        engine = SelfPlayEngine.__new__(SelfPlayEngine)
+        rows = [
+            {"tensor_action": 10, "score_without_gumbel": 2.0},
+            {"tensor_action": 5, "score_without_gumbel": 1.0},
+            {"tensor_action": 7, "score_without_gumbel": 0.0},
+        ]
+        mcts_result = SimpleNamespace(
+            move=(0, 10),  # tensor action 10 on 13x13 board
+            stats={"gumbel_final_rank_rows": rows},
+        )
+
+        vec = engine._build_policy_target_vector_from_gumbel_final_scores(
+            mcts_result, board_size=13
+        )
+        assert vec.shape == (169,)
+        assert np.isclose(float(vec.sum()), 1.0, atol=1e-6)
+        assert vec[10] > vec[5] > vec[7]
+        assert vec[3] == 0.0
+
+    def test_gumbel_policy_target_vector_fails_if_selected_move_not_top_score(self):
+        """Fail fast when selected move does not match top final noise-free Gumbel score."""
+        engine = SelfPlayEngine.__new__(SelfPlayEngine)
+        rows = [
+            {"tensor_action": 10, "score_without_gumbel": 2.0},
+            {"tensor_action": 5, "score_without_gumbel": 1.0},
+        ]
+        mcts_result = SimpleNamespace(
+            move=(0, 5),  # selected action is not top score action
+            stats={"gumbel_final_rank_rows": rows},
+        )
+
+        with pytest.raises(RuntimeError, match="selected move is not the top noise-free"):
+            engine._build_policy_target_vector_from_gumbel_final_scores(
+                mcts_result, board_size=13
+            )
