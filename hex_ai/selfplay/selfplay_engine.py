@@ -1139,6 +1139,30 @@ class SelfPlayEngine:
                 raise ValueError(
                     f"policy_targets_matrix contains non-finite values{game_info}"
                 )
+            if move_codes is not None:
+                trainable_codes = {
+                    MOVE_CODE_VISIT_COUNT,
+                    MOVE_CODE_GUMBEL_ROOT,
+                    MOVE_CODE_TERMINAL_TERMINATION,
+                }
+                row_sums = policy_targets_matrix.sum(axis=1, dtype=np.float64)
+                bad_rows = []
+                for position, code in enumerate(move_codes):
+                    if code in trainable_codes and float(row_sums[position]) <= 1e-12:
+                        bad_rows.append((position, code, float(row_sums[position])))
+
+                if bad_rows:
+                    game_info = f" (game {game_id})" if game_id is not None else ""
+                    preview = ", ".join(
+                        f"pos={pos}, code={code}, sum={row_sum:.6e}"
+                        for pos, code, row_sum in bad_rows[:8]
+                    )
+                    if len(bad_rows) > 8:
+                        preview += f", ... ({len(bad_rows)} total)"
+                    raise ValueError(
+                        "policy_targets_matrix has non-positive probability mass for "
+                        f"trainable move codes{game_info}: {preview}"
+                    )
 
         policy_target_source_codes = game_data.get("policy_target_source_codes")
         if policy_target_source_codes is not None:

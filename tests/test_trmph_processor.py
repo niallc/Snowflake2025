@@ -987,3 +987,41 @@ class TestTRMPHProcessor:
             engine._build_policy_target_vector_from_gumbel_final_scores(
                 mcts_result, board_size=13
             )
+
+    def test_validate_game_data_fails_for_zero_mass_trainable_policy_row(self):
+        """Self-play output validation should fail when a trainable V/G/T row has zero mass."""
+        engine = SelfPlayEngine.__new__(SelfPlayEngine)
+        engine.board_size = 13
+        engine.write_provenance = True
+
+        policy_targets = np.zeros((2, 169), dtype=np.float32)
+        # Row 0 corresponds to trainable code 'V' but has zero probability mass.
+        # Row 1 corresponds to masked code 'C' and may be zero.
+        game_data = {
+            "trmph": "#13,a1b2",
+            "winner": TRMPH_BLUE_WIN,
+            "move_provenance_codes": "VC",
+            "policy_targets_matrix": policy_targets,
+            "policy_target_source_codes": "VC",
+        }
+
+        with pytest.raises(ValueError, match="trainable move codes"):
+            engine._validate_game_data(game_data)
+
+    def test_validate_game_data_allows_zero_mass_masked_policy_row(self):
+        """Masked C rows may be zero-mass as long as trainable rows have positive mass."""
+        engine = SelfPlayEngine.__new__(SelfPlayEngine)
+        engine.board_size = 13
+        engine.write_provenance = True
+
+        policy_targets = np.zeros((2, 169), dtype=np.float32)
+        policy_targets[0, 0] = 1.0
+        game_data = {
+            "trmph": "#13,a1b2",
+            "winner": TRMPH_BLUE_WIN,
+            "move_provenance_codes": "VC",
+            "policy_targets_matrix": policy_targets,
+            "policy_target_source_codes": "VC",
+        }
+
+        engine._validate_game_data(game_data)
