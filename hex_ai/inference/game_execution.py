@@ -28,8 +28,17 @@ from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.inference.tournament import TournamentResult as BaseTournamentResult
 from hex_ai.inference.model_cache import create_temporary_model_cache
+from hex_ai.move_provenance import (
+    MOVE_CODE_CONFIDENCE_TERMINATION,
+    MOVE_CODE_GUMBEL_ROOT,
+    MOVE_CODE_TERMINAL_TERMINATION,
+    MOVE_CODE_VISIT_COUNT,
+)
 from hex_ai.utils.format_conversion import (
-    rowcol_to_trmph, trmph_to_moves
+    rowcol_to_tensor_with_size,
+    rowcol_to_trmph,
+    trmph_to_moves,
+    trmph_to_tensor,
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
 from hex_ai.utils.deterministic_tournament_utils import (
@@ -60,6 +69,18 @@ DEFAULT_VERBOSE = 1
 OUTPUT_DIR_PREFIX = "data/tournament_play/tournament_"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 TRMPH_FILE_PATTERN = "*.trmph"
+POLICY_TARGET_CONSTRUCTION_VERSION = 1
+
+TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
+TOURNAMENT_SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
+    "visit_counts": MOVE_CODE_VISIT_COUNT,
+    "gumbel_root": MOVE_CODE_GUMBEL_ROOT,
+    "neural_network_confidence": MOVE_CODE_CONFIDENCE_TERMINATION,
+    "terminal_move": MOVE_CODE_TERMINAL_TERMINATION,
+    # Non-selfplay strategy paths used by tournament wrappers.
+    "policy_only": MOVE_CODE_CONFIDENCE_TERMINATION,
+    "fixed_tree_search": MOVE_CODE_CONFIDENCE_TERMINATION,
+}
 
 
 class DeterministicTournamentResult(BaseTournamentResult):
@@ -449,6 +470,156 @@ def select_random_openings(
     return selected_openings
 
 
+def _zero_policy_target_vector(board_size: int) -> np.ndarray:
+    """Return all-zero policy-target row for non-trainable moves."""
+    return np.zeros(board_size * board_size, dtype=np.float32)
+
+
+def _one_hot_policy_target_vector(move: Tuple[int, int], board_size: int) -> np.ndarray:
+    """Return one-hot policy target row for a selected move."""
+    row, col = move
+    idx = rowcol_to_tensor_with_size(int(row), int(col), board_size)
+    vec = np.zeros(board_size * board_size, dtype=np.float32)
+    vec[idx] = 1.0
+    return vec
+
+
+def _build_policy_target_vector_from_mcts_result(
+    mcts_result: Any, *, board_size: int
+) -> np.ndarray:
+    """Build dense policy-target row from MCTS root visit distribution."""
+    tree_data = getattr(mcts_result, "tree_data", {}) or {}
+    mcts_probs_raw = tree_data.get("mcts_probabilities")
+    if not isinstance(mcts_probs_raw, dict):
+        raise ValueError(
+            "MCTS result missing mcts_probabilities dict in tree_data; "
+            "cannot build policy target vector."
+        )
+
+    vec = np.zeros(board_size * board_size, dtype=np.float32)
+    for move_trmph, prob_raw in mcts_probs_raw.items():
+        if not isinstance(move_trmph, str):
+            raise TypeError(
+                f"mcts_probabilities key must be str move, got {type(move_trmph)}"
+            )
+        prob = float(prob_raw)
+        if not np.isfinite(prob) or prob < 0.0:
+            raise ValueError(
+                f"Invalid probability for move {move_trmph!r}: {prob_raw!r}"
+            )
+        tensor_idx = trmph_to_tensor(move_trmph, board_size=board_size)
+        vec[tensor_idx] = prob
+
+    total = float(vec.sum())
+    if total <= 0.0:
+        raise RuntimeError(
+            "MCTS policy target vector has zero mass despite trainable MCTS move source."
+        )
+    if not np.isclose(total, 1.0, atol=1e-5):
+        vec /= total
+    return vec
+
+
+def _build_policy_target_vector_from_gumbel_final_scores(
+    mcts_result: Any, *, board_size: int
+) -> np.ndarray:
+    """
+    Build dense policy target from final noise-free Gumbel ranking scores.
+
+    Contract:
+    - Uses `stats["gumbel_final_rank_rows"]` entries (tensor_action + score_without_gumbel).
+    - Applies softmax over the scored action set only.
+    - Leaves all non-scored legal actions at probability 0.
+    - Enforces that the top score action is exactly the selected move.
+    """
+    stats = getattr(mcts_result, "stats", {}) or {}
+    rows = stats.get("gumbel_final_rank_rows")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(
+            "Gumbel move is missing gumbel_final_rank_rows in MCTS stats; "
+            "cannot build Gumbel-specific policy target."
+        )
+
+    action_count = board_size * board_size
+    action_indices: List[int] = []
+    raw_scores: List[float] = []
+    seen_indices: set[int] = set()
+
+    for row in rows:
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"gumbel_final_rank_rows entries must be dict, got {type(row)}"
+            )
+        action_raw = row.get("tensor_action")
+        score_raw = row.get("score_without_gumbel")
+        if action_raw is None or score_raw is None:
+            raise ValueError(
+                "gumbel_final_rank_rows entries must include tensor_action and score_without_gumbel"
+            )
+        action_idx = int(action_raw)
+        if action_idx < 0 or action_idx >= action_count:
+            raise ValueError(
+                f"Invalid tensor_action {action_idx} for board size {board_size}"
+            )
+        if action_idx in seen_indices:
+            raise ValueError(
+                f"Duplicate tensor_action {action_idx} in gumbel_final_rank_rows"
+            )
+        score = float(score_raw)
+        if not np.isfinite(score):
+            raise ValueError(
+                f"Non-finite score_without_gumbel for tensor_action {action_idx}: {score_raw!r}"
+            )
+        seen_indices.add(action_idx)
+        action_indices.append(action_idx)
+        raw_scores.append(score)
+
+    selected_move = mcts_result.move
+    selected_idx = rowcol_to_tensor_with_size(
+        int(selected_move[0]), int(selected_move[1]), board_size
+    )
+    top_idx = action_indices[int(np.argmax(np.asarray(raw_scores, dtype=np.float64)))]
+    if selected_idx != top_idx:
+        raise RuntimeError(
+            "Gumbel target construction mismatch: selected move is not the top noise-free "
+            f"Gumbel score action (selected={selected_idx}, top={top_idx})."
+        )
+
+    scores_arr = np.asarray(raw_scores, dtype=np.float64)
+    max_score = float(np.max(scores_arr))
+    exp_scores = np.exp(scores_arr - max_score)
+    exp_sum = float(np.sum(exp_scores))
+    if exp_sum <= 0.0 or not np.isfinite(exp_sum):
+        raise RuntimeError(
+            "Invalid Gumbel final-score normalization (non-positive/invalid softmax denominator)."
+        )
+    probs = exp_scores / exp_sum
+
+    vec = np.zeros(action_count, dtype=np.float32)
+    for action_idx, prob in zip(action_indices, probs):
+        vec[action_idx] = float(prob)
+
+    total = float(vec.sum())
+    if total <= 0.0:
+        raise RuntimeError("Gumbel policy target vector has zero mass.")
+    if not np.isclose(total, 1.0, atol=1e-6):
+        vec /= total
+    return vec
+
+
+def _resolve_provenance_code_from_selected_move_source(source_raw: Any) -> str:
+    source = str(source_raw).strip() if source_raw is not None else ""
+    if not source:
+        raise ValueError("Missing selected_move_source while building tournament policy targets.")
+    code = TOURNAMENT_SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE.get(source)
+    if code is None:
+        raise ValueError(
+            f"Unsupported selected_move_source {source!r}. "
+            f"Expected one of {sorted(TOURNAMENT_SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE.keys())}."
+        )
+    return code
+
+
 def play_deterministic_game(
     model_cache,
     strategy_a: StrategyConfig,
@@ -495,6 +666,13 @@ def play_deterministic_game(
     
     # Play the game from the opening position
     move_sequence = list(opening.moves)  # Start with opening moves
+    move_provenance_codes: List[str] = []
+    policy_target_rows: List[np.ndarray] = []
+    for opening_move in opening.moves:
+        move_provenance_codes.append(MOVE_CODE_VISIT_COUNT)
+        policy_target_rows.append(
+            _one_hot_policy_target_vector(opening_move, board_size)
+        )
     
     logger.debug(f"Starting game: {strategy_a.name} vs {strategy_b.name}")
     logger.debug(f"Opening moves: {opening.moves}")
@@ -543,6 +721,47 @@ def play_deterministic_game(
         move_time = end_time - start_time
         strategy_timings[strategy_name] += move_time
         move_count += 1
+
+        move_metadata = strategy_obj.pop_last_move_metadata()
+        if move_metadata is None:
+            # Conservative fallback for strategy implementations that do not expose
+            # per-move diagnostics: keep row non-trainable.
+            provenance_code = TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE
+            policy_target = _zero_policy_target_vector(board_size)
+        else:
+            provenance_code = _resolve_provenance_code_from_selected_move_source(
+                move_metadata.get("selected_move_source")
+            )
+            if provenance_code == MOVE_CODE_GUMBEL_ROOT:
+                mcts_result = move_metadata.get("mcts_result")
+                if mcts_result is None:
+                    raise RuntimeError(
+                        "Gumbel-root tournament move missing MCTS result payload."
+                    )
+                policy_target = _build_policy_target_vector_from_gumbel_final_scores(
+                    mcts_result, board_size=board_size
+                )
+            elif provenance_code in {
+                MOVE_CODE_VISIT_COUNT,
+                MOVE_CODE_TERMINAL_TERMINATION,
+            }:
+                mcts_result = move_metadata.get("mcts_result")
+                if mcts_result is None:
+                    raise RuntimeError(
+                        "Trainable tournament move missing MCTS result payload."
+                    )
+                policy_target = _build_policy_target_vector_from_mcts_result(
+                    mcts_result, board_size=board_size
+                )
+            elif provenance_code == MOVE_CODE_CONFIDENCE_TERMINATION:
+                policy_target = _zero_policy_target_vector(board_size)
+            else:
+                raise RuntimeError(
+                    f"Unsupported tournament provenance code: {provenance_code!r}"
+                )
+
+        move_provenance_codes.append(provenance_code)
+        policy_target_rows.append(policy_target)
         
         logger.debug(f"Player {current_player.name} ({strategy_name}) plays move {move} in {move_time:.3f}s")
         
@@ -578,6 +797,26 @@ def play_deterministic_game(
     logger.debug(f"Game complete: {winner_strategy} wins with {len(move_sequence)} moves")
     logger.debug(f"Final TRMPH: {trmph_str}")
     logger.debug(f"Timing summary: {strategy_a.name}={strategy_timings[strategy_a.name]:.3f}s, {strategy_b.name}={strategy_timings[strategy_b.name]:.3f}s")
+
+    expected_move_count = len(move_sequence)
+    if len(move_provenance_codes) != expected_move_count:
+        raise RuntimeError(
+            "Tournament move provenance length mismatch: "
+            f"expected {expected_move_count}, got {len(move_provenance_codes)}"
+        )
+    if len(policy_target_rows) != expected_move_count:
+        raise RuntimeError(
+            "Tournament policy-target row count mismatch: "
+            f"expected {expected_move_count}, got {len(policy_target_rows)}"
+        )
+    if policy_target_rows:
+        policy_targets_matrix = np.stack(policy_target_rows, axis=0).astype(
+            np.float32, copy=False
+        )
+    else:
+        policy_targets_matrix = np.zeros(
+            (0, board_size * board_size), dtype=np.float32
+        )
     
     return {
         'winner_strategy': winner_strategy,
@@ -587,7 +826,11 @@ def play_deterministic_game(
         'num_moves': len(move_sequence),
         'opening': opening,
         'strategy_timings': strategy_timings,
-        'total_moves': move_count
+        'total_moves': move_count,
+        'move_provenance_codes': ''.join(move_provenance_codes),
+        'policy_targets_matrix': policy_targets_matrix,
+        'policy_target_source_codes': ''.join(move_provenance_codes),
+        'policy_target_version': POLICY_TARGET_CONSTRUCTION_VERSION,
     }
 
 

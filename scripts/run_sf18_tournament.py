@@ -44,6 +44,7 @@ import sys
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+import numpy as np
 
 from hex_ai.config import (
     BOARD_SIZE,
@@ -63,6 +64,11 @@ from hex_ai.inference.game_engine import apply_move_to_state
 from hex_ai.inference.sf18_client import SF18Client, SF18Player
 from hex_ai.inference.move_selection import get_strategy, MoveSelectionConfig
 from hex_ai.inference.strategy_config import StrategyConfig
+from hex_ai.move_provenance import (
+    MOVE_CODE_VISIT_COUNT,
+    make_move_provenance_record,
+    sidecar_path_for_trmph,
+)
 from hex_ai.utils.format_conversion import rowcol_to_trmph
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename, get_command_line
 from hex_ai.utils.tournament_utils import (
@@ -80,6 +86,13 @@ from hex_ai.utils.random_utils import set_deterministic_seeds
 from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
     OpeningPosition,
+    POLICY_TARGET_CONSTRUCTION_VERSION,
+    TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE,
+    _build_policy_target_vector_from_gumbel_final_scores,
+    _build_policy_target_vector_from_mcts_result,
+    _one_hot_policy_target_vector,
+    _resolve_provenance_code_from_selected_move_source,
+    _zero_policy_target_vector,
     find_trmph_files,
     generate_diverse_openings,
     load_openings_from_file,
@@ -299,6 +312,13 @@ def play_sf18_vs_sf25_game(
     
     # Track move sequence for TRMPH generation
     move_sequence = list(opening.moves)  # Start with opening moves
+    move_provenance_codes: List[str] = []
+    policy_target_rows: List[np.ndarray] = []
+    for opening_move in opening.moves:
+        move_provenance_codes.append(MOVE_CODE_VISIT_COUNT)
+        policy_target_rows.append(
+            _one_hot_policy_target_vector(opening_move, board_size)
+        )
     move_count = len(opening.moves)
     max_moves = board_size * board_size
     
@@ -319,13 +339,45 @@ def play_sf18_vs_sf25_game(
                 # Only show detailed MCTS output at very high verbosity
                 mcts_verbose = max(0, verbose - 2) if verbose >= 4 else 0
                 row, col = sf25_strategy_obj.select_move(state, model, move_config, verbose=mcts_verbose)
+                move_metadata = sf25_strategy_obj.pop_last_move_metadata()
+                if move_metadata is None:
+                    provenance_code = TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE
+                    policy_target = _zero_policy_target_vector(board_size)
+                else:
+                    provenance_code = _resolve_provenance_code_from_selected_move_source(
+                        move_metadata.get("selected_move_source")
+                    )
+                    if provenance_code == "G":
+                        mcts_result = move_metadata.get("mcts_result")
+                        if mcts_result is None:
+                            raise RuntimeError(
+                                "Gumbel-root SF25 tournament move missing MCTS result payload."
+                            )
+                        policy_target = _build_policy_target_vector_from_gumbel_final_scores(
+                            mcts_result, board_size=board_size
+                        )
+                    elif provenance_code in {"V", "T"}:
+                        mcts_result = move_metadata.get("mcts_result")
+                        if mcts_result is None:
+                            raise RuntimeError(
+                                "Trainable SF25 tournament move missing MCTS result payload."
+                            )
+                        policy_target = _build_policy_target_vector_from_mcts_result(
+                            mcts_result, board_size=board_size
+                        )
+                    else:
+                        policy_target = _zero_policy_target_vector(board_size)
             else:
                 # SF18's turn
                 row, col = sf18_player.get_move(state)
+                provenance_code = TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE
+                policy_target = _zero_policy_target_vector(board_size)
             
             # Apply the move
             state = apply_move_to_state(state, row, col)
             move_sequence.append((row, col))  # Track the move
+            move_provenance_codes.append(provenance_code)
+            policy_target_rows.append(policy_target)
             move_count += 1
             
             if verbose >= 4:
@@ -390,6 +442,26 @@ def play_sf18_vs_sf25_game(
     # Show game summary at verbose >= 1
     if verbose >= 1:
         print(f"    Game complete: {winner_strategy} wins in {move_count} moves")
+
+    expected_move_count = len(move_sequence)
+    if len(move_provenance_codes) != expected_move_count:
+        raise RuntimeError(
+            "SF18 tournament move provenance length mismatch: "
+            f"expected {expected_move_count}, got {len(move_provenance_codes)}"
+        )
+    if len(policy_target_rows) != expected_move_count:
+        raise RuntimeError(
+            "SF18 tournament policy-target row count mismatch: "
+            f"expected {expected_move_count}, got {len(policy_target_rows)}"
+        )
+    if policy_target_rows:
+        policy_targets_matrix = np.stack(policy_target_rows, axis=0).astype(
+            np.float32, copy=False
+        )
+    else:
+        policy_targets_matrix = np.zeros(
+            (0, board_size * board_size), dtype=np.float32
+        )
     
     return {
         'winner': winner_str,
@@ -398,7 +470,11 @@ def play_sf18_vs_sf25_game(
         'total_moves': move_count,
         'opening': opening,
         'sf25_strategy': sf25_strategy.name,
-        'sf18_difficulty': sf18_player.difficulty
+        'sf18_difficulty': sf18_player.difficulty,
+        'move_provenance_codes': ''.join(move_provenance_codes),
+        'policy_targets_matrix': policy_targets_matrix,
+        'policy_target_source_codes': ''.join(move_provenance_codes),
+        'policy_target_version': POLICY_TARGET_CONSTRUCTION_VERSION,
     }
 
 
@@ -441,6 +517,7 @@ def run_sf18_tournament(
         output_dir, openings_file = setup_tournament_output(OUTPUT_DIR_PREFIX)
     else:
         os.makedirs(output_dir, exist_ok=True)
+        openings_file = os.path.join(output_dir, "openings.txt")
     
     save_opening_positions(openings, openings_file)
     
@@ -465,41 +542,71 @@ def run_sf18_tournament(
             trmph_file, pair_model_paths, len(openings), play_config, BOARD_SIZE, 
             strategy_configs=pair_strategy_configs
         )
+        provenance_file = str(sidecar_path_for_trmph(actual_trmph_file))
+        if os.path.exists(provenance_file):
+            raise RuntimeError(
+                "Expected fresh provenance sidecar path for SF18 tournament but file already exists: "
+                f"{provenance_file}"
+            )
+        provenance_records_written = 0
         
         # Find available CSV filename
         actual_csv_file = find_available_csv_filename(csv_file)
         
         # Play games
-        for opening_idx, opening in enumerate(openings):
-            if verbose >= 1:
-                print(f"  Game {opening_idx + 1}/{len(openings)}: {opening}")
-            
-            # Game 1: SF25 (Blue) vs SF18 (Red)
-            result_1 = play_sf18_vs_sf25_game(
-                model_cache, strategy_config, sf18_player, opening, temperature, 
-                verbose=verbose, sf25_is_blue=True
-            )
-            
-            # Game 2: SF18 (Blue) vs SF25 (Red)
-            result_2 = play_sf18_vs_sf25_game(
-                model_cache, strategy_config, sf18_player, opening, temperature, 
-                verbose=verbose, sf25_is_blue=False
-            )
-            
-            # Record results
-            winner_1 = "sf25" if result_1['winner_strategy'] == "SF25" else "sf18"
-            winner_2 = "sf25" if result_2['winner_strategy'] == "SF25" else "sf18"
-            
-            result.record_game(strategy_config.name, winner_1, result_1)
-            result.record_game(strategy_config.name, winner_2, result_2)
-            
-            # Record opening-level results
-            result.record_opening_results(strategy_config.name, opening_idx, 
-                                        winner_1 == "sf25", winner_2 == "sf25")
-            
-            # Log TRMPH results
-            append_trmph_winner_line(result_1['trmph_str'], result_1['winner'][0], actual_trmph_file)
-            append_trmph_winner_line(result_2['trmph_str'], result_2['winner'][0], actual_trmph_file)
+        with open(provenance_file, "w", encoding="utf-8") as provenance_handle:
+            for opening_idx, opening in enumerate(openings):
+                if verbose >= 1:
+                    print(f"  Game {opening_idx + 1}/{len(openings)}: {opening}")
+                
+                # Game 1: SF25 (Blue) vs SF18 (Red)
+                result_1 = play_sf18_vs_sf25_game(
+                    model_cache, strategy_config, sf18_player, opening, temperature, 
+                    verbose=verbose, sf25_is_blue=True
+                )
+                
+                # Game 2: SF18 (Blue) vs SF25 (Red)
+                result_2 = play_sf18_vs_sf25_game(
+                    model_cache, strategy_config, sf18_player, opening, temperature, 
+                    verbose=verbose, sf25_is_blue=False
+                )
+                
+                # Record results
+                winner_1 = "sf25" if result_1['winner_strategy'] == "SF25" else "sf18"
+                winner_2 = "sf25" if result_2['winner_strategy'] == "SF25" else "sf18"
+                
+                result.record_game(strategy_config.name, winner_1, result_1)
+                result.record_game(strategy_config.name, winner_2, result_2)
+                
+                # Record opening-level results
+                result.record_opening_results(strategy_config.name, opening_idx, 
+                                            winner_1 == "sf25", winner_2 == "sf25")
+                
+                # Log TRMPH results
+                append_trmph_winner_line(result_1['trmph_str'], result_1['winner'][0], actual_trmph_file)
+                append_trmph_winner_line(result_2['trmph_str'], result_2['winner'][0], actual_trmph_file)
+                provenance_handle.write(
+                    make_move_provenance_record(
+                        game_index=provenance_records_written,
+                        move_codes=result_1["move_provenance_codes"],
+                        policy_targets=result_1["policy_targets_matrix"],
+                        policy_target_source_codes=result_1.get("policy_target_source_codes"),
+                        policy_target_version=result_1.get("policy_target_version"),
+                    ).to_json_line()
+                )
+                provenance_handle.write("\n")
+                provenance_records_written += 1
+                provenance_handle.write(
+                    make_move_provenance_record(
+                        game_index=provenance_records_written,
+                        move_codes=result_2["move_provenance_codes"],
+                        policy_targets=result_2["policy_targets_matrix"],
+                        policy_target_source_codes=result_2.get("policy_target_source_codes"),
+                        policy_target_version=result_2.get("policy_target_version"),
+                    ).to_json_line()
+                )
+                provenance_handle.write("\n")
+                provenance_records_written += 1
             
         # Report results for this model
         print()

@@ -173,13 +173,29 @@ class MoveSelectionStrategy(ABC):
         """Return a summary of the configuration for this strategy."""
         pass
 
+    def pop_last_move_metadata(self) -> Optional[Dict[str, Any]]:
+        """
+        Return metadata for the most-recent selected move and clear it.
+
+        Default implementation returns None for strategies that do not expose
+        per-move diagnostics.
+        """
+        return None
+
 
 class PolicyBasedStrategy(MoveSelectionStrategy):
     """Move selection using direct policy sampling."""
+
+    def __init__(self) -> None:
+        self._last_move_metadata: Optional[Dict[str, Any]] = None
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
-        return select_policy_move(state, model, config.temperature)
+        move = select_policy_move(state, model, config.temperature)
+        self._last_move_metadata = {
+            "selected_move_source": "policy_only",
+        }
+        return move
     
     def get_name(self) -> str:
         return "policy"
@@ -187,9 +203,17 @@ class PolicyBasedStrategy(MoveSelectionStrategy):
     def get_config_summary(self, config: MoveSelectionConfig) -> str:
         return f"policy(t={config.temperature})"
 
+    def pop_last_move_metadata(self) -> Optional[Dict[str, Any]]:
+        metadata = self._last_move_metadata
+        self._last_move_metadata = None
+        return metadata
+
 
 class FixedTreeSearchStrategy(MoveSelectionStrategy):
     """Move selection using fixed-width minimax search."""
+
+    def __init__(self) -> None:
+        self._last_move_metadata: Optional[Dict[str, Any]] = None
     
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
@@ -203,6 +227,9 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
             batch_size=1000  # Default batch size
         )
         result = run_fixed_tree_search(state, model, search_config, verbose)
+        self._last_move_metadata = {
+            "selected_move_source": "fixed_tree_search",
+        }
         return result.move
     
     def get_name(self) -> str:
@@ -213,6 +240,11 @@ class FixedTreeSearchStrategy(MoveSelectionStrategy):
             return "fixed_tree(no_widths)"
         return f"fixed_tree(widths={config.search_widths}, t={config.temperature})"
 
+    def pop_last_move_metadata(self) -> Optional[Dict[str, Any]]:
+        metadata = self._last_move_metadata
+        self._last_move_metadata = None
+        return metadata
+
 
 class MCTSStrategy(MoveSelectionStrategy):
     """Move selection using MCTS."""
@@ -222,9 +254,11 @@ class MCTSStrategy(MoveSelectionStrategy):
         # Reuse a single engine instance across moves; constructing this repeatedly adds overhead.
         self._engine = HexGameEngine()
         self._profile_calls = 0
+        self._last_move_metadata: Optional[Dict[str, Any]] = None
 
     def select_move(self, state: HexGameState, model: SimpleModelInference, 
                    config: MoveSelectionConfig, verbose: int = 0) -> Tuple[int, int]:
+        self._last_move_metadata = None
         if not 0.0 <= config.base_fraction_mcts_moves <= 1.0:
             raise ValueError(
                 "base_fraction_mcts_moves must be in [0, 1], "
@@ -239,7 +273,11 @@ class MCTSStrategy(MoveSelectionStrategy):
                         "🎮 TOURNAMENT: Using policy-only move "
                         f"(base_fraction_mcts_moves={config.base_fraction_mcts_moves:.3f})"
                     )
-                return select_policy_move(state, model, config.temperature)
+                move = select_policy_move(state, model, config.temperature)
+                self._last_move_metadata = {
+                    "selected_move_source": "policy_only",
+                }
+                return move
 
         # Create MCTS configuration optimized for tournament play
         # Pass all parameters through create_mcts_config for consistency
@@ -316,6 +354,10 @@ class MCTSStrategy(MoveSelectionStrategy):
                     # Profiling should never interfere with tournament execution.
                     print(f"[MCTS_PROFILE] failed to summarize stats: {e}")
 
+        self._last_move_metadata = {
+            "selected_move_source": str(result.stats.get("selected_move_source", "")),
+            "mcts_result": result,
+        }
         return result.move
     
     def get_name(self) -> str:
@@ -343,6 +385,11 @@ class MCTSStrategy(MoveSelectionStrategy):
             f"t={config.temperature}"
             f"{batch_info}{gumbel_info}{dead_cell_info})"
         )
+
+    def pop_last_move_metadata(self) -> Optional[Dict[str, Any]]:
+        metadata = self._last_move_metadata
+        self._last_move_metadata = None
+        return metadata
 
 
 # Strategy registry

@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Set, Tuple, Optional
 from pathlib import Path
 
 from hex_ai.file_utils import sanitize_filename
+from hex_ai.move_provenance import make_move_provenance_record, sidecar_path_for_trmph
 from hex_ai.inference.strategy_config import (
     StrategyConfig,
     DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN,
@@ -436,6 +437,30 @@ def report_strategy_pair_results(
         print(f"  Total unique games played: {len(duplicate_tracker.seen_games)}")
 
 
+def _build_game_provenance_json_line(game_result: Dict[str, Any], game_index: int) -> str:
+    """Build one move-provenance JSONL record for a played tournament game."""
+    move_codes = game_result.get("move_provenance_codes")
+    if move_codes is None:
+        raise ValueError(
+            f"Missing move_provenance_codes for tournament game index {game_index}"
+        )
+
+    policy_targets = game_result.get("policy_targets_matrix")
+    if policy_targets is None:
+        raise ValueError(
+            f"Missing policy_targets_matrix for tournament game index {game_index}"
+        )
+
+    record = make_move_provenance_record(
+        game_index=game_index,
+        move_codes=move_codes,
+        policy_targets=policy_targets,
+        policy_target_source_codes=game_result.get("policy_target_source_codes"),
+        policy_target_version=game_result.get("policy_target_version"),
+    )
+    return record.to_json_line()
+
+
 def play_strategy_pair_games(
     model_cache: Any,
     strategy_a: StrategyConfig,
@@ -470,50 +495,69 @@ def play_strategy_pair_games(
     """
     duplicate_tracker.reset_for_new_pair()
     game_results = []
+    provenance_file = str(sidecar_path_for_trmph(actual_trmph_file))
+    if os.path.exists(provenance_file):
+        raise RuntimeError(
+            "Expected fresh provenance sidecar path for tournament pair but file already exists: "
+            f"{provenance_file}"
+        )
+    provenance_records_written = 0
     
-    for opening_idx, opening in enumerate(openings):
-        report_progress(verbose, opening_idx, len(openings))
-        
-        # Game 1: Strategy A (Blue) vs Strategy B (Red)
-        result_1 = play_deterministic_game_func(
-            model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
-        )
-        game_results.append(result_1)
-        
-        # Game 2: Strategy B (Blue) vs Strategy A (Red)
-        result_2 = play_deterministic_game_func(
-            model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
-        )
-        game_results.append(result_2)
-        
-        # Check for duplicates and record games
-        duplicate_tracker.check_and_record_games(
-            opening_idx, result_1, result_2, strategy_a, strategy_b, opening, openings
-        )
-        
-        # Log TRMPH results
-        append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
-        append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
-        
-        # Log CSV results
-        csv_rows = create_csv_rows_for_games(
-            result_1, result_2, strategy_a, strategy_b, opening_idx, opening, temperature
-        )
-        write_csv_results(csv_rows, actual_csv_file)
-        
-        # Record results for tournament tracking
-        if result_tracker:
-            # Game 1: Strategy A vs Strategy B
-            winner_1 = result_1['winner_strategy']
-            loser_1 = strategy_b.name if winner_1 == strategy_a.name else strategy_a.name
-            result_tracker.record_game_with_timing(winner_1, loser_1, result_1)
+    with open(provenance_file, 'w', encoding='utf-8') as provenance_handle:
+        for opening_idx, opening in enumerate(openings):
+            report_progress(verbose, opening_idx, len(openings))
             
-            # Game 2: Strategy B vs Strategy A
-            winner_2 = result_2['winner_strategy']
-            loser_2 = strategy_a.name if winner_2 == strategy_b.name else strategy_b.name
-            result_tracker.record_game_with_timing(winner_2, loser_2, result_2)
-        
-        if verbose >= 1:
-            print(f":{result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
+            # Game 1: Strategy A (Blue) vs Strategy B (Red)
+            result_1 = play_deterministic_game_func(
+                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=True
+            )
+            game_results.append(result_1)
+            
+            # Game 2: Strategy B (Blue) vs Strategy A (Red)
+            result_2 = play_deterministic_game_func(
+                model_cache, strategy_a, strategy_b, opening, temperature, verbose=verbose, strategy_a_is_blue=False
+            )
+            game_results.append(result_2)
+            
+            # Check for duplicates and record games
+            duplicate_tracker.check_and_record_games(
+                opening_idx, result_1, result_2, strategy_a, strategy_b, opening, openings
+            )
+            
+            # Log TRMPH results
+            append_trmph_winner_line(result_1['trmph_str'], result_1['winner_char'], actual_trmph_file)
+            append_trmph_winner_line(result_2['trmph_str'], result_2['winner_char'], actual_trmph_file)
+
+            provenance_handle.write(
+                _build_game_provenance_json_line(result_1, provenance_records_written)
+            )
+            provenance_handle.write("\n")
+            provenance_records_written += 1
+            provenance_handle.write(
+                _build_game_provenance_json_line(result_2, provenance_records_written)
+            )
+            provenance_handle.write("\n")
+            provenance_records_written += 1
+            
+            # Log CSV results
+            csv_rows = create_csv_rows_for_games(
+                result_1, result_2, strategy_a, strategy_b, opening_idx, opening, temperature
+            )
+            write_csv_results(csv_rows, actual_csv_file)
+            
+            # Record results for tournament tracking
+            if result_tracker:
+                # Game 1: Strategy A vs Strategy B
+                winner_1 = result_1['winner_strategy']
+                loser_1 = strategy_b.name if winner_1 == strategy_a.name else strategy_a.name
+                result_tracker.record_game_with_timing(winner_1, loser_1, result_1)
+                
+                # Game 2: Strategy B vs Strategy A
+                winner_2 = result_2['winner_strategy']
+                loser_2 = strategy_a.name if winner_2 == strategy_b.name else strategy_b.name
+                result_tracker.record_game_with_timing(winner_2, loser_2, result_2)
+            
+            if verbose >= 1:
+                print(f":{result_1['winner_char']}/{result_2['winner_char']}", end="", flush=True)
     
     return game_results

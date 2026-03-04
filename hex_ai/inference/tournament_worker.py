@@ -7,6 +7,7 @@ compact JSON summary for the parent coordinator to consume.
 
 import argparse
 import json
+import os
 from typing import Any, Dict, List
 
 from hex_ai.config import BOARD_SIZE
@@ -19,6 +20,7 @@ from hex_ai.inference.knockout_tournament import TournamentParticipant
 from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.inference.tournament import TournamentPlayConfig
+from hex_ai.move_provenance import make_move_provenance_record, sidecar_path_for_trmph
 from hex_ai.utils.random_utils import set_deterministic_seeds
 from hex_ai.utils.deterministic_tournament_utils import setup_strategy_pair_files
 from hex_ai.utils.tournament_logging import (
@@ -133,48 +135,78 @@ def run_knockout_match_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
         BOARD_SIZE,
         strategy_configs=[strategy_a, strategy_b],
     )
+    provenance_file = str(sidecar_path_for_trmph(actual_trmph_file))
+    if os.path.exists(provenance_file):
+        raise RuntimeError(
+            "Expected fresh provenance sidecar path for knockout worker but file already exists: "
+            f"{provenance_file}"
+        )
 
     participant1_wins = 0
     participant2_wins = 0
     openings_used = []
+    provenance_records_written = 0
 
-    for opening_idx, opening in enumerate(openings):
-        result_1 = play_deterministic_game(
-            model_cache=model_cache,
-            strategy_a=strategy_a,
-            strategy_b=strategy_b,
-            opening=opening,
-            temperature=knockout_config.get("temperature", 1.0),
-            verbose=0,
-            strategy_a_is_blue=True,
-        )
-        append_trmph_winner_line(result_1["trmph_str"], result_1["winner_char"], actual_trmph_file)
+    with open(provenance_file, "w", encoding="utf-8") as provenance_handle:
+        for opening_idx, opening in enumerate(openings):
+            result_1 = play_deterministic_game(
+                model_cache=model_cache,
+                strategy_a=strategy_a,
+                strategy_b=strategy_b,
+                opening=opening,
+                temperature=knockout_config.get("temperature", 1.0),
+                verbose=0,
+                strategy_a_is_blue=True,
+            )
+            append_trmph_winner_line(result_1["trmph_str"], result_1["winner_char"], actual_trmph_file)
+            provenance_handle.write(
+                make_move_provenance_record(
+                    game_index=provenance_records_written,
+                    move_codes=result_1["move_provenance_codes"],
+                    policy_targets=result_1["policy_targets_matrix"],
+                    policy_target_source_codes=result_1.get("policy_target_source_codes"),
+                    policy_target_version=result_1.get("policy_target_version"),
+                ).to_json_line()
+            )
+            provenance_handle.write("\n")
+            provenance_records_written += 1
 
-        result_2 = play_deterministic_game(
-            model_cache=model_cache,
-            strategy_a=strategy_b,
-            strategy_b=strategy_a,
-            opening=opening,
-            temperature=knockout_config.get("temperature", 1.0),
-            verbose=0,
-            strategy_a_is_blue=True,
-        )
-        append_trmph_winner_line(result_2["trmph_str"], result_2["winner_char"], actual_trmph_file)
+            result_2 = play_deterministic_game(
+                model_cache=model_cache,
+                strategy_a=strategy_b,
+                strategy_b=strategy_a,
+                opening=opening,
+                temperature=knockout_config.get("temperature", 1.0),
+                verbose=0,
+                strategy_a_is_blue=True,
+            )
+            append_trmph_winner_line(result_2["trmph_str"], result_2["winner_char"], actual_trmph_file)
+            provenance_handle.write(
+                make_move_provenance_record(
+                    game_index=provenance_records_written,
+                    move_codes=result_2["move_provenance_codes"],
+                    policy_targets=result_2["policy_targets_matrix"],
+                    policy_target_source_codes=result_2.get("policy_target_source_codes"),
+                    policy_target_version=result_2.get("policy_target_version"),
+                ).to_json_line()
+            )
+            provenance_handle.write("\n")
+            provenance_records_written += 1
 
-        openings_used.append(opening.get_trmph_string())
+            openings_used.append(opening.get_trmph_string())
 
-        if result_1["winner_strategy"] == participant1.name:
-            participant1_wins += 1
-        else:
-            participant2_wins += 1
+            if result_1["winner_strategy"] == participant1.name:
+                participant1_wins += 1
+            else:
+                participant2_wins += 1
 
-        if result_2["winner_strategy"] == participant1.name:
-            participant1_wins += 1
-        else:
-            participant2_wins += 1
+            if result_2["winner_strategy"] == participant1.name:
+                participant1_wins += 1
+            else:
+                participant2_wins += 1
 
-        if opening_idx % 10 == 0:
-            print(".", end="", flush=True)
+            if opening_idx % 10 == 0:
+                print(".", end="", flush=True)
 
     total_games = games * 2
     if participant1_wins > participant2_wins:
