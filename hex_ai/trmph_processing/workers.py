@@ -139,7 +139,12 @@ def process_single_file_direct(
         if policy_provenance_mode in {"optional", "require"}:
             sidecar_path = sidecar_path_for_trmph(file_path)
             if sidecar_path.exists():
-                provenance_records = load_move_provenance_sidecar(sidecar_path)
+                # We decode policy targets per record below, so skip eager decode
+                # validation here to avoid duplicate decode/decompress work.
+                provenance_records = load_move_provenance_sidecar(
+                    sidecar_path,
+                    validate_policy_targets_payload=False,
+                )
                 provenance_active = True
                 logger.info(
                     f"Loaded {len(provenance_records)} move provenance records from {sidecar_path}"

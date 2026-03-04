@@ -336,14 +336,6 @@ class MoveProvenanceRecord:
                 self.policy_target_version, "policy_target_version", context
             )
 
-            # Decode validation for fail-fast payload integrity checks.
-            decode_policy_targets_blob(
-                self.policy_targets_blob,
-                move_count=move_count,
-                policy_target_size=policy_target_size,
-                encoding=encoding,
-            )
-
             object.__setattr__(self, "policy_target_encoding", encoding)
             object.__setattr__(self, "policy_target_size", policy_target_size)
             object.__setattr__(self, "policy_target_version", policy_target_version)
@@ -385,6 +377,28 @@ class MoveProvenanceRecord:
         if self.policy_target_size is None:
             raise RuntimeError("policy_target_size unexpectedly missing on v2 record")
         return decode_policy_targets_blob(
+            self.policy_targets_blob,
+            move_count=self.move_count,
+            policy_target_size=self.policy_target_size,
+            encoding=self.policy_target_encoding,
+        )
+
+    def validate_policy_targets_payload(self) -> None:
+        """
+        Validate v2 payload integrity by decoding blob shape/encoding checks.
+
+        Callers that immediately decode policy targets can skip this to avoid
+        duplicated decode work.
+        """
+        if not self.has_policy_targets():
+            return
+        if self.policy_target_encoding is None:
+            raise RuntimeError("policy_target_encoding unexpectedly missing on v2 record")
+        if self.policy_targets_blob is None:
+            raise RuntimeError("policy_targets_blob unexpectedly missing on v2 record")
+        if self.policy_target_size is None:
+            raise RuntimeError("policy_target_size unexpectedly missing on v2 record")
+        decode_policy_targets_blob(
             self.policy_targets_blob,
             move_count=self.move_count,
             policy_target_size=self.policy_target_size,
@@ -557,8 +571,20 @@ def parse_move_provenance_line(
     return MoveProvenanceRecord.from_json_dict(payload, context=context)
 
 
-def load_move_provenance_sidecar(sidecar_path: PathLike) -> list[MoveProvenanceRecord]:
-    """Load and validate all provenance records from a sidecar JSONL file."""
+def load_move_provenance_sidecar(
+    sidecar_path: PathLike,
+    *,
+    validate_policy_targets_payload: bool = True,
+) -> list[MoveProvenanceRecord]:
+    """
+    Load provenance records from a sidecar JSONL file.
+
+    Args:
+        sidecar_path: Sidecar JSONL path.
+        validate_policy_targets_payload: If True, decode-validate each v2 blob
+            during load. Set False when callers immediately decode each record
+            anyway to avoid duplicate decode work.
+    """
     path = Path(sidecar_path)
     if not path.exists():
         raise FileNotFoundError(
@@ -573,6 +599,8 @@ def load_move_provenance_sidecar(sidecar_path: PathLike) -> list[MoveProvenanceR
             record = parse_move_provenance_line(
                 line, source=path, line_number=line_number
             )
+            if validate_policy_targets_payload and record.has_policy_targets():
+                record.validate_policy_targets_payload()
             records.append(record)
 
     return records

@@ -26,6 +26,7 @@ from hex_ai.move_provenance import (
     load_move_provenance_sidecar,
     make_move_provenance_record,
     MOVE_PROVENANCE_SCHEMA_VERSION_V2,
+    POLICY_TARGET_ENCODING_DENSE_FP16_ZLIB_BASE64,
     sidecar_path_for_trmph,
 )
 from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
@@ -856,6 +857,56 @@ class TestTRMPHProcessor:
         decoded = record.decode_policy_targets()
         assert decoded is not None
         np.testing.assert_allclose(decoded, targets, rtol=1e-3, atol=1e-3)
+
+    def test_load_move_provenance_sidecar_validates_v2_payload_by_default(self):
+        """Default sidecar loading should fail fast on malformed v2 payload blobs."""
+        trmph_path = self.create_test_trmph_file("invalid_v2_blob.trmph", "#13,a1 b\n")
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        payload = {
+            "schema_version": MOVE_PROVENANCE_SCHEMA_VERSION_V2,
+            "game_index": 0,
+            "move_count": 1,
+            "move_codes": "V",
+            "policy_train_mask": "1",
+            "policy_target_encoding": POLICY_TARGET_ENCODING_DENSE_FP16_ZLIB_BASE64,
+            "policy_targets_blob": "!!not_base64!!",
+            "policy_target_size": 169,
+            "policy_target_source_codes": "V",
+            "policy_target_version": 1,
+        }
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload))
+            f.write("\n")
+
+        with pytest.raises(ValueError, match="base64"):
+            load_move_provenance_sidecar(sidecar_path)
+
+    def test_load_move_provenance_sidecar_can_skip_eager_v2_payload_decode(self):
+        """Optional lazy mode should defer malformed payload failure until decode call."""
+        trmph_path = self.create_test_trmph_file("invalid_v2_blob_lazy.trmph", "#13,a1 b\n")
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        payload = {
+            "schema_version": MOVE_PROVENANCE_SCHEMA_VERSION_V2,
+            "game_index": 0,
+            "move_count": 1,
+            "move_codes": "V",
+            "policy_train_mask": "1",
+            "policy_target_encoding": POLICY_TARGET_ENCODING_DENSE_FP16_ZLIB_BASE64,
+            "policy_targets_blob": "!!not_base64!!",
+            "policy_target_size": 169,
+            "policy_target_source_codes": "V",
+            "policy_target_version": 1,
+        }
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload))
+            f.write("\n")
+
+        records = load_move_provenance_sidecar(
+            sidecar_path, validate_policy_targets_payload=False
+        )
+        assert len(records) == 1
+        with pytest.raises(ValueError, match="base64"):
+            records[0].decode_policy_targets()
 
     def test_combine_and_clean_files_preserves_v2_policy_targets(self):
         """Combine/clean should preserve v2 sidecar payloads when rewriting game_index."""
