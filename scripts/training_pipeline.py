@@ -814,6 +814,7 @@ class TrainingStep:
             "value_learning_rate_factor": "--value-learning-rate-factor",
             "value_weight_decay_factor": "--value-weight-decay-factor",
             "use_policy_search_targets": "--use-policy-search-targets",
+            "soft_target_legal_mix_alpha": "--soft-target-legal-mix-alpha",
         }
         for key, arg_name in override_arg_map.items():
             values = self.config.hyperparameter_overrides.get(key)
@@ -1444,6 +1445,14 @@ Examples:
         action="store_true",
         help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
     )
+    parser.add_argument(
+        "--soft-target-legal-mix-alpha",
+        type=float,
+        help=(
+            "Optional alpha in [0,1) for training-time mixing of non-one-hot policy targets "
+            "with uniform legal mass. Default is 0.017; set 0.0 for strict targets."
+        ),
+    )
     
     # Pipeline control
     parser.add_argument("--run-game-collection", action="store_true", help="Run game collection from multiple sources")
@@ -1545,6 +1554,10 @@ def main():
             hyperparameter_overrides["value_weight_decay_factor"] = [args.value_weight_decay_factor]
         if args.use_policy_search_targets:
             hyperparameter_overrides["use_policy_search_targets"] = [True]
+        if args.soft_target_legal_mix_alpha is not None:
+            hyperparameter_overrides["soft_target_legal_mix_alpha"] = [
+                args.soft_target_legal_mix_alpha
+            ]
 
         # Create configuration
         config = PipelineConfig(

@@ -433,6 +433,87 @@ class MCTSGumbelMixin:
         self._gumbel_rounds_R = gumbel_metrics["rounds_R"]
         self._gumbel_timing_breakdown = gumbel_metrics.get("timing_breakdown", {})
 
+    @staticmethod
+    def _extract_required_gumbel_final_rank_rows(
+        gumbel_metrics: Dict[str, Any],
+    ) -> List[Dict[str, float]]:
+        """
+        Extract compact final rank rows required for downstream target generation.
+
+        This is not debug-only state; self-play policy-target construction depends
+        on these rows being present and valid.
+        """
+        final_rows_raw = gumbel_metrics.get("final_rank_rows", None)
+        if not isinstance(final_rows_raw, list) or not final_rows_raw:
+            raise RuntimeError(
+                "Missing required Gumbel final_rank_rows in gumbel metrics."
+            )
+
+        compact_rows: List[Dict[str, float]] = []
+        seen_actions: set[int] = set()
+        previous_score: Optional[float] = None
+        for row in final_rows_raw:
+            if not isinstance(row, dict):
+                raise RuntimeError(
+                    "Invalid Gumbel final_rank_rows entry type: expected dict."
+                )
+            action_raw = row.get("tensor_action", None)
+            score_raw = row.get("score_without_gumbel", None)
+            if action_raw is None or score_raw is None:
+                raise RuntimeError(
+                    "Gumbel final_rank_rows entries must include tensor_action and score_without_gumbel."
+                )
+
+            action = int(action_raw)
+            if action in seen_actions:
+                raise RuntimeError(
+                    f"Duplicate tensor_action {action} in gumbel final_rank_rows."
+                )
+            seen_actions.add(action)
+
+            score = float(score_raw)
+            if not np.isfinite(score):
+                raise RuntimeError(
+                    f"Non-finite score_without_gumbel in gumbel final_rank_rows: {score_raw!r}"
+                )
+            if previous_score is not None and score > previous_score + 1e-12:
+                raise RuntimeError(
+                    "Gumbel final_rank_rows are not sorted by descending score_without_gumbel."
+                )
+            previous_score = score
+
+            compact_rows.append(
+                {
+                    "tensor_action": action,
+                    "score_without_gumbel": score,
+                }
+            )
+
+        return compact_rows
+
+    def _record_required_gumbel_target_fields(
+        self,
+        gumbel_metrics: Dict[str, Any],
+    ) -> None:
+        """
+        Record required Gumbel fields used outside inference-time debugging.
+
+        Keeping this separate from debug capture avoids accidental loss of
+        required fields due to best-effort formatting failures.
+        """
+        compact_rows = self._extract_required_gumbel_final_rank_rows(gumbel_metrics)
+        self._gumbel_final_rank_rows = compact_rows
+        self._gumbel_final_score_gap_top1_top2 = (
+            float(compact_rows[0]["score_without_gumbel"] - compact_rows[1]["score_without_gumbel"])
+            if len(compact_rows) >= 2
+            else None
+        )
+        self._gumbel_final_score_gap_top1_top3 = (
+            float(compact_rows[0]["score_without_gumbel"] - compact_rows[2]["score_without_gumbel"])
+            if len(compact_rows) >= 3
+            else None
+        )
+
     def _merge_forced_round_stats_into_timing_tracker(
         self,
         timing_tracker: MCTSTimingTracker,
@@ -509,35 +590,6 @@ class MCTSGumbelMixin:
             final_rows = self._decorate_gumbel_score_rows_with_moves(final_rows_raw, board_size)
             self._gumbel_final_rank_top5 = final_rows[:5] if final_rows else None
             self._gumbel_final_rank_top_move_trmph = final_rows[0]["move"] if final_rows else None
-            compact_rows: List[Dict[str, Any]] = []
-            for row in final_rows_raw:
-                action = row.get("tensor_action", None)
-                score_without_gumbel = row.get("score_without_gumbel", None)
-                if action is None or score_without_gumbel is None:
-                    continue
-                compact_rows.append(
-                    {
-                        "tensor_action": int(action),
-                        "score_without_gumbel": float(score_without_gumbel),
-                    }
-                )
-            self._gumbel_final_rank_rows = compact_rows if compact_rows else None
-
-            if compact_rows and len(compact_rows) >= 2:
-                self._gumbel_final_score_gap_top1_top2 = float(
-                    compact_rows[0]["score_without_gumbel"]
-                    - compact_rows[1]["score_without_gumbel"]
-                )
-            else:
-                self._gumbel_final_score_gap_top1_top2 = None
-
-            if compact_rows and len(compact_rows) >= 3:
-                self._gumbel_final_score_gap_top1_top3 = float(
-                    compact_rows[0]["score_without_gumbel"]
-                    - compact_rows[2]["score_without_gumbel"]
-                )
-            else:
-                self._gumbel_final_score_gap_top1_top3 = None
 
             if self.detailed_exploration_enabled:
                 dive_actions: List[int] = []
@@ -573,9 +625,6 @@ class MCTSGumbelMixin:
             # Best-effort debug only: do not risk crashing inference due to debug formatting.
             self._gumbel_final_rank_top5 = None
             self._gumbel_final_rank_top_move_trmph = None
-            self._gumbel_final_rank_rows = None
-            self._gumbel_final_score_gap_top1_top2 = None
-            self._gumbel_final_score_gap_top1_top3 = None
             self._gumbel_v_pi_01 = None
 
     def _run_gumbel_root_selection(self, root: MCTSNode, total_sims: int,
@@ -605,6 +654,7 @@ class MCTSGumbelMixin:
         )
 
         self._record_gumbel_metrics(gumbel_metrics)
+        self._record_required_gumbel_target_fields(gumbel_metrics)
         self._merge_forced_round_stats_into_timing_tracker(timing_tracker, gumbel_metrics)
         if verbose >= 4:
             print(f"Gumbel root: fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE:.3f}")

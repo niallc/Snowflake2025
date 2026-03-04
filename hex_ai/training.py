@@ -71,6 +71,15 @@ DEFAULT_ENTROPY_WEIGHT = 1e-3
 DEFAULT_LABEL_SMOOTHING = 0.1
 # Rationale: Prevents overconfidence by smoothing targets over legal moves
 
+# Targets with support strictly larger than this threshold are treated as
+# non-one-hot distributions and bypass extra label smoothing.
+TARGET_SUPPORT_EPSILON = 1e-6
+
+# Optional training-time regularization for non-one-hot targets:
+# mix a small amount of uniform legal mass into soft targets.
+# Default adds 1.7% legal-uniform mass; set 0.0 for strict behavior.
+DEFAULT_SOFT_TARGET_LEGAL_MIX_ALPHA = 0.017
+
 # L2 penalty on centered logits to prevent explosion
 DEFAULT_LOGITS_L2_LAMBDA = 1e-5
 # Rationale: Directly penalizes logit scale/variance to prevent gradient explosion
@@ -81,13 +90,20 @@ class PolicyValueLoss(nn.Module):
     
     def __init__(self, policy_weight: float = POLICY_LOSS_WEIGHT, value_weight: float = VALUE_LOSS_WEIGHT, 
                  entropy_weight: float = DEFAULT_ENTROPY_WEIGHT, label_smoothing: float = DEFAULT_LABEL_SMOOTHING, 
-                 logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA):
+                 logits_l2_lambda: float = DEFAULT_LOGITS_L2_LAMBDA,
+                 soft_target_legal_mix_alpha: float = DEFAULT_SOFT_TARGET_LEGAL_MIX_ALPHA):
         super().__init__()
         self.policy_weight = policy_weight
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
         self.label_smoothing = label_smoothing
         self.logits_l2_lambda = logits_l2_lambda
+        self.soft_target_legal_mix_alpha = float(soft_target_legal_mix_alpha)
+        if not (0.0 <= self.soft_target_legal_mix_alpha < 1.0):
+            raise ValueError(
+                "soft_target_legal_mix_alpha must be in [0, 1), "
+                f"got {self.soft_target_legal_mix_alpha}"
+            )
         self.policy_loss = nn.CrossEntropyLoss()
         # Value loss is now handled by the new compute_value_loss function
     
@@ -368,6 +384,26 @@ class PolicyValueLoss(nn.Module):
             smoothed_target[batch_idx, chosen_move_idx] = 1.0 - epsilon + epsilon_per_legal
         
         return smoothed_target
+
+    @staticmethod
+    def _is_one_hot_like_target(
+        target: torch.Tensor,
+        *,
+        support_epsilon: float = TARGET_SUPPORT_EPSILON,
+    ) -> torch.Tensor:
+        """
+        Return a per-row mask indicating whether targets are one-hot-like.
+
+        A row is considered one-hot-like when exactly one action has mass above
+        `support_epsilon`. This allows us to keep legacy label smoothing for
+        played-move one-hot targets while preserving richer soft search targets.
+        """
+        if target.ndim != 2:
+            raise RuntimeError(
+                f"CRITICAL BUG: target must be 2D in _is_one_hot_like_target, got shape {tuple(target.shape)}"
+            )
+        support_count = (target > support_epsilon).sum(dim=1)  # (batch_size,)
+        return support_count == 1
     
     def forward(self, policy_pred: torch.Tensor, value_pred: torch.Tensor,
                 policy_target: torch.Tensor, value_target: torch.Tensor, 
@@ -635,11 +671,26 @@ class PolicyValueLoss(nn.Module):
                 "Training stopped to prevent silent failures. Check debug output above for details."
             )
 
+        one_hot_like_mask = self._is_one_hot_like_target(target)
+        if self.soft_target_legal_mix_alpha > 0:
+            alpha = self.soft_target_legal_mix_alpha
+            soft_target_mask = (~one_hot_like_mask).unsqueeze(1)
+            if soft_target_mask.any():
+                legal_counts = legal_mask.sum(dim=1).clamp_min(1)
+                uniform = legal_mask.to(dtype=target.dtype) / legal_counts.unsqueeze(1).to(
+                    dtype=target.dtype
+                )
+                mixed_target = (1 - alpha) * target + alpha * uniform
+                target = torch.where(soft_target_mask, mixed_target, target)
+
         if self.label_smoothing > 0:
             legal_counts = legal_mask.sum(dim=1).clamp_min(1)
             epsilon = self.label_smoothing
             uniform = legal_mask.float() / legal_counts.unsqueeze(1)
-            target = (1 - epsilon) * target + epsilon * uniform
+            one_hot_like_mask_expanded = one_hot_like_mask.unsqueeze(1)
+            if one_hot_like_mask_expanded.any():
+                smoothed_target = (1 - epsilon) * target + epsilon * uniform
+                target = torch.where(one_hot_like_mask_expanded, smoothed_target, target)
 
         logp = torch.log_softmax(logits, dim=1)
         policy_loss = -(target * logp).sum(dim=1).mean()
@@ -773,7 +824,8 @@ class Trainer:
                  shutdown_handler=None,
                  betas: Tuple[float, float] = (0.9, 0.999),
                  eps: float = 1e-8,
-                 use_policy_search_targets: bool = False):
+                 use_policy_search_targets: bool = False,
+                 soft_target_legal_mix_alpha: float = DEFAULT_SOFT_TARGET_LEGAL_MIX_ALPHA):
         """
         Args:
             model: The neural network model to train.
@@ -799,6 +851,9 @@ class Trainer:
             eps: Term added to the denominator to improve numerical stability (default: 1e-8)
             use_policy_search_targets: If True, training expects data loader policy
                 tensors to come from per-position MCTS search targets.
+            soft_target_legal_mix_alpha: Optional alpha in [0,1) used to mix
+                uniform-legal mass into non-one-hot policy targets at training time.
+                0.0 disables mixing and keeps strict original targets.
 
         """
         if device is None:
@@ -812,6 +867,7 @@ class Trainer:
         self.run_timestamp = run_timestamp
         self.shutdown_handler = shutdown_handler
         self.use_policy_search_targets = bool(use_policy_search_targets)
+        self.soft_target_legal_mix_alpha = float(soft_target_legal_mix_alpha)
 
         
         # Store hyperparameters for logging
@@ -950,7 +1006,8 @@ class Trainer:
         self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
         self.criterion = PolicyValueLoss(policy_weight=policy_weight, value_weight=value_weight, 
                                         entropy_weight=entropy_weight, label_smoothing=label_smoothing,
-                                        logits_l2_lambda=logits_l2_lambda)
+                                        logits_l2_lambda=logits_l2_lambda,
+                                        soft_target_legal_mix_alpha=soft_target_legal_mix_alpha)
         
         # Learning rate scheduler (ReduceLROnPlateau)
         # TODO: NOTE, I have increased min_lr to =2e-5 (from 1e-5), as a temporary check to see if learning becomes more faster.
@@ -990,8 +1047,14 @@ class Trainer:
         if self.use_policy_search_targets and label_smoothing > 0:
             logger.info(
                 "Label smoothing is enabled (%.4f) while using policy_search_target; "
-                "training targets will be smoothed over legal moves.",
+                "only one-hot-like targets will be smoothed over legal moves "
+                "(non-one-hot search targets are left unchanged).",
                 label_smoothing,
+            )
+        if self.use_policy_search_targets and self.soft_target_legal_mix_alpha > 0:
+            logger.info(
+                "Applying soft-target legal-uniform mixing with alpha=%.6f on non-one-hot targets.",
+                self.soft_target_legal_mix_alpha,
             )
         
         # Log parameter group info

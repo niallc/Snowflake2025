@@ -232,6 +232,14 @@ Examples:
         action="store_true",
         help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
     )
+    parser.add_argument(
+        "--soft-target-legal-mix-alpha",
+        type=float,
+        help=(
+            "Optional alpha in [0,1) for training-time mixing of non-one-hot policy targets "
+            "with uniform legal mass. Default is 0.017; set 0.0 for strict targets."
+        ),
+    )
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
     parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
@@ -329,6 +337,8 @@ Examples:
             config["value_weight"] = 1.0 - config["policy_weight"]
         if args.use_policy_search_targets:
             config["use_policy_search_targets"] = True
+        if args.soft_target_legal_mix_alpha is not None:
+            config["soft_target_legal_mix_alpha"] = float(args.soft_target_legal_mix_alpha)
         exp_name = make_experiment_name(config, i, tag = "loss_weight_sweep")
         experiments.append({
             'experiment_name': exp_name,
