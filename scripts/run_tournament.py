@@ -390,9 +390,9 @@ def parse_mini_epoch_range(mini_epoch_range_str: str) -> Tuple[int, int]:
     return start_mini_epoch, end_mini_epoch
 
 
-def build_recent_biased_checkpoint_offsets(count: int) -> List[int]:
+def _build_recent_biased_checkpoint_offsets_unbounded(count: int) -> List[int]:
     """
-    Build recency-biased offsets from the latest checkpoint.
+    Build recency-biased offsets from the latest checkpoint without history bounds.
 
     Offset semantics:
       0 -> newest checkpoint
@@ -405,9 +405,6 @@ def build_recent_biased_checkpoint_offsets(count: int) -> List[int]:
       count=8  -> [0, -1, -2, -3, -5, -7, -10, -13]
       count=16 -> [0, -1, -2, -3, -4, -6, -8, -10, -12, -15, -18, -21, -25, -29, -33, -38]
     """
-    if count <= 0:
-        raise ValueError(f"count must be positive, got {count}")
-
     head_len = min(count, int(round(math.sqrt(count))) + 1)
     distances = list(range(head_len))
 
@@ -420,6 +417,63 @@ def build_recent_biased_checkpoint_offsets(count: int) -> List[int]:
             distances.append(distances[-1] + step)
         remaining -= take
         step += 1
+
+    return [-distance for distance in distances]
+
+
+def build_recent_biased_checkpoint_offsets(
+    count: int,
+    available_count: Optional[int] = None,
+) -> List[int]:
+    """
+    Build recency-biased offsets from the latest checkpoint.
+
+    When available_count is provided, the returned offsets are guaranteed to fit
+    the discovered history and will be compressed toward recent checkpoints if
+    the default spacing would otherwise spread too far back.
+    """
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+
+    if available_count is None:
+        return _build_recent_biased_checkpoint_offsets_unbounded(count)
+
+    if available_count <= 0:
+        raise ValueError(
+            f"available_count must be positive when provided, got {available_count}"
+        )
+
+    effective_count = min(count, available_count)
+    if effective_count <= 0:
+        raise ValueError(
+            f"effective checkpoint count must be positive, got {effective_count}"
+        )
+
+    unbounded_offsets = _build_recent_biased_checkpoint_offsets_unbounded(effective_count)
+    max_available_distance = available_count - 1
+    max_unbounded_distance = -unbounded_offsets[-1]
+
+    if max_unbounded_distance <= max_available_distance:
+        return unbounded_offsets
+
+    # Overflow indicates the default spacing reaches too far into history.
+    # Compress the spread toward recent checkpoints while preserving uniqueness.
+    compression_ratio = max_unbounded_distance / max_available_distance
+    target_span = max(
+        effective_count - 1,
+        int(round(max_available_distance / compression_ratio)),
+    )
+    target_span = min(target_span, max_available_distance)
+    power = min(4.0, 2.0 + (compression_ratio - 1.0) * 1.5)
+
+    distances = [0]
+    for idx in range(1, effective_count):
+        t = idx / (effective_count - 1)
+        projected = int(round((t ** power) * target_span))
+        min_allowed = distances[-1] + 1
+        max_allowed = target_span - (effective_count - 1 - idx)
+        distance = min(max(projected, min_allowed), max_allowed)
+        distances.append(distance)
 
     return [-distance for distance in distances]
 
@@ -549,17 +603,22 @@ def _build_most_recent_knockout_participants(
     latest_run_dir, checkpoint_dir = _discover_latest_checkpoint_directory(root_dir)
     discovery = CheckpointDiscovery(str(checkpoint_dir))
     checkpoints = discovery.discover_checkpoints()
+    available_count = len(checkpoints)
 
-    if len(checkpoints) < 2:
+    if available_count < 2:
         raise ValueError(
-            f"Latest checkpoint directory has only {len(checkpoints)} checkpoint(s): {checkpoint_dir}. "
+            f"Latest checkpoint directory has only {available_count} checkpoint(s): {checkpoint_dir}. "
             "At least 2 checkpoints are required for knockout."
         )
 
+    selected_count = min(count, available_count)
     offsets = (
-        build_recent_biased_checkpoint_offsets(count)
+        build_recent_biased_checkpoint_offsets(
+            selected_count,
+            available_count=available_count,
+        )
         if biased
-        else [-index for index in range(count)]
+        else [-index for index in range(selected_count)]
     )
     selected_checkpoints = _select_checkpoints_from_offsets(checkpoints, offsets)
     participants = [
@@ -570,6 +629,9 @@ def _build_most_recent_knockout_participants(
     return participants, {
         "latest_run_dir": str(latest_run_dir),
         "checkpoint_dir": str(checkpoint_dir),
+        "requested_count": count,
+        "available_count": available_count,
+        "selected_count": len(selected_checkpoints),
         "offsets": offsets,
         "selected_checkpoints": [checkpoint.name for checkpoint in selected_checkpoints],
         "selection_mode": "biased" if biased else "most_recent",
