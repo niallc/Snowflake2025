@@ -11,6 +11,7 @@ import os
 import gzip
 import pickle
 import json
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -23,6 +24,7 @@ from hex_ai.data_collection import (
 from hex_ai.move_provenance import (
     load_move_provenance_sidecar,
     make_move_provenance_record,
+    MOVE_PROVENANCE_SCHEMA_VERSION_V2,
     sidecar_path_for_trmph,
 )
 from hex_ai.trmph_processing.processor import TRMPHProcessor
@@ -750,6 +752,48 @@ class TestTRMPHProcessor:
         summary_text = (self.output_dir / "processing_summary.txt").read_text(encoding="utf-8")
         assert "Conflicting authoritative provenance records kept-first: 1" in summary_text
 
+    def test_combine_and_clean_files_optional_prefers_v2_over_v1_when_equivalent(self):
+        """Optional mode should prefer v2 payloads over v1 for equivalent duplicate games."""
+        self.create_test_trmph_file(
+            "combine_optional_v1_first.trmph",
+            "#13,a1b2 b\n",
+        )
+        self.create_test_provenance_sidecar("combine_optional_v1_first.trmph", ["VV"])
+
+        trmph_path = self.create_test_trmph_file(
+            "combine_optional_v2_second.trmph",
+            "#13,a1b2 b\n",
+        )
+        targets = np.zeros((2, 169), dtype=np.float32)
+        targets[0, 0] = 1.0
+        targets[1, 14] = 1.0
+        v2_record = make_move_provenance_record(
+            game_index=0,
+            move_codes="VV",
+            policy_targets=targets,
+            policy_target_source_codes="VV",
+            policy_target_version=1,
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(v2_record.to_json_line())
+            f.write("\n")
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "cleaned_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert len(records) == 1
+        assert records[0].schema_version == MOVE_PROVENANCE_SCHEMA_VERSION_V2
+        decoded = records[0].decode_policy_targets()
+        assert decoded is not None
+        np.testing.assert_allclose(decoded, targets, rtol=1e-3, atol=1e-3)
+
     def test_collect_and_organize_data_optional_writes_sidecars(self):
         """Collection mode should emit sidecars in optional mode."""
         self.create_test_trmph_file(
@@ -790,3 +834,116 @@ class TestTRMPHProcessor:
         assert chunk_sidecar.exists()
         records = load_move_provenance_sidecar(chunk_sidecar)
         assert [record.move_codes for record in records] == ["VV"]
+
+    def test_move_provenance_v2_policy_target_roundtrip(self):
+        """Schema-v2 records should round-trip encoded policy-target payloads."""
+        targets = np.zeros((3, 169), dtype=np.float32)
+        targets[0, 0] = 1.0
+        targets[1, 1] = 0.7
+        targets[1, 2] = 0.3
+        targets[2, 168] = 1.0
+
+        record = make_move_provenance_record(
+            game_index=0,
+            move_codes="VVV",
+            policy_targets=targets,
+            policy_target_source_codes="VVV",
+            policy_target_version=1,
+        )
+        assert record.schema_version == MOVE_PROVENANCE_SCHEMA_VERSION_V2
+        decoded = record.decode_policy_targets()
+        assert decoded is not None
+        np.testing.assert_allclose(decoded, targets, rtol=1e-3, atol=1e-3)
+
+    def test_combine_and_clean_files_preserves_v2_policy_targets(self):
+        """Combine/clean should preserve v2 sidecar payloads when rewriting game_index."""
+        trmph_path = self.create_test_trmph_file(
+            "combine_v2_payload.trmph",
+            "#13,a1b2c3 b\n",
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        targets = np.zeros((3, 169), dtype=np.float32)
+        targets[0, 0] = 1.0
+        targets[1, 14] = 0.4
+        targets[1, 15] = 0.6
+        targets[2, 28] = 1.0
+        record = make_move_provenance_record(
+            game_index=0,
+            move_codes="VVV",
+            policy_targets=targets,
+            policy_target_source_codes="VVV",
+            policy_target_version=1,
+        )
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(record.to_json_line())
+            f.write("\n")
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="require",
+        )
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "cleaned_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert len(records) == 1
+        assert records[0].schema_version == MOVE_PROVENANCE_SCHEMA_VERSION_V2
+        decoded = records[0].decode_policy_targets()
+        assert decoded is not None
+        np.testing.assert_allclose(decoded, targets, rtol=1e-3, atol=1e-3)
+
+    def test_trmph_processor_attaches_policy_search_targets_from_v2_sidecar(self):
+        """TRMPH processor should attach per-position policy_search_target when v2 payload exists."""
+        trmph_path = self.create_test_trmph_file(
+            "processor_v2_payload.trmph",
+            "#13,a1b2c3 b\n",
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        targets = np.zeros((3, 169), dtype=np.float32)
+        targets[0, 0] = 1.0
+        targets[1, 14] = 0.25
+        targets[1, 15] = 0.75
+        targets[2, 28] = 1.0
+        record = make_move_provenance_record(
+            game_index=0,
+            move_codes="VVV",
+            policy_targets=targets,
+            policy_target_source_codes="VVV",
+            policy_target_version=1,
+        )
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(record.to_json_line())
+            f.write("\n")
+
+        config = ProcessingConfig(
+            data_dir=str(self.data_dir),
+            output_dir=str(self.output_dir),
+            policy_provenance_mode="require",
+            max_workers=1,
+        )
+        processor = TRMPHProcessor(config)
+        results = processor.process_all_files()
+        assert len(results) == 1
+        assert results[0]["success"]
+
+        output_files = list(self.output_dir.glob("*_processed.pkl.gz"))
+        assert len(output_files) == 1
+        with gzip.open(output_files[0], "rb") as f:
+            data = pickle.load(f)
+
+        non_terminal_examples = [
+            ex
+            for ex in data["examples"]
+            if ex["metadata"]["position_in_game"] < (ex["metadata"]["total_positions"] - 1)
+        ]
+        by_pos = {
+            ex["metadata"]["position_in_game"]: ex
+            for ex in non_terminal_examples
+        }
+        assert sorted(by_pos.keys()) == [0, 1, 2]
+        for pos in [0, 1, 2]:
+            search_target = by_pos[pos].get("policy_search_target")
+            assert isinstance(search_target, np.ndarray)
+            assert search_target.shape == (169,)
+            np.testing.assert_allclose(search_target, targets[pos], rtol=1e-3, atol=1e-3)

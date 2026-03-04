@@ -168,6 +168,9 @@ def process_single_file_direct(
 
                 policy_train_mask = None
                 policy_move_codes = None
+                policy_search_targets = None
+                policy_target_source_codes = None
+                policy_target_version = None
                 if provenance_active:
                     if consumed_provenance_records >= len(provenance_records):
                         raise ValueError(
@@ -192,6 +195,9 @@ def process_single_file_direct(
 
                     policy_train_mask = provenance_record.policy_train_mask
                     policy_move_codes = provenance_record.move_codes
+                    policy_search_targets = provenance_record.decode_policy_targets()
+                    policy_target_source_codes = provenance_record.policy_target_source_codes
+                    policy_target_version = provenance_record.policy_target_version
                     consumed_provenance_records += 1
                 
                 # Extract training examples from this game
@@ -203,6 +209,9 @@ def process_single_file_direct(
                     position_selector=position_selector,
                     policy_train_mask=policy_train_mask,
                     policy_move_codes=policy_move_codes,
+                    policy_search_targets=policy_search_targets,
+                    policy_target_source_codes=policy_target_source_codes,
+                    policy_target_version=policy_target_version,
                 )
                 
                 if examples:

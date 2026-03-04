@@ -41,7 +41,12 @@ from hex_ai.move_provenance import (
 from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
-from hex_ai.utils.format_conversion import count_trmph_moves, rowcol_to_trmph
+from hex_ai.utils.format_conversion import (
+    count_trmph_moves,
+    rowcol_to_tensor_with_size,
+    rowcol_to_trmph,
+    trmph_to_tensor,
+)
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.value_utils import select_policy_move, validate_trmph_winner
@@ -62,6 +67,7 @@ SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
     "neural_network_confidence": MOVE_CODE_CONFIDENCE_TERMINATION,
     "terminal_move": MOVE_CODE_TERMINAL_TERMINATION,
 }
+POLICY_TARGET_CONSTRUCTION_VERSION = 1
 
 
 class SelfPlayEngine:
@@ -646,6 +652,7 @@ class SelfPlayEngine:
         
         state = make_empty_hex_state(board_size=board_size)
         move_provenance_codes: List[str] = []
+        policy_target_rows: List[np.ndarray] = []
 
         if prefill_moves:
             if self.verbose >= 3:
@@ -662,6 +669,9 @@ class SelfPlayEngine:
                 state = state.make_move(row, col)
                 if self.write_provenance:
                     move_provenance_codes.append(VIRTUAL_PREFILL_MOVE_PROVENANCE_CODE)
+                    policy_target_rows.append(
+                        self._zero_policy_target_vector(board_size)
+                    )
                 if state.game_over:
                     raise RuntimeError(
                         "Virtual prefill reached terminal state unexpectedly at "
@@ -684,6 +694,9 @@ class SelfPlayEngine:
                 # Opening moves are externally provided and have no MCTS source in schema v1.
                 # We mark them as trainable visit-style moves to keep move-level alignment.
                 move_provenance_codes.append(MOVE_CODE_VISIT_COUNT)
+                policy_target_rows.append(
+                    self._one_hot_policy_target_vector((row, col), board_size)
+                )
         
         if self.verbose >= 3:
             print(
@@ -754,9 +767,26 @@ class SelfPlayEngine:
 
                 move = mcts_result.move
                 if self.write_provenance:
-                    move_provenance_codes.append(
-                        self._get_move_provenance_code(mcts_result.stats)
-                    )
+                    provenance_code = self._get_move_provenance_code(mcts_result.stats)
+                    move_provenance_codes.append(provenance_code)
+                    if provenance_code in {
+                        MOVE_CODE_VISIT_COUNT,
+                        MOVE_CODE_GUMBEL_ROOT,
+                        MOVE_CODE_TERMINAL_TERMINATION,
+                    }:
+                        policy_target_rows.append(
+                            self._build_policy_target_vector_from_mcts_result(
+                                mcts_result, board_size=board_size
+                            )
+                        )
+                    elif provenance_code == MOVE_CODE_CONFIDENCE_TERMINATION:
+                        policy_target_rows.append(
+                            self._zero_policy_target_vector(board_size)
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unsupported provenance code {provenance_code!r} while building policy targets."
+                        )
 
                 # Get root value (approximate from MCTS)
                 tree_data = mcts_result.tree_data
@@ -781,6 +811,9 @@ class SelfPlayEngine:
                 if self.write_provenance:
                     # Policy-only rollout moves are intentionally excluded from policy-target training.
                     move_provenance_codes.append(POLICY_ONLY_MOVE_PROVENANCE_CODE)
+                    policy_target_rows.append(
+                        self._zero_policy_target_vector(board_size)
+                    )
                 if self.verbose >= 2:
                     print(
                         f"[Move {move_idx}] POLICY_ONLY: temp={policy_temperature:.3f}, "
@@ -819,6 +852,22 @@ class SelfPlayEngine:
                     "Move provenance length mismatch for generated game. "
                     f"Expected {expected_move_count}, got {len(game_data['move_provenance_codes'])}."
                 )
+            if len(policy_target_rows) != expected_move_count:
+                raise RuntimeError(
+                    "Policy-target row count mismatch for generated game. "
+                    f"Expected {expected_move_count}, got {len(policy_target_rows)}."
+                )
+            if policy_target_rows:
+                policy_targets_matrix = np.stack(policy_target_rows, axis=0).astype(
+                    np.float32, copy=False
+                )
+            else:
+                policy_targets_matrix = np.zeros(
+                    (0, board_size * board_size), dtype=np.float32
+                )
+            game_data['policy_targets_matrix'] = policy_targets_matrix
+            game_data['policy_target_source_codes'] = game_data['move_provenance_codes']
+            game_data['policy_target_version'] = POLICY_TARGET_CONSTRUCTION_VERSION
         
         if self.verbose >= 3:
             print(f"🎮 SELF-PLAY: Game complete, winner: {state.winner}, moves: {len(state.move_history)}")
@@ -842,6 +891,60 @@ class SelfPlayEngine:
                 f"Expected one of {sorted(SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE.keys())}."
             )
         return code
+
+    @staticmethod
+    def _zero_policy_target_vector(board_size: int) -> np.ndarray:
+        """Return all-zero policy-target row for non-trainable moves."""
+        return np.zeros(board_size * board_size, dtype=np.float32)
+
+    @staticmethod
+    def _one_hot_policy_target_vector(move: Tuple[int, int], board_size: int) -> np.ndarray:
+        """Return one-hot policy target row for a selected move."""
+        row, col = move
+        idx = rowcol_to_tensor_with_size(row, col, board_size)
+        vec = np.zeros(board_size * board_size, dtype=np.float32)
+        vec[idx] = 1.0
+        return vec
+
+    def _build_policy_target_vector_from_mcts_result(
+        self, mcts_result: Any, *, board_size: int
+    ) -> np.ndarray:
+        """
+        Build dense policy-target row from MCTS root visit distribution.
+
+        This is additive Phase-A instrumentation and does not change active training
+        behavior yet; training still consumes the legacy `policy` field from TRMPH extraction.
+        """
+        tree_data = mcts_result.tree_data or {}
+        mcts_probs_raw = tree_data.get("mcts_probabilities")
+        if not isinstance(mcts_probs_raw, dict):
+            raise ValueError(
+                "MCTS result missing mcts_probabilities dict in tree_data; "
+                "cannot build policy target vector."
+            )
+
+        vec = np.zeros(board_size * board_size, dtype=np.float32)
+        for move_trmph, prob_raw in mcts_probs_raw.items():
+            if not isinstance(move_trmph, str):
+                raise TypeError(
+                    f"mcts_probabilities key must be str move, got {type(move_trmph)}"
+                )
+            prob = float(prob_raw)
+            if not np.isfinite(prob) or prob < 0.0:
+                raise ValueError(
+                    f"Invalid probability for move {move_trmph!r}: {prob_raw!r}"
+                )
+            tensor_idx = trmph_to_tensor(move_trmph, board_size=board_size)
+            vec[tensor_idx] = prob
+
+        total = float(vec.sum())
+        if total <= 0.0:
+            raise RuntimeError(
+                "MCTS policy target vector has zero mass despite trainable MCTS move source."
+            )
+        if not np.isclose(total, 1.0, atol=1e-5):
+            vec /= total
+        return vec
 
     def _validate_game_data(self, game_data: Dict[str, Any], game_id: Optional[int] = None) -> None:
         """
@@ -905,6 +1008,51 @@ class SelfPlayEngine:
                 raise ValueError(
                     f"Invalid move_provenance_codes length{game_info}: "
                     f"expected {move_count}, got {len(move_codes)}"
+                )
+
+        policy_targets_matrix = game_data.get("policy_targets_matrix")
+        if policy_targets_matrix is not None:
+            if not isinstance(policy_targets_matrix, np.ndarray):
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_targets_matrix{game_info} must be np.ndarray, got {type(policy_targets_matrix)}"
+                )
+            if policy_targets_matrix.ndim != 2:
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_targets_matrix{game_info} must be 2D, got shape {policy_targets_matrix.shape}"
+                )
+            if policy_targets_matrix.shape[0] != move_count:
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_targets_matrix row count mismatch{game_info}: "
+                    f"expected {move_count}, got {policy_targets_matrix.shape[0]}"
+                )
+            expected_actions = self.board_size * self.board_size
+            if policy_targets_matrix.shape[1] != expected_actions:
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_targets_matrix column count mismatch{game_info}: "
+                    f"expected {expected_actions}, got {policy_targets_matrix.shape[1]}"
+                )
+            if not np.isfinite(policy_targets_matrix).all():
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_targets_matrix contains non-finite values{game_info}"
+                )
+
+        policy_target_source_codes = game_data.get("policy_target_source_codes")
+        if policy_target_source_codes is not None:
+            if not isinstance(policy_target_source_codes, str):
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_target_source_codes{game_info} must be str, got {type(policy_target_source_codes)}"
+                )
+            if len(policy_target_source_codes) != move_count:
+                game_info = f" (game {game_id})" if game_id is not None else ""
+                raise ValueError(
+                    f"policy_target_source_codes length mismatch{game_info}: "
+                    f"expected {move_count}, got {len(policy_target_source_codes)}"
                 )
 
     def _print_generation_progress(
@@ -1438,6 +1586,9 @@ class SelfPlayEngine:
                     record = make_move_provenance_record(
                         existing_provenance_records + game_index,
                         move_codes,
+                        policy_targets=game.get("policy_targets_matrix"),
+                        policy_target_source_codes=game.get("policy_target_source_codes"),
+                        policy_target_version=game.get("policy_target_version"),
                     )
                     f.write(record.to_json_line())
                     f.write("\n")
@@ -1482,7 +1633,11 @@ class SelfPlayEngine:
                     "Missing move_provenance_codes while writing streaming provenance sidecar"
                 )
             record = make_move_provenance_record(
-                self._streaming_games_written, move_codes
+                self._streaming_games_written,
+                move_codes,
+                policy_targets=game_data.get("policy_targets_matrix"),
+                policy_target_source_codes=game_data.get("policy_target_source_codes"),
+                policy_target_version=game_data.get("policy_target_version"),
             )
             with open(self.streaming_provenance_file, 'a', encoding='utf-8') as f:
                 f.write(record.to_json_line())

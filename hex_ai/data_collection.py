@@ -265,10 +265,7 @@ def collect_tournament_data_since_date(
                         raise ValueError(
                             f"Missing source provenance while writing tournament sidecar for {chunk_path}"
                         )
-                    record = make_move_provenance_record(
-                        game_index=game_index,
-                        move_codes=source_record.move_codes,
-                    )
+                    record = source_record.with_game_index(game_index)
                     f.write(record.to_json_line())
                     f.write("\n")
             logger.info(f"Wrote chunk provenance sidecar for chunk {i}: {sidecar_path}")
@@ -446,10 +443,7 @@ def collect_and_organize_data(
                         raise ValueError(
                             f"Missing source provenance while writing collected sidecar for {chunk_path}"
                         )
-                    record = make_move_provenance_record(
-                        game_index=game_index,
-                        move_codes=source_record.move_codes,
-                    )
+                    record = source_record.with_game_index(game_index)
                     f.write(record.to_json_line())
                     f.write("\n")
             logger.info(f"Wrote chunk provenance sidecar for chunk {i}: {sidecar_path}")
@@ -612,10 +606,7 @@ def combine_and_clean_files(
                         raise ValueError(
                             f"Missing source provenance while writing cleaned sidecar for {chunk_path}"
                         )
-                    record = make_move_provenance_record(
-                        game_index=game_index,
-                        move_codes=source_record.move_codes,
-                    )
+                    record = source_record.with_game_index(game_index)
                     f.write(record.to_json_line())
                     f.write("\n")
             logger.info(
@@ -670,14 +661,18 @@ def _add_or_validate_game_provenance(
         return
 
     existing_is_fallback = game_to_provenance_is_fallback[game_line]
-    records_match = (
-        existing.move_codes == record.move_codes
-        and existing.policy_train_mask == record.policy_train_mask
-    )
+    records_match = existing.equivalent_for_game_content(record)
     if records_match:
+        replace_existing = False
         if existing_is_fallback and not is_fallback:
+            replace_existing = True
+        elif (not existing.has_policy_targets()) and record.has_policy_targets():
+            # Prefer richer v2 payload when move-level provenance is otherwise equivalent.
+            replace_existing = True
+
+        if replace_existing:
             game_to_provenance[game_line] = record
-            game_to_provenance_is_fallback[game_line] = False
+            game_to_provenance_is_fallback[game_line] = is_fallback
         return
 
     if existing_is_fallback and not is_fallback:

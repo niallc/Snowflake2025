@@ -667,6 +667,9 @@ def extract_training_examples_with_selector_from_game(
     position_selector: str = "all",
     policy_train_mask: Optional[str] = None,
     policy_move_codes: Optional[str] = None,
+    policy_search_targets: Optional[np.ndarray] = None,
+    policy_target_source_codes: Optional[str] = None,
+    policy_target_version: Optional[int] = None,
     include_trmph: bool = False,
     shuffle_positions: bool = True
 ) -> tuple[list, Optional[str]]:
@@ -714,6 +717,67 @@ def extract_training_examples_with_selector_from_game(
                     f"policy_move_codes contains invalid values: {invalid_codes}"
                 )
 
+        policy_search_targets_arr: Optional[np.ndarray] = None
+        if policy_search_targets is not None:
+            policy_search_targets_arr = np.asarray(policy_search_targets, dtype=np.float32)
+            if policy_search_targets_arr.ndim != 2:
+                raise ValueError(
+                    f"policy_search_targets must be 2D when provided, got shape {policy_search_targets_arr.shape}"
+                )
+            if policy_search_targets_arr.shape[0] != len(moves):
+                raise ValueError(
+                    "policy_search_targets row count must match move count "
+                    f"(got {policy_search_targets_arr.shape[0]} vs {len(moves)})"
+                )
+            if policy_search_targets_arr.shape[1] != POLICY_OUTPUT_SIZE:
+                raise ValueError(
+                    "policy_search_targets column count must match policy output size "
+                    f"(got {policy_search_targets_arr.shape[1]} vs {POLICY_OUTPUT_SIZE})"
+                )
+            if not np.isfinite(policy_search_targets_arr).all():
+                raise ValueError("policy_search_targets contains non-finite values")
+            if (policy_search_targets_arr < 0.0).any():
+                raise ValueError("policy_search_targets contains negative probabilities")
+
+        if policy_target_source_codes is not None:
+            if not isinstance(policy_target_source_codes, str):
+                raise ValueError(
+                    "policy_target_source_codes must be str when provided, "
+                    f"got {type(policy_target_source_codes)}"
+                )
+            if len(policy_target_source_codes) != len(moves):
+                raise ValueError(
+                    "policy_target_source_codes length must match move count "
+                    f"(got {len(policy_target_source_codes)} vs {len(moves)})"
+                )
+            invalid_target_source_codes = sorted(
+                set(policy_target_source_codes) - {"V", "G", "C", "T"}
+            )
+            if invalid_target_source_codes:
+                raise ValueError(
+                    "policy_target_source_codes contains invalid values: "
+                    f"{invalid_target_source_codes}"
+                )
+            if policy_move_codes is not None and policy_target_source_codes != policy_move_codes:
+                raise ValueError(
+                    "policy_target_source_codes must match policy_move_codes when both are provided"
+                )
+
+        if policy_target_version is not None:
+            if isinstance(policy_target_version, bool):
+                raise ValueError("policy_target_version must be int, got bool")
+            try:
+                policy_target_version = int(policy_target_version)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "policy_target_version must be int when provided, "
+                    f"got {type(policy_target_version)}"
+                ) from exc
+            if policy_target_version < 0:
+                raise ValueError(
+                    f"policy_target_version must be >= 0, got {policy_target_version}"
+                )
+
         if winner_from_file not in [TRMPH_BLUE_WIN, TRMPH_RED_WIN]:
             raise ValueError(f"Invalid winner format: {winner_from_file}")
         winner_clear = trmph_winner_to_clear_str(winner_from_file)
@@ -750,8 +814,13 @@ def extract_training_examples_with_selector_from_game(
                     continue
 
             policy_target = None
+            policy_search_target = None
             if not is_terminal_position:
                 policy_target = create_policy_target(moves[position])
+                if policy_search_targets_arr is not None:
+                    policy_search_target = np.array(
+                        policy_search_targets_arr[position], dtype=np.float32, copy=True
+                    )
             player_to_move = get_player_to_move_from_moves(moves[:position])
             # Convert winner string to Winner enum
             winner_enum = Winner.BLUE if winner_clear == "BLUE" else Winner.RED if winner_clear == "RED" else None
@@ -767,11 +836,16 @@ def extract_training_examples_with_selector_from_game(
                 metadata['policy_move_code'] = policy_move_codes[position]
             if policy_train_mask is not None and not is_terminal_position:
                 metadata['policy_target_trainable'] = policy_train_mask[position] == "1"
+            if policy_target_source_codes is not None and not is_terminal_position:
+                metadata['policy_target_source_code'] = policy_target_source_codes[position]
+            if policy_target_version is not None and not is_terminal_position:
+                metadata['policy_target_version'] = policy_target_version
             if include_trmph:
                 metadata['trmph_game'] = trmph_text
             example = {
                 'board': board_state,
                 'policy': policy_target,
+                'policy_search_target': policy_search_target,
                 'value': value_target,
                 'player_to_move': player_to_move,
                 'metadata': metadata
