@@ -637,6 +637,24 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 raise ValueError("Policy target contains non-finite values")
             if (policy_arr < 0.0).any():
                 raise ValueError("Policy target contains negative values")
+            if self.use_policy_search_targets and legacy_policy is not None:
+                # In search-target mode, non-terminal positions must carry a
+                # trainable distribution with positive mass. Zero-mass rows are
+                # reserved for terminal/masked samples and should not appear here.
+                policy_mass = float(policy_arr.sum(dtype=np.float64))
+                if policy_mass <= 1e-12:
+                    metadata = (
+                        example.get("metadata", {})
+                        if isinstance(example, dict)
+                        else {}
+                    )
+                    source_code = metadata.get("policy_target_source_code", None)
+                    position = metadata.get("position_in_game", None)
+                    raise ValueError(
+                        "Non-positive policy_search_target mass for non-terminal sample "
+                        f"(position={position}, source_code={source_code!r}). "
+                        "This indicates corrupted trainable search-target data."
+                    )
             policy = policy_arr
 
         return (

@@ -739,6 +739,32 @@ def extract_training_examples_with_selector_from_game(
             if (policy_search_targets_arr < 0.0).any():
                 raise ValueError("policy_search_targets contains negative probabilities")
 
+            trainable_row_mask: Optional[List[bool]] = None
+            if policy_train_mask is not None:
+                trainable_row_mask = [bit == "1" for bit in policy_train_mask]
+            elif policy_target_source_codes is not None:
+                trainable_row_mask = [
+                    code in {"V", "G", "T"} for code in policy_target_source_codes
+                ]
+            elif policy_move_codes is not None:
+                trainable_row_mask = [code in {"V", "G", "T"} for code in policy_move_codes]
+
+            if trainable_row_mask is not None:
+                row_sums = policy_search_targets_arr.sum(axis=1, dtype=np.float64)
+                bad_rows = [
+                    idx
+                    for idx, trainable in enumerate(trainable_row_mask)
+                    if trainable and float(row_sums[idx]) <= 1e-12
+                ]
+                if bad_rows:
+                    preview = ", ".join(str(idx) for idx in bad_rows[:8])
+                    if len(bad_rows) > 8:
+                        preview += f", ... ({len(bad_rows)} total)"
+                    raise ValueError(
+                        "policy_search_targets has non-positive probability mass on "
+                        f"trainable rows at positions: {preview}"
+                    )
+
         if policy_target_source_codes is not None:
             if not isinstance(policy_target_source_codes, str):
                 raise ValueError(

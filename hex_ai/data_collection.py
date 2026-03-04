@@ -118,12 +118,35 @@ def _collect_file_provenance(
 
     sidecar_path = sidecar_path_for_trmph(file_path)
     if sidecar_path.exists():
-        provenance_records = load_move_provenance_sidecar(sidecar_path)
+        provenance_records = load_move_provenance_sidecar(
+            sidecar_path,
+            allow_truncated_last_line=(not provenance_required),
+        )
         if len(provenance_records) != len(games):
-            raise ValueError(
-                f"Provenance record count mismatch for {file_path}: "
-                f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
-            )
+            if (not provenance_required) and len(provenance_records) < len(games):
+                # Optional mode: allow interrupted tail writes to sidecar by
+                # synthesizing deterministic fallback records for trailing games.
+                missing = len(games) - len(provenance_records)
+                logger.warning(
+                    "Optional provenance recovery for %s: sidecar has %d/%d records; "
+                    "using fallback V-codes for trailing %d games.",
+                    file_path,
+                    len(provenance_records),
+                    len(games),
+                    missing,
+                )
+                for game_index in range(len(provenance_records), len(games)):
+                    provenance_records.append(
+                        _build_fallback_provenance_record(
+                            game_index=game_index,
+                            game_line=games[game_index],
+                        )
+                    )
+            else:
+                raise ValueError(
+                    f"Provenance record count mismatch for {file_path}: "
+                    f"expected {len(games)}, found {len(provenance_records)} in {sidecar_path}"
+                )
 
         for game_index, game_line in enumerate(games):
             record = provenance_records[game_index]
@@ -201,7 +224,10 @@ def collect_tournament_data_since_date(
     processed_files_by_source = {}
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
-    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
+    provenance_conflict_counter: Dict[str, int] = {
+        "authoritative_conflicts": 0,
+        "policy_target_payload_conflicts": 0,
+    }
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
@@ -230,11 +256,20 @@ def collect_tournament_data_since_date(
     
     logger.info(f"Total games extracted: {len(all_games)}")
     authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    policy_target_payload_conflicts = provenance_conflict_counter[
+        "policy_target_payload_conflicts"
+    ]
     if authoritative_conflicts:
         logger.warning(
             "Observed %d conflicting authoritative provenance records for duplicate games; "
             "keeping the first record encountered for each duplicate game line.",
             authoritative_conflicts,
+        )
+    if policy_target_payload_conflicts:
+        logger.warning(
+            "Observed %d duplicate games with conflicting v2 policy-target payloads; "
+            "keeping first-seen payload unless a higher policy_target_version is present.",
+            policy_target_payload_conflicts,
         )
     
     # Remove duplicates
@@ -293,6 +328,10 @@ def collect_tournament_data_since_date(
                 "Conflicting authoritative provenance records kept-first: "
                 f"{authoritative_conflicts}\n"
             )
+            f.write(
+                "Conflicting v2 policy-target payloads (first-seen kept unless newer version): "
+                f"{policy_target_payload_conflicts}\n"
+            )
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -332,6 +371,7 @@ def collect_tournament_data_since_date(
         "chunks_created": len(chunks),
         "provenance_sidecars_written": provenance_enabled,
         "provenance_authoritative_conflicts": authoritative_conflicts,
+        "provenance_policy_target_payload_conflicts": policy_target_payload_conflicts,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -379,7 +419,10 @@ def collect_and_organize_data(
     processed_files_by_source = {}
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
-    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
+    provenance_conflict_counter: Dict[str, int] = {
+        "authoritative_conflicts": 0,
+        "policy_target_payload_conflicts": 0,
+    }
     
     for source_dir, file_path in all_files:
         logger.info(f"Processing {file_path}")
@@ -408,11 +451,20 @@ def collect_and_organize_data(
     
     logger.info(f"Total games extracted: {len(all_games)}")
     authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    policy_target_payload_conflicts = provenance_conflict_counter[
+        "policy_target_payload_conflicts"
+    ]
     if authoritative_conflicts:
         logger.warning(
             "Observed %d conflicting authoritative provenance records for duplicate games; "
             "keeping the first record encountered for each duplicate game line.",
             authoritative_conflicts,
+        )
+    if policy_target_payload_conflicts:
+        logger.warning(
+            "Observed %d duplicate games with conflicting v2 policy-target payloads; "
+            "keeping first-seen payload unless a higher policy_target_version is present.",
+            policy_target_payload_conflicts,
         )
     
     # Remove duplicates
@@ -469,6 +521,10 @@ def collect_and_organize_data(
                 "Conflicting authoritative provenance records kept-first: "
                 f"{authoritative_conflicts}\n"
             )
+            f.write(
+                "Conflicting v2 policy-target payloads (first-seen kept unless newer version): "
+                f"{policy_target_payload_conflicts}\n"
+            )
         
         f.write(f"\nSource directories:\n")
         for source_dir in source_dirs:
@@ -503,6 +559,7 @@ def collect_and_organize_data(
         "chunks_created": len(chunks),
         "provenance_sidecars_written": provenance_enabled,
         "provenance_authoritative_conflicts": authoritative_conflicts,
+        "provenance_policy_target_payload_conflicts": policy_target_payload_conflicts,
         "source_stats": source_stats,
         "processed_files_by_source": processed_files_by_source
     }
@@ -552,7 +609,10 @@ def combine_and_clean_files(
     all_games: List[str] = []
     game_to_provenance: Dict[str, MoveProvenanceRecord] = {}
     game_to_provenance_is_fallback: Dict[str, bool] = {}
-    provenance_conflict_counter: Dict[str, int] = {"authoritative_conflicts": 0}
+    provenance_conflict_counter: Dict[str, int] = {
+        "authoritative_conflicts": 0,
+        "policy_target_payload_conflicts": 0,
+    }
     for file_path in all_trmph_files:
         logger.info(f"Processing {file_path}")
         games = extract_games_from_file(file_path)
@@ -571,11 +631,20 @@ def combine_and_clean_files(
     
     logger.info(f"Total games extracted: {len(all_games)}")
     authoritative_conflicts = provenance_conflict_counter["authoritative_conflicts"]
+    policy_target_payload_conflicts = provenance_conflict_counter[
+        "policy_target_payload_conflicts"
+    ]
     if authoritative_conflicts:
         logger.warning(
             "Observed %d conflicting authoritative provenance records for duplicate games; "
             "keeping the first record encountered for each duplicate game line.",
             authoritative_conflicts,
+        )
+    if policy_target_payload_conflicts:
+        logger.warning(
+            "Observed %d duplicate games with conflicting v2 policy-target payloads; "
+            "keeping first-seen payload unless a higher policy_target_version is present.",
+            policy_target_payload_conflicts,
         )
     
     # Remove duplicates
@@ -633,6 +702,10 @@ def combine_and_clean_files(
                 "Conflicting authoritative provenance records kept-first: "
                 f"{authoritative_conflicts}\n"
             )
+            f.write(
+                "Conflicting v2 policy-target payloads (first-seen kept unless newer version): "
+                f"{policy_target_payload_conflicts}\n"
+            )
         f.write(f"\nInput files:\n")
         for file_path in all_trmph_files:
             f.write(f"  {file_path}\n")
@@ -669,6 +742,27 @@ def _add_or_validate_game_provenance(
         elif (not existing.has_policy_targets()) and record.has_policy_targets():
             # Prefer richer v2 payload when move-level provenance is otherwise equivalent.
             replace_existing = True
+        elif (
+            (not existing_is_fallback)
+            and (not is_fallback)
+            and existing.has_policy_targets()
+            and record.has_policy_targets()
+            and (not existing.equivalent_policy_target_payload(record))
+        ):
+            # Duplicate game lines can carry different policy-target payloads even when
+            # move-level provenance is equivalent. Keep deterministic behavior (first
+            # seen), but if a newer target contract version appears, prefer that.
+            if provenance_conflict_counter is not None:
+                provenance_conflict_counter["policy_target_payload_conflicts"] = (
+                    provenance_conflict_counter.get(
+                        "policy_target_payload_conflicts", 0
+                    )
+                    + 1
+                )
+            existing_version = int(existing.policy_target_version or 0)
+            record_version = int(record.policy_target_version or 0)
+            if record_version > existing_version:
+                replace_existing = True
 
         if replace_existing:
             game_to_provenance[game_line] = record

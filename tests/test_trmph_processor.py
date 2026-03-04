@@ -33,6 +33,7 @@ from hex_ai.selfplay.selfplay_engine import SelfPlayEngine
 from hex_ai.trmph_processing.processor import TRMPHProcessor
 from hex_ai.trmph_processing.config import ProcessingConfig
 from hex_ai.config import TRMPH_BLUE_WIN, TRMPH_RED_WIN
+from hex_ai.data_utils import extract_training_examples_with_selector_from_game
 
 
 class TestTRMPHProcessor:
@@ -797,6 +798,65 @@ class TestTRMPHProcessor:
         assert decoded is not None
         np.testing.assert_allclose(decoded, targets, rtol=1e-3, atol=1e-3)
 
+    def test_combine_and_clean_files_optional_counts_conflicting_v2_payloads(self):
+        """Equivalent duplicate games with different v2 payloads should be counted and keep-first."""
+        trmph_a = self.create_test_trmph_file(
+            "combine_optional_v2_conflict_a.trmph",
+            "#13,a1b2 b\n",
+        )
+        targets_a = np.zeros((2, 169), dtype=np.float32)
+        targets_a[0, 0] = 1.0
+        targets_a[1, 1] = 1.0
+        record_a = make_move_provenance_record(
+            game_index=0,
+            move_codes="VV",
+            policy_targets=targets_a,
+            policy_target_source_codes="VV",
+            policy_target_version=1,
+        )
+        with open(sidecar_path_for_trmph(trmph_a), "w", encoding="utf-8") as f:
+            f.write(record_a.to_json_line())
+            f.write("\n")
+
+        trmph_b = self.create_test_trmph_file(
+            "combine_optional_v2_conflict_b.trmph",
+            "#13,a1b2 b\n",
+        )
+        targets_b = np.zeros((2, 169), dtype=np.float32)
+        targets_b[0, 2] = 1.0
+        targets_b[1, 3] = 1.0
+        record_b = make_move_provenance_record(
+            game_index=0,
+            move_codes="VV",
+            policy_targets=targets_b,
+            policy_target_source_codes="VV",
+            policy_target_version=1,
+        )
+        with open(sidecar_path_for_trmph(trmph_b), "w", encoding="utf-8") as f:
+            f.write(record_b.to_json_line())
+            f.write("\n")
+
+        combine_and_clean_files(
+            input_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "cleaned_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert len(records) == 1
+        assert records[0].schema_version == MOVE_PROVENANCE_SCHEMA_VERSION_V2
+        decoded = records[0].decode_policy_targets()
+        assert decoded is not None
+        np.testing.assert_allclose(decoded, targets_a, rtol=1e-3, atol=1e-3)
+
+        summary_text = (self.output_dir / "processing_summary.txt").read_text(encoding="utf-8")
+        assert (
+            "Conflicting v2 policy-target payloads (first-seen kept unless newer version): 1"
+            in summary_text
+        )
+
     def test_collect_and_organize_data_optional_writes_sidecars(self):
         """Collection mode should emit sidecars in optional mode."""
         self.create_test_trmph_file(
@@ -907,6 +967,73 @@ class TestTRMPHProcessor:
         assert len(records) == 1
         with pytest.raises(ValueError, match="base64"):
             records[0].decode_policy_targets()
+
+    def test_load_move_provenance_sidecar_can_ignore_truncated_last_line(self):
+        """Optional loader mode should skip a non-empty truncated tail line."""
+        trmph_path = self.create_test_trmph_file(
+            "truncated_sidecar_tail.trmph",
+            "#13,a1 b\n#13,a1b2 r\n",
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        first_record = make_move_provenance_record(game_index=0, move_codes="V")
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(first_record.to_json_line())
+            f.write("\n")
+            # Deliberately write a truncated/incomplete JSON line without newline.
+            f.write('{"schema_version":1')
+
+        with pytest.raises(ValueError, match="invalid JSON"):
+            load_move_provenance_sidecar(sidecar_path)
+
+        records = load_move_provenance_sidecar(
+            sidecar_path,
+            allow_truncated_last_line=True,
+        )
+        assert len(records) == 1
+        assert records[0].game_index == 0
+        assert records[0].move_codes == "V"
+
+    def test_collect_and_organize_data_optional_recovers_truncated_sidecar_tail(self):
+        """Optional provenance mode should recover trailing sidecar truncation via fallback."""
+        trmph_path = self.create_test_trmph_file(
+            "optional_truncated_sidecar_recovery.trmph",
+            "#13,a1 b\n#13,a1b2 r\n",
+        )
+        sidecar_path = sidecar_path_for_trmph(trmph_path)
+        first_record = make_move_provenance_record(game_index=0, move_codes="V")
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            f.write(first_record.to_json_line())
+            f.write("\n")
+            f.write('{"schema_version":1')
+
+        stats = collect_and_organize_data(
+            source_dirs=[self.data_dir],
+            output_dir=self.output_dir,
+            chunk_size=10,
+            policy_provenance_mode="optional",
+        )
+        assert stats["provenance_sidecars_written"] is True
+
+        chunk_sidecar = sidecar_path_for_trmph(self.output_dir / "collected_chunk_000.trmph")
+        records = load_move_provenance_sidecar(chunk_sidecar)
+        assert [record.move_codes for record in records] == ["V", "VV"]
+
+    def test_extract_training_examples_rejects_zero_mass_trainable_search_target_rows(self):
+        """Fail fast when trainable rows carry zero policy_search_target mass."""
+        zero_targets = np.zeros((2, 169), dtype=np.float32)
+        with pytest.raises(
+            ValueError,
+            match="policy_search_targets has non-positive probability mass on trainable rows",
+        ):
+            extract_training_examples_with_selector_from_game(
+                trmph_text="#13,a1b2",
+                winner_from_file=TRMPH_BLUE_WIN,
+                game_id=(0, 1),
+                policy_train_mask="11",
+                policy_move_codes="VV",
+                policy_search_targets=zero_targets,
+                policy_target_source_codes="VV",
+            )
 
     def test_combine_and_clean_files_preserves_v2_policy_targets(self):
         """Combine/clean should preserve v2 sidecar payloads when rewriting game_index."""

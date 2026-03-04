@@ -436,6 +436,28 @@ class MoveProvenanceRecord:
             and self.policy_train_mask == other.policy_train_mask
         )
 
+    def equivalent_policy_target_payload(self, other: "MoveProvenanceRecord") -> bool:
+        """
+        Return whether v2 policy-target payloads are byte-equivalent.
+
+        This is intentionally stricter than semantic equivalence: we compare the full
+        encoded payload contract fields so dedupe callers can detect conflicting
+        authoritative policy-target data for duplicate game lines.
+        """
+        if not isinstance(other, MoveProvenanceRecord):
+            return False
+        if self.has_policy_targets() != other.has_policy_targets():
+            return False
+        if not self.has_policy_targets():
+            return True
+        return (
+            self.policy_target_encoding == other.policy_target_encoding
+            and self.policy_targets_blob == other.policy_targets_blob
+            and self.policy_target_size == other.policy_target_size
+            and self.policy_target_source_codes == other.policy_target_source_codes
+            and self.policy_target_version == other.policy_target_version
+        )
+
     @classmethod
     def from_json_dict(cls, payload: Dict[str, Any], context: str) -> "MoveProvenanceRecord":
         required_fields = {
@@ -576,6 +598,7 @@ def load_move_provenance_sidecar(
     sidecar_path: PathLike,
     *,
     validate_policy_targets_payload: bool = True,
+    allow_truncated_last_line: bool = False,
 ) -> list[MoveProvenanceRecord]:
     """
     Load provenance records from a sidecar JSONL file.
@@ -585,6 +608,9 @@ def load_move_provenance_sidecar(
         validate_policy_targets_payload: If True, decode-validate each v2 blob
             during load. Set False when callers immediately decode each record
             anyway to avoid duplicate decode work.
+        allow_truncated_last_line: If True, tolerate a malformed final line when
+            that line is non-empty and missing a trailing newline. This is
+            intended only for optional recovery from interrupted writes.
     """
     path = Path(sidecar_path)
     if not path.exists():
@@ -596,13 +622,29 @@ def load_move_provenance_sidecar(
 
     records: list[MoveProvenanceRecord] = []
     with open(path, "r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
+        lines = list(enumerate(handle, 1))
+
+    total_lines = len(lines)
+    for line_number, line in lines:
+        try:
             record = parse_move_provenance_line(
                 line, source=path, line_number=line_number
             )
-            if validate_policy_targets_payload and record.has_policy_targets():
-                record.validate_policy_targets_payload()
-            records.append(record)
+        except ValueError:
+            is_last_line = line_number == total_lines
+            truncated_tail = (
+                allow_truncated_last_line
+                and is_last_line
+                and bool(line.strip())
+                and (not line.endswith("\n"))
+            )
+            if truncated_tail:
+                break
+            raise
+
+        if validate_policy_targets_payload and record.has_policy_targets():
+            record.validate_policy_targets_payload()
+        records.append(record)
 
     return records
 
