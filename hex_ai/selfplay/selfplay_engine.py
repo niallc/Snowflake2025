@@ -67,6 +67,8 @@ SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
     "neural_network_confidence": MOVE_CODE_CONFIDENCE_TERMINATION,
     "terminal_move": MOVE_CODE_TERMINAL_TERMINATION,
 }
+# Policy-target construction semantics for V/G/C/T codes are documented in:
+# write_ups/search_policy_target_design_2026_03_04.md
 POLICY_TARGET_CONSTRUCTION_VERSION = 1
 
 

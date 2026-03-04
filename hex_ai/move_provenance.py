@@ -1,6 +1,16 @@
 """
 Move provenance sidecar helpers for self-play and TRMPH preprocessing.
 
+Authoritative semantics and end-to-end usage notes for policy targets live in:
+  write_ups/search_policy_target_design_2026_03_04.md
+
+Current policy-target source-code semantics:
+  V: visit-count distribution target
+  G: softmax(score_without_gumbel) on final scored/ranked subset
+  C: policy-masked row (unused for policy loss)
+  T: currently visit-count distribution in searched terminal-move cases; one-hot
+     only in terminal-shortcut/no-visit cases
+
 Schema v1:
 - One JSON object per line
 - Required fields:
