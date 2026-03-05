@@ -703,18 +703,29 @@ def run_hyperparameter_tuning_current_data(
     if len(shard_ranges) != len(data_dirs):
         raise ValueError(f"Number of shard_ranges ({len(shard_ranges)}) must match number of data_dirs ({len(data_dirs)})")
     
-    # Resolve validation configuration
-    validation_log_overrides = (
-        {"hex_ai.validation_defaults": logging.WARNING}
-        if concise_restart_logging
-        else {}
+    # Resolve validation configuration.
+    # Explicit empty lists are treated as "validation disabled" so callers that
+    # already resolved --no-validation don't get silently remapped to defaults.
+    explicit_no_validation = (
+        isinstance(validation_dirs, list)
+        and isinstance(validation_shard_ranges, list)
+        and len(validation_dirs) == 0
+        and len(validation_shard_ranges) == 0
     )
-    with _temporary_logger_levels(validation_log_overrides):
-        resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
-            validation_dirs=validation_dirs,
-            validation_shard_ranges=validation_shard_ranges,
-            no_validation=False  # We don't support no_validation in this function
+    if explicit_no_validation:
+        resolved_validation_dirs, resolved_validation_ranges = [], []
+    else:
+        validation_log_overrides = (
+            {"hex_ai.validation_defaults": logging.WARNING}
+            if concise_restart_logging
+            else {}
         )
+        with _temporary_logger_levels(validation_log_overrides):
+            resolved_validation_dirs, resolved_validation_ranges = resolve_validation_config(
+                validation_dirs=validation_dirs,
+                validation_shard_ranges=validation_shard_ranges,
+                no_validation=False
+            )
     
     # Validate validation configuration if not empty
     if resolved_validation_dirs and resolved_validation_ranges:
