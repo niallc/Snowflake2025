@@ -821,7 +821,9 @@ class TrainingStep:
             if values:
                 if key == "use_policy_search_targets":
                     if bool(values[0]):
-                        cmd.append(arg_name)
+                        cmd.append("--use-policy-search-targets")
+                    else:
+                        cmd.append("--no-use-policy-search-targets")
                 else:
                     cmd.extend([arg_name, str(values[0])])
 
@@ -1440,10 +1442,19 @@ Examples:
     parser.add_argument("--max-grad-norm", type=float, help="Override max gradient norm")
     parser.add_argument("--value-learning-rate-factor", type=float, help="Override value learning rate factor")
     parser.add_argument("--value-weight-decay-factor", type=float, help="Override value weight decay factor")
-    parser.add_argument(
+    policy_target_group = parser.add_mutually_exclusive_group()
+    policy_target_group.add_argument(
         "--use-policy-search-targets",
         action="store_true",
         help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
+    )
+    policy_target_group.add_argument(
+        "--no-use-policy-search-targets",
+        action="store_true",
+        help=(
+            "Disable per-position search-target supervision and train policy against "
+            "legacy played-move one-hot targets."
+        ),
     )
     parser.add_argument(
         "--soft-target-legal-mix-alpha",
@@ -1554,10 +1565,23 @@ def main():
             hyperparameter_overrides["value_weight_decay_factor"] = [args.value_weight_decay_factor]
         if args.use_policy_search_targets:
             hyperparameter_overrides["use_policy_search_targets"] = [True]
+        elif args.no_use_policy_search_targets:
+            hyperparameter_overrides["use_policy_search_targets"] = [False]
         if args.soft_target_legal_mix_alpha is not None:
             hyperparameter_overrides["soft_target_legal_mix_alpha"] = [
                 args.soft_target_legal_mix_alpha
             ]
+
+        if args.use_policy_search_targets:
+            logger.info("Policy target mode override: use_policy_search_targets=True")
+        elif args.no_use_policy_search_targets:
+            logger.info("Policy target mode override: use_policy_search_targets=False")
+        else:
+            logger.info(
+                "Policy target mode: using default sweep hyperparameter "
+                "(use_policy_search_targets=True). Pass --no-use-policy-search-targets "
+                "to disable for legacy data."
+            )
 
         # Create configuration
         config = PipelineConfig(

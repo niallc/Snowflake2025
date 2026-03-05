@@ -227,10 +227,19 @@ Examples:
     parser.add_argument("--target_samples_per_mini_epoch", type=int, default=TARGET_SAMPLES_PER_MINI_EPOCH,
                        help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
-    parser.add_argument(
+    policy_target_group = parser.add_mutually_exclusive_group()
+    policy_target_group.add_argument(
         "--use-policy-search-targets",
         action="store_true",
         help="Train policy head against per-position MCTS search targets (requires v2 policy sidecar data).",
+    )
+    policy_target_group.add_argument(
+        "--no-use-policy-search-targets",
+        action="store_true",
+        help=(
+            "Disable per-position search-target supervision and train policy against "
+            "legacy played-move one-hot targets."
+        ),
     )
     parser.add_argument(
         "--soft-target-legal-mix-alpha",
@@ -337,6 +346,8 @@ Examples:
             config["value_weight"] = 1.0 - config["policy_weight"]
         if args.use_policy_search_targets:
             config["use_policy_search_targets"] = True
+        elif args.no_use_policy_search_targets:
+            config["use_policy_search_targets"] = False
         if args.soft_target_legal_mix_alpha is not None:
             config["soft_target_legal_mix_alpha"] = float(args.soft_target_legal_mix_alpha)
         exp_name = make_experiment_name(config, i, tag = "loss_weight_sweep")

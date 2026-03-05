@@ -190,7 +190,21 @@ def create_datasets(data_dirs: List[str],
                 pin_memory=False
             )
     except Exception as e:
-        logger.error(f"Failed to create training/validation dataloaders: {e}")
+        error_message = str(e)
+        if (
+            use_policy_search_targets
+            and "Missing policy_search_target while use_policy_search_targets=True" in error_message
+        ):
+            actionable = (
+                f"{error_message} "
+                "Detected legacy/mixed shard data while search-target mode is enabled. "
+                "Either train only on v2 search-target shards, or disable search-target mode "
+                "with --no-use-policy-search-targets."
+            )
+            logger.error(f"Failed to create training/validation dataloaders: {actionable}")
+            raise RuntimeError(actionable) from e
+
+        logger.error(f"Failed to create training/validation dataloaders: {error_message}")
         raise
     return train_loader, val_loader
 
