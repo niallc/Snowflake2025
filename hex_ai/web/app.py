@@ -47,6 +47,7 @@ from hex_ai.web.gameplay_response import (
     build_engine_move_response,
     build_game_state_response,
 )
+from hex_ai.review.game_review import GameReviewer, review_to_json
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
     get_interactive_dead_cell_config,
@@ -1299,6 +1300,7 @@ ENDPOINT_COSTS = {
     'api_mcts_move': 2,            # Expensive MCTS (4 burst calls, 2/sec sustained)
     'api_constants': 0.1,            # Constants endpoint (very cheap)
     'api_move_heatmap': 8.0,         # Heavy batch of value inferences
+    'api_game_review': 14.0,         # Sequence-wide review over many positions
 }
 
 def rate_limit(cost: float):
@@ -2079,6 +2081,110 @@ def api_move_heatmap():
         )
         return jsonify({"success": False, "error": "Failed to compute move heatmap"}), 500
 
+@app.route("/api/game_review", methods=["POST"])
+@rate_limit(ENDPOINT_COSTS['api_game_review'])
+def api_game_review():
+    data = request.get_json()
+
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=None,
+        optional_fields=[
+            "trmph",
+            "elo_rating",
+            "display_board_size",
+            "model_id",
+            "candidate_top_k",
+            "suggestion_count",
+            "policy_temperature",
+        ],
+    )
+    if not is_valid:
+        app.logger.warning("Invalid game-review input rejected: %s", error_msg)
+        return jsonify({"success": False, "error": error_msg}), 400
+
+    trmph = validated_data.get("trmph", "")
+    if not trmph:
+        return jsonify({"success": False, "error": "trmph is required for game review"}), 400
+
+    elo_rating = validated_data.get("elo_rating", DEFAULT_ELO)
+    display_board_size = validated_data.get("display_board_size", DEFAULT_DISPLAY_BOARD_SIZE)
+    requested_model_id = validated_data.get("model_id")
+
+    try:
+        candidate_top_k = int(validated_data.get("candidate_top_k", 8))
+        suggestion_count = int(validated_data.get("suggestion_count", 3))
+        policy_temperature = float(validated_data.get("policy_temperature", 1.0))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": f"Invalid review parameter: {exc}"}), 400
+
+    if candidate_top_k < 1:
+        return jsonify({"success": False, "error": "candidate_top_k must be >= 1"}), 400
+    if suggestion_count < 1:
+        return jsonify({"success": False, "error": "suggestion_count must be >= 1"}), 400
+    if policy_temperature <= 0:
+        return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
+
+    try:
+        moves = fc.split_trmph_moves(trmph)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": f"Invalid trmph: {exc}"}), 400
+
+    if not moves:
+        return jsonify({"success": False, "error": "At least one move is required for review"}), 400
+
+    model_id = requested_model_id or get_difficulty_parameters(elo_rating)["model"]
+
+    try:
+        initial_state = create_game_state_from_trmph(
+            "",
+            display_board_size=display_board_size,
+            context="for game review",
+        )
+        reviewer = GameReviewer(
+            get_model(model_id),
+            model_label=model_id,
+            display_board_size=display_board_size,
+            candidate_policy_top_k=candidate_top_k,
+            suggestion_count=suggestion_count,
+            policy_temperature=policy_temperature,
+        )
+        review = reviewer.review_move_sequence(
+            initial_state,
+            moves,
+            metadata={
+                "user_trmph": trmph,
+                "elo_rating": elo_rating,
+                "display_board_size": display_board_size,
+            },
+        )
+        payload = review_to_json(review)
+
+        _log_usage_event_with_trmph_context(
+            "game_review",
+            trmph,
+            status=200,
+            elo_rating=elo_rating,
+            model_id=model_id,
+            display_board_size=display_board_size,
+            candidate_top_k=candidate_top_k,
+            suggestion_count=suggestion_count,
+        )
+        return jsonify({"success": True, "review": payload})
+    except Exception as exc:
+        app.logger.error("Error in api_game_review: %s", exc)
+        _log_usage_event_with_trmph_context(
+            "game_review",
+            trmph,
+            status=500,
+            success=False,
+            reason="exception",
+            elo_rating=elo_rating,
+            model_id=model_id,
+            display_board_size=display_board_size,
+        )
+        return jsonify({"success": False, "error": "Failed to generate review"}), 500
+
 @app.route("/api/apply_move", methods=["POST"])
 @rate_limit(ENDPOINT_COSTS['api_apply_move'])
 def api_apply_move():
@@ -2802,6 +2908,14 @@ def serve_settings():
 @app.route("/settings.html")
 def serve_settings_html():
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), "settings.html")
+
+@app.route("/review")
+def serve_review_page():
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), "review.html")
+
+@app.route("/review.html")
+def serve_review_page_html():
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), "review.html")
 
 if __name__ == "__main__":
     import argparse

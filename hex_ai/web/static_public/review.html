@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snowflake 25 Review</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/review.css">
+</head>
+<body>
+  <div class="review-page-shell">
+    <div class="review-page-layout">
+      <div class="review-page-header">
+        <div>
+          <h1>Snowflake 25 Review</h1>
+          <p class="review-page-subtitle">Paste a move sequence or open this page from the main board to generate a visual move review.</p>
+        </div>
+        <a href="/" class="btn-secondary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:10px 14px;">Back To Board</a>
+      </div>
+
+      <form id="review-form" class="review-toolbar">
+        <div class="review-toolbar-group">
+          <label for="review-trmph-input">Move Sequence</label>
+          <input id="review-trmph-input" type="text" placeholder="Enter TRMPH moves (e.g. a1b2c3)">
+        </div>
+        <div class="review-toolbar-group">
+          <label for="review-board-size">Board Size</label>
+          <select id="review-board-size"></select>
+        </div>
+        <div class="review-toolbar-group">
+          <label for="review-elo">ELO</label>
+          <input id="review-elo" type="number" min="1" max="2350" step="1">
+        </div>
+        <button id="review-submit" type="submit" class="btn-primary">Analyze</button>
+      </form>
+
+      <p id="review-status" class="review-status"></p>
+
+      <div id="review-root" class="review-empty">
+        Paste a sequence, or use the main board's review button to open this page with the current game state.
+      </div>
+    </div>
+  </div>
+
+  <script src="/shared/board_renderer.js"></script>
+  <script src="/shared/game_review_ui.js"></script>
+  <script src="/static/review.js"></script>
+</body>
+</html>

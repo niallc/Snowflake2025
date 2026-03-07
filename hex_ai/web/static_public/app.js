@@ -101,6 +101,7 @@ class HexGame {
         this.trmphInput = document.getElementById('trmph-input');
         this.copyTrmphBtn = document.getElementById('copy-trmph');
         this.applyTrmphBtn = document.getElementById('apply-trmph');
+        this.reviewGameBtn = document.getElementById('review-game-btn');
         this.trmphError = document.getElementById('trmph-error');
         this.darkModeToggle = document.getElementById('dark-mode-toggle');
         this.heatmapEnabledCheck = document.getElementById('heatmap-enabled');
@@ -159,6 +160,9 @@ class HexGame {
         this.computerMoveBtn.addEventListener('click', () => this.makeComputerMove());
         this.copyTrmphBtn.addEventListener('click', () => this.copyTrmph());
         this.applyTrmphBtn.addEventListener('click', () => this.applyTrmphSequence());
+        if (this.reviewGameBtn) {
+            this.reviewGameBtn.addEventListener('click', () => this.openReviewPage());
+        }
 
         this.difficultyPreset.addEventListener('change', (e) => {
             this.currentElo = parseInt(e.target.value);
@@ -2329,6 +2333,24 @@ class HexGame {
     updateTrmphDisplay() {
         this.trmphDisplay.value = this.currentTRMPH;
         this.updatePieRuleUi();
+    }
+
+    openReviewPage() {
+        if (!this.currentTRMPH) {
+            this.showError('Play or load a game before opening the review page.');
+            return;
+        }
+
+        const params = new URLSearchParams({
+            trmph: this.currentTRMPH,
+            display_board_size: String(this.validateBoardSize()),
+            elo_rating: String(this.validateEloRating())
+        });
+        const url = `/review?${params.toString()}`;
+        const opened = window.open(url, '_blank', 'noopener');
+        if (!opened) {
+            window.location.href = url;
+        }
     }
 
 

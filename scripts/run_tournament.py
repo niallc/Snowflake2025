@@ -284,6 +284,16 @@ Examples:
                        help='Use the N most recent checkpoints from the latest run under --most-recent-root for knockout stage.')
     parser.add_argument('--most-recent-biased', type=int,
                        help='Use a recency-biased sample of N checkpoints from the latest run under --most-recent-root for knockout stage.')
+    parser.add_argument(
+        '--most-recent-bias-spread',
+        type=float,
+        help=(
+            'Optional spread exponent for --most-recent-biased. '
+            'Larger values sample farther back when enough checkpoints exist; '
+            '1.0 collapses to contiguous recent checkpoints, and 1.5 yields '
+            'a broader sample like (0,-1,-3,-5,-8,...) when history allows.'
+        ),
+    )
     parser.add_argument('--most-recent-root', type=str, default=DEFAULT_MOST_RECENT_ROOT,
                        help=f'Root directory for --most-recent/--most-recent-biased (default: {DEFAULT_MOST_RECENT_ROOT})')
     parser.add_argument('--round-robin-games', type=int, default=DEFAULT_NUM_OPENINGS,
@@ -421,9 +431,58 @@ def _build_recent_biased_checkpoint_offsets_unbounded(count: int) -> List[int]:
     return [-distance for distance in distances]
 
 
+def _build_recent_biased_checkpoint_offsets_with_spread(
+    count: int,
+    bias_spread: float,
+    available_count: Optional[int] = None,
+) -> List[int]:
+    """Build recency-biased offsets from a tunable power curve."""
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+    if bias_spread < 1.0:
+        raise ValueError(
+            f"bias_spread must be >= 1.0, got {bias_spread}"
+        )
+
+    if available_count is None:
+        effective_count = count
+    else:
+        if available_count <= 0:
+            raise ValueError(
+                f"available_count must be positive when provided, got {available_count}"
+            )
+        effective_count = min(count, available_count)
+
+    if effective_count <= 0:
+        raise ValueError(
+            f"effective checkpoint count must be positive, got {effective_count}"
+        )
+    if effective_count == 1:
+        return [0]
+
+    target_span = max(
+        effective_count - 1,
+        int(math.floor((effective_count - 1) ** bias_spread)),
+    )
+    if available_count is not None:
+        target_span = min(target_span, available_count - 1)
+
+    distances = [0]
+    for idx in range(1, effective_count):
+        t = idx / (effective_count - 1)
+        projected = int(round((t ** bias_spread) * target_span))
+        min_allowed = distances[-1] + 1
+        max_allowed = target_span - (effective_count - 1 - idx)
+        distance = min(max(projected, min_allowed), max_allowed)
+        distances.append(distance)
+
+    return [-distance for distance in distances]
+
+
 def build_recent_biased_checkpoint_offsets(
     count: int,
     available_count: Optional[int] = None,
+    bias_spread: Optional[float] = None,
 ) -> List[int]:
     """
     Build recency-biased offsets from the latest checkpoint.
@@ -434,6 +493,13 @@ def build_recent_biased_checkpoint_offsets(
     """
     if count <= 0:
         raise ValueError(f"count must be positive, got {count}")
+
+    if bias_spread is not None:
+        return _build_recent_biased_checkpoint_offsets_with_spread(
+            count=count,
+            bias_spread=bias_spread,
+            available_count=available_count,
+        )
 
     if available_count is None:
         return _build_recent_biased_checkpoint_offsets_unbounded(count)
@@ -593,6 +659,7 @@ def _build_most_recent_knockout_participants(
     biased: bool,
     root_dir: str,
     knockout_config: Dict[str, Any],
+    bias_spread: Optional[float] = None,
 ) -> Tuple[List[TournamentParticipant], Dict[str, Any]]:
     """Build knockout participants from the latest run's checkpoints."""
     if count < 2:
@@ -616,6 +683,7 @@ def _build_most_recent_knockout_participants(
         build_recent_biased_checkpoint_offsets(
             selected_count,
             available_count=available_count,
+            bias_spread=bias_spread,
         )
         if biased
         else [-index for index in range(selected_count)]
@@ -633,6 +701,7 @@ def _build_most_recent_knockout_participants(
         "available_count": available_count,
         "selected_count": len(selected_checkpoints),
         "offsets": offsets,
+        "bias_spread": bias_spread,
         "selected_checkpoints": [checkpoint.name for checkpoint in selected_checkpoints],
         "selection_mode": "biased" if biased else "most_recent",
     }
@@ -1036,6 +1105,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 biased=use_biased_sampling,
                 root_dir=args.most_recent_root,
                 knockout_config=knockout_config,
+                bias_spread=args.most_recent_bias_spread if use_biased_sampling else None,
             )
             print(
                 "Loaded "
@@ -1044,6 +1114,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
             )
             print(f"  Latest run directory: {most_recent_selection_info['latest_run_dir']}")
             print(f"  Checkpoint directory: {most_recent_selection_info['checkpoint_dir']}")
+            if most_recent_selection_info["bias_spread"] is not None:
+                print(f"  Bias spread: {most_recent_selection_info['bias_spread']}")
             print(f"  Offsets from latest checkpoint: {most_recent_selection_info['offsets']}")
             print(f"  Selected checkpoints: {most_recent_selection_info['selected_checkpoints']}")
             knockout_dir = None
@@ -1085,6 +1157,8 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         )
         print(f"  Latest run directory: {most_recent_selection_info['latest_run_dir']}")
         print(f"  Checkpoint directory: {most_recent_selection_info['checkpoint_dir']}")
+        if most_recent_selection_info["bias_spread"] is not None:
+            print(f"  Bias spread: {most_recent_selection_info['bias_spread']}")
         print(f"  Checkpoint offsets: {most_recent_selection_info['offsets']}")
     else:
         print(f"  Knockout directory: {args.knockout_dir}")
@@ -1291,6 +1365,15 @@ def main():
         sys.exit(1)
     if args.most_recent_biased is not None and args.most_recent_biased < 2:
         print(f"ERROR: --most-recent-biased must be >= 2, got {args.most_recent_biased}")
+        sys.exit(1)
+    if args.most_recent_bias_spread is not None and args.most_recent_biased is None:
+        print("ERROR: --most-recent-bias-spread requires --most-recent-biased")
+        sys.exit(1)
+    if args.most_recent_bias_spread is not None and args.most_recent_bias_spread < 1.0:
+        print(
+            "ERROR: --most-recent-bias-spread must be >= 1.0, "
+            f"got {args.most_recent_bias_spread}"
+        )
         sys.exit(1)
     if (args.most_recent is not None or args.most_recent_biased is not None) and (
         args.epoch_range or args.mini_epoch_range
