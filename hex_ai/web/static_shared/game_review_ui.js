@@ -24,6 +24,86 @@
     return `${(value * 100).toFixed(digits)} pts`;
   }
 
+  function reviewLossValue(analysis) {
+    const reviewLoss = Number(analysis && analysis.review_score_loss);
+    if (Number.isFinite(reviewLoss)) {
+      return reviewLoss;
+    }
+    return Number(analysis && analysis.win_probability_loss);
+  }
+
+  function isSwapAwareOpening(analysis) {
+    return Boolean(analysis && analysis.review_metric === 'swap_evenness');
+  }
+
+  function impactLabel(analysis) {
+    return isSwapAwareOpening(analysis) ? 'Balance Gap' : 'Loss';
+  }
+
+  function formatImpact(analysis) {
+    const value = reviewLossValue(analysis);
+    if (!Number.isFinite(value)) {
+      return 'n/a';
+    }
+    return isSwapAwareOpening(analysis)
+      ? `${formatPoints(value)} from 50%`
+      : formatPoints(value);
+  }
+
+  function formatDistanceToEven(value) {
+    if (!Number.isFinite(value)) {
+      return 'n/a';
+    }
+    return `${formatPoints(value)} from 50%`;
+  }
+
+  function momentBadgeText(analysis) {
+    if (analysis.is_losing_move) {
+      return 'Losing swing';
+    }
+    if (isSwapAwareOpening(analysis)) {
+      return analysis.is_mistake ? 'Opening balance' : 'Opening';
+    }
+    return analysis.mistake_severity || 'none';
+  }
+
+  function buildMomentStats(analysis) {
+    if (isSwapAwareOpening(analysis)) {
+      return [
+        ['Player', analysis.player.toUpperCase()],
+        ['Played', analysis.move_played_trmph],
+        ['Best', analysis.best_move_trmph],
+        [impactLabel(analysis), formatImpact(analysis)],
+        ['Played Blue Win', formatPercent(analysis.move_played_win_probability_for_player)],
+        ['Played from 50%', formatDistanceToEven(Number(analysis.move_played_distance_to_even))],
+      ];
+    }
+
+    return [
+      ['Player', analysis.player.toUpperCase()],
+      ['Played', analysis.move_played_trmph],
+      ['Best', analysis.best_move_trmph],
+      [impactLabel(analysis), formatImpact(analysis)],
+      ['Before', formatPercent(analysis.position_win_probability_for_player)],
+      ['After', formatPercent(analysis.move_played_win_probability_for_player)],
+    ];
+  }
+
+  function buildSuggestionDetails(suggestion, analysis) {
+    if (isSwapAwareOpening(analysis)) {
+      return [
+        `blue ${formatPercent(suggestion.blue_win_probability)}`,
+        formatDistanceToEven(Number(suggestion.distance_to_even)),
+        `policy rank ${String(suggestion.policy_rank)}`,
+      ];
+    }
+
+    return [
+      `${formatPercent(suggestion.win_probability_for_player)} for player`,
+      `policy rank ${String(suggestion.policy_rank)}`,
+    ];
+  }
+
   function createElement(tagName, className, textContent) {
     const element = document.createElement(tagName);
     if (className) {
@@ -174,12 +254,14 @@
 
     const list = createElement('div', 'review-suggestion-list');
     suggestions.forEach((suggestion, index) => {
+      const detailHtml = buildSuggestionDetails(suggestion, analysis)
+        .map((detail) => `<span class="review-suggestion-detail">${escapeHtml(detail)}</span>`)
+        .join('');
       const item = createElement('div', 'review-suggestion-item');
       item.innerHTML = `
         <span class="review-suggestion-index">${index + 1}</span>
         <span class="review-suggestion-move">${escapeHtml(suggestion.move_trmph)}</span>
-        <span class="review-suggestion-detail">${escapeHtml(formatPercent(suggestion.win_probability_for_player))} for player</span>
-        <span class="review-suggestion-detail">policy rank ${escapeHtml(String(suggestion.policy_rank))}</span>
+        ${detailHtml}
       `;
       list.appendChild(item);
     });
@@ -198,19 +280,12 @@
     const body = createElement('div');
     const titleRow = createElement('div', 'review-moment-title-row');
     titleRow.appendChild(createElement('h3', 'review-moment-title', `Move ${analysis.move_number}: ${analysis.move_played_trmph}`));
-    const badge = createElement('span', `review-severity-badge ${severity}`, analysis.is_losing_move ? 'Losing swing' : analysis.mistake_severity);
+    const badge = createElement('span', `review-severity-badge ${severity}`, momentBadgeText(analysis));
     titleRow.appendChild(badge);
     body.appendChild(titleRow);
 
     const statGrid = createElement('div', 'review-moment-grid');
-    const stats = [
-      ['Player', analysis.player.toUpperCase()],
-      ['Played', analysis.move_played_trmph],
-      ['Best', analysis.best_move_trmph],
-      ['Loss', formatPoints(analysis.win_probability_loss)],
-      ['Before', formatPercent(analysis.position_win_probability_for_player)],
-      ['After', formatPercent(analysis.move_played_win_probability_for_player)],
-    ];
+    const stats = buildMomentStats(analysis);
     stats.forEach(([label, value]) => {
       const stat = createElement('div', 'review-stat');
       stat.appendChild(createElement('p', 'review-stat-label', label));
@@ -238,7 +313,8 @@
           <th>Player</th>
           <th>Played</th>
           <th>Best</th>
-          <th>Loss</th>
+          <th>Impact</th>
+          <th>Review</th>
           <th>Policy Rank</th>
           <th>Phase</th>
         </tr>
@@ -255,7 +331,8 @@
         <td>${escapeHtml(analysis.player.toUpperCase())}</td>
         <td>${escapeHtml(analysis.move_played_trmph)}</td>
         <td>${escapeHtml(analysis.best_move_trmph)}</td>
-        <td class="loss-cell ${severity}">${escapeHtml(formatPoints(analysis.win_probability_loss))}</td>
+        <td class="loss-cell ${severity}">${escapeHtml(formatImpact(analysis))}</td>
+        <td>${escapeHtml(analysis.review_metric_label || 'Win probability')}</td>
         <td>${escapeHtml(String(analysis.move_played_policy_rank))}</td>
         <td>${escapeHtml(analysis.game_phase)}</td>
       `;
@@ -277,7 +354,7 @@
       <div class="review-hero-top">
         <div>
           <h2 class="review-hero-title">Visual Review</h2>
-          <p class="review-page-subtitle">Played move plus policy-ranked candidate alternatives, scored by the current model's value head.</p>
+          <p class="review-page-subtitle">Played move plus policy-ranked candidate alternatives, with move 1 judged by swap-aware distance from 50%.</p>
         </div>
         <div class="review-hero-meta">
           <span class="review-chip">Model ${escapeHtml(String(analysisMetadata.model || 'unknown'))}</span>
@@ -306,7 +383,7 @@
       createElement(
         'p',
         'review-chart-note',
-        'Solid line shows the played game. Dashed line shows the best reviewed candidate for each move, still from Blue’s perspective.'
+        'Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from Blue’s perspective; move 1 impact still uses the swap-aware balance metric.'
       )
     );
     root.appendChild(chartPanel);
@@ -316,7 +393,7 @@
     const momentList = createElement('div', 'review-moment-list');
     const criticalAnalyses = analyses
       .filter((analysis) => analysis.is_mistake || analysis.is_losing_move)
-      .sort((left, right) => Number(right.win_probability_loss) - Number(left.win_probability_loss))
+      .sort((left, right) => reviewLossValue(right) - reviewLossValue(left))
       .slice(0, 8);
 
     if (criticalAnalyses.length === 0) {

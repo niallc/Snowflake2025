@@ -17,6 +17,7 @@ from hex_ai.utils.format_conversion import (
     rowcol_to_trmph,
     trmph_move_to_rowcol,
 )
+from hex_ai.web.move_heatmap import build_policy_value_heatmap
 from hex_ai.value_utils import ValuePredictor, get_legal_policy_probs, policy_logits_to_probs, select_top_k_moves
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,8 @@ class MoveCandidate:
     policy_probability: float
     policy_rank: int
     is_played_move: bool
+    review_score: float
+    distance_to_even: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -65,12 +68,19 @@ class MoveAnalysis:
     best_move: Tuple[int, int]
     best_move_trmph: str
     best_move_win_probability_for_player: float
+    review_metric: str
+    review_metric_label: str
+    review_score_played: float
+    best_review_score: float
+    review_score_loss: float
     win_probability_loss: float
     move_played_policy_probability: float
     move_played_policy_rank: int
     legal_move_count: int
     candidate_move_count: int
     suggestions: List[MoveCandidate]
+    move_played_distance_to_even: Optional[float]
+    best_move_distance_to_even: Optional[float]
     is_mistake: bool
     mistake_severity: str
     mistake_reason: str
@@ -144,6 +154,7 @@ class GameReviewer:
         candidate_policy_top_k: int = DEFAULT_CANDIDATE_POLICY_TOP_K,
         suggestion_count: int = DEFAULT_SUGGESTION_COUNT,
         policy_temperature: float = DEFAULT_POLICY_TEMPERATURE,
+        swap_opening_scores: Optional[Mapping[str, float]] = None,
     ):
         if candidate_policy_top_k < 1:
             raise ValueError("candidate_policy_top_k must be >= 1")
@@ -160,6 +171,11 @@ class GameReviewer:
         self.candidate_policy_top_k = candidate_policy_top_k
         self.suggestion_count = suggestion_count
         self.policy_temperature = policy_temperature
+        self.swap_opening_scores = (
+            {str(move).lower(): float(score) for move, score in swap_opening_scores.items()}
+            if swap_opening_scores is not None
+            else None
+        )
 
     def review_game_record(self, game: GameRecord) -> GameReview:
         if game.board_size != BOARD_SIZE:
@@ -219,7 +235,7 @@ class GameReviewer:
                     "player": analysis.player,
                     "blue_win_probability": analysis.blue_win_probability_after_played,
                     "best_blue_win_probability": analysis.blue_win_probability_after_best,
-                    "loss": analysis.win_probability_loss,
+                    "loss": analysis.review_score_loss,
                 }
             )
             state = apply_move_to_state_trmph(state, move_trmph)
@@ -273,6 +289,19 @@ class GameReviewer:
             float(position_value_signed),
             Player.BLUE,
         )
+
+        if self._is_swap_aware_opening_position(ply, current_player):
+            return self._analyze_swap_aware_opening(
+                state=state,
+                move_played=move_played,
+                move_played_trmph=move_played_trmph,
+                ply=ply,
+                total_moves=total_moves,
+                legal_moves=legal_moves,
+                position_win_probability_for_player=position_win_probability_for_player,
+                blue_win_probability_before=blue_win_probability_before,
+                policy_logits=policy_logits,
+            )
 
         ranked_legal_moves, policy_probability_by_move = self._rank_legal_moves_by_policy(
             policy_logits,
@@ -342,12 +371,19 @@ class GameReviewer:
             best_move=(best_candidate.row, best_candidate.col),
             best_move_trmph=best_candidate.move_trmph,
             best_move_win_probability_for_player=best_candidate.win_probability_for_player,
+            review_metric="win_probability",
+            review_metric_label="Win probability",
+            review_score_played=played_candidate.review_score,
+            best_review_score=best_candidate.review_score,
+            review_score_loss=win_probability_loss,
             win_probability_loss=win_probability_loss,
             move_played_policy_probability=played_candidate.policy_probability,
             move_played_policy_rank=played_candidate.policy_rank,
             legal_move_count=len(legal_moves),
             candidate_move_count=len(candidate_by_move),
             suggestions=suggestions,
+            move_played_distance_to_even=played_candidate.distance_to_even,
+            best_move_distance_to_even=best_candidate.distance_to_even,
             is_mistake=is_mistake,
             mistake_severity=mistake_severity,
             mistake_reason=mistake_reason,
@@ -376,6 +412,145 @@ class GameReviewer:
             reverse=True,
         )
         return ranked_legal_moves, policy_probability_by_move
+
+    @staticmethod
+    def _is_swap_aware_opening_position(ply: int, current_player: Player) -> bool:
+        return ply == 0 and current_player == Player.BLUE
+
+    @staticmethod
+    def _distance_to_even(opening_win_probability: float) -> float:
+        return abs(float(opening_win_probability) - 0.5)
+
+    @classmethod
+    def _swap_evenness_score(cls, opening_win_probability: float) -> float:
+        return 1.0 - 2.0 * cls._distance_to_even(opening_win_probability)
+
+    def _load_swap_opening_scores(self, state: HexGameState) -> Dict[str, float]:
+        if self.swap_opening_scores is not None:
+            return dict(self.swap_opening_scores)
+
+        heatmap = build_policy_value_heatmap(
+            state=state,
+            model=self.model,
+            selection_mode="all_legal",
+            top_k=None,
+            policy_temperature=1.0,
+        )
+        return {move.lower(): float(score) for move, score in heatmap.scores.items()}
+
+    def _analyze_swap_aware_opening(
+        self,
+        *,
+        state: HexGameState,
+        move_played: Tuple[int, int],
+        move_played_trmph: str,
+        ply: int,
+        total_moves: int,
+        legal_moves: Sequence[Tuple[int, int]],
+        position_win_probability_for_player: float,
+        blue_win_probability_before: float,
+        policy_logits,
+    ) -> MoveAnalysis:
+        ranked_legal_moves, policy_probability_by_move = self._rank_legal_moves_by_policy(
+            policy_logits,
+            legal_moves,
+        )
+        policy_rank_by_move = {
+            rowcol_to_trmph(row, col, board_size=BOARD_SIZE): index + 1
+            for index, (row, col) in enumerate(ranked_legal_moves)
+        }
+        opening_scores = self._load_swap_opening_scores(state)
+
+        candidate_by_move: Dict[str, MoveCandidate] = {}
+        for row, col in legal_moves:
+            move_trmph = rowcol_to_trmph(row, col, board_size=BOARD_SIZE)
+            opening_win_probability = opening_scores.get(move_trmph.lower())
+            if opening_win_probability is None:
+                raise ValueError(f"Missing swap-aware opening score for move {move_trmph}")
+
+            distance_to_even = self._distance_to_even(opening_win_probability)
+            review_score = self._swap_evenness_score(opening_win_probability)
+            candidate_by_move[move_trmph] = MoveCandidate(
+                row=row,
+                col=col,
+                move_trmph=move_trmph,
+                win_probability_for_player=float(opening_win_probability),
+                blue_win_probability=float(opening_win_probability),
+                policy_probability=float(policy_probability_by_move[move_trmph]),
+                policy_rank=int(policy_rank_by_move[move_trmph]),
+                is_played_move=(row, col) == move_played,
+                review_score=review_score,
+                distance_to_even=distance_to_even,
+            )
+
+        played_candidate = candidate_by_move[move_played_trmph]
+        ranked_candidates = sorted(
+            candidate_by_move.values(),
+            key=lambda item: (
+                item.review_score,
+                item.policy_probability,
+                -item.policy_rank,
+            ),
+            reverse=True,
+        )
+        best_candidate = ranked_candidates[0]
+        suggestions = [
+            candidate
+            for candidate in ranked_candidates
+            if not candidate.is_played_move
+        ][: self.suggestion_count]
+
+        played_distance = played_candidate.distance_to_even or 0.0
+        best_distance = best_candidate.distance_to_even or 0.0
+        review_score_loss = max(0.0, played_distance - best_distance)
+        is_mistake, mistake_severity, _ = _normalize_mistake(review_score_loss)
+        if review_score_loss < WIN_PROBABILITY_LOSS_THRESHOLDS["minor"]:
+            mistake_reason = (
+                f"Opening move stayed close to swap balance at {played_distance * 100:.1f} points from 50%"
+            )
+        else:
+            mistake_reason = (
+                f"Opening move landed {played_distance * 100:.1f} points from 50%; "
+                f"best reviewed option was {best_distance * 100:.1f} points away"
+            )
+
+        return MoveAnalysis(
+            ply=ply,
+            move_number=ply + 1,
+            player=_summarize_player(state.current_player_enum),
+            game_phase=_determine_game_phase(ply, total_moves),
+            position_trmph=state.to_trmph(),
+            board_before=_board_to_display_slice(state.board, self.display_board_size),
+            move_played=move_played,
+            move_played_trmph=move_played_trmph,
+            position_win_probability_for_player=position_win_probability_for_player,
+            move_played_win_probability_for_player=played_candidate.win_probability_for_player,
+            best_move=(best_candidate.row, best_candidate.col),
+            best_move_trmph=best_candidate.move_trmph,
+            best_move_win_probability_for_player=best_candidate.win_probability_for_player,
+            review_metric="swap_evenness",
+            review_metric_label="Distance from 50%",
+            review_score_played=played_candidate.review_score,
+            best_review_score=best_candidate.review_score,
+            review_score_loss=review_score_loss,
+            win_probability_loss=review_score_loss,
+            move_played_policy_probability=played_candidate.policy_probability,
+            move_played_policy_rank=played_candidate.policy_rank,
+            legal_move_count=len(legal_moves),
+            candidate_move_count=len(candidate_by_move),
+            suggestions=suggestions,
+            move_played_distance_to_even=played_candidate.distance_to_even,
+            best_move_distance_to_even=best_candidate.distance_to_even,
+            is_mistake=is_mistake,
+            mistake_severity=mistake_severity,
+            mistake_reason=mistake_reason,
+            is_losing_move=False,
+            was_winning_before=False,
+            is_winning_after=False,
+            blue_win_probability_before=blue_win_probability_before,
+            blue_win_probability_after_played=played_candidate.blue_win_probability,
+            blue_win_probability_after_best=best_candidate.blue_win_probability,
+        )
 
     def _select_candidate_moves(
         self,
@@ -428,6 +603,8 @@ class GameReviewer:
                     policy_probability=float(policy_probability_by_move[move_trmph]),
                     policy_rank=int(policy_rank_by_move[move_trmph]),
                     is_played_move=(row, col) == move_played,
+                    review_score=player_win_probability,
+                    distance_to_even=None,
                 )
                 continue
 
@@ -451,6 +628,8 @@ class GameReviewer:
                     policy_probability=float(policy_probability_by_move[move_trmph]),
                     policy_rank=int(policy_rank_by_move[move_trmph]),
                     is_played_move=(row, col) == move_played,
+                    review_score=player_win_probability,
+                    distance_to_even=None,
                 )
 
         return finished
@@ -495,7 +674,7 @@ class GameReviewer:
                 if analysis.is_mistake or analysis.is_losing_move
             ),
             key=lambda analysis: (
-                analysis.win_probability_loss,
+                analysis.review_score_loss,
                 1 if analysis.is_losing_move else 0,
             ),
             reverse=True,
@@ -512,7 +691,8 @@ class GameReviewer:
                     "best_move": analysis.best_move_trmph,
                     "mistake_severity": analysis.mistake_severity,
                     "is_losing_move": analysis.is_losing_move,
-                    "win_probability_loss": analysis.win_probability_loss,
+                    "review_metric": analysis.review_metric,
+                    "review_score_loss": analysis.review_score_loss,
                     "description": analysis.mistake_reason,
                 }
             )

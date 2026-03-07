@@ -2103,7 +2103,7 @@ def api_game_review():
         app.logger.warning("Invalid game-review input rejected: %s", error_msg)
         return jsonify({"success": False, "error": error_msg}), 400
 
-    trmph = validated_data.get("trmph", "")
+    trmph = fc.strip_trmph_preamble(validated_data.get("trmph", ""))
     if not trmph:
         return jsonify({"success": False, "error": "trmph is required for game review"}), 400
 
@@ -2136,6 +2136,7 @@ def api_game_review():
     model_id = requested_model_id or get_difficulty_parameters(elo_rating)["model"]
 
     try:
+        swap_opening_scores, _ = _get_pie_rule_opening_scores(model_id, display_board_size)
         initial_state = create_game_state_from_trmph(
             "",
             display_board_size=display_board_size,
@@ -2148,6 +2149,7 @@ def api_game_review():
             candidate_policy_top_k=candidate_top_k,
             suggestion_count=suggestion_count,
             policy_temperature=policy_temperature,
+            swap_opening_scores=swap_opening_scores,
         )
         review = reviewer.review_move_sequence(
             initial_state,
@@ -2885,6 +2887,10 @@ def favicon():
 
 @app.route("/static/<path:path>")
 def serve_static(path):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), path)
+
+@app.route("/public-static/<path:path>")
+def serve_public_static(path):
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), path)
 
 @app.route("/shared/<path:path>")

@@ -42,6 +42,7 @@ from hex_ai.web.gameplay_response import (
     build_engine_move_response,
     build_game_state_response,
 )
+from hex_ai.review.game_review import GameReviewer, review_to_json
 from hex_ai.web.mcts_interactive_utils import (
     create_interactive_mcts_config,
     get_interactive_dead_cell_config,
@@ -116,6 +117,9 @@ preload_default_models()
 
 DEFAULT_PIE_RULE_ENABLED = True
 PIE_RULE_OPENING_WEIGHT_EXPONENT = 6.0
+DEFAULT_REVIEW_CANDIDATE_TOP_K = 8
+DEFAULT_REVIEW_SUGGESTION_COUNT = 3
+DEFAULT_REVIEW_POLICY_TEMPERATURE = 1.0
 
 # --- Input Validation ---
 def validate_trmph_input(trmph):
@@ -213,6 +217,19 @@ def clear_model_wrapper_cache():
 def create_game_state_from_trmph(trmph, context=""):
     """Create game state from normalized TRMPH input."""
     return core_create_game_state_from_trmph_input(trmph, context=context)
+
+
+def validate_review_display_board_size(value) -> int:
+    """Dev app review only supports the full BOARD_SIZE board."""
+    if value is None:
+        return BOARD_SIZE
+    try:
+        size = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("display_board_size must be an integer") from exc
+    if size != BOARD_SIZE:
+        raise ValueError(f"display_board_size must be {BOARD_SIZE} for the dev web app")
+    return size
 
 
 def _safe_count_trmph_moves(trmph_text):
@@ -1137,6 +1154,8 @@ def api_constants():
     """Return game constants for frontend use."""
     return jsonify({
         "BOARD_SIZE": BOARD_SIZE,
+        "DEFAULT_DISPLAY_BOARD_SIZE": BOARD_SIZE,
+        "DISPLAY_BOARD_SIZE_OPTIONS": [BOARD_SIZE],
         "PIECE_VALUES": {
             "EMPTY": Piece.EMPTY.value,
             "BLUE": Piece.BLUE.value,
@@ -1156,6 +1175,87 @@ def api_constants():
             "DEFAULT_TEMPERATURE": FIXED_TREE_DEFAULT_TEMPERATURE
         }
     })
+
+
+@app.route("/api/game_review", methods=["POST"])
+def api_game_review():
+    data = request.get_json()
+
+    is_valid, error_msg, validated_data = validate_api_input(
+        data,
+        required_fields=None,
+        optional_fields=[
+            "trmph",
+            "display_board_size",
+            "model_id",
+            "candidate_top_k",
+            "suggestion_count",
+            "policy_temperature",
+        ],
+    )
+    if not is_valid:
+        app.logger.warning("Invalid game-review input rejected: %s", error_msg)
+        return jsonify({"success": False, "error": error_msg}), 400
+
+    trmph = fc.strip_trmph_preamble(validated_data.get("trmph", ""))
+    if not trmph:
+        return jsonify({"success": False, "error": "trmph is required for game review"}), 400
+
+    try:
+        display_board_size = validate_review_display_board_size(
+            validated_data.get("display_board_size", BOARD_SIZE)
+        )
+        candidate_top_k = int(
+            validated_data.get("candidate_top_k", DEFAULT_REVIEW_CANDIDATE_TOP_K)
+        )
+        suggestion_count = int(
+            validated_data.get("suggestion_count", DEFAULT_REVIEW_SUGGESTION_COUNT)
+        )
+        policy_temperature = float(
+            validated_data.get("policy_temperature", DEFAULT_REVIEW_POLICY_TEMPERATURE)
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": f"Invalid review parameter: {exc}"}), 400
+
+    if candidate_top_k < 1:
+        return jsonify({"success": False, "error": "candidate_top_k must be >= 1"}), 400
+    if suggestion_count < 1:
+        return jsonify({"success": False, "error": "suggestion_count must be >= 1"}), 400
+    if policy_temperature <= 0:
+        return jsonify({"success": False, "error": "policy_temperature must be > 0"}), 400
+
+    try:
+        moves = fc.split_trmph_moves(trmph)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": f"Invalid trmph: {exc}"}), 400
+
+    if not moves:
+        return jsonify({"success": False, "error": "At least one move is required for review"}), 400
+
+    model_id = validated_data.get("model_id", "best")
+
+    try:
+        reviewer = GameReviewer(
+            get_model(model_id),
+            model_label=model_id,
+            display_board_size=display_board_size,
+            candidate_policy_top_k=candidate_top_k,
+            suggestion_count=suggestion_count,
+            policy_temperature=policy_temperature,
+        )
+        review = reviewer.review_move_sequence(
+            create_game_state_from_trmph(f"#{BOARD_SIZE},", context="for game review"),
+            moves,
+            metadata={
+                "user_trmph": trmph,
+                "display_board_size": display_board_size,
+                "model_id": model_id,
+            },
+        )
+        return jsonify({"success": True, "review": review_to_json(review)})
+    except Exception as exc:
+        app.logger.error("Error in api_game_review: %s", exc)
+        return jsonify({"success": False, "error": "Failed to generate review"}), 500
 
 @app.route("/api/models", methods=["GET"])
 def api_models():
@@ -2049,6 +2149,10 @@ def favicon():
 def serve_static(path):
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static"), path)
 
+@app.route("/public-static/<path:path>")
+def serve_public_static(path):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), path)
+
 @app.route("/shared/<path:path>")
 def serve_shared(path):
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static_shared"), path)
@@ -2056,6 +2160,14 @@ def serve_shared(path):
 @app.route("/")
 def serve_index():
     return send_from_directory(os.path.join(os.path.dirname(__file__), "static"), "index.html")
+
+@app.route("/review")
+def serve_review_page():
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), "review.html")
+
+@app.route("/review.html")
+def serve_review_page_html():
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "static_public"), "review.html")
 
 if __name__ == "__main__":
     import argparse

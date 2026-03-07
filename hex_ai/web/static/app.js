@@ -1681,6 +1681,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('copy-trmph').addEventListener('click', () => {
     navigator.clipboard.writeText(state.trmph);
   });
+  document.getElementById('review-game-btn').addEventListener('click', openReviewPage);
 
   // Debug controls
   document.getElementById('verbose-level').addEventListener('change', (e) => {
@@ -2986,6 +2987,32 @@ function clearTrmphSequence() {
   document.getElementById('trmph-sequence-input').value = '';
   document.getElementById('trmph-sequence-status').innerHTML = '';
   document.getElementById('trmph-sequence-status').className = 'status-message';
+}
+
+function getReviewModelId() {
+  if (state.blue_model_id === state.red_model_id) {
+    return state.blue_model_id;
+  }
+  return 'best';
+}
+
+function openReviewPage() {
+  const bareTrmph = String(state.trmph || '').replace(/^#\d+,/, '');
+  if (!bareTrmph) {
+    alert('Play or load a game before opening the review page.');
+    return;
+  }
+
+  const params = new URLSearchParams({
+    trmph: bareTrmph,
+    display_board_size: String(BOARD_SIZE),
+    model_id: getReviewModelId(),
+  });
+  const url = `/review?${params.toString()}`;
+  const opened = window.open(url, '_blank', 'noopener');
+  if (!opened) {
+    window.location.href = url;
+  }
 }
 
 function showTrmphStatus(message, type) {
