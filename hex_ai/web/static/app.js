@@ -215,6 +215,29 @@ let GAME_CONSTANTS = {
   }
 };
 
+function getConfiguredBoardSize() {
+  const configuredSize = Number(state && state.constants && state.constants.BOARD_SIZE);
+  if (Number.isFinite(configuredSize) && configuredSize > 0) {
+    return configuredSize;
+  }
+
+  const fallbackSize = Number(GAME_CONSTANTS && GAME_CONSTANTS.BOARD_SIZE);
+  if (Number.isFinite(fallbackSize) && fallbackSize > 0) {
+    return fallbackSize;
+  }
+
+  const boardLength = Array.isArray(state && state.board) ? Number(state.board.length) : NaN;
+  if (Number.isFinite(boardLength) && boardLength > 0) {
+    return boardLength;
+  }
+
+  return 13;
+}
+
+function buildEmptyTrmph() {
+  return `#${getConfiguredBoardSize()},`;
+}
+
 const HISTORY_UTILS = window.HexHistoryUtils;
 if (!HISTORY_UTILS) {
   throw new Error('HexHistoryUtils is required but was not loaded');
@@ -1660,7 +1683,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('auto-step-checkbox').checked = true;
     }
     
-    state.trmph = '#13,';
+    state.trmph = buildEmptyTrmph();
     // Use blue's settings for reset
     const result = await fetchState(
       state.trmph,
@@ -3005,7 +3028,7 @@ function openReviewPage() {
 
   const params = new URLSearchParams({
     trmph: bareTrmph,
-    display_board_size: String(BOARD_SIZE),
+    display_board_size: String(getConfiguredBoardSize()),
     model_id: getReviewModelId(),
   });
   const url = `/review?${params.toString()}`;
