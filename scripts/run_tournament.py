@@ -138,6 +138,7 @@ DEFAULT_VERBOSE = 1
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 DEFAULT_MOST_RECENT_ROOT = "checkpoints/hyperparameter_tuning"
 CHECKPOINT_FILE_REGEX = re.compile(r"epoch\d+_mini\d+\.pt\.gz$")
+CHECKPOINT_NAME_REGEX = re.compile(r"epoch(\d+)_mini(\d+)(?:\.pt\.gz)?$")
 DEFAULT_ROUND_ROBIN_SKIP_RECENT_GENERATIONS = 1
 
 # TODO: Consider adding configuration for:
@@ -296,6 +297,10 @@ Examples:
     )
     parser.add_argument('--most-recent-root', type=str, default=DEFAULT_MOST_RECENT_ROOT,
                        help=f'Root directory for --most-recent/--most-recent-biased (default: {DEFAULT_MOST_RECENT_ROOT})')
+    parser.add_argument('--extra-knockout-dirs', type=str,
+                       help='Comma-separated directories paired with --extra-knockout-checkpoints when appending explicit checkpoints to the primary knockout source.')
+    parser.add_argument('--extra-knockout-checkpoints', type=str,
+                       help='Comma-separated extra checkpoint files to append to the primary knockout source. Entries may be relative/absolute paths, or bare filenames when paired with --extra-knockout-dirs. Duplicate checkpoint paths are removed automatically.')
     parser.add_argument('--round-robin-games', type=int, default=DEFAULT_NUM_OPENINGS,
                        help='Number of openings per round-robin pair (actual games are doubled via color swap, default: 100)')
     parser.add_argument('--run-desc', type=str,
@@ -654,17 +659,241 @@ def _build_checkpoint_participant(
     )
 
 
+def _split_csv_arg(value: Optional[str]) -> List[str]:
+    """Split a comma-separated CLI argument into non-empty trimmed values."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _strip_checkpoint_suffix(filename: str) -> str:
+    """Remove common checkpoint filename suffixes for display names."""
+    if filename.endswith(".pt.gz"):
+        return filename[:-6]
+    if filename.endswith(".pt"):
+        return filename[:-3]
+    return filename
+
+
+def _checkpoint_name_from_path(checkpoint_path: Path) -> str:
+    """Derive a participant name from a checkpoint file path."""
+    match = CHECKPOINT_NAME_REGEX.match(checkpoint_path.name)
+    if match:
+        return f"epoch{int(match.group(1))}_mini{int(match.group(2))}"
+    return _strip_checkpoint_suffix(checkpoint_path.name)
+
+
+def _has_path_separator(value: str) -> bool:
+    """Return True when a CLI path-like value contains an explicit directory separator."""
+    separators = [os.sep]
+    if os.altsep:
+        separators.append(os.altsep)
+    return any(separator and separator in value for separator in separators)
+
+
+def _build_explicit_knockout_participant(
+    checkpoint_path: Path,
+    knockout_config: Dict[str, Any],
+) -> TournamentParticipant:
+    """Build a knockout participant from one explicit checkpoint file path."""
+    candidate_path = checkpoint_path.expanduser()
+    if not candidate_path.is_absolute():
+        candidate_path = Path.cwd() / candidate_path
+    resolved_path = candidate_path.resolve()
+
+    if not resolved_path.exists():
+        raise FileNotFoundError(
+            f"Extra knockout checkpoint does not exist: {resolved_path}"
+        )
+    if not resolved_path.is_file():
+        raise ValueError(
+            f"Extra knockout checkpoint path is not a file: {resolved_path}"
+        )
+
+    participant_config = knockout_config.copy()
+    participant_config["strategy"] = "mcts"
+    participant_config["model_path"] = str(resolved_path)
+    if "temperature" not in participant_config:
+        participant_config["temperature"] = 1.0
+
+    metadata: Dict[str, Any] = {
+        "checkpoint_file": str(resolved_path),
+        "source_dir": str(resolved_path.parent),
+    }
+    match = CHECKPOINT_NAME_REGEX.match(resolved_path.name)
+    if match:
+        metadata["epoch"] = int(match.group(1))
+        metadata["mini_epoch"] = int(match.group(2))
+
+    return TournamentParticipant(
+        name=_checkpoint_name_from_path(resolved_path),
+        strategy_config=participant_config,
+        metadata=metadata,
+    )
+
+
+def _resolve_extra_knockout_checkpoint_paths(args) -> List[Path]:
+    """Resolve extra knockout checkpoint CLI arguments into explicit checkpoint paths."""
+    checkpoint_entries = _split_csv_arg(getattr(args, "extra_knockout_checkpoints", None))
+    directory_entries = _split_csv_arg(getattr(args, "extra_knockout_dirs", None))
+
+    if not checkpoint_entries:
+        if directory_entries:
+            raise ValueError(
+                "--extra-knockout-dirs requires --extra-knockout-checkpoints."
+            )
+        return []
+
+    if directory_entries:
+        if len(directory_entries) != len(checkpoint_entries):
+            raise ValueError(
+                "Number of --extra-knockout-dirs entries must match "
+                f"--extra-knockout-checkpoints entries, got {len(directory_entries)} "
+                f"dirs and {len(checkpoint_entries)} checkpoints."
+            )
+
+        resolved_paths: List[Path] = []
+        for checkpoint_name, directory in zip(checkpoint_entries, directory_entries):
+            if _has_path_separator(checkpoint_name):
+                raise ValueError(
+                    "--extra-knockout-checkpoints entries must be bare filenames when "
+                    "paired with --extra-knockout-dirs. Use full checkpoint paths "
+                    "without --extra-knockout-dirs instead."
+                )
+            resolved_paths.append(Path(directory) / checkpoint_name)
+        return resolved_paths
+
+    return [Path(entry) for entry in checkpoint_entries]
+
+
+def _build_knockout_participants_from_directory(
+    checkpoint_dir: str,
+    knockout_config: Dict[str, Any],
+    epoch_range: Optional[Tuple[int, int]] = None,
+    mini_epoch_range: Optional[Tuple[int, int]] = None,
+    minimum_selected_count: int = 2,
+) -> Tuple[List[TournamentParticipant], Dict[str, Any]]:
+    """Discover checkpoint participants from one knockout directory."""
+    discovery = CheckpointDiscovery(checkpoint_dir)
+
+    if epoch_range or mini_epoch_range:
+        checkpoints = discovery.get_checkpoints_by_combined_range(
+            epoch_range=epoch_range,
+            mini_epoch_range=mini_epoch_range,
+        )
+    else:
+        checkpoints = discovery.discover_checkpoints()
+
+    if len(checkpoints) < minimum_selected_count:
+        filter_parts = []
+        if epoch_range:
+            filter_parts.append(f"epoch-range={epoch_range[0]}-{epoch_range[1] - 1}")
+        if mini_epoch_range:
+            filter_parts.append(
+                f"mini-epoch-range={mini_epoch_range[0]}-{mini_epoch_range[1] - 1}"
+            )
+        filter_desc = f" ({', '.join(filter_parts)})" if filter_parts else ""
+        raise ValueError(
+            f"Knockout directory {checkpoint_dir}{filter_desc} produced "
+            f"{len(checkpoints)} checkpoint(s), but at least {minimum_selected_count} "
+            "are required for this selection step."
+        )
+
+    participants = [
+        _build_checkpoint_participant(checkpoint, knockout_config)
+        for checkpoint in checkpoints
+    ]
+    return participants, {
+        "checkpoint_dir": str(Path(checkpoint_dir).resolve()),
+        "selected_count": len(participants),
+        "selected_checkpoints": [participant.name for participant in participants],
+        "epoch_range": epoch_range,
+        "mini_epoch_range": mini_epoch_range,
+        "selection_mode": "knockout_dir",
+    }
+
+
+def _knockout_name_suffix_from_model_path(model_path: str) -> str:
+    """Build a stable suffix for disambiguating duplicate participant names."""
+    label = Path(model_path).parent.name or "checkpoint"
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_")
+    return sanitized or "checkpoint"
+
+
+def _ensure_unique_knockout_participant_names(
+    participants: List[TournamentParticipant],
+) -> None:
+    """Rename later duplicate participants so tournament result keys stay unique."""
+    used_names = set()
+    for participant in participants:
+        if participant.name not in used_names:
+            used_names.add(participant.name)
+            continue
+
+        model_path = participant.strategy_config.get("model_path")
+        suffix = (
+            _knockout_name_suffix_from_model_path(model_path)
+            if model_path
+            else "checkpoint"
+        )
+        base_name = f"{participant.name}__{suffix}"
+        candidate_name = base_name
+        counter = 2
+        while candidate_name in used_names:
+            candidate_name = f"{base_name}_{counter}"
+            counter += 1
+
+        participant.name = candidate_name
+        used_names.add(candidate_name)
+
+
+def _dedupe_knockout_participants(
+    participants: List[TournamentParticipant],
+) -> Tuple[List[TournamentParticipant], List[str]]:
+    """Remove duplicate knockout participants by resolved checkpoint path."""
+    deduped_participants: List[TournamentParticipant] = []
+    duplicate_paths: List[str] = []
+    seen_paths = set()
+
+    for participant in participants:
+        model_path = participant.strategy_config.get("model_path")
+        if not model_path:
+            raise ValueError(
+                f"Knockout participant {participant.name} is missing model_path."
+            )
+
+        resolved_path = str(Path(model_path).expanduser().resolve())
+        participant.strategy_config["model_path"] = resolved_path
+        if participant.metadata is None:
+            participant.metadata = {}
+        participant.metadata["model_path"] = resolved_path
+        if "checkpoint_file" in participant.metadata:
+            participant.metadata["checkpoint_file"] = resolved_path
+
+        if resolved_path in seen_paths:
+            duplicate_paths.append(resolved_path)
+            continue
+
+        seen_paths.add(resolved_path)
+        deduped_participants.append(participant)
+
+    _ensure_unique_knockout_participant_names(deduped_participants)
+    return deduped_participants, duplicate_paths
+
+
 def _build_most_recent_knockout_participants(
     count: int,
     biased: bool,
     root_dir: str,
     knockout_config: Dict[str, Any],
     bias_spread: Optional[float] = None,
+    minimum_selected_count: int = 2,
 ) -> Tuple[List[TournamentParticipant], Dict[str, Any]]:
     """Build knockout participants from the latest run's checkpoints."""
-    if count < 2:
+    if count < minimum_selected_count:
         raise ValueError(
-            f"Most-recent checkpoint mode requires at least 2 checkpoints, got {count}."
+            "Most-recent checkpoint mode requires at least "
+            f"{minimum_selected_count} requested checkpoint(s), got {count}."
         )
 
     latest_run_dir, checkpoint_dir = _discover_latest_checkpoint_directory(root_dir)
@@ -672,10 +901,10 @@ def _build_most_recent_knockout_participants(
     checkpoints = discovery.discover_checkpoints()
     available_count = len(checkpoints)
 
-    if available_count < 2:
+    if available_count < minimum_selected_count:
         raise ValueError(
             f"Latest checkpoint directory has only {available_count} checkpoint(s): {checkpoint_dir}. "
-            "At least 2 checkpoints are required for knockout."
+            f"At least {minimum_selected_count} checkpoint(s) are required for this selection step."
         )
 
     selected_count = min(count, available_count)
@@ -1087,7 +1316,18 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     # Handle knockout participants: from MODEL_GENERATIONS, latest-run sampling, or directory discovery.
     knockout_participants = None
     most_recent_selection_info = None
+    knockout_dir_selection_info = None
+    duplicate_knockout_paths: List[str] = []
     knockout_dir = args.knockout_dir if not args.knockout_from_generations else None
+    try:
+        extra_knockout_checkpoint_paths = _resolve_extra_knockout_checkpoint_paths(args)
+    except ValueError as error:
+        print(f"ERROR: {error}")
+        sys.exit(1)
+
+    has_extra_knockout_checkpoints = bool(extra_knockout_checkpoint_paths)
+    minimum_primary_knockout_count = 1 if has_extra_knockout_checkpoints else 2
+
     if args.knockout_from_generations:
         # Get all participants from MODEL_GENERATIONS
         knockout_participants = get_all_model_participants_from_generations(knockout_config)
@@ -1106,6 +1346,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 root_dir=args.most_recent_root,
                 knockout_config=knockout_config,
                 bias_spread=args.most_recent_bias_spread if use_biased_sampling else None,
+                minimum_selected_count=minimum_primary_knockout_count,
             )
             print(
                 "Loaded "
@@ -1122,7 +1363,45 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         except (FileNotFoundError, ValueError) as error:
             print(f"ERROR: {error}")
             sys.exit(1)
-    
+    elif args.knockout_dir and has_extra_knockout_checkpoints:
+        try:
+            knockout_participants, knockout_dir_selection_info = (
+                _build_knockout_participants_from_directory(
+                    checkpoint_dir=args.knockout_dir,
+                    knockout_config=knockout_config,
+                    epoch_range=epoch_range,
+                    mini_epoch_range=mini_epoch_range,
+                    minimum_selected_count=minimum_primary_knockout_count,
+                )
+            )
+            knockout_dir = None
+        except (FileNotFoundError, ValueError) as error:
+            print(f"ERROR: {error}")
+            sys.exit(1)
+
+    if has_extra_knockout_checkpoints:
+        try:
+            extra_knockout_participants = [
+                _build_explicit_knockout_participant(path, knockout_config)
+                for path in extra_knockout_checkpoint_paths
+            ]
+        except (FileNotFoundError, ValueError) as error:
+            print(f"ERROR: {error}")
+            sys.exit(1)
+
+        combined_knockout_participants = list(knockout_participants or [])
+        combined_knockout_participants.extend(extra_knockout_participants)
+        knockout_participants, duplicate_knockout_paths = _dedupe_knockout_participants(
+            combined_knockout_participants
+        )
+
+        if len(knockout_participants) < 2:
+            print(
+                "ERROR: Knockout participant merge produced fewer than 2 unique "
+                f"checkpoints ({len(knockout_participants)})."
+            )
+            sys.exit(1)
+
     # Validate epoch/mini epoch ranges are not used with knockout-from-generations
     if args.knockout_from_generations and (epoch_range or mini_epoch_range):
         print("WARNING: --epoch-range and --mini-epoch-range are ignored when using --knockout-from-generations")
@@ -1160,8 +1439,29 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         if most_recent_selection_info["bias_spread"] is not None:
             print(f"  Bias spread: {most_recent_selection_info['bias_spread']}")
         print(f"  Checkpoint offsets: {most_recent_selection_info['offsets']}")
+    elif knockout_dir_selection_info:
+        print(
+            f"  Knockout participants: {len(knockout_participants)} checkpoints from "
+            f"{knockout_dir_selection_info['checkpoint_dir']} plus explicit additions"
+        )
+        if knockout_dir_selection_info["epoch_range"] is not None:
+            print(
+                "  Epoch range: "
+                f"{knockout_dir_selection_info['epoch_range'][0]}-"
+                f"{knockout_dir_selection_info['epoch_range'][1] - 1}"
+            )
+        if knockout_dir_selection_info["mini_epoch_range"] is not None:
+            print(
+                "  Mini-epoch range: "
+                f"{knockout_dir_selection_info['mini_epoch_range'][0]}-"
+                f"{knockout_dir_selection_info['mini_epoch_range'][1] - 1}"
+            )
     else:
         print(f"  Knockout directory: {args.knockout_dir}")
+    if has_extra_knockout_checkpoints:
+        print(f"  Extra knockout checkpoints requested: {len(extra_knockout_checkpoint_paths)}")
+        if duplicate_knockout_paths:
+            print(f"  Duplicate knockout checkpoints skipped: {len(duplicate_knockout_paths)}")
     print(f"  Knockout config: {knockout_config}")
     print(f"  Games per match: {args.games_per_match}")
     print(f"  Top K: {args.top_k}")
@@ -1380,6 +1680,15 @@ def main():
     ):
         print("ERROR: --epoch-range and --mini-epoch-range are not supported with --most-recent or --most-recent-biased")
         print("Use --knockout-dir with explicit ranges if you need range filters.")
+        sys.exit(1)
+    has_extra_knockout_checkpoints = bool(
+        args.extra_knockout_dirs or args.extra_knockout_checkpoints
+    )
+    if has_extra_knockout_checkpoints and not enabled_knockout_sources:
+        print(
+            "ERROR: --extra-knockout-checkpoints/--extra-knockout-dirs require "
+            "a primary knockout source."
+        )
         sys.exit(1)
     
     # For 2-stage tournaments, models/strategies are optional (only for round-robin stage)
