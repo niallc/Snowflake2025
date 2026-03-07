@@ -1,7 +1,8 @@
 .review-page-shell {
   min-height: 100vh;
   background:
-    radial-gradient(circle at top right, rgba(0, 153, 255, 0.11), transparent 32%),
+    radial-gradient(circle at top right, var(--review-shell-glow), transparent 32%),
+    radial-gradient(circle at bottom left, var(--review-shell-glow-secondary), transparent 38%),
     linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
 }
 
@@ -420,31 +421,35 @@
 }
 
 :root {
-  --review-played-fill: rgba(191, 76, 83, 0.16);
-  --review-played-stroke: #bf4c53;
-  --review-played-swatch: #bf4c53;
-  --review-suggestion-fill: rgba(47, 153, 101, 0.18);
-  --review-suggestion-stroke: #2f9965;
-  --review-suggestion-text: #184f35;
-  --review-suggestion-swatch: #2f9965;
-  --review-chart-actual: #2a6ee8;
-  --review-chart-best: #2f9965;
-  --review-chart-midline: rgba(127, 141, 182, 0.45);
-  --review-chart-dot: #bf4c53;
+  --review-shell-glow: color-mix(in srgb, var(--board-piece-blue-fill) 12%, transparent);
+  --review-shell-glow-secondary: color-mix(in srgb, var(--board-piece-red-fill) 10%, transparent);
+  --review-played-fill: color-mix(in srgb, var(--status-error-text) 18%, transparent);
+  --review-played-stroke: color-mix(in srgb, var(--status-error-text) 88%, var(--text-primary));
+  --review-played-swatch: var(--review-played-stroke);
+  --review-suggestion-fill: color-mix(in srgb, var(--status-success-text) 18%, transparent);
+  --review-suggestion-stroke: color-mix(in srgb, var(--status-success-text) 78%, var(--text-primary));
+  --review-suggestion-text: color-mix(in srgb, var(--status-success-text) 58%, var(--text-primary));
+  --review-suggestion-swatch: var(--review-suggestion-stroke);
+  --review-chart-actual: color-mix(in srgb, var(--board-piece-blue-fill) 72%, var(--text-primary));
+  --review-chart-best: var(--review-suggestion-stroke);
+  --review-chart-midline: color-mix(in srgb, var(--text-tertiary) 46%, transparent);
+  --review-chart-dot: var(--review-played-stroke);
 }
 
-[data-theme="dark"] {
-  --review-played-fill: rgba(220, 123, 126, 0.18);
-  --review-played-stroke: #dc7b7e;
-  --review-played-swatch: #dc7b7e;
-  --review-suggestion-fill: rgba(106, 209, 155, 0.18);
-  --review-suggestion-stroke: #6ad19b;
-  --review-suggestion-text: #dffbeb;
-  --review-suggestion-swatch: #6ad19b;
-  --review-chart-actual: #83a8ff;
-  --review-chart-best: #6ad19b;
-  --review-chart-midline: rgba(166, 181, 222, 0.45);
-  --review-chart-dot: #ff9d8e;
+[data-color-scheme="classic"] {
+  --review-chart-actual: color-mix(in srgb, var(--board-piece-red-fill) 72%, var(--text-primary));
+}
+
+[data-color-scheme="classic_blue_first"] {
+  --review-chart-actual: color-mix(in srgb, var(--board-piece-blue-fill) 72%, var(--text-primary));
+}
+
+[data-color-scheme="wood"] {
+  --review-shell-glow: rgba(110, 82, 56, 0.14);
+  --review-shell-glow-secondary: rgba(241, 229, 210, 0.12);
+  --review-chart-actual: color-mix(in srgb, var(--board-piece-blue-fill) 84%, #8e6b48);
+  --review-suggestion-stroke: color-mix(in srgb, var(--status-success-text) 68%, #556744);
+  --review-suggestion-text: color-mix(in srgb, var(--review-suggestion-stroke) 64%, var(--text-primary));
 }
 
 @keyframes review-spin {

@@ -220,26 +220,15 @@
       <a href="/" class="back-button">← Back to Game</a>
     </div>
   </div>
+  <script src="/shared/theme_preferences.js"></script>
   <script>
     (function () {
-      const storedColorScheme = localStorage.getItem('hex_ai_color_scheme');
-      const normalizeColorScheme = (rawScheme) => {
-        if (rawScheme === 'wood' || rawScheme === 'classic' || rawScheme === 'classic_blue_first') {
-          return rawScheme;
-        }
-        if (rawScheme === 'default') {
-          return 'wood';
-        }
-        return 'wood';
-      };
-
-      const colorScheme = normalizeColorScheme(storedColorScheme);
-      let playerNames = { blue: 'Blue', red: 'Red' };
-      if (colorScheme === 'wood') {
-        playerNames = { blue: 'Black', red: 'White' };
-      } else if (colorScheme === 'classic') {
-        playerNames = { blue: 'Red', red: 'Blue' };
-      }
+      const theme = window.HexThemePreferences
+        ? window.HexThemePreferences.applyStoredThemePreferences()
+        : { colorScheme: 'wood' };
+      const playerNames = window.HexThemePreferences
+        ? window.HexThemePreferences.getPlayerDisplayNames(theme.colorScheme)
+        : { blue: 'Black', red: 'White' };
 
       document.querySelectorAll('[data-player-side]').forEach((element) => {
         const side = element.getAttribute('data-player-side');

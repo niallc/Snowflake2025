@@ -17,6 +17,14 @@
     return document.createElementNS(SVG_NS, tagName);
   }
 
+  function displayColorForInternalSide(globalObject, side) {
+    const themeApi = globalObject && globalObject.HexThemePreferences;
+    if (themeApi && typeof themeApi.getDisplayColorKeyForInternalSide === 'function') {
+      return themeApi.getDisplayColorKeyForInternalSide(side);
+    }
+    return side === 'red' ? 'red' : 'blue';
+  }
+
   function hexCenter(row, col, hexRadius) {
     const padding = hexRadius * 0.5;
     const extraTopPadding = hexRadius * 0.5;
@@ -97,16 +105,18 @@
     }
 
     getColors() {
+      const blueDisplayColor = displayColorForInternalSide(global, 'blue');
+      const redDisplayColor = displayColorForInternalSide(global, 'red');
       return {
         emptyHex: readCssToken('--board-cell-empty', '#f0f0f0'),
         boardBackground: readCssToken('--board-bg', '#f8f8fa'),
         hexStroke: readCssToken('--board-cell-stroke', '#555555'),
-        bluePieceFill: readCssToken('--board-piece-blue-fill', '#0099ff'),
-        bluePieceStroke: readCssToken('--board-piece-blue-stroke', '#0064af'),
-        redPieceFill: readCssToken('--board-piece-red-fill', '#ff4444'),
-        redPieceStroke: readCssToken('--board-piece-red-stroke', '#952500'),
-        blueEdge: readCssToken('--board-edge-blue', '#0099ff'),
-        redEdge: readCssToken('--board-edge-red', '#ff4444'),
+        bluePieceFill: readCssToken(`--board-piece-${blueDisplayColor}-fill`, '#0099ff'),
+        bluePieceStroke: readCssToken(`--board-piece-${blueDisplayColor}-stroke`, '#0064af'),
+        redPieceFill: readCssToken(`--board-piece-${redDisplayColor}-fill`, '#ff4444'),
+        redPieceStroke: readCssToken(`--board-piece-${redDisplayColor}-stroke`, '#952500'),
+        blueEdge: readCssToken(`--board-edge-${blueDisplayColor}`, '#0099ff'),
+        redEdge: readCssToken(`--board-edge-${redDisplayColor}`, '#ff4444'),
         playedFill: readCssToken('--review-played-fill', 'rgba(191, 76, 83, 0.16)'),
         playedStroke: readCssToken('--review-played-stroke', '#bf4c53'),
         suggestionFill: readCssToken('--review-suggestion-fill', 'rgba(47, 153, 101, 0.18)'),

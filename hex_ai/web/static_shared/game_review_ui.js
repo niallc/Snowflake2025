@@ -57,6 +57,39 @@
     return `${formatPoints(value)} from 50%`;
   }
 
+  function applyStoredThemePreferences() {
+    const themeApi = global.HexThemePreferences;
+    if (themeApi && typeof themeApi.applyStoredThemePreferences === 'function') {
+      return themeApi.applyStoredThemePreferences();
+    }
+
+    if (typeof document === 'undefined' || !document.documentElement || typeof localStorage === 'undefined') {
+      return { darkMode: false, colorScheme: 'wood' };
+    }
+    const darkMode = localStorage.getItem('hex_ai_dark_mode') === 'true';
+    const colorScheme = localStorage.getItem('hex_ai_color_scheme');
+    if (darkMode) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    document.documentElement.setAttribute('data-color-scheme', colorScheme === 'default' ? 'wood' : (colorScheme || 'wood'));
+    return { darkMode, colorScheme: colorScheme === 'default' ? 'wood' : (colorScheme || 'wood') };
+  }
+
+  function getPlayerDisplayNames() {
+    const themeApi = global.HexThemePreferences;
+    if (themeApi && typeof themeApi.getPlayerDisplayNames === 'function') {
+      return themeApi.getPlayerDisplayNames();
+    }
+    return { blue: 'Blue', red: 'Red' };
+  }
+
+  function playerDisplayName(player) {
+    const names = getPlayerDisplayNames();
+    return player === 'red' ? names.red : names.blue;
+  }
+
   function momentBadgeText(analysis) {
     if (analysis.is_losing_move) {
       return 'Losing swing';
@@ -70,17 +103,17 @@
   function buildMomentStats(analysis) {
     if (isSwapAwareOpening(analysis)) {
       return [
-        ['Player', analysis.player.toUpperCase()],
+        ['Player', playerDisplayName(analysis.player)],
         ['Played', analysis.move_played_trmph],
         ['Best', analysis.best_move_trmph],
         [impactLabel(analysis), formatImpact(analysis)],
-        ['Played Blue Win', formatPercent(analysis.move_played_win_probability_for_player)],
+        [`Played ${playerDisplayName('blue')} Win`, formatPercent(analysis.move_played_win_probability_for_player)],
         ['Played from 50%', formatDistanceToEven(Number(analysis.move_played_distance_to_even))],
       ];
     }
 
     return [
-      ['Player', analysis.player.toUpperCase()],
+      ['Player', playerDisplayName(analysis.player)],
       ['Played', analysis.move_played_trmph],
       ['Best', analysis.best_move_trmph],
       [impactLabel(analysis), formatImpact(analysis)],
@@ -92,7 +125,7 @@
   function buildSuggestionDetails(suggestion, analysis) {
     if (isSwapAwareOpening(analysis)) {
       return [
-        `blue ${formatPercent(suggestion.blue_win_probability)}`,
+        `${playerDisplayName('blue')} ${formatPercent(suggestion.blue_win_probability)}`,
         formatDistanceToEven(Number(suggestion.distance_to_even)),
         `policy rank ${String(suggestion.policy_rank)}`,
       ];
@@ -113,24 +146,6 @@
       element.textContent = textContent;
     }
     return element;
-  }
-
-  function applyStoredThemePreferences() {
-    if (typeof document === 'undefined' || !document.documentElement || typeof localStorage === 'undefined') {
-      return;
-    }
-    const darkMode = localStorage.getItem('hex_ai_dark_mode');
-    const colorScheme = localStorage.getItem('hex_ai_color_scheme');
-    if (darkMode === 'true') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
-    }
-    if (colorScheme) {
-      document.documentElement.setAttribute('data-color-scheme', colorScheme === 'default' ? 'wood' : colorScheme);
-    } else {
-      document.documentElement.setAttribute('data-color-scheme', 'wood');
-    }
   }
 
   function buildSummaryCard(label, value) {
@@ -328,7 +343,7 @@
       const severity = severityClass(analysis);
       row.innerHTML = `
         <td>${escapeHtml(String(analysis.move_number))}</td>
-        <td>${escapeHtml(analysis.player.toUpperCase())}</td>
+        <td>${escapeHtml(playerDisplayName(analysis.player))}</td>
         <td>${escapeHtml(analysis.move_played_trmph)}</td>
         <td>${escapeHtml(analysis.best_move_trmph)}</td>
         <td class="loss-cell ${severity}">${escapeHtml(formatImpact(analysis))}</td>
@@ -369,8 +384,8 @@
     summaryGrid.appendChild(buildSummaryCard('Mistakes', String(summary.total_mistakes || 0)));
     summaryGrid.appendChild(buildSummaryCard('Major', String(summary.major_mistakes || 0)));
     summaryGrid.appendChild(buildSummaryCard('Losing Swings', String(summary.losing_moves || 0)));
-    summaryGrid.appendChild(buildSummaryCard('Blue Mistakes', String(summary.mistake_by_player ? summary.mistake_by_player.blue : 0)));
-    summaryGrid.appendChild(buildSummaryCard('Red Mistakes', String(summary.mistake_by_player ? summary.mistake_by_player.red : 0)));
+    summaryGrid.appendChild(buildSummaryCard(`${playerDisplayName('blue')} Mistakes`, String(summary.mistake_by_player ? summary.mistake_by_player.blue : 0)));
+    summaryGrid.appendChild(buildSummaryCard(`${playerDisplayName('red')} Mistakes`, String(summary.mistake_by_player ? summary.mistake_by_player.red : 0)));
     hero.appendChild(summaryGrid);
     root.appendChild(hero);
 
@@ -383,7 +398,7 @@
       createElement(
         'p',
         'review-chart-note',
-        'Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from Blue’s perspective; move 1 impact still uses the swap-aware balance metric.'
+        `Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from ${playerDisplayName('blue')}'s perspective; move 1 impact still uses the swap-aware balance metric.`
       )
     );
     root.appendChild(chartPanel);

@@ -733,6 +733,7 @@ def build_standalone_review_html(review_payload: Mapping[str, Any]) -> str:
     root = _project_root()
     base_css = _asset_text(root / "hex_ai/web/static_public/style.css")
     review_css = _asset_text(root / "hex_ai/web/static_public/review.css")
+    theme_preferences_js = _asset_text(root / "hex_ai/web/static_shared/theme_preferences.js")
     board_renderer_js = _asset_text(root / "hex_ai/web/static_shared/board_renderer.js")
     review_ui_js = _asset_text(root / "hex_ai/web/static_shared/game_review_ui.js")
     payload_json = json.dumps(review_payload)
@@ -752,6 +753,7 @@ def build_standalone_review_html(review_payload: Mapping[str, Any]) -> str:
   <script>
     window.__HEX_GAME_REVIEW_PAYLOAD__ = {payload_json};
   </script>
+  <script>{theme_preferences_js}</script>
   <script>{board_renderer_js}</script>
   <script>{review_ui_js}</script>
   <script>
