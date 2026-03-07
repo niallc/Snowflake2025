@@ -881,6 +881,28 @@ def _dedupe_knockout_participants(
     return deduped_participants, duplicate_paths
 
 
+def _preview_knockout_first_round(
+    participants: List[TournamentParticipant],
+) -> Tuple[Optional[str], List[Tuple[str, str]]]:
+    """Return the first-round bye and pairings for the current knockout order."""
+    if len(participants) < 2:
+        return None, []
+
+    bye_participant = participants[0].name if len(participants) % 2 != 0 else None
+    participants_to_pair = participants[1:] if bye_participant else participants
+
+    pairs: List[Tuple[str, str]] = []
+    n = len(participants_to_pair)
+    for i in range(n // 2):
+        pairs.append(
+            (
+                participants_to_pair[i].name,
+                participants_to_pair[n - 1 - i].name,
+            )
+        )
+    return bye_participant, pairs
+
+
 def _build_most_recent_knockout_participants(
     count: int,
     biased: bool,
@@ -1358,7 +1380,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
             if most_recent_selection_info["bias_spread"] is not None:
                 print(f"  Bias spread: {most_recent_selection_info['bias_spread']}")
             print(f"  Offsets from latest checkpoint: {most_recent_selection_info['offsets']}")
-            print(f"  Selected checkpoints: {most_recent_selection_info['selected_checkpoints']}")
+            print(
+                "  Auto-selected checkpoints before extra merge/dedupe: "
+                f"{most_recent_selection_info['selected_checkpoints']}"
+            )
             knockout_dir = None
         except (FileNotFoundError, ValueError) as error:
             print(f"ERROR: {error}")
@@ -1439,6 +1464,10 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
         if most_recent_selection_info["bias_spread"] is not None:
             print(f"  Bias spread: {most_recent_selection_info['bias_spread']}")
         print(f"  Checkpoint offsets: {most_recent_selection_info['offsets']}")
+        print(
+            "  Auto-selected checkpoints before extra merge/dedupe: "
+            f"{most_recent_selection_info['selected_checkpoints']}"
+        )
     elif knockout_dir_selection_info:
         print(
             f"  Knockout participants: {len(knockout_participants)} checkpoints from "
@@ -1459,9 +1488,24 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     else:
         print(f"  Knockout directory: {args.knockout_dir}")
     if has_extra_knockout_checkpoints:
-        print(f"  Extra knockout checkpoints requested: {len(extra_knockout_checkpoint_paths)}")
+        print(
+            "  Extra knockout checkpoints requested: "
+            f"{[path.name for path in extra_knockout_checkpoint_paths]}"
+        )
         if duplicate_knockout_paths:
-            print(f"  Duplicate knockout checkpoints skipped: {len(duplicate_knockout_paths)}")
+            print(f"  Duplicate knockout checkpoints skipped: {duplicate_knockout_paths}")
+    if knockout_participants is not None:
+        final_knockout_order = [participant.name for participant in knockout_participants]
+        print(f"  Final knockout participant order: {final_knockout_order}")
+        first_round_bye, first_round_pairs = _preview_knockout_first_round(
+            knockout_participants
+        )
+        if first_round_bye is not None:
+            print(f"  First-round bye: {first_round_bye}")
+        print(
+            "  First-round pairings: "
+            f"{[f'{left} vs {right}' for left, right in first_round_pairs]}"
+        )
     print(f"  Knockout config: {knockout_config}")
     print(f"  Games per match: {args.games_per_match}")
     print(f"  Top K: {args.top_k}")
