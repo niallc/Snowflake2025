@@ -4,14 +4,14 @@ Move provenance sidecar helpers for self-play and TRMPH preprocessing.
 Authoritative semantics and end-to-end usage notes for policy targets live in:
   write_ups/search_policy_target_design_2026_03_04.md
 
-Current policy-target source-code semantics:
-  V: usually visit-count distribution target; currently also used for externally
-     injected opening-book moves (stored as one-hot on the opening move)
-  G: softmax over the full Gumbel top-m candidate set using clean log-priors
-     and completed-Q scores with a visit-damped value scale
+Policy-target source-code semantics:
+  V: visit-count distribution target; also used for externally injected
+     opening-book moves (stored as one-hot on the chosen move)
+  G: Gumbel candidate-set target built from clean log-priors plus
+     completed-Q scores with a visit-damped value scale
   C: policy-masked row (unused for policy loss)
-  T: currently visit-count distribution in searched terminal-move cases; one-hot
-     only in terminal-shortcut/no-visit cases
+  T: visit-count distribution in searched terminal-move cases; one-hot only
+     when the terminal move is known without search
 
 Schema v1:
 - One JSON object per line
