@@ -105,6 +105,7 @@ def build_katahex_override_config(
     *,
     max_visits: int,
     num_search_threads: int,
+    num_eigen_threads: Optional[int] = None,
     nn_cache_size_power_of_two: int,
     log_dir: str = "",
     extra_override_config: Optional[str] = None,
@@ -115,6 +116,10 @@ def build_katahex_override_config(
     if num_search_threads <= 0:
         raise ValueError(
             f"num_search_threads must be positive, got {num_search_threads}"
+        )
+    if num_eigen_threads is not None and num_eigen_threads <= 0:
+        raise ValueError(
+            f"num_eigen_threads must be positive when provided, got {num_eigen_threads}"
         )
     if nn_cache_size_power_of_two < 0:
         raise ValueError(
@@ -134,6 +139,8 @@ def build_katahex_override_config(
         f"nnCacheSizePowerOfTwo={nn_cache_size_power_of_two}",
         "noResultUtilityForWhite=0.0",
     ]
+    if num_eigen_threads is not None:
+        parts.append(f"numEigenThreadsPerModel={num_eigen_threads}")
     if extra_override_config:
         parts.append(extra_override_config.strip())
     return ",".join(parts)

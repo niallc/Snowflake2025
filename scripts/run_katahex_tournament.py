@@ -677,7 +677,9 @@ Examples:
     parser.add_argument("--katahex-config", type=str, default=DEFAULT_KATAHEX_CONFIG, help=f"Path to the KataHex config file (default: {DEFAULT_KATAHEX_CONFIG})")
     parser.add_argument("--katahex-model", type=str, default=DEFAULT_KATAHEX_MODEL, help=f"Path to the KataHex model file (default: {DEFAULT_KATAHEX_MODEL})")
     parser.add_argument("--katahex-max-visits", type=int, default=DEFAULT_KATAHEX_MAX_VISITS, help=f"KataHex maxVisits/maxPlayouts override (default: {DEFAULT_KATAHEX_MAX_VISITS})")
-    parser.add_argument("--katahex-num-search-threads", type=int, default=DEFAULT_KATAHEX_NUM_SEARCH_THREADS, help=f"KataHex numSearchThreads override (default: {DEFAULT_KATAHEX_NUM_SEARCH_THREADS})")
+    parser.add_argument("--katahex-num-threads", type=int, help=f"Convenience CPU-thread budget for KataHex. Sets numSearchThreads, and on Eigen/CPU builds also sets numEigenThreadsPerModel unless overridden separately (default search threads: {DEFAULT_KATAHEX_NUM_SEARCH_THREADS})")
+    parser.add_argument("--katahex-num-search-threads", type=int, help=f"KataHex numSearchThreads override (default: {DEFAULT_KATAHEX_NUM_SEARCH_THREADS})")
+    parser.add_argument("--katahex-num-eigen-threads", type=int, help="KataHex numEigenThreadsPerModel override for Eigen/CPU builds (default: follow numSearchThreads)")
     parser.add_argument("--katahex-nn-cache-power", type=int, default=DEFAULT_KATAHEX_CACHE_POWER, help=f"KataHex nnCacheSizePowerOfTwo override (default: {DEFAULT_KATAHEX_CACHE_POWER})")
     parser.add_argument("--katahex-command-timeout", type=float, default=DEFAULT_KATAHEX_COMMAND_TIMEOUT, help=f"Per-command timeout in seconds for KataHex GTP commands (default: {DEFAULT_KATAHEX_COMMAND_TIMEOUT})")
     parser.add_argument("--katahex-override-config", type=str, help="Additional raw KataHex override-config entries to append")
@@ -795,9 +797,34 @@ def main() -> None:
         print(f"ERROR: {exc}")
         sys.exit(1)
 
+    effective_katahex_num_search_threads = (
+        args.katahex_num_search_threads
+        if args.katahex_num_search_threads is not None
+        else (
+            args.katahex_num_threads
+            if args.katahex_num_threads is not None
+            else DEFAULT_KATAHEX_NUM_SEARCH_THREADS
+        )
+    )
+    effective_katahex_num_eigen_threads = (
+        args.katahex_num_eigen_threads
+        if args.katahex_num_eigen_threads is not None
+        else args.katahex_num_threads
+    )
+    if effective_katahex_num_search_threads <= 0:
+        print("ERROR: --katahex-num-search-threads/--katahex-num-threads must be positive.")
+        sys.exit(1)
+    if (
+        effective_katahex_num_eigen_threads is not None
+        and effective_katahex_num_eigen_threads <= 0
+    ):
+        print("ERROR: --katahex-num-eigen-threads/--katahex-num-threads must be positive when provided.")
+        sys.exit(1)
+
     katahex_override_config = build_katahex_override_config(
         max_visits=args.katahex_max_visits,
-        num_search_threads=args.katahex_num_search_threads,
+        num_search_threads=effective_katahex_num_search_threads,
+        num_eigen_threads=effective_katahex_num_eigen_threads,
         nn_cache_size_power_of_two=args.katahex_nn_cache_power,
         extra_override_config=args.katahex_override_config,
     )
@@ -827,6 +854,11 @@ def main() -> None:
     print(f"KataHex Config: {args.katahex_config}")
     print(f"KataHex Model: {args.katahex_model}")
     print(f"KataHex Policy Only: {args.katahex_policy_only}")
+    print(f"KataHex Search Threads: {effective_katahex_num_search_threads}")
+    if effective_katahex_num_eigen_threads is None:
+        print("KataHex Eigen Threads: default (follow KataHex/Eigen default, normally numSearchThreads)")
+    else:
+        print(f"KataHex Eigen Threads: {effective_katahex_num_eigen_threads}")
     print(f"KataHex Override Config: {katahex_override_config}")
     print(f"Number of openings: {len(openings)}")
     if args.first_move_sweep:
