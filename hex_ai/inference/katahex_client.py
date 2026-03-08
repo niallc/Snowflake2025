@@ -1,9 +1,8 @@
 """
 Client utilities for running a local KataHex GTP engine.
 
-KataHex uses GTP coordinates with A1 at the bottom-left. Snowflake/TRMPH uses
-``a1`` at the top-left of the board, so coordinate conversion must vertically
-flip rows when exchanging moves with KataHex.
+On Hex boards, KataHex GTP coordinates use the same top-left-origin convention
+as Snowflake/TRMPH, so row/column conversion is direct.
 """
 
 from __future__ import annotations
@@ -58,14 +57,14 @@ def snowflake_rowcol_to_katahex_vertex(
     """
     Convert Snowflake coordinates to a KataHex GTP vertex.
 
-    Snowflake/TRMPH treats ``a1`` as the top-left corner. KataHex/GTP treats
-    ``A1`` as the bottom-left corner, so rows are vertically flipped.
+    On Hex boards, both Snowflake/TRMPH and KataHex use ``a1``/``A1`` for the
+    top-left corner, so the mapping is direct.
     """
     if not (0 <= row < board_size and 0 <= col < board_size):
         raise ValueError(
             f"Invalid Snowflake coordinates ({row}, {col}) for board size {board_size}"
         )
-    return f"{_index_to_alpha(col)}{board_size - row}"
+    return f"{_index_to_alpha(col)}{row + 1}"
 
 
 def katahex_vertex_to_snowflake_rowcol(
@@ -80,7 +79,7 @@ def katahex_vertex_to_snowflake_rowcol(
 
     col = _alpha_to_index(match.group(1))
     gtp_row = int(match.group(2))
-    row = board_size - gtp_row
+    row = gtp_row - 1
     if not (0 <= row < board_size and 0 <= col < board_size):
         raise ValueError(
             f"KataHex vertex {vertex!r} is out of range for board size {board_size}"
