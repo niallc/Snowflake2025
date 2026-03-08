@@ -7,7 +7,8 @@ Authoritative semantics and end-to-end usage notes for policy targets live in:
 Current policy-target source-code semantics:
   V: usually visit-count distribution target; currently also used for externally
      injected opening-book moves (stored as one-hot on the opening move)
-  G: softmax(score_without_gumbel) on final scored/ranked subset
+  G: softmax over the full Gumbel top-m candidate set using clean log-priors
+     and completed-Q scores with a visit-damped value scale
   C: policy-masked row (unused for policy loss)
   T: currently visit-count distribution in searched terminal-move cases; one-hot
      only in terminal-shortcut/no-visit cases

@@ -491,6 +491,67 @@ class MCTSGumbelMixin:
 
         return compact_rows
 
+    @staticmethod
+    def _extract_required_gumbel_top_m_candidate_rows(
+        gumbel_metrics: Dict[str, Any],
+    ) -> List[Dict[str, float]]:
+        """
+        Extract compact top-m candidate rows required for richer Gumbel targets.
+
+        These rows preserve the clean pre-search log-priors for the full Gumbel
+        candidate set so self-play can build policy targets over all searched
+        candidates rather than only the final ranked survivors.
+        """
+        candidate_rows_raw = gumbel_metrics.get("top_m_selected_rows", None)
+        if not isinstance(candidate_rows_raw, list) or not candidate_rows_raw:
+            raise RuntimeError(
+                "Missing required Gumbel top_m_selected_rows in gumbel metrics."
+            )
+
+        compact_rows: List[Dict[str, float]] = []
+        seen_actions: set[int] = set()
+        for row in candidate_rows_raw:
+            if not isinstance(row, dict):
+                raise RuntimeError(
+                    "Invalid Gumbel top_m_selected_rows entry type: expected dict."
+                )
+            action_raw = row.get("tensor_action", None)
+            log_prior_raw = row.get("log_prior", None)
+            prior_raw = row.get("prior", None)
+            if action_raw is None or log_prior_raw is None or prior_raw is None:
+                raise RuntimeError(
+                    "Gumbel top_m_selected_rows entries must include tensor_action, log_prior, and prior."
+                )
+
+            action = int(action_raw)
+            if action in seen_actions:
+                raise RuntimeError(
+                    f"Duplicate tensor_action {action} in gumbel top_m_selected_rows."
+                )
+            seen_actions.add(action)
+
+            log_prior = float(log_prior_raw)
+            if not np.isfinite(log_prior):
+                raise RuntimeError(
+                    f"Non-finite log_prior in gumbel top_m_selected_rows: {log_prior_raw!r}"
+                )
+
+            prior = float(prior_raw)
+            if not np.isfinite(prior) or prior < 0.0:
+                raise RuntimeError(
+                    f"Invalid prior in gumbel top_m_selected_rows: {prior_raw!r}"
+                )
+
+            compact_rows.append(
+                {
+                    "tensor_action": action,
+                    "log_prior": log_prior,
+                    "prior": prior,
+                }
+            )
+
+        return compact_rows
+
     def _record_required_gumbel_target_fields(
         self,
         gumbel_metrics: Dict[str, Any],
@@ -502,7 +563,11 @@ class MCTSGumbelMixin:
         required fields due to best-effort formatting failures.
         """
         compact_rows = self._extract_required_gumbel_final_rank_rows(gumbel_metrics)
+        compact_candidate_rows = self._extract_required_gumbel_top_m_candidate_rows(
+            gumbel_metrics
+        )
         self._gumbel_final_rank_rows = compact_rows
+        self._gumbel_top_m_candidate_rows = compact_candidate_rows
         self._gumbel_final_score_gap_top1_top2 = (
             float(compact_rows[0]["score_without_gumbel"] - compact_rows[1]["score_without_gumbel"])
             if len(compact_rows) >= 2
