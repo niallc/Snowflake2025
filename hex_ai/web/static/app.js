@@ -1132,6 +1132,7 @@ function updateUI() {
   
   // TRMPH
   document.getElementById('trmph-string').value = state.trmph;
+  updateReviewLink();
   
   // Update step button - keep it enabled even when game is over
   const stepBtn = document.getElementById('step-btn');
@@ -1540,12 +1541,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const redModel = document.getElementById('red-model');
   if (blueModel) blueModel.addEventListener('change', (e) => {
     state.blue_model_id = e.target.value;
+    updateReviewLink();
     if (state.player === 'blue') {
       void refreshMoveHeatmap();
     }
   });
   if (redModel) redModel.addEventListener('change', (e) => {
     state.red_model_id = e.target.value;
+    updateReviewLink();
     if (state.player === 'red') {
       void refreshMoveHeatmap();
     }
@@ -1705,6 +1708,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     navigator.clipboard.writeText(state.trmph);
   });
   document.getElementById('review-game-btn').addEventListener('click', openReviewPage);
+  updateReviewLink();
 
   // Debug controls
   document.getElementById('verbose-level').addEventListener('change', (e) => {
@@ -3019,11 +3023,10 @@ function getReviewModelId() {
   return 'best';
 }
 
-function openReviewPage() {
+function getReviewPageUrl() {
   const bareTrmph = String(state.trmph || '').replace(/^#\d+,/, '');
   if (!bareTrmph) {
-    alert('Play or load a game before opening the review page.');
-    return;
+    return '';
   }
 
   const params = new URLSearchParams({
@@ -3031,11 +3034,32 @@ function openReviewPage() {
     display_board_size: String(getConfiguredBoardSize()),
     model_id: getReviewModelId(),
   });
-  const url = `/review?${params.toString()}`;
-  const opened = window.open(url, '_blank', 'noopener');
-  if (!opened) {
-    window.location.href = url;
+  return `/review?${params.toString()}`;
+}
+
+function updateReviewLink() {
+  const link = document.getElementById('review-game-btn');
+  if (!link) {
+    return;
   }
+  const url = getReviewPageUrl();
+  if (!url) {
+    link.removeAttribute('href');
+    link.setAttribute('aria-disabled', 'true');
+    return;
+  }
+  link.href = url;
+  link.setAttribute('aria-disabled', 'false');
+}
+
+function openReviewPage(event) {
+  const url = getReviewPageUrl();
+  if (!url) {
+    event.preventDefault();
+    alert('Play or load a game before opening the review page.');
+    return;
+  }
+  document.getElementById('review-game-btn').href = url;
 }
 
 function showTrmphStatus(message, type) {

@@ -580,9 +580,7 @@
 
       const focusColumn = createElement('div', 'review-focus-column');
       this.elements.focusPanel = createElement('section', 'review-panel review-focus-panel');
-      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
       focusColumn.appendChild(this.elements.focusPanel);
-      focusColumn.appendChild(this.elements.chartPanel);
 
       const railColumn = createElement('div', 'review-rail-column');
 
@@ -600,6 +598,9 @@
       stage.appendChild(focusColumn);
       stage.appendChild(railColumn);
       results.appendChild(stage);
+
+      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
+      results.appendChild(this.elements.chartPanel);
 
       clearAndAppend(this.root, results);
     }
@@ -970,13 +971,38 @@
       return detail;
     }
 
+    buildEmptyFocusState() {
+      const fragment = document.createDocumentFragment();
+
+      const boardShell = createElement('div', 'review-board-shell review-focus-board-shell');
+      const emptyBoard = createElement('div', 'review-board review-focus-board review-board-empty');
+      emptyBoard.appendChild(
+        createElement(
+          'p',
+          'review-board-empty-message',
+          'No move is available to preview under the current filters.'
+        )
+      );
+      boardShell.appendChild(emptyBoard);
+      fragment.appendChild(boardShell);
+
+      fragment.appendChild(this.buildTransportBar());
+      fragment.appendChild(this.buildControlBar());
+
+      const emptyDetail = createElement('div', 'review-empty review-filter-empty');
+      emptyDetail.textContent = 'Adjust the filters below to bring moves back into the preview.';
+      fragment.appendChild(emptyDetail);
+
+      return fragment;
+    }
+
     renderFocusPanel(activeAnalysis) {
       this.elements.focusPanel.innerHTML = '';
 
       if (!activeAnalysis) {
-        const empty = createElement('div', 'review-empty');
-        empty.textContent = 'No move is available to preview under the current filters.';
-        this.elements.focusPanel.appendChild(empty);
+        this.elements.focusPanel.appendChild(this.buildEmptyFocusState());
+        this.updateFilterButtons();
+        this.updateSummaryAndStatus();
         return;
       }
 

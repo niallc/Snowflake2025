@@ -161,14 +161,16 @@ class HexGame {
         this.copyTrmphBtn.addEventListener('click', () => this.copyTrmph());
         this.applyTrmphBtn.addEventListener('click', () => this.applyTrmphSequence());
         if (this.reviewGameBtn) {
-            this.reviewGameBtn.addEventListener('click', () => this.openReviewPage());
+            this.reviewGameBtn.addEventListener('click', (event) => this.openReviewPage(event));
         }
+        this.updateReviewLink();
 
         this.difficultyPreset.addEventListener('change', (e) => {
             this.currentElo = parseInt(e.target.value);
             this.eloSlider.value = this.currentElo;
             this.eloDisplay.textContent = this.currentElo;
             localStorage.setItem('hex_ai_preferred_elo', String(this.currentElo));
+            this.updateReviewLink();
             this.persistSessionState();
         });
 
@@ -192,6 +194,7 @@ class HexGame {
             this.currentElo = parseInt(e.target.value);
             this.eloDisplay.textContent = this.currentElo;
             this.updateDifficultyPreset();
+            this.updateReviewLink();
         });
 
         this.eloSlider.addEventListener('change', () => {
@@ -2333,24 +2336,43 @@ class HexGame {
     updateTrmphDisplay() {
         this.trmphDisplay.value = this.currentTRMPH;
         this.updatePieRuleUi();
+        this.updateReviewLink();
     }
 
-    openReviewPage() {
+    getReviewPageUrl() {
         if (!this.currentTRMPH) {
-            this.showError('Play or load a game before opening the review page.');
-            return;
+            return '';
         }
-
         const params = new URLSearchParams({
             trmph: this.currentTRMPH,
             display_board_size: String(this.validateBoardSize()),
             elo_rating: String(this.validateEloRating())
         });
-        const url = `/review?${params.toString()}`;
-        const opened = window.open(url, '_blank', 'noopener');
-        if (!opened) {
-            window.location.href = url;
+        return `/review?${params.toString()}`;
+    }
+
+    updateReviewLink() {
+        if (!this.reviewGameBtn) {
+            return;
         }
+        const url = this.getReviewPageUrl();
+        if (!url) {
+            this.reviewGameBtn.removeAttribute('href');
+            this.reviewGameBtn.setAttribute('aria-disabled', 'true');
+            return;
+        }
+        this.reviewGameBtn.href = url;
+        this.reviewGameBtn.setAttribute('aria-disabled', 'false');
+    }
+
+    openReviewPage(event) {
+        const url = this.getReviewPageUrl();
+        if (!url) {
+            event.preventDefault();
+            this.showError('Play or load a game before opening the review page.');
+            return;
+        }
+        this.reviewGameBtn.href = url;
     }
 
 

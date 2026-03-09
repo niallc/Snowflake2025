@@ -362,6 +362,9 @@ button:hover {
 }
 
 .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--button-secondary-bg);
   color: white;
   border: none;
@@ -369,11 +372,17 @@ button:hover {
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
+  text-decoration: none;
   transition: background-color 0.3s ease;
 }
 
 .btn-secondary:hover {
   background: var(--button-secondary-bg-hover);
+}
+
+.btn-secondary[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 #debug-content {
