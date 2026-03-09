@@ -24,6 +24,7 @@ from hex_ai.config import (
     DEFAULT_GUMBEL_CANDIDATE_POWER_SCALE,
     DEFAULT_GUMBEL_SIM_THRESHOLD,
     DEFAULT_MCTS_SIMS,
+    POLICY_TARGET_CONSTRUCTION_VERSION,
     TOURNAMENT_CONFIDENCE_TERMINATION_THRESHOLD,
     TRMPH_PREFIX,
 )
@@ -63,9 +64,8 @@ from hex_ai.utils.tournament_utils import (
 from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
     OpeningPosition,
-    POLICY_TARGET_CONSTRUCTION_VERSION,
     TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE,
-    _build_policy_target_vector_from_gumbel_final_scores,
+    _build_policy_target_vector_from_gumbel_candidate_scores,
     _build_policy_target_vector_from_mcts_result,
     _one_hot_policy_target_vector,
     _resolve_provenance_code_from_selected_move_source,
@@ -361,9 +361,11 @@ def play_katahex_vs_sf25_game(
                             raise RuntimeError(
                                 "Gumbel-root SF25 tournament move missing MCTS result payload."
                             )
-                        policy_target = _build_policy_target_vector_from_gumbel_final_scores(
+                        policy_target = _build_policy_target_vector_from_gumbel_candidate_scores(
                             mcts_result,
                             board_size=board_size,
+                            gumbel_c_visit=float(move_config.gumbel_c_visit),
+                            gumbel_c_scale=float(move_config.gumbel_c_scale),
                         )
                     elif provenance_code in {"V", "T"}:
                         mcts_result = move_metadata.get("mcts_result")

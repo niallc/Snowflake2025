@@ -66,6 +66,10 @@ TRAINING_RED_WIN = 1.0
 # TRMPH format constants
 TRMPH_PREFIX = "#13,"
 
+# Policy-target construction contract version shared by all game generators.
+# Bump only when the stored search-target semantics change.
+POLICY_TARGET_CONSTRUCTION_VERSION = 2
+
 # Default hyperparameters
 LEARNING_RATE = 8e-4
 BATCH_SIZE = 256

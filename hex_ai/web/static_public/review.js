@@ -3,16 +3,21 @@ class HexReviewPage {
         this.form = document.getElementById('review-form');
         this.trmphInput = document.getElementById('review-trmph-input');
         this.boardSizeSelect = document.getElementById('review-board-size');
-        this.eloInput = document.getElementById('review-elo');
+        this.modelSelect = document.getElementById('review-model');
         this.status = document.getElementById('review-status');
         this.root = document.getElementById('review-root');
-        this.modelId = null;
 
         this.defaultBoardSize = 13;
         this.boardSizeOptions = [13];
         this.defaultElo = 600;
         this.minElo = 1;
         this.maxElo = 2350;
+        this.defaultReviewModelId = 'beginner';
+        this.reviewModelOptions = [
+            { id: 'best', label: 'Strongest Model' },
+            { id: 'simple', label: 'More Direct Model' },
+            { id: 'beginner', label: 'Basic Model' },
+        ];
 
         this.installEventListeners();
         window.HexGameReviewUi.applyStoredThemePreferences();
@@ -50,25 +55,46 @@ class HexReviewPage {
         return String(value || '').trim().replace(/^#\d+,/, '');
     }
 
+    isSupportedReviewModelId(modelId) {
+        return this.reviewModelOptions.some((option) => option.id === modelId);
+    }
+
+    reviewModelIdFromElo(eloRating) {
+        if (!Number.isFinite(eloRating)) {
+            return this.defaultReviewModelId;
+        }
+        if (eloRating >= 1500) {
+            return 'best';
+        }
+        if (eloRating >= 800) {
+            return 'simple';
+        }
+        return 'beginner';
+    }
+
     populateControls() {
         this.boardSizeSelect.innerHTML = this.boardSizeOptions
             .map((size) => `<option value="${size}">${size}x${size}</option>`)
             .join('');
 
-        this.eloInput.min = String(this.minElo);
-        this.eloInput.max = String(this.maxElo);
+        this.modelSelect.innerHTML = this.reviewModelOptions
+            .map((option) => `<option value="${option.id}">${option.label}</option>`)
+            .join('');
 
         const storedBoardSize = parseInt(localStorage.getItem('hex_ai_display_board_size'), 10);
+        const storedReviewModelId = String(localStorage.getItem('hex_ai_review_model') || '').trim();
         const storedElo = parseInt(localStorage.getItem('hex_ai_preferred_elo'), 10);
 
         this.boardSizeSelect.value = String(
             this.boardSizeOptions.includes(storedBoardSize) ? storedBoardSize : this.defaultBoardSize
         );
-        this.eloInput.value = String(
-            Number.isFinite(storedElo) && storedElo >= this.minElo && storedElo <= this.maxElo
-                ? storedElo
-                : this.defaultElo
-        );
+        this.modelSelect.value = this.isSupportedReviewModelId(storedReviewModelId)
+            ? storedReviewModelId
+            : this.reviewModelIdFromElo(
+                Number.isFinite(storedElo) && storedElo >= this.minElo && storedElo <= this.maxElo
+                    ? storedElo
+                    : this.defaultElo
+            );
     }
 
     applyQueryDefaults() {
@@ -84,11 +110,10 @@ class HexReviewPage {
         if (Number.isFinite(displayBoardSize) && this.boardSizeOptions.includes(displayBoardSize)) {
             this.boardSizeSelect.value = String(displayBoardSize);
         }
-        if (Number.isFinite(eloRating) && eloRating >= this.minElo && eloRating <= this.maxElo) {
-            this.eloInput.value = String(eloRating);
-        }
-        if (typeof modelId === 'string' && modelId.trim()) {
-            this.modelId = modelId.trim();
+        if (typeof modelId === 'string' && this.isSupportedReviewModelId(modelId.trim())) {
+            this.modelSelect.value = modelId.trim();
+        } else if (Number.isFinite(eloRating) && eloRating >= this.minElo && eloRating <= this.maxElo) {
+            this.modelSelect.value = this.reviewModelIdFromElo(eloRating);
         }
 
         if (this.trmphInput.value.trim()) {
@@ -102,15 +127,11 @@ class HexReviewPage {
     }
 
     currentRequestPayload() {
-        const payload = {
+        return {
             trmph: this.normalizeTrmphInput(this.trmphInput.value),
             display_board_size: parseInt(this.boardSizeSelect.value, 10),
-            elo_rating: parseInt(this.eloInput.value, 10),
+            model_id: this.modelSelect.value,
         };
-        if (this.modelId) {
-            payload.model_id = this.modelId;
-        }
-        return payload;
     }
 
     async runReview() {
@@ -137,12 +158,9 @@ class HexReviewPage {
             const query = new URLSearchParams({
                 trmph: payload.trmph,
                 display_board_size: String(payload.display_board_size),
+                model_id: payload.model_id,
             });
-            if (this.modelId) {
-                query.set('model_id', this.modelId);
-            } else {
-                query.set('elo_rating', String(payload.elo_rating));
-            }
+            localStorage.setItem('hex_ai_review_model', payload.model_id);
             window.history.replaceState({}, '', `/review?${query.toString()}`);
 
             window.HexGameReviewUi.mount(this.root, data.review);

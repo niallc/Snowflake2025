@@ -259,17 +259,10 @@
     legend.appendChild(playedMistake);
 
     const suggestion = createElement('span', 'review-board-legend-item');
-    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Other reviewed move';
+    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Suggested Moves (not played)';
     legend.appendChild(suggestion);
 
     legendWrap.appendChild(legend);
-    legendWrap.appendChild(
-      createElement(
-        'p',
-        'review-board-legend-note',
-        'The board shows three reviewed moves total. Numbers are reviewed ranks, and the played move is always included.'
-      )
-    );
     return legendWrap;
   }
 

@@ -15,6 +15,7 @@ from hex_ai.config import (
     DEFAULT_CACHE_SIZE,
     DEFAULT_C_PUCT,
     DEFAULT_MCTS_SIMS,
+    POLICY_TARGET_CONSTRUCTION_VERSION,
     DEFAULT_SELFPLAY_BASE_FRACTION_MCTS_MOVES,
     DEFAULT_SELFPLAY_SMALL_BOARD_FRACTION,
     DEFAULT_SELFPLAY_SMALL_BOARD_MAX_DISPLAY_SIZE,
@@ -38,6 +39,10 @@ from hex_ai.move_provenance import (
     make_move_provenance_record,
     sidecar_path_for_trmph,
 )
+from hex_ai.policy_target_construction import (
+    build_policy_target_vector_from_gumbel_candidate_scores,
+    build_policy_target_vector_from_mcts_result,
+)
 from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
 from hex_ai.system_utils import get_git_commit_info
 from hex_ai.training_utils import get_device
@@ -45,7 +50,6 @@ from hex_ai.utils.format_conversion import (
     count_trmph_moves,
     rowcol_to_tensor_with_size,
     rowcol_to_trmph,
-    trmph_to_tensor,
 )
 from hex_ai.utils.tournament_logging import write_trmph_header
 from hex_ai.utils.temperature import calculate_mcts_root_temperature
@@ -67,11 +71,6 @@ SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
     "neural_network_confidence": MOVE_CODE_CONFIDENCE_TERMINATION,
     "terminal_move": MOVE_CODE_TERMINAL_TERMINATION,
 }
-# Policy-target construction semantics for V/G/C/T codes are documented in:
-# write_ups/search_policy_target_design_2026_03_04.md
-POLICY_TARGET_CONSTRUCTION_VERSION = 2
-
-
 class SelfPlayEngine:
     """High-performance self-play engine with optimized inference and logging."""
     
@@ -923,41 +922,11 @@ class SelfPlayEngine:
     def _build_policy_target_vector_from_mcts_result(
         self, mcts_result: Any, *, board_size: int
     ) -> np.ndarray:
-        """
-        Build dense policy-target row from MCTS root visit distribution.
-
-        Used for non-Gumbel MCTS sources (`V`/`T`).
-        """
-        tree_data = mcts_result.tree_data or {}
-        mcts_probs_raw = tree_data.get("mcts_probabilities")
-        if not isinstance(mcts_probs_raw, dict):
-            raise ValueError(
-                "MCTS result missing mcts_probabilities dict in tree_data; "
-                "cannot build policy target vector."
-            )
-
-        vec = np.zeros(board_size * board_size, dtype=np.float32)
-        for move_trmph, prob_raw in mcts_probs_raw.items():
-            if not isinstance(move_trmph, str):
-                raise TypeError(
-                    f"mcts_probabilities key must be str move, got {type(move_trmph)}"
-                )
-            prob = float(prob_raw)
-            if not np.isfinite(prob) or prob < 0.0:
-                raise ValueError(
-                    f"Invalid probability for move {move_trmph!r}: {prob_raw!r}"
-                )
-            tensor_idx = trmph_to_tensor(move_trmph, board_size=board_size)
-            vec[tensor_idx] = prob
-
-        total = float(vec.sum())
-        if total <= 0.0:
-            raise RuntimeError(
-                "MCTS policy target vector has zero mass despite trainable MCTS move source."
-            )
-        if not np.isclose(total, 1.0, atol=1e-5):
-            vec /= total
-        return vec
+        """Build dense policy-target row from MCTS root visit distribution."""
+        return build_policy_target_vector_from_mcts_result(
+            mcts_result,
+            board_size=board_size,
+        )
 
     def _extract_gumbel_top_m_candidate_rows(
         self,
@@ -1035,102 +1004,13 @@ class SelfPlayEngine:
     def _build_policy_target_vector_from_gumbel_candidate_scores(
         self, mcts_result: Any, *, board_size: int
     ) -> np.ndarray:
-        """
-        Build dense policy target from the full Gumbel top-m candidate set.
-
-        Contract:
-        - Uses `stats["gumbel_top_m_candidate_rows"]` for the clean pre-search
-          log-priors of the searched candidate set.
-        - Uses root child Q-values for visited candidates and `gumbel_v_pi_01`
-          as the completed-Q fallback for any unvisited candidate.
-        - Applies softmax over the searched candidate set only.
-        - Leaves all non-candidate legal actions at probability 0.
-        """
-        stats = getattr(mcts_result, "stats", {}) or {}
-        root = getattr(mcts_result, "root_node", None)
-        if root is None:
-            raise ValueError(
-                "Gumbel move is missing root_node on MCTS result; "
-                "cannot build Gumbel-specific policy target."
-            )
-
-        action_count = board_size * board_size
-        candidate_rows = self._extract_gumbel_top_m_candidate_rows(
-            stats, action_count=action_count
+        """Build dense policy target from the full Gumbel top-m candidate set."""
+        return build_policy_target_vector_from_gumbel_candidate_scores(
+            mcts_result,
+            board_size=board_size,
+            gumbel_c_visit=float(self.mcts_config.gumbel_c_visit),
+            gumbel_c_scale=float(self.mcts_config.gumbel_c_scale),
         )
-        v_pi_raw = stats.get("gumbel_v_pi_01")
-        if v_pi_raw is None:
-            raise ValueError(
-                "Gumbel move is missing gumbel_v_pi_01 in MCTS stats; "
-                "cannot build Gumbel-specific policy target."
-            )
-        v_pi_01 = float(v_pi_raw)
-        if not np.isfinite(v_pi_01):
-            raise ValueError(f"Invalid gumbel_v_pi_01 value: {v_pi_raw!r}")
-
-        action_to_legal_idx = {
-            int(action): idx for idx, action in enumerate(root.legal_indices)
-        }
-        candidate_visit_counts: List[int] = []
-        for row in candidate_rows:
-            action_idx = int(row["tensor_action"])
-            legal_idx = action_to_legal_idx.get(action_idx)
-            if legal_idx is None:
-                raise RuntimeError(
-                    f"Gumbel candidate tensor_action {action_idx} missing from root legal_indices"
-                )
-            candidate_visit_counts.append(int(root.N[legal_idx]))
-
-        value_scale = self._compute_gumbel_policy_target_value_scale(
-            candidate_visit_counts
-        )
-
-        action_indices: List[int] = []
-        raw_scores: List[float] = []
-        for row in candidate_rows:
-            action_idx = int(row["tensor_action"])
-            log_prior = float(row["log_prior"])
-            legal_idx = action_to_legal_idx[action_idx]
-            visits = int(root.N[legal_idx])
-            if visits > 0:
-                q_01 = float((float(root.Q[legal_idx]) + 1.0) / 2.0)
-            else:
-                q_01 = v_pi_01
-            raw_score = float(log_prior + value_scale * (q_01 - v_pi_01))
-            action_indices.append(action_idx)
-            raw_scores.append(raw_score)
-
-        selected_move = mcts_result.move
-        selected_idx = rowcol_to_tensor_with_size(
-            int(selected_move[0]), int(selected_move[1]), board_size
-        )
-        if selected_idx not in action_indices:
-            raise RuntimeError(
-                "Gumbel target construction mismatch: selected move is missing from "
-                f"the searched candidate set (selected={selected_idx}, candidates={action_indices})."
-            )
-
-        scores_arr = np.asarray(raw_scores, dtype=np.float64)
-        max_score = float(np.max(scores_arr))
-        exp_scores = np.exp(scores_arr - max_score)
-        exp_sum = float(np.sum(exp_scores))
-        if exp_sum <= 0.0 or not np.isfinite(exp_sum):
-            raise RuntimeError(
-                "Invalid Gumbel candidate-score normalization "
-                "(non-positive/invalid softmax denominator)."
-            )
-        probs = exp_scores / exp_sum
-
-        vec = np.zeros(action_count, dtype=np.float32)
-        for action_idx, prob in zip(action_indices, probs):
-            vec[action_idx] = float(prob)
-
-        total = float(vec.sum())
-        if total <= 0.0:
-            raise RuntimeError("Gumbel policy target vector has zero mass.")
-        if not np.isclose(total, 1.0, atol=1e-6):
-            vec /= total
-        return vec
 
     def _validate_game_data(self, game_data: Dict[str, Any], game_id: Optional[int] = None) -> None:
         """

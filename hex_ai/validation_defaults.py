@@ -1,26 +1,14 @@
 """
-Validation data defaults and configuration resolution.
+Validation data configuration resolution.
 
-This module provides hardcoded defaults for validation data and simple
-resolution logic for command-line overrides.
+Validation is disabled by default. Callers that want validation must provide
+both directories and shard ranges explicitly.
 """
 
 from typing import List, Tuple, Optional
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Default validation configuration - update in code when needed
-DEFAULT_VALIDATION_DIRS = [
-    "data/processed/sf18_shuffled",
-    "data/processed/shuffled_selfplay_20250924_105628"
-]
-
-DEFAULT_VALIDATION_RANGES = [
-    "498-498",  # Use only 1 shard from sf18_shuffled (the last one)
-    "99-99"     # Keep 1 shard from selfplay directory
-]
-
 
 def get_default_validation_config() -> Tuple[List[str], List[str]]:
     """
@@ -29,7 +17,7 @@ def get_default_validation_config() -> Tuple[List[str], List[str]]:
     Returns:
         Tuple of (validation_dirs, validation_shard_ranges)
     """
-    return DEFAULT_VALIDATION_DIRS.copy(), DEFAULT_VALIDATION_RANGES.copy()
+    return [], []
 
 
 def resolve_validation_config(
@@ -38,15 +26,15 @@ def resolve_validation_config(
     no_validation: bool = False
 ) -> Tuple[List[str], List[str]]:
     """
-    Resolve validation configuration with simple logic.
-    
+    Resolve validation configuration.
+
     Note: Training and validation datasets are constructed independently.
     If using the same directory for both, ensure shard ranges don't overlap
     to avoid data leakage.
     
     Args:
-        validation_dirs: Override default validation directories
-        validation_shard_ranges: Override default validation shard ranges
+        validation_dirs: Explicit validation directories
+        validation_shard_ranges: Explicit validation shard ranges
         no_validation: Disable validation entirely
         
     Returns:
@@ -55,24 +43,28 @@ def resolve_validation_config(
     if no_validation:
         logger.info("Validation disabled via --no-validation flag")
         return [], []
-    
-    if validation_dirs and validation_shard_ranges:
-        # Use explicit specification
-        logger.info(f"Using explicit validation config: dirs={validation_dirs}, ranges={validation_shard_ranges}")
-        return validation_dirs, validation_shard_ranges
-    
-    if validation_dirs or validation_shard_ranges:
-        # Partial specification - use defaults for missing parts
-        default_dirs, default_ranges = get_default_validation_config()
-        resolved_dirs = validation_dirs or default_dirs
-        resolved_ranges = validation_shard_ranges or default_ranges
-        logger.info(f"Using partial validation config: dirs={resolved_dirs}, ranges={resolved_ranges}")
-        return resolved_dirs, resolved_ranges
-    
-    # Use defaults
-    default_dirs, default_ranges = get_default_validation_config()
-    logger.info(f"Using default validation config: dirs={default_dirs}, ranges={default_ranges}")
-    return default_dirs, default_ranges
+
+    if validation_dirs is None and validation_shard_ranges is None:
+        logger.info("Validation disabled by default (no validation dirs/ranges provided)")
+        return [], []
+
+    resolved_dirs = validation_dirs or []
+    resolved_ranges = validation_shard_ranges or []
+
+    if not resolved_dirs and not resolved_ranges:
+        logger.info("Validation disabled explicitly with empty validation dirs/ranges")
+        return [], []
+
+    if bool(resolved_dirs) != bool(resolved_ranges):
+        raise ValueError(
+            "Validation requires both validation_dirs and validation_shard_ranges. "
+            "Provide both, or neither, or use --no-validation."
+        )
+
+    logger.info(
+        f"Using explicit validation config: dirs={resolved_dirs}, ranges={resolved_ranges}"
+    )
+    return resolved_dirs, resolved_ranges
 
 
 def log_validation_summary(validation_dirs: List[str], validation_ranges: List[str]) -> None:

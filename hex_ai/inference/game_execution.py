@@ -19,7 +19,12 @@ import numpy as np
 import gc
 
 from hex_ai.config import (
-    BOARD_SIZE, EMPTY_PIECE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, TRMPH_PREFIX
+    BOARD_SIZE,
+    EMPTY_PIECE,
+    POLICY_TARGET_CONSTRUCTION_VERSION,
+    TRMPH_BLUE_WIN,
+    TRMPH_RED_WIN,
+    TRMPH_PREFIX,
 )
 from hex_ai.data_processing import parse_trmph_line_flexible
 from hex_ai.enums import Player, Piece
@@ -34,11 +39,14 @@ from hex_ai.move_provenance import (
     MOVE_CODE_TERMINAL_TERMINATION,
     MOVE_CODE_VISIT_COUNT,
 )
+from hex_ai.policy_target_construction import (
+    build_policy_target_vector_from_gumbel_candidate_scores,
+    build_policy_target_vector_from_mcts_result,
+)
 from hex_ai.utils.format_conversion import (
     rowcol_to_tensor_with_size,
     rowcol_to_trmph,
     trmph_to_moves,
-    trmph_to_tensor,
 )
 from hex_ai.utils.tournament_logging import append_trmph_winner_line, write_tournament_trmph_header, find_available_csv_filename
 from hex_ai.utils.deterministic_tournament_utils import (
@@ -69,7 +77,6 @@ DEFAULT_VERBOSE = 1
 OUTPUT_DIR_PREFIX = "data/tournament_play/tournament_"
 TRMPH_SOURCE_DIR = "data/sf25/sep28"
 TRMPH_FILE_PATTERN = "*.trmph"
-POLICY_TARGET_CONSTRUCTION_VERSION = 1
 
 TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
 TOURNAMENT_SELECTED_MOVE_SOURCE_TO_PROVENANCE_CODE = {
@@ -488,42 +495,34 @@ def _build_policy_target_vector_from_mcts_result(
     mcts_result: Any, *, board_size: int
 ) -> np.ndarray:
     """Build dense policy-target row from MCTS root visit distribution."""
-    tree_data = getattr(mcts_result, "tree_data", {}) or {}
-    mcts_probs_raw = tree_data.get("mcts_probabilities")
-    if not isinstance(mcts_probs_raw, dict):
-        raise ValueError(
-            "MCTS result missing mcts_probabilities dict in tree_data; "
-            "cannot build policy target vector."
-        )
+    return build_policy_target_vector_from_mcts_result(
+        mcts_result,
+        board_size=board_size,
+    )
 
-    vec = np.zeros(board_size * board_size, dtype=np.float32)
-    for move_trmph, prob_raw in mcts_probs_raw.items():
-        if not isinstance(move_trmph, str):
-            raise TypeError(
-                f"mcts_probabilities key must be str move, got {type(move_trmph)}"
-            )
-        prob = float(prob_raw)
-        if not np.isfinite(prob) or prob < 0.0:
-            raise ValueError(
-                f"Invalid probability for move {move_trmph!r}: {prob_raw!r}"
-            )
-        tensor_idx = trmph_to_tensor(move_trmph, board_size=board_size)
-        vec[tensor_idx] = prob
 
-    total = float(vec.sum())
-    if total <= 0.0:
-        raise RuntimeError(
-            "MCTS policy target vector has zero mass despite trainable MCTS move source."
-        )
-    if not np.isclose(total, 1.0, atol=1e-5):
-        vec /= total
-    return vec
+def _build_policy_target_vector_from_gumbel_candidate_scores(
+    mcts_result: Any,
+    *,
+    board_size: int,
+    gumbel_c_visit: float,
+    gumbel_c_scale: float,
+) -> np.ndarray:
+    """Build v2 dense policy target from the full Gumbel top-m candidate set."""
+    return build_policy_target_vector_from_gumbel_candidate_scores(
+        mcts_result,
+        board_size=board_size,
+        gumbel_c_visit=gumbel_c_visit,
+        gumbel_c_scale=gumbel_c_scale,
+    )
 
 
 def _build_policy_target_vector_from_gumbel_final_scores(
     mcts_result: Any, *, board_size: int
 ) -> np.ndarray:
     """
+    Legacy v1 Gumbel policy target helper retained for debugging/comparison.
+
     Build dense policy target from final noise-free Gumbel ranking scores.
 
     Contract:
@@ -738,8 +737,11 @@ def play_deterministic_game(
                     raise RuntimeError(
                         "Gumbel-root tournament move missing MCTS result payload."
                     )
-                policy_target = _build_policy_target_vector_from_gumbel_final_scores(
-                    mcts_result, board_size=board_size
+                policy_target = _build_policy_target_vector_from_gumbel_candidate_scores(
+                    mcts_result,
+                    board_size=board_size,
+                    gumbel_c_visit=float(strategy_config.gumbel_c_visit),
+                    gumbel_c_scale=float(strategy_config.gumbel_c_scale),
                 )
             elif provenance_code in {
                 MOVE_CODE_VISIT_COUNT,

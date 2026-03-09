@@ -79,10 +79,10 @@ class PipelineConfig:
     raw_trmph_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_SOURCE_DIRS])  # Raw .trmph files to collect
     cleaned_trmph_data_dirs: List[str] = field(default_factory=list)  # Already cleaned .trmph files
     ordered_positions_dirs: List[str] = field(default_factory=list)  # Existing ordered positions (not shuffled)
-    training_data_dirs: List[str] = field(default_factory=lambda: [str(d) for d in hex_ai.data_config.DEFAULT_TRAINING_DATA_DIRS])  # Existing training data (shuffled positions)
-    shard_ranges: List[str] = field(default_factory=lambda: ["all"])
-    validation_dirs: Optional[List[str]] = None  # Validation data directories (optional, defaults to hardcoded values)
-    validation_shard_ranges: Optional[List[str]] = None  # Validation shard ranges (optional, defaults to hardcoded values)
+    training_data_dirs: List[str] = field(default_factory=list)  # Existing training data (shuffled positions)
+    shard_ranges: Optional[List[str]] = None
+    validation_dirs: Optional[List[str]] = None  # Validation data directories (optional, disabled by default)
+    validation_shard_ranges: Optional[List[str]] = None  # Validation shard ranges (optional, disabled by default)
     no_validation: bool = False  # Disable validation entirely
     selfplay_dir: Optional[str] = None  # If provided, use existing raw self-play data
     
@@ -663,12 +663,14 @@ class TrainingStep:
         return experiments
 
     def _resolve_training_data_sources(self, new_shuffled_dir: Optional[str]):
+        existing_training_dirs = self.config.training_data_dirs or []
+        existing_shard_ranges = self.config.shard_ranges or []
         if new_shuffled_dir:
-            all_data_dirs = [new_shuffled_dir] + self.config.training_data_dirs
-            all_shard_ranges = ["all"] + self.config.shard_ranges
+            all_data_dirs = [new_shuffled_dir] + existing_training_dirs
+            all_shard_ranges = ["all"] + existing_shard_ranges
         else:
-            all_data_dirs = self.config.training_data_dirs
-            all_shard_ranges = self.config.shard_ranges
+            all_data_dirs = existing_training_dirs
+            all_shard_ranges = existing_shard_ranges
 
         return (
             all_data_dirs,
@@ -1370,8 +1372,8 @@ Examples:
     parser.add_argument("--ordered-positions-dirs", type=str, nargs='+', default=[],
                        help="Existing ordered positions directories (not shuffled) for shuffling step")
     parser.add_argument("--training-data-dirs", type=str, nargs='+', 
-                       default=[str(d) for d in hex_ai.data_config.DEFAULT_TRAINING_DATA_DIRS],
-                       help="Existing training data directories (shuffled positions) for training")
+                       default=[],
+                       help="Existing training data directories (shuffled positions) to add to training")
     parser.add_argument("--shard-ranges", type=str, nargs='+',
                        help='Shard ranges for training data directories. Format: "start-end", comma-separated ranges like "0-206,208-498", or "all" (e.g., --shard-ranges "251-300" "all").')
     # Validation data arguments
@@ -1381,14 +1383,14 @@ Examples:
         '--validation-dirs',
         type=str,
         nargs='*',
-        help='Validation data directories (defaults to hardcoded values)'
+        help='Validation data directories (validation is disabled by default unless both validation args are provided)'
     )
     
     validation_group.add_argument(
         '--validation-shard-ranges',
         type=str,
         nargs='*',
-        help='Validation shard ranges (defaults to hardcoded values)'
+        help='Validation shard ranges (validation is disabled by default unless both validation args are provided)'
     )
     
     validation_group.add_argument(

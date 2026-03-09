@@ -652,8 +652,8 @@ def run_hyperparameter_tuning_current_data(
     Args:
         experiments: List of experiment configurations
         data_dirs: Single data directory (str) or list of data directories (List[str])
-        validation_dirs: Override validation directories (defaults to hardcoded values)
-        validation_shard_ranges: Override validation shard ranges (defaults to hardcoded values)
+        validation_dirs: Explicit validation directories (disabled by default)
+        validation_shard_ranges: Explicit validation shard ranges (disabled by default)
         results_dir: Directory to save results
         train_ratio: Ratio for train/val split
         num_epochs: Number of training epochs

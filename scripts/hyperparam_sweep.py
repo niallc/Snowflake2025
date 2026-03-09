@@ -182,14 +182,14 @@ Examples:
         '--validation-dirs',
         type=str,
         nargs='*',
-        help='Validation data directories (defaults to hardcoded values)'
+        help='Validation data directories (validation is disabled by default unless both validation args are provided)'
     )
     
     validation_group.add_argument(
         '--validation-shard-ranges',
         type=str,
         nargs='*',
-        help='Validation shard ranges (defaults to hardcoded values)'
+        help='Validation shard ranges (validation is disabled by default unless both validation args are provided)'
     )
     
     validation_group.add_argument(
