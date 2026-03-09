@@ -733,6 +733,7 @@
   color: var(--text-secondary);
   line-height: 1.35;
   overflow: hidden;
+  line-clamp: 1;
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -792,8 +793,8 @@
 :root {
   --review-shell-glow: color-mix(in srgb, var(--board-piece-blue-fill) 12%, transparent);
   --review-shell-glow-secondary: color-mix(in srgb, var(--board-piece-red-fill) 10%, transparent);
-  --review-played-recommended-fill: color-mix(in srgb, var(--board-piece-blue-fill) 18%, transparent);
-  --review-played-recommended-stroke: color-mix(in srgb, var(--board-piece-blue-fill) 82%, var(--text-primary));
+  --review-played-recommended-fill: color-mix(in srgb, #2f80ff 20%, transparent);
+  --review-played-recommended-stroke: #2f80ff;
   --review-played-recommended-swatch: var(--review-played-recommended-stroke);
   --review-played-close-fill: color-mix(in srgb, #d1a11e 18%, transparent);
   --review-played-close-stroke: color-mix(in srgb, #d1a11e 82%, var(--text-primary));
