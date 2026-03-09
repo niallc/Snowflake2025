@@ -271,6 +271,25 @@
 .review-focus-panel {
   position: sticky;
   top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.review-rail-column {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.review-rail-panel {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .review-focus-title-group {
@@ -305,7 +324,7 @@
 }
 
 .review-focus-board-shell {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .review-board-shell {
@@ -370,7 +389,13 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 12px;
+}
+
+.review-focus-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .review-stat {
@@ -394,12 +419,100 @@
 
 .review-explanation,
 .review-alternatives {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .review-section-heading {
   margin: 0 0 10px;
   font-size: 1rem;
+}
+
+.review-focus-detail {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.review-focus-detail-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.review-focus-detail-section {
+  display: grid;
+  gap: 10px;
+}
+
+.review-focus-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-focus-tab {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--bg-tertiary));
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.review-focus-tab:hover {
+  background: color-mix(in srgb, var(--bg-secondary) 76%, var(--bg-quaternary));
+}
+
+.review-focus-tab.is-active {
+  border-color: var(--review-active-border);
+  background: color-mix(in srgb, var(--review-active-bg) 72%, var(--bg-secondary));
+  color: var(--review-active-text);
+}
+
+.review-transport {
+  display: grid;
+  gap: 10px;
+}
+
+.review-transport-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-transport-button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, var(--bg-tertiary));
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.review-transport-button:hover {
+  background: color-mix(in srgb, var(--bg-secondary) 72%, var(--bg-quaternary));
+}
+
+.review-transport-button.is-primary {
+  border-color: color-mix(in srgb, var(--button-primary-bg) 58%, var(--border-secondary));
+  background: color-mix(in srgb, var(--button-primary-bg) 18%, var(--bg-secondary));
+  color: color-mix(in srgb, var(--button-primary-bg) 78%, var(--text-primary));
+}
+
+.review-transport-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  background: color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-tertiary));
+}
+
+.review-transport-status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
 }
 
 .review-moment-copy {
@@ -485,12 +598,19 @@
   gap: 12px;
 }
 
+.review-move-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  align-content: start;
+}
+
 .review-spotlight-button,
 .review-move-card {
   width: 100%;
   text-align: left;
   border-radius: 18px;
-  padding: 14px;
+  padding: 12px;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -571,8 +691,8 @@
 .review-move-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .review-card-chip {
@@ -603,6 +723,10 @@
   margin-top: 10px;
   color: var(--text-secondary);
   line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .review-severity-badge {
@@ -705,8 +829,23 @@
     grid-template-columns: 1fr;
   }
 
-  .review-focus-panel {
+  .review-focus-panel,
+  .review-rail-column {
     position: static;
+    max-height: none;
+  }
+
+  .review-focus-panel,
+  .review-rail-panel,
+  .review-focus-detail,
+  .review-focus-detail-body,
+  .review-move-list {
+    overflow: visible;
+  }
+
+  .review-focus-detail,
+  .review-rail-panel {
+    min-height: auto;
   }
 }
 
@@ -746,6 +885,7 @@
     padding: 16px;
   }
 
+  .review-focus-quick-grid,
   .review-focus-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

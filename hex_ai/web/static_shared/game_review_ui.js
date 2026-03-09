@@ -389,6 +389,8 @@
         showRed: true,
         showMinor: false,
         showQuietMoves: false,
+        activeTab: 'why',
+        isPlaying: false,
         selectedMoveNumber: null,
         hoveredMoveNumber: null,
       };
@@ -405,6 +407,8 @@
       baseState.selectedMoveNumber = this.pickPreferredMoveNumber(this.getVisibleAnalyses(baseState));
       this.state = baseState;
       this.visibleAnalyses = [];
+      this.playbackDelayMs = 2000;
+      this.playTimer = null;
     }
 
     mount() {
@@ -451,6 +455,95 @@
 
     getAnalysisByMoveNumber(moveNumber) {
       return this.analysisByMoveNumber.get(Number(moveNumber)) || null;
+    }
+
+    currentVisibleIndex() {
+      if (this.visibleAnalyses.length === 0) {
+        return -1;
+      }
+      const active = this.activeAnalysis();
+      const moveNumber = active ? Number(active.move_number) : Number(this.state.selectedMoveNumber);
+      const activeIndex = this.visibleAnalyses.findIndex((analysis) => Number(analysis.move_number) === moveNumber);
+      if (activeIndex >= 0) {
+        return activeIndex;
+      }
+      return 0;
+    }
+
+    moveToVisibleIndex(index, options) {
+      const config = options || {};
+      const target = this.visibleAnalyses[index];
+      if (!target) {
+        return false;
+      }
+      if (!config.keepPlaying) {
+        this.stopPlayback({ refresh: false });
+      }
+      this.state.selectedMoveNumber = Number(target.move_number);
+      this.state.hoveredMoveNumber = null;
+      this.refreshActiveUi();
+      return true;
+    }
+
+    jumpToBoundary(edge, options) {
+      if (this.visibleAnalyses.length === 0) {
+        return;
+      }
+      const targetIndex = edge === 'end' ? this.visibleAnalyses.length - 1 : 0;
+      this.moveToVisibleIndex(targetIndex, options);
+    }
+
+    jumpRelative(offset, options) {
+      if (this.visibleAnalyses.length === 0) {
+        return;
+      }
+      const currentIndex = this.currentVisibleIndex();
+      const nextIndex = Math.max(0, Math.min(this.visibleAnalyses.length - 1, currentIndex + offset));
+      this.moveToVisibleIndex(nextIndex, options);
+    }
+
+    startPlayback() {
+      if (this.state.isPlaying || this.visibleAnalyses.length === 0) {
+        return;
+      }
+      if (this.currentVisibleIndex() >= this.visibleAnalyses.length - 1) {
+        this.jumpToBoundary('start', { keepPlaying: true });
+      }
+      this.state.isPlaying = true;
+      this.state.hoveredMoveNumber = null;
+      this.refreshActiveUi();
+      this.playTimer = global.setInterval(() => {
+        if (!this.state.isPlaying) {
+          return;
+        }
+        const currentIndex = this.currentVisibleIndex();
+        if (currentIndex < 0 || currentIndex >= this.visibleAnalyses.length - 1) {
+          this.stopPlayback();
+          return;
+        }
+        this.moveToVisibleIndex(currentIndex + 1, { keepPlaying: true });
+      }, this.playbackDelayMs);
+    }
+
+    stopPlayback(options) {
+      const config = options || {};
+      if (this.playTimer !== null) {
+        global.clearInterval(this.playTimer);
+        this.playTimer = null;
+      }
+      const wasPlaying = this.state.isPlaying;
+      this.state.isPlaying = false;
+      if (wasPlaying && config.refresh !== false) {
+        this.refreshActiveUi();
+      }
+    }
+
+    setActiveTab(tabName) {
+      if (this.state.activeTab === tabName) {
+        return;
+      }
+      this.state.activeTab = tabName;
+      this.refreshActiveUi();
     }
 
     ensureSelectionIsVisible() {
@@ -669,6 +762,9 @@
     refreshFilteredUi() {
       this.visibleAnalyses = this.getVisibleAnalyses();
       this.ensureSelectionIsVisible();
+      if (this.state.isPlaying && this.visibleAnalyses.length <= 1) {
+        this.stopPlayback({ refresh: false });
+      }
       const active = this.activeAnalysis();
 
       this.updateFilterButtons();
@@ -688,6 +784,9 @@
     }
 
     setHoveredMoveNumber(moveNumber) {
+      if (this.state.isPlaying) {
+        return;
+      }
       if (this.state.hoveredMoveNumber === moveNumber) {
         return;
       }
@@ -707,6 +806,7 @@
     }
 
     selectMoveNumber(moveNumber) {
+      this.stopPlayback({ refresh: false });
       this.state.selectedMoveNumber = Number(moveNumber);
       this.state.hoveredMoveNumber = null;
       this.refreshActiveUi();
@@ -782,8 +882,6 @@
           <span class="review-card-chip player-${escapeHtml(analysis.player)}">${escapeHtml(playerDisplayName(analysis.player))}</span>
           <span class="review-card-chip">${escapeHtml(formatPhase(analysis.game_phase))}</span>
           <span class="review-card-chip">${escapeHtml(impactLabel(analysis))} ${escapeHtml(formatImpact(analysis))}</span>
-          <span class="review-card-chip">Best ${escapeHtml(analysis.best_move_trmph)}</span>
-          <span class="review-card-chip">Policy rank ${escapeHtml(String(analysis.move_played_policy_rank))}</span>
         </span>
         <span class="review-move-card-copy">${escapeHtml(analysis.mistake_reason || (isQuietAnalysis(analysis) ? 'No review threshold crossed for this move.' : ''))}</span>
       `;
@@ -839,6 +937,128 @@
       return stats;
     }
 
+    buildQuickFacts(analysis) {
+      const facts = [
+        ['Played', analysis.move_played_trmph],
+        ['Best', analysis.best_move_trmph],
+        [impactLabel(analysis), formatImpact(analysis)],
+      ];
+
+      if (isSwapAwareOpening(analysis)) {
+        facts.push(['From 50%', formatDistanceToEven(Number(analysis.move_played_distance_to_even))]);
+      } else {
+        facts.push([
+          'Swing',
+          `${formatPercent(analysis.position_win_probability_for_player)} to ${formatPercent(analysis.move_played_win_probability_for_player)}`,
+        ]);
+      }
+      return facts;
+    }
+
+    buildTransportButton(label, disabled, onClick, extraClassName) {
+      const button = createElement('button', `review-transport-button${extraClassName ? ` ${extraClassName}` : ''}`, label);
+      button.type = 'button';
+      button.disabled = Boolean(disabled);
+      button.addEventListener('click', onClick);
+      return button;
+    }
+
+    buildTransportBar() {
+      const transport = createElement('div', 'review-transport');
+      const currentIndex = this.currentVisibleIndex();
+      const visibleCount = this.visibleAnalyses.length;
+      const atStart = currentIndex <= 0;
+      const atEnd = currentIndex === -1 || currentIndex >= visibleCount - 1;
+
+      const controls = createElement('div', 'review-transport-controls');
+      controls.appendChild(this.buildTransportButton('Beginning', visibleCount === 0 || atStart, () => {
+        this.jumpToBoundary('start');
+      }));
+      controls.appendChild(this.buildTransportButton('Prev', visibleCount === 0 || atStart, () => {
+        this.jumpRelative(-1);
+      }));
+      controls.appendChild(this.buildTransportButton('Play', visibleCount <= 1 || this.state.isPlaying, () => {
+        this.startPlayback();
+      }, 'is-primary'));
+      controls.appendChild(this.buildTransportButton('Stop', !this.state.isPlaying, () => {
+        this.stopPlayback();
+      }));
+      controls.appendChild(this.buildTransportButton('Next', visibleCount === 0 || atEnd, () => {
+        this.jumpRelative(1);
+      }));
+      controls.appendChild(this.buildTransportButton('End', visibleCount === 0 || atEnd, () => {
+        this.jumpToBoundary('end');
+      }));
+      transport.appendChild(controls);
+
+      const status = createElement('p', 'review-transport-status');
+      if (visibleCount === 0) {
+        status.textContent = 'No visible moves.';
+      } else if (this.state.isPlaying) {
+        status.textContent = `Playing visible moves every ${Math.round(this.playbackDelayMs / 1000)} seconds.`;
+      } else if (currentIndex >= 0) {
+        status.textContent = `Move ${currentIndex + 1} of ${visibleCount} in the current filtered set.`;
+      } else {
+        status.textContent = `${visibleCount} visible moves.`;
+      }
+      transport.appendChild(status);
+      return transport;
+    }
+
+    buildFocusTabs() {
+      const tabs = createElement('div', 'review-focus-tabs');
+      [
+        ['why', 'Why'],
+        ['alternatives', 'Alternatives'],
+        ['numbers', 'Numbers'],
+      ].forEach(([key, label]) => {
+        const button = createElement('button', `review-focus-tab${this.state.activeTab === key ? ' is-active' : ''}`, label);
+        button.type = 'button';
+        button.setAttribute('aria-pressed', this.state.activeTab === key ? 'true' : 'false');
+        button.addEventListener('click', () => {
+          this.setActiveTab(key);
+        });
+        tabs.appendChild(button);
+      });
+      return tabs;
+    }
+
+    buildFocusDetail(analysis) {
+      const detail = createElement('div', 'review-focus-detail');
+      const body = createElement('div', 'review-focus-detail-body');
+
+      if (this.state.activeTab === 'alternatives') {
+        body.appendChild(buildSuggestionList(analysis));
+      } else if (this.state.activeTab === 'numbers') {
+        const section = createElement('section', 'review-focus-detail-section');
+        section.appendChild(createElement('h3', 'review-section-heading', 'Detailed Numbers'));
+        const statGrid = createElement('div', 'review-focus-grid');
+        this.buildFocusStats(analysis).forEach(([label, value]) => {
+          statGrid.appendChild(buildStatCard(label, value));
+        });
+        section.appendChild(statGrid);
+        body.appendChild(section);
+      } else {
+        const explanation = createElement('section', 'review-focus-detail-section');
+        explanation.appendChild(createElement('h3', 'review-section-heading', 'What Changed'));
+        explanation.appendChild(createElement('p', 'review-moment-copy', analysis.mistake_reason));
+        if (isSwapAwareOpening(analysis)) {
+          explanation.appendChild(
+            createElement(
+              'p',
+              'review-focus-footnote',
+              'Move 1 uses the swap-aware balance metric, so impact is measured by distance from an even 50% opening rather than raw first-player value.'
+            )
+          );
+        }
+        body.appendChild(explanation);
+      }
+
+      detail.appendChild(this.buildFocusTabs());
+      detail.appendChild(body);
+      return detail;
+    }
+
     renderFocusPanel(activeAnalysis) {
       this.elements.focusPanel.innerHTML = '';
 
@@ -872,28 +1092,15 @@
       this.elements.focusPanel.appendChild(boardShell);
       renderBoard(board, activeAnalysis);
 
-      const statGrid = createElement('div', 'review-focus-grid');
-      this.buildFocusStats(activeAnalysis).forEach(([label, value]) => {
-        statGrid.appendChild(buildStatCard(label, value));
+      this.elements.focusPanel.appendChild(this.buildTransportBar());
+
+      const quickGrid = createElement('div', 'review-focus-quick-grid');
+      this.buildQuickFacts(activeAnalysis).forEach(([label, value]) => {
+        quickGrid.appendChild(buildStatCard(label, value));
       });
-      this.elements.focusPanel.appendChild(statGrid);
+      this.elements.focusPanel.appendChild(quickGrid);
 
-      const explanation = createElement('section', 'review-explanation');
-      explanation.appendChild(createElement('h3', 'review-section-heading', 'What Changed'));
-      explanation.appendChild(createElement('p', 'review-moment-copy', activeAnalysis.mistake_reason));
-      this.elements.focusPanel.appendChild(explanation);
-
-      this.elements.focusPanel.appendChild(buildSuggestionList(activeAnalysis));
-
-      if (isSwapAwareOpening(activeAnalysis)) {
-        this.elements.focusPanel.appendChild(
-          createElement(
-            'p',
-            'review-focus-footnote',
-            'Move 1 uses the swap-aware balance metric, so impact is measured by distance from an even 50% opening rather than raw first-player value.'
-          )
-        );
-      }
+      this.elements.focusPanel.appendChild(this.buildFocusDetail(activeAnalysis));
     }
 
     renderChart(activeAnalysis) {
