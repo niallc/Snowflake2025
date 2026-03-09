@@ -451,7 +451,7 @@
 .review-focus-detail-body {
   min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 0 4px 18px 0;
 }
 
 .review-focus-detail-section {

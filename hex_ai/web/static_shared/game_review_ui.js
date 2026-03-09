@@ -580,7 +580,9 @@
 
       const focusColumn = createElement('div', 'review-focus-column');
       this.elements.focusPanel = createElement('section', 'review-panel review-focus-panel');
+      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
       focusColumn.appendChild(this.elements.focusPanel);
+      focusColumn.appendChild(this.elements.chartPanel);
 
       const railColumn = createElement('div', 'review-rail-column');
 
@@ -598,9 +600,6 @@
       stage.appendChild(focusColumn);
       stage.appendChild(railColumn);
       results.appendChild(stage);
-
-      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
-      results.appendChild(this.elements.chartPanel);
 
       clearAndAppend(this.root, results);
     }
