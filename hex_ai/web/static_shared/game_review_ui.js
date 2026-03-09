@@ -2,6 +2,7 @@
   'use strict';
 
   const PLAYED_MOVE_WARNING_THRESHOLD = 0.05;
+  const REVIEWED_MOVE_DISPLAY_COUNT = 3;
 
   function escapeHtml(value) {
     return String(value)
@@ -50,6 +51,82 @@
       return 'recommended';
     }
     return reviewLossValue(analysis) < PLAYED_MOVE_WARNING_THRESHOLD ? 'close' : 'mistake';
+  }
+
+  function reviewRankValue(candidate) {
+    const rank = Number(candidate && candidate.review_rank);
+    if (!Number.isFinite(rank) || rank < 1) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return rank;
+  }
+
+  function formatReviewedRank(rank) {
+    const numericRank = Number(rank);
+    if (!Number.isFinite(numericRank) || numericRank < 1) {
+      return '#?';
+    }
+    return `#${String(numericRank)}`;
+  }
+
+  function markerLabelForReviewedRank(rank) {
+    const numericRank = Number(rank);
+    if (!Number.isFinite(numericRank) || numericRank < 1) {
+      return '?';
+    }
+    return String(numericRank);
+  }
+
+  function reviewedMoveSort(left, right) {
+    const rankDelta = reviewRankValue(left) - reviewRankValue(right);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+    if (Boolean(left && left.is_played_move) !== Boolean(right && right.is_played_move)) {
+      return left && left.is_played_move ? -1 : 1;
+    }
+    return String((left && left.move_trmph) || '').localeCompare(String((right && right.move_trmph) || ''));
+  }
+
+  function buildDisplayedReviewedMoves(analysis) {
+    if (!analysis) {
+      return [];
+    }
+
+    const playedMove = {
+      row: Number(analysis.move_played[0]),
+      col: Number(analysis.move_played[1]),
+      move_trmph: analysis.move_played_trmph,
+      review_rank: Number(analysis.move_played_review_rank),
+      is_played_move: true,
+      win_probability_for_player: Number(analysis.move_played_win_probability_for_player),
+      blue_win_probability: Number(analysis.blue_win_probability_after_played),
+      policy_probability: Number(analysis.move_played_policy_probability),
+      policy_rank: Number(analysis.move_played_policy_rank),
+      review_score: Number(analysis.review_score_played),
+      distance_to_even: analysis.move_played_distance_to_even,
+    };
+
+    const alternatives = (Array.isArray(analysis.suggestions) ? analysis.suggestions : [])
+      .filter((candidate) => candidate && candidate.move_trmph && candidate.move_trmph !== analysis.move_played_trmph)
+      .slice()
+      .sort(reviewedMoveSort);
+
+    if (!(reviewRankValue(playedMove) < Number.POSITIVE_INFINITY)) {
+      return [playedMove].concat(alternatives.slice(0, Math.max(0, REVIEWED_MOVE_DISPLAY_COUNT - 1)));
+    }
+
+    if (reviewRankValue(playedMove) <= REVIEWED_MOVE_DISPLAY_COUNT) {
+      return [playedMove]
+        .concat(alternatives)
+        .sort(reviewedMoveSort)
+        .slice(0, REVIEWED_MOVE_DISPLAY_COUNT);
+    }
+
+    return alternatives
+      .slice(0, Math.max(0, REVIEWED_MOVE_DISPLAY_COUNT - 1))
+      .concat([playedMove])
+      .sort(reviewedMoveSort);
   }
 
   function impactLabel(analysis) {
@@ -182,7 +259,7 @@
     legend.appendChild(playedMistake);
 
     const suggestion = createElement('span', 'review-board-legend-item');
-    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Suggested alternatives';
+    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Other reviewed move';
     legend.appendChild(suggestion);
 
     legendWrap.appendChild(legend);
@@ -190,7 +267,7 @@
       createElement(
         'p',
         'review-board-legend-note',
-        'Numbered markers show the strongest reviewed alternatives from the candidate set.'
+        'The board shows three reviewed moves total. Numbers are reviewed ranks, and the played move is always included.'
       )
     );
     return legendWrap;
@@ -198,23 +275,13 @@
 
   function renderBoard(container, analysis) {
     const renderer = new global.HexBoardRenderer.BoardRenderer(container);
-    const markers = [
-      {
-        row: Number(analysis.move_played[0]),
-        col: Number(analysis.move_played[1]),
-        kind: 'played',
-        tone: playedMarkerTone(analysis),
-      },
-    ];
-
-    (analysis.suggestions || []).forEach((suggestion, index) => {
-      markers.push({
-        row: Number(suggestion.row),
-        col: Number(suggestion.col),
-        kind: 'suggestion',
-        label: String(index + 1),
-      });
-    });
+    const markers = buildDisplayedReviewedMoves(analysis).map((candidate) => ({
+      row: Number(candidate.row),
+      col: Number(candidate.col),
+      kind: candidate.is_played_move ? 'played' : 'suggestion',
+      tone: candidate.is_played_move ? playedMarkerTone(analysis) : null,
+      label: markerLabelForReviewedRank(candidate.review_rank),
+    }));
 
     renderer.render({
       board: analysis.board_before,
@@ -241,40 +308,40 @@
 
   function buildSuggestionList(analysis) {
     const wrapper = createElement('section', 'review-alternatives');
-    wrapper.appendChild(createElement('h3', 'review-section-heading', 'Alternatives'));
+    wrapper.appendChild(createElement('h3', 'review-section-heading', 'Top Reviewed Moves'));
 
     const intro = createElement(
       'p',
       'review-moment-copy',
-      analysis.best_move_trmph === analysis.move_played_trmph
-        ? 'The played move already led the reviewed candidate set. Lower-ranked alternatives are still shown for context.'
-        : 'The strongest reviewed alternative is marked as Best below.'
+      'The board shows three reviewed moves total. Numbers are reviewed ranks, and the played move is always included even when it ranked lower.'
     );
     wrapper.appendChild(intro);
 
-    const suggestions = Array.isArray(analysis.suggestions) ? analysis.suggestions : [];
-    if (suggestions.length === 0) {
+    const reviewedMoves = buildDisplayedReviewedMoves(analysis);
+    if (reviewedMoves.length === 0) {
       wrapper.appendChild(
         createElement(
           'p',
           'review-moment-copy',
-          'No higher-ranked alternatives were selected in the reviewed candidate set.'
+          'No reviewed move ranking is available for this position.'
         )
       );
       return wrapper;
     }
 
     const list = createElement('div', 'review-suggestion-list');
-    suggestions.forEach((suggestion, index) => {
-      const detailHtml = buildSuggestionDetails(suggestion, analysis)
+    reviewedMoves.forEach((candidate) => {
+      const detailHtml = buildSuggestionDetails(candidate, analysis)
         .map((detail) => `<span class="review-suggestion-detail">${escapeHtml(detail)}</span>`)
         .join('');
-      const item = createElement('div', 'review-suggestion-item');
-      const isBestSuggestion = suggestion.move_trmph === analysis.best_move_trmph && analysis.best_move_trmph !== analysis.move_played_trmph;
-      const rankLabel = isBestSuggestion ? 'Best' : `#${index + 1}`;
+      const item = createElement('div', `review-suggestion-item${candidate.is_played_move ? ' is-played' : ''}`);
+      const statusBadge = candidate.is_played_move
+        ? '<span class="review-chip review-chip-soft">Played</span>'
+        : '';
       item.innerHTML = `
-        <span class="review-suggestion-index${isBestSuggestion ? ' is-best' : ''}">${escapeHtml(rankLabel)}</span>
-        <span class="review-suggestion-move">${escapeHtml(suggestion.move_trmph)}</span>
+        <span class="review-suggestion-index">${escapeHtml(formatReviewedRank(candidate.review_rank))}</span>
+        <span class="review-suggestion-move">${escapeHtml(candidate.move_trmph)}</span>
+        ${statusBadge}
         ${detailHtml}
       `;
       list.appendChild(item);
@@ -826,6 +893,7 @@
         ['Phase', formatPhase(analysis.game_phase)],
         ['Played', analysis.move_played_trmph],
         ['Best', analysis.best_move_trmph],
+        ['Reviewed Rank', formatReviewedRank(analysis.move_played_review_rank)],
         [impactLabel(analysis), formatImpact(analysis)],
         ['Review', analysis.review_metric_label || 'Win probability'],
         ['Policy Rank', String(analysis.move_played_policy_rank)],
@@ -847,6 +915,7 @@
       const facts = [
         ['Played', analysis.move_played_trmph],
         ['Best', analysis.best_move_trmph],
+        ['Reviewed Rank', formatReviewedRank(analysis.move_played_review_rank)],
         [impactLabel(analysis), formatImpact(analysis)],
       ];
 
@@ -872,6 +941,7 @@
       const badges = createElement('div', 'review-focus-badges');
       const severity = severityClass(analysis);
       badges.appendChild(createElement('span', `review-severity-badge ${severity}`, momentBadgeText(analysis)));
+      badges.appendChild(createElement('span', 'review-chip review-chip-soft', `Played rank ${formatReviewedRank(analysis.move_played_review_rank)}`));
       if (analysis.best_move_trmph === analysis.move_played_trmph) {
         badges.appendChild(createElement('span', 'review-chip review-chip-soft', 'Played matched best'));
       }
@@ -942,7 +1012,7 @@
       const tabs = createElement('div', 'review-focus-tabs');
       [
         ['why', 'Why'],
-        ['alternatives', 'Alternatives'],
+        ['alternatives', 'Reviewed'],
         ['numbers', 'Numbers'],
       ].forEach(([key, label]) => {
         const button = createElement('button', `review-focus-tab${this.state.activeTab === key ? ' is-active' : ''}`, label);

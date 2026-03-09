@@ -570,6 +570,10 @@
   border: 1px solid var(--border-primary);
 }
 
+.review-suggestion-item.is-played {
+  border-color: color-mix(in srgb, var(--review-active-border) 42%, var(--border-primary));
+}
+
 .review-suggestion-index {
   display: inline-flex;
   align-items: center;
@@ -796,6 +800,7 @@
   --review-played-recommended-fill: color-mix(in srgb, #2f80ff 20%, transparent);
   --review-played-recommended-stroke: #2f80ff;
   --review-played-recommended-swatch: var(--review-played-recommended-stroke);
+  --review-played-label-text: #ffffff;
   --review-played-close-fill: color-mix(in srgb, #d1a11e 18%, transparent);
   --review-played-close-stroke: color-mix(in srgb, #d1a11e 82%, var(--text-primary));
   --review-played-close-swatch: var(--review-played-close-stroke);

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -51,6 +51,7 @@ class MoveCandidate:
     is_played_move: bool
     review_score: float
     distance_to_even: Optional[float]
+    review_rank: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class MoveAnalysis:
     win_probability_loss: float
     move_played_policy_probability: float
     move_played_policy_rank: int
+    move_played_review_rank: int
     legal_move_count: int
     candidate_move_count: int
     suggestions: List[MoveCandidate]
@@ -134,6 +136,13 @@ def _normalize_mistake(win_probability_loss: float) -> Tuple[bool, str, str]:
 
 def _summarize_player(player: Player) -> str:
     return "blue" if player == Player.BLUE else "red"
+
+
+def _assign_review_ranks(ranked_candidates: Sequence[MoveCandidate]) -> List[MoveCandidate]:
+    return [
+        replace(candidate, review_rank=index + 1)
+        for index, candidate in enumerate(ranked_candidates)
+    ]
 
 
 class GameReviewer:
@@ -326,7 +335,6 @@ class GameReviewer:
             move_played,
         )
 
-        played_candidate = candidate_by_move[move_played_trmph]
         ranked_candidates = sorted(
             candidate_by_move.values(),
             key=lambda item: (
@@ -336,6 +344,9 @@ class GameReviewer:
             ),
             reverse=True,
         )
+        ranked_candidates = _assign_review_ranks(ranked_candidates)
+        candidate_by_move = {candidate.move_trmph: candidate for candidate in ranked_candidates}
+        played_candidate = candidate_by_move[move_played_trmph]
         best_candidate = ranked_candidates[0]
         suggestions = [
             candidate
@@ -379,6 +390,7 @@ class GameReviewer:
             win_probability_loss=win_probability_loss,
             move_played_policy_probability=played_candidate.policy_probability,
             move_played_policy_rank=played_candidate.policy_rank,
+            move_played_review_rank=int(played_candidate.review_rank or 1),
             legal_move_count=len(legal_moves),
             candidate_move_count=len(candidate_by_move),
             suggestions=suggestions,
@@ -483,7 +495,6 @@ class GameReviewer:
                 distance_to_even=distance_to_even,
             )
 
-        played_candidate = candidate_by_move[move_played_trmph]
         ranked_candidates = sorted(
             candidate_by_move.values(),
             key=lambda item: (
@@ -493,6 +504,9 @@ class GameReviewer:
             ),
             reverse=True,
         )
+        ranked_candidates = _assign_review_ranks(ranked_candidates)
+        candidate_by_move = {candidate.move_trmph: candidate for candidate in ranked_candidates}
+        played_candidate = candidate_by_move[move_played_trmph]
         best_candidate = ranked_candidates[0]
         suggestions = [
             candidate
@@ -536,6 +550,7 @@ class GameReviewer:
             win_probability_loss=review_score_loss,
             move_played_policy_probability=played_candidate.policy_probability,
             move_played_policy_rank=played_candidate.policy_rank,
+            move_played_review_rank=int(played_candidate.review_rank or 1),
             legal_move_count=len(legal_moves),
             candidate_move_count=len(candidate_by_move),
             suggestions=suggestions,

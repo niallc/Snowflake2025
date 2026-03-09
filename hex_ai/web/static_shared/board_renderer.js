@@ -123,6 +123,7 @@
         playedCloseStroke: readCssToken('--review-played-close-stroke', '#d6aa2e'),
         playedMistakeFill: readCssToken('--review-played-mistake-fill', 'rgba(191, 76, 83, 0.16)'),
         playedMistakeStroke: readCssToken('--review-played-mistake-stroke', '#bf4c53'),
+        playedLabelText: readCssToken('--review-played-label-text', '#ffffff'),
         suggestionFill: readCssToken('--review-suggestion-fill', 'rgba(47, 153, 101, 0.18)'),
         suggestionStroke: readCssToken('--review-suggestion-stroke', '#2f9965'),
         suggestionText: readCssToken('--review-suggestion-text', '#184f35'),
@@ -272,6 +273,24 @@
       outer.setAttribute('stroke', stroke);
       outer.setAttribute('stroke-width', '2.5');
       svg.appendChild(outer);
+
+      if (marker.label) {
+        const text = createSvgElement('text');
+        text.setAttribute('x', String(center.x));
+        text.setAttribute('y', String(center.y + 0.8));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'middle');
+        text.setAttribute('font-size', String(Math.max(10, this.hexRadius * 0.62)));
+        text.setAttribute('font-weight', '700');
+        text.setAttribute('font-family', 'system-ui, sans-serif');
+        text.setAttribute('fill', colors.playedLabelText);
+        text.setAttribute('stroke', stroke);
+        text.setAttribute('stroke-width', '0.9');
+        text.setAttribute('paint-order', 'stroke');
+        text.textContent = marker.label;
+        svg.appendChild(text);
+        return;
+      }
 
       const arm = radius * 0.58;
       const lineA = makeEdgeLine(center.x - arm, center.y - arm, center.x + arm, center.y + arm, stroke, 2.6);
