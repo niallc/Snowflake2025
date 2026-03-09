@@ -117,8 +117,12 @@
         redPieceStroke: readCssToken(`--board-piece-${redDisplayColor}-stroke`, '#952500'),
         blueEdge: readCssToken(`--board-edge-${blueDisplayColor}`, '#0099ff'),
         redEdge: readCssToken(`--board-edge-${redDisplayColor}`, '#ff4444'),
-        playedFill: readCssToken('--review-played-fill', 'rgba(191, 76, 83, 0.16)'),
-        playedStroke: readCssToken('--review-played-stroke', '#bf4c53'),
+        playedRecommendedFill: readCssToken('--review-played-recommended-fill', 'rgba(34, 117, 214, 0.16)'),
+        playedRecommendedStroke: readCssToken('--review-played-recommended-stroke', '#2275d6'),
+        playedCloseFill: readCssToken('--review-played-close-fill', 'rgba(214, 170, 46, 0.18)'),
+        playedCloseStroke: readCssToken('--review-played-close-stroke', '#d6aa2e'),
+        playedMistakeFill: readCssToken('--review-played-mistake-fill', 'rgba(191, 76, 83, 0.16)'),
+        playedMistakeStroke: readCssToken('--review-played-mistake-stroke', '#bf4c53'),
         suggestionFill: readCssToken('--review-suggestion-fill', 'rgba(47, 153, 101, 0.18)'),
         suggestionStroke: readCssToken('--review-suggestion-stroke', '#2f9965'),
         suggestionText: readCssToken('--review-suggestion-text', '#184f35'),
@@ -245,20 +249,33 @@
     }
 
     drawPlayedMarker(svg, marker, colors) {
+      const tone = marker && typeof marker.tone === 'string' ? marker.tone : 'mistake';
+      const fillByTone = {
+        recommended: colors.playedRecommendedFill,
+        close: colors.playedCloseFill,
+        mistake: colors.playedMistakeFill,
+      };
+      const strokeByTone = {
+        recommended: colors.playedRecommendedStroke,
+        close: colors.playedCloseStroke,
+        mistake: colors.playedMistakeStroke,
+      };
+      const fill = fillByTone[tone] || colors.playedMistakeFill;
+      const stroke = strokeByTone[tone] || colors.playedMistakeStroke;
       const center = hexCenter(marker.row, marker.col, this.hexRadius);
       const radius = Math.max(5.5, this.hexRadius * 0.44);
       const outer = createSvgElement('circle');
       outer.setAttribute('cx', String(center.x));
       outer.setAttribute('cy', String(center.y));
       outer.setAttribute('r', String(radius));
-      outer.setAttribute('fill', colors.playedFill);
-      outer.setAttribute('stroke', colors.playedStroke);
+      outer.setAttribute('fill', fill);
+      outer.setAttribute('stroke', stroke);
       outer.setAttribute('stroke-width', '2.5');
       svg.appendChild(outer);
 
       const arm = radius * 0.58;
-      const lineA = makeEdgeLine(center.x - arm, center.y - arm, center.x + arm, center.y + arm, colors.playedStroke, 2.6);
-      const lineB = makeEdgeLine(center.x - arm, center.y + arm, center.x + arm, center.y - arm, colors.playedStroke, 2.6);
+      const lineA = makeEdgeLine(center.x - arm, center.y - arm, center.x + arm, center.y + arm, stroke, 2.6);
+      const lineB = makeEdgeLine(center.x - arm, center.y + arm, center.x + arm, center.y - arm, stroke, 2.6);
       lineA.setAttribute('opacity', '1');
       lineB.setAttribute('opacity', '1');
       svg.appendChild(lineA);

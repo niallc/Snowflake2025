@@ -394,8 +394,16 @@
   display: inline-block;
 }
 
-.review-board-swatch.played {
-  background: var(--review-played-swatch);
+.review-board-swatch.played-recommended {
+  background: var(--review-played-recommended-swatch);
+}
+
+.review-board-swatch.played-close {
+  background: var(--review-played-close-swatch);
+}
+
+.review-board-swatch.played-mistake {
+  background: var(--review-played-mistake-swatch);
 }
 
 .review-board-swatch.suggestion {
@@ -784,9 +792,15 @@
 :root {
   --review-shell-glow: color-mix(in srgb, var(--board-piece-blue-fill) 12%, transparent);
   --review-shell-glow-secondary: color-mix(in srgb, var(--board-piece-red-fill) 10%, transparent);
-  --review-played-fill: color-mix(in srgb, var(--status-error-text) 18%, transparent);
-  --review-played-stroke: color-mix(in srgb, var(--status-error-text) 88%, var(--text-primary));
-  --review-played-swatch: var(--review-played-stroke);
+  --review-played-recommended-fill: color-mix(in srgb, var(--board-piece-blue-fill) 18%, transparent);
+  --review-played-recommended-stroke: color-mix(in srgb, var(--board-piece-blue-fill) 82%, var(--text-primary));
+  --review-played-recommended-swatch: var(--review-played-recommended-stroke);
+  --review-played-close-fill: color-mix(in srgb, #d1a11e 18%, transparent);
+  --review-played-close-stroke: color-mix(in srgb, #d1a11e 82%, var(--text-primary));
+  --review-played-close-swatch: var(--review-played-close-stroke);
+  --review-played-mistake-fill: color-mix(in srgb, var(--status-error-text) 18%, transparent);
+  --review-played-mistake-stroke: color-mix(in srgb, var(--status-error-text) 88%, var(--text-primary));
+  --review-played-mistake-swatch: var(--review-played-mistake-stroke);
   --review-suggestion-fill: color-mix(in srgb, var(--status-success-text) 18%, transparent);
   --review-suggestion-stroke: color-mix(in srgb, var(--status-success-text) 78%, var(--text-primary));
   --review-suggestion-text: color-mix(in srgb, var(--status-success-text) 58%, var(--text-primary));
@@ -794,7 +808,7 @@
   --review-chart-actual: color-mix(in srgb, var(--board-piece-blue-fill) 72%, var(--text-primary));
   --review-chart-best: var(--review-suggestion-stroke);
   --review-chart-midline: color-mix(in srgb, var(--text-tertiary) 46%, transparent);
-  --review-chart-dot: var(--review-played-stroke);
+  --review-chart-dot: var(--review-played-mistake-stroke);
   --review-chart-selected: color-mix(in srgb, var(--button-primary-bg) 55%, white);
   --review-chart-selected-stroke: color-mix(in srgb, var(--button-primary-bg) 72%, var(--text-primary));
   --review-active-border: color-mix(in srgb, var(--button-primary-bg) 58%, var(--border-secondary));

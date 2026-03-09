@@ -1,6 +1,8 @@
 (function (global) {
   'use strict';
 
+  const PLAYED_MOVE_WARNING_THRESHOLD = 0.05;
+
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, '&amp;')
@@ -38,6 +40,16 @@
 
   function isSwapAwareOpening(analysis) {
     return Boolean(analysis && analysis.review_metric === 'swap_evenness');
+  }
+
+  function playedMarkerTone(analysis) {
+    if (!analysis) {
+      return 'mistake';
+    }
+    if (analysis.best_move_trmph === analysis.move_played_trmph) {
+      return 'recommended';
+    }
+    return reviewLossValue(analysis) < PLAYED_MOVE_WARNING_THRESHOLD ? 'close' : 'mistake';
   }
 
   function impactLabel(analysis) {
@@ -157,9 +169,17 @@
     const legendWrap = createElement('div', 'review-board-legend-wrap');
     const legend = createElement('div', 'review-board-legend');
 
-    const played = createElement('span', 'review-board-legend-item');
-    played.innerHTML = '<span class="review-board-swatch played"></span>Played move';
-    legend.appendChild(played);
+    const playedRecommended = createElement('span', 'review-board-legend-item');
+    playedRecommended.innerHTML = '<span class="review-board-swatch played-recommended"></span>Played and recommended';
+    legend.appendChild(playedRecommended);
+
+    const playedClose = createElement('span', 'review-board-legend-item');
+    playedClose.innerHTML = '<span class="review-board-swatch played-close"></span>Played, under 5% loss';
+    legend.appendChild(playedClose);
+
+    const playedMistake = createElement('span', 'review-board-legend-item');
+    playedMistake.innerHTML = '<span class="review-board-swatch played-mistake"></span>Played, 5%+ loss';
+    legend.appendChild(playedMistake);
 
     const suggestion = createElement('span', 'review-board-legend-item');
     suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Suggested alternatives';
@@ -183,6 +203,7 @@
         row: Number(analysis.move_played[0]),
         col: Number(analysis.move_played[1]),
         kind: 'played',
+        tone: playedMarkerTone(analysis),
       },
     ];
 
