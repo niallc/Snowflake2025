@@ -29,7 +29,11 @@
     if (Number.isFinite(reviewLoss)) {
       return reviewLoss;
     }
-    return Number(analysis && analysis.win_probability_loss);
+    const winProbabilityLoss = Number(analysis && analysis.win_probability_loss);
+    if (Number.isFinite(winProbabilityLoss)) {
+      return winProbabilityLoss;
+    }
+    return 0;
   }
 
   function isSwapAwareOpening(analysis) {
@@ -90,36 +94,112 @@
     return player === 'red' ? names.red : names.blue;
   }
 
+  function formatPhase(value) {
+    if (!value) {
+      return 'Unknown';
+    }
+    return `${String(value).charAt(0).toUpperCase()}${String(value).slice(1)}`;
+  }
+
   function momentBadgeText(analysis) {
-    if (analysis.is_losing_move) {
+    if (analysis && analysis.is_losing_move) {
       return 'Losing swing';
     }
     if (isSwapAwareOpening(analysis)) {
-      return analysis.is_mistake ? 'Opening balance' : 'Opening';
+      return analysis && analysis.is_mistake ? 'Opening balance' : 'Opening';
     }
-    return analysis.mistake_severity || 'none';
+    if (analysis && analysis.is_mistake && analysis.mistake_severity) {
+      return analysis.mistake_severity;
+    }
+    return 'Steady';
   }
 
-  function buildMomentStats(analysis) {
-    if (isSwapAwareOpening(analysis)) {
-      return [
-        ['Player', playerDisplayName(analysis.player)],
-        ['Played', analysis.move_played_trmph],
-        ['Best', analysis.best_move_trmph],
-        [impactLabel(analysis), formatImpact(analysis)],
-        [`Played ${playerDisplayName('blue')} Win`, formatPercent(analysis.move_played_win_probability_for_player)],
-        ['Played from 50%', formatDistanceToEven(Number(analysis.move_played_distance_to_even))],
-      ];
+  function severityClass(analysis) {
+    if (!analysis || !analysis.mistake_severity) {
+      return 'severity-none';
     }
+    return `severity-${analysis.mistake_severity}`;
+  }
 
-    return [
-      ['Player', playerDisplayName(analysis.player)],
-      ['Played', analysis.move_played_trmph],
-      ['Best', analysis.best_move_trmph],
-      [impactLabel(analysis), formatImpact(analysis)],
-      ['Before', formatPercent(analysis.position_win_probability_for_player)],
-      ['After', formatPercent(analysis.move_played_win_probability_for_player)],
+  function isQuietAnalysis(analysis) {
+    return !analysis.is_mistake && !analysis.is_losing_move;
+  }
+
+  function createElement(tagName, className, textContent) {
+    const element = document.createElement(tagName);
+    if (className) {
+      element.className = className;
+    }
+    if (typeof textContent === 'string') {
+      element.textContent = textContent;
+    }
+    return element;
+  }
+
+  function buildSummaryCard(label, value, detail) {
+    const card = createElement('div', 'review-summary-card');
+    card.appendChild(createElement('p', 'review-summary-label', label));
+    card.appendChild(createElement('p', 'review-summary-value', value));
+    if (detail) {
+      card.appendChild(createElement('p', 'review-summary-detail', detail));
+    }
+    return card;
+  }
+
+  function buildStatCard(label, value) {
+    const stat = createElement('div', 'review-stat');
+    stat.appendChild(createElement('p', 'review-stat-label', label));
+    stat.appendChild(createElement('p', 'review-stat-value', value));
+    return stat;
+  }
+
+  function buildBoardLegend() {
+    const legendWrap = createElement('div', 'review-board-legend-wrap');
+    const legend = createElement('div', 'review-board-legend');
+
+    const played = createElement('span', 'review-board-legend-item');
+    played.innerHTML = '<span class="review-board-swatch played"></span>Played move';
+    legend.appendChild(played);
+
+    const suggestion = createElement('span', 'review-board-legend-item');
+    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Suggested alternatives';
+    legend.appendChild(suggestion);
+
+    legendWrap.appendChild(legend);
+    legendWrap.appendChild(
+      createElement(
+        'p',
+        'review-board-legend-note',
+        'Numbered markers show the strongest reviewed alternatives from the candidate set.'
+      )
+    );
+    return legendWrap;
+  }
+
+  function renderBoard(container, analysis) {
+    const renderer = new global.HexBoardRenderer.BoardRenderer(container);
+    const markers = [
+      {
+        row: Number(analysis.move_played[0]),
+        col: Number(analysis.move_played[1]),
+        kind: 'played',
+      },
     ];
+
+    (analysis.suggestions || []).forEach((suggestion, index) => {
+      markers.push({
+        row: Number(suggestion.row),
+        col: Number(suggestion.col),
+        kind: 'suggestion',
+        label: String(index + 1),
+      });
+    });
+
+    renderer.render({
+      board: analysis.board_before,
+      display_board_size: analysis.board_before.length,
+      markers,
+    });
   }
 
   function buildSuggestionDetails(suggestion, analysis) {
@@ -134,34 +214,66 @@
     return [
       `${formatPercent(suggestion.win_probability_for_player)} for player`,
       `policy rank ${String(suggestion.policy_rank)}`,
+      `${formatPercent(suggestion.policy_probability, 0)} policy`,
     ];
   }
 
-  function createElement(tagName, className, textContent) {
-    const element = document.createElement(tagName);
-    if (className) {
-      element.className = className;
+  function buildSuggestionList(analysis) {
+    const wrapper = createElement('section', 'review-alternatives');
+    wrapper.appendChild(createElement('h3', 'review-section-heading', 'Alternatives'));
+
+    const intro = createElement(
+      'p',
+      'review-moment-copy',
+      analysis.best_move_trmph === analysis.move_played_trmph
+        ? 'The played move already led the reviewed candidate set. Lower-ranked alternatives are still shown for context.'
+        : 'The strongest reviewed alternative is marked as Best below.'
+    );
+    wrapper.appendChild(intro);
+
+    const suggestions = Array.isArray(analysis.suggestions) ? analysis.suggestions : [];
+    if (suggestions.length === 0) {
+      wrapper.appendChild(
+        createElement(
+          'p',
+          'review-moment-copy',
+          'No higher-ranked alternatives were selected in the reviewed candidate set.'
+        )
+      );
+      return wrapper;
     }
-    if (typeof textContent === 'string') {
-      element.textContent = textContent;
-    }
-    return element;
+
+    const list = createElement('div', 'review-suggestion-list');
+    suggestions.forEach((suggestion, index) => {
+      const detailHtml = buildSuggestionDetails(suggestion, analysis)
+        .map((detail) => `<span class="review-suggestion-detail">${escapeHtml(detail)}</span>`)
+        .join('');
+      const item = createElement('div', 'review-suggestion-item');
+      const isBestSuggestion = suggestion.move_trmph === analysis.best_move_trmph && analysis.best_move_trmph !== analysis.move_played_trmph;
+      const rankLabel = isBestSuggestion ? 'Best' : `#${index + 1}`;
+      item.innerHTML = `
+        <span class="review-suggestion-index${isBestSuggestion ? ' is-best' : ''}">${escapeHtml(rankLabel)}</span>
+        <span class="review-suggestion-move">${escapeHtml(suggestion.move_trmph)}</span>
+        ${detailHtml}
+      `;
+      list.appendChild(item);
+    });
+    wrapper.appendChild(list);
+    return wrapper;
   }
 
-  function buildSummaryCard(label, value) {
-    const card = createElement('div', 'review-summary-card');
-    card.appendChild(createElement('p', 'review-summary-label', label));
-    card.appendChild(createElement('p', 'review-summary-value', value));
-    return card;
-  }
+  function buildChartSvg(trajectory, selectedMoveNumber, visibleMoveNumbers) {
+    if (!Array.isArray(trajectory) || trajectory.length === 0) {
+      return '<div class="review-chart-empty">No trajectory data available.</div>';
+    }
 
-  function buildChartSvg(trajectory) {
     const width = 920;
     const height = 260;
     const padding = { top: 22, right: 20, bottom: 28, left: 20 };
     const innerWidth = width - padding.left - padding.right;
     const innerHeight = height - padding.top - padding.bottom;
     const maxIndex = Math.max(1, trajectory.length - 1);
+    const visibleSet = visibleMoveNumbers instanceof Set ? visibleMoveNumbers : null;
 
     const pointFor = (item, index, field) => {
       const x = padding.left + (index / maxIndex) * innerWidth;
@@ -193,20 +305,64 @@
     const dots = trajectory
       .slice(1)
       .map((item, index) => {
+        const moveNumber = Number(item.move_number);
         const point = pointFor(item, index + 1, 'blue_win_probability');
-        const radius = Number(item.loss) >= 0.08 ? 3.3 : 2.2;
-        return `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="${radius}" fill="var(--review-chart-dot)" opacity="0.86"></circle>`;
+        const isSelected = moveNumber === selectedMoveNumber;
+        const isVisible = !visibleSet || visibleSet.has(moveNumber);
+        const radius = isSelected ? 5.2 : (Number(item.loss) >= 0.08 ? 3.3 : 2.2);
+        const fill = isSelected ? 'var(--review-chart-selected)' : 'var(--review-chart-dot)';
+        const stroke = isSelected ? 'var(--review-chart-selected-stroke)' : 'transparent';
+        const opacity = isVisible ? 0.9 : 0.22;
+        return `
+          <circle
+            cx="${point.x.toFixed(2)}"
+            cy="${point.y.toFixed(2)}"
+            r="${radius}"
+            fill="${fill}"
+            stroke="${stroke}"
+            stroke-width="${isSelected ? '2.1' : '0'}"
+            opacity="${opacity}"
+          ></circle>
+        `;
       })
       .join('');
 
-    const startLabel = formatPercent(trajectory[0].blue_win_probability, 0);
-    const endLabel = formatPercent(trajectory[trajectory.length - 1].blue_win_probability, 0);
+    const selectedTrajectoryItem = trajectory.find((item) => Number(item.move_number) === selectedMoveNumber);
+    const selectedMarker = selectedTrajectoryItem
+      ? (() => {
+          const selectedIndex = trajectory.indexOf(selectedTrajectoryItem);
+          const point = pointFor(selectedTrajectoryItem, selectedIndex, 'blue_win_probability');
+          return `
+            <line
+              x1="${point.x.toFixed(2)}"
+              y1="${padding.top}"
+              x2="${point.x.toFixed(2)}"
+              y2="${(height - padding.bottom).toFixed(2)}"
+              stroke="var(--review-chart-selected-stroke)"
+              stroke-width="1.4"
+              stroke-dasharray="4 5"
+              opacity="0.9"
+            ></line>
+            <text
+              x="${point.x.toFixed(2)}"
+              y="${(padding.top + 14).toFixed(2)}"
+              text-anchor="middle"
+              font-size="12"
+              fill="var(--review-chart-selected-stroke)"
+            >Move ${escapeHtml(String(selectedMoveNumber))}</text>
+          `;
+        })()
+      : '';
+
+    const startLabel = formatPercent(Number(trajectory[0].blue_win_probability), 0);
+    const endLabel = formatPercent(Number(trajectory[trajectory.length - 1].blue_win_probability), 0);
 
     return `
       <svg viewBox="0 0 ${width} ${height}" aria-label="Blue win probability trajectory">
         <rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>
         <line x1="${padding.left}" y1="${midlineY}" x2="${width - padding.right}" y2="${midlineY}" stroke="var(--review-chart-midline)" stroke-width="1.4" stroke-dasharray="5 5"></line>
-        <path d="${bestPath}" fill="none" stroke="var(--review-chart-best)" stroke-width="2.6" stroke-dasharray="8 6" opacity="0.8"></path>
+        ${selectedMarker}
+        <path d="${bestPath}" fill="none" stroke="var(--review-chart-best)" stroke-width="2.6" stroke-dasharray="8 6" opacity="0.82"></path>
         <path d="${actualPath}" fill="none" stroke="var(--review-chart-actual)" stroke-width="3.2"></path>
         ${dots}
         ${labels}
@@ -216,223 +372,576 @@
     `;
   }
 
-  function severityClass(analysis) {
-    if (!analysis || !analysis.mistake_severity) {
-      return 'severity-none';
+  class ReviewExplorer {
+    constructor(root, payload) {
+      this.root = root;
+      this.payload = payload || {};
+      this.summary = this.payload.summary || {};
+      this.analysisMetadata = this.payload.analysis_metadata || {};
+      this.analyses = Array.isArray(this.payload.move_analyses) ? this.payload.move_analyses.slice() : [];
+      this.analysisByMoveNumber = new Map(this.analyses.map((analysis) => [Number(analysis.move_number), analysis]));
+      this.elements = {};
+      this.moveButtons = new Map();
+      this.spotlightButtons = new Map();
+
+      const baseState = {
+        showBlue: true,
+        showRed: true,
+        showMinor: false,
+        showQuietMoves: false,
+        selectedMoveNumber: null,
+        hoveredMoveNumber: null,
+      };
+      const initialVisible = this.getVisibleAnalyses(baseState);
+      if (initialVisible.length === 0) {
+        baseState.showQuietMoves = true;
+      }
+      this.defaultFilters = {
+        showBlue: baseState.showBlue,
+        showRed: baseState.showRed,
+        showMinor: baseState.showMinor,
+        showQuietMoves: baseState.showQuietMoves,
+      };
+      baseState.selectedMoveNumber = this.pickPreferredMoveNumber(this.getVisibleAnalyses(baseState));
+      this.state = baseState;
+      this.visibleAnalyses = [];
     }
-    return `severity-${analysis.mistake_severity}`;
-  }
 
-  function renderBoard(container, analysis) {
-    const renderer = new global.HexBoardRenderer.BoardRenderer(container);
-    const markers = [
-      {
-        row: Number(analysis.move_played[0]),
-        col: Number(analysis.move_played[1]),
-        kind: 'played',
-      },
-    ];
+    mount() {
+      this.buildLayout();
+      this.refreshFilteredUi();
+    }
 
-    (analysis.suggestions || []).forEach((suggestion, index) => {
-      markers.push({
-        row: Number(suggestion.row),
-        col: Number(suggestion.col),
-        kind: 'suggestion',
-        label: String(index + 1),
+    getVisibleAnalyses(stateOverride) {
+      const state = stateOverride || this.state;
+      return this.analyses.filter((analysis) => {
+        if (analysis.player === 'blue' && !state.showBlue) {
+          return false;
+        }
+        if (analysis.player === 'red' && !state.showRed) {
+          return false;
+        }
+        if (!state.showMinor && analysis.mistake_severity === 'minor' && !analysis.is_losing_move) {
+          return false;
+        }
+        if (!state.showQuietMoves && isQuietAnalysis(analysis)) {
+          return false;
+        }
+        return true;
       });
-    });
-
-    renderer.render({
-      board: analysis.board_before,
-      display_board_size: analysis.board_before.length,
-      markers,
-    });
-  }
-
-  function buildBoardLegend() {
-    const legend = createElement('div', 'review-board-legend');
-    const played = createElement('span', 'review-board-legend-item');
-    played.innerHTML = '<span class="review-board-swatch played"></span>Played move';
-    legend.appendChild(played);
-
-    const suggestion = createElement('span', 'review-board-legend-item');
-    suggestion.innerHTML = '<span class="review-board-swatch suggestion"></span>Suggested alternatives';
-    legend.appendChild(suggestion);
-    return legend;
-  }
-
-  function buildSuggestionList(analysis) {
-    const suggestions = Array.isArray(analysis.suggestions) ? analysis.suggestions : [];
-    if (suggestions.length === 0) {
-      return createElement('p', 'review-moment-copy', 'No higher-ranked alternatives were selected in the review candidate set.');
     }
 
-    const list = createElement('div', 'review-suggestion-list');
-    suggestions.forEach((suggestion, index) => {
-      const detailHtml = buildSuggestionDetails(suggestion, analysis)
-        .map((detail) => `<span class="review-suggestion-detail">${escapeHtml(detail)}</span>`)
-        .join('');
-      const item = createElement('div', 'review-suggestion-item');
-      item.innerHTML = `
-        <span class="review-suggestion-index">${index + 1}</span>
-        <span class="review-suggestion-move">${escapeHtml(suggestion.move_trmph)}</span>
-        ${detailHtml}
-      `;
-      list.appendChild(item);
-    });
-    return list;
-  }
+    pickPreferredMoveNumber(visibleAnalyses) {
+      if (!Array.isArray(visibleAnalyses) || visibleAnalyses.length === 0) {
+        return this.analyses.length > 0 ? Number(this.analyses[0].move_number) : null;
+      }
+      const spotlightAnalyses = this.getSpotlightAnalyses(visibleAnalyses);
+      if (spotlightAnalyses.length > 0) {
+        return Number(spotlightAnalyses[0].move_number);
+      }
+      return Number(visibleAnalyses[0].move_number);
+    }
 
-  function buildMomentCard(analysis) {
-    const severity = severityClass(analysis);
-    const card = createElement('article', `review-moment-card ${severity}`);
+    getSpotlightAnalyses(visibleAnalyses) {
+      return visibleAnalyses
+        .filter((analysis) => analysis.is_mistake || analysis.is_losing_move)
+        .sort((left, right) => reviewLossValue(right) - reviewLossValue(left))
+        .slice(0, 5);
+    }
 
-    const boardShell = createElement('div', 'review-board-shell');
-    const board = createElement('div', 'review-board');
-    boardShell.appendChild(board);
-    boardShell.appendChild(buildBoardLegend());
+    getAnalysisByMoveNumber(moveNumber) {
+      return this.analysisByMoveNumber.get(Number(moveNumber)) || null;
+    }
 
-    const body = createElement('div');
-    const titleRow = createElement('div', 'review-moment-title-row');
-    titleRow.appendChild(createElement('h3', 'review-moment-title', `Move ${analysis.move_number}: ${analysis.move_played_trmph}`));
-    const badge = createElement('span', `review-severity-badge ${severity}`, momentBadgeText(analysis));
-    titleRow.appendChild(badge);
-    body.appendChild(titleRow);
+    ensureSelectionIsVisible() {
+      if (this.visibleAnalyses.length === 0) {
+        this.state.selectedMoveNumber = null;
+        this.state.hoveredMoveNumber = null;
+        return;
+      }
 
-    const statGrid = createElement('div', 'review-moment-grid');
-    const stats = buildMomentStats(analysis);
-    stats.forEach(([label, value]) => {
-      const stat = createElement('div', 'review-stat');
-      stat.appendChild(createElement('p', 'review-stat-label', label));
-      stat.appendChild(createElement('p', 'review-stat-value', value));
-      statGrid.appendChild(stat);
-    });
-    body.appendChild(statGrid);
+      const visibleNumbers = new Set(this.visibleAnalyses.map((analysis) => Number(analysis.move_number)));
+      if (!visibleNumbers.has(Number(this.state.selectedMoveNumber))) {
+        this.state.selectedMoveNumber = this.pickPreferredMoveNumber(this.visibleAnalyses);
+      }
+      if (!visibleNumbers.has(Number(this.state.hoveredMoveNumber))) {
+        this.state.hoveredMoveNumber = null;
+      }
+    }
 
-    body.appendChild(createElement('p', 'review-moment-copy', analysis.mistake_reason));
-    body.appendChild(buildSuggestionList(analysis));
+    activeAnalysis() {
+      const hovered = this.getAnalysisByMoveNumber(this.state.hoveredMoveNumber);
+      if (hovered && this.visibleAnalyses.some((analysis) => Number(analysis.move_number) === Number(hovered.move_number))) {
+        return hovered;
+      }
+      const selected = this.getAnalysisByMoveNumber(this.state.selectedMoveNumber);
+      if (selected && this.visibleAnalyses.some((analysis) => Number(analysis.move_number) === Number(selected.move_number))) {
+        return selected;
+      }
+      return this.visibleAnalyses[0] || null;
+    }
 
-    card.appendChild(boardShell);
-    card.appendChild(body);
-    renderBoard(board, analysis);
-    return card;
-  }
+    buildLayout() {
+      const results = createElement('div', 'review-results');
+      results.appendChild(this.buildOverviewSection());
+      results.appendChild(this.buildControlBar());
 
-  function buildMoveTable(analyses) {
-    const wrap = createElement('div', 'review-table-wrap');
-    const table = createElement('table', 'review-table');
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th>Move</th>
-          <th>Player</th>
-          <th>Played</th>
-          <th>Best</th>
-          <th>Impact</th>
-          <th>Review</th>
-          <th>Policy Rank</th>
-          <th>Phase</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    `;
-    const body = table.querySelector('tbody');
+      const stage = createElement('section', 'review-stage-grid');
 
-    analyses.forEach((analysis) => {
-      const row = document.createElement('tr');
-      const severity = severityClass(analysis);
-      row.innerHTML = `
-        <td>${escapeHtml(String(analysis.move_number))}</td>
-        <td>${escapeHtml(playerDisplayName(analysis.player))}</td>
-        <td>${escapeHtml(analysis.move_played_trmph)}</td>
-        <td>${escapeHtml(analysis.best_move_trmph)}</td>
-        <td class="loss-cell ${severity}">${escapeHtml(formatImpact(analysis))}</td>
-        <td>${escapeHtml(analysis.review_metric_label || 'Win probability')}</td>
-        <td>${escapeHtml(String(analysis.move_played_policy_rank))}</td>
-        <td>${escapeHtml(analysis.game_phase)}</td>
-      `;
-      body.appendChild(row);
-    });
+      const focusColumn = createElement('div', 'review-focus-column');
+      this.elements.focusPanel = createElement('section', 'review-panel review-focus-panel');
+      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
+      focusColumn.appendChild(this.elements.focusPanel);
+      focusColumn.appendChild(this.elements.chartPanel);
 
-    wrap.appendChild(table);
-    return wrap;
-  }
+      const railColumn = createElement('div', 'review-rail-column');
+      this.elements.spotlightPanel = createElement('section', 'review-panel review-spotlight-panel');
 
-  function buildResults(payload) {
-    const root = createElement('div', 'review-results');
-    const summary = payload.summary || {};
-    const analyses = Array.isArray(payload.move_analyses) ? payload.move_analyses : [];
-    const analysisMetadata = payload.analysis_metadata || {};
+      const railPanel = createElement('section', 'review-panel review-rail-panel');
+      const railHeader = createElement('div', 'review-rail-header');
+      railHeader.appendChild(createElement('h2', 'review-panel-title', 'Move Explorer'));
+      this.elements.moveRailCount = createElement('p', 'review-rail-count');
+      railHeader.appendChild(this.elements.moveRailCount);
+      railPanel.appendChild(railHeader);
+      this.elements.moveList = createElement('div', 'review-move-list');
+      railPanel.appendChild(this.elements.moveList);
 
-    const hero = createElement('section', 'review-hero');
-    hero.innerHTML = `
-      <div class="review-hero-top">
-        <div>
-          <h2 class="review-hero-title">Visual Review</h2>
-          <p class="review-page-subtitle">Played move plus policy-ranked candidate alternatives, with move 1 judged by swap-aware distance from 50%.</p>
-        </div>
-        <div class="review-hero-meta">
-          <span class="review-chip">Model ${escapeHtml(String(analysisMetadata.model || 'unknown'))}</span>
-          <span class="review-chip">Board ${escapeHtml(String(analysisMetadata.display_board_size || '?'))}x${escapeHtml(String(analysisMetadata.display_board_size || '?'))}</span>
-          <span class="review-chip">Candidates top ${escapeHtml(String(analysisMetadata.candidate_policy_top_k || '?'))} + played</span>
-        </div>
-      </div>
-    `;
+      railColumn.appendChild(this.elements.spotlightPanel);
+      railColumn.appendChild(railPanel);
 
-    const summaryGrid = createElement('div', 'review-summary-grid');
-    summaryGrid.appendChild(buildSummaryCard('Moves', String(summary.total_moves || 0)));
-    summaryGrid.appendChild(buildSummaryCard('Mistakes', String(summary.total_mistakes || 0)));
-    summaryGrid.appendChild(buildSummaryCard('Major', String(summary.major_mistakes || 0)));
-    summaryGrid.appendChild(buildSummaryCard('Losing Swings', String(summary.losing_moves || 0)));
-    summaryGrid.appendChild(buildSummaryCard(`${playerDisplayName('blue')} Mistakes`, String(summary.mistake_by_player ? summary.mistake_by_player.blue : 0)));
-    summaryGrid.appendChild(buildSummaryCard(`${playerDisplayName('red')} Mistakes`, String(summary.mistake_by_player ? summary.mistake_by_player.red : 0)));
-    hero.appendChild(summaryGrid);
-    root.appendChild(hero);
+      stage.appendChild(focusColumn);
+      stage.appendChild(railColumn);
+      results.appendChild(stage);
 
-    const chartPanel = createElement('section', 'review-panel');
-    chartPanel.appendChild(createElement('h2', null, 'Win Probability'));
-    const chartFrame = createElement('div', 'review-chart-frame');
-    chartFrame.innerHTML = buildChartSvg(payload.win_probability_trajectory || []);
-    chartPanel.appendChild(chartFrame);
-    chartPanel.appendChild(
-      createElement(
-        'p',
-        'review-chart-note',
-        `Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from ${playerDisplayName('blue')}'s perspective; move 1 impact still uses the swap-aware balance metric.`
-      )
-    );
-    root.appendChild(chartPanel);
+      clearAndAppend(this.root, results);
+    }
 
-    const criticalPanel = createElement('section', 'review-panel');
-    criticalPanel.appendChild(createElement('h2', null, 'Critical Moments'));
-    const momentList = createElement('div', 'review-moment-list');
-    const criticalAnalyses = analyses
-      .filter((analysis) => analysis.is_mistake || analysis.is_losing_move)
-      .sort((left, right) => reviewLossValue(right) - reviewLossValue(left))
-      .slice(0, 8);
+    buildOverviewSection() {
+      const hero = createElement('section', 'review-hero');
+      const heroTop = createElement('div', 'review-hero-top');
 
-    if (criticalAnalyses.length === 0) {
-      criticalPanel.appendChild(
+      const heading = createElement('div');
+      heading.appendChild(createElement('p', 'review-hero-kicker', 'Review Explorer'));
+      heading.appendChild(createElement('h2', 'review-hero-title', 'Game review, rebuilt around move-by-move exploration'));
+      heading.appendChild(
         createElement(
           'p',
-          'review-moment-copy',
-          'No critical moments crossed the current review thresholds.'
+          'review-page-subtitle',
+          'Use filters to narrow the review, then hover or pin moves to inspect the board, win swing, and candidate alternatives.'
         )
       );
-    } else {
-      criticalAnalyses.forEach((analysis) => {
-        momentList.appendChild(buildMomentCard(analysis));
-      });
-      criticalPanel.appendChild(momentList);
+      heroTop.appendChild(heading);
+
+      const meta = createElement('div', 'review-hero-meta');
+      meta.appendChild(createElement('span', 'review-chip', `Model ${String(this.analysisMetadata.model || 'unknown')}`));
+      meta.appendChild(
+        createElement(
+          'span',
+          'review-chip',
+          `Board ${String(this.analysisMetadata.display_board_size || '?')}x${String(this.analysisMetadata.display_board_size || '?')}`
+        )
+      );
+      meta.appendChild(
+        createElement(
+          'span',
+          'review-chip',
+          `Candidates top ${String(this.analysisMetadata.candidate_policy_top_k || '?')} + played`
+        )
+      );
+      heroTop.appendChild(meta);
+      hero.appendChild(heroTop);
+
+      const summaryGrid = createElement('div', 'review-summary-grid');
+      summaryGrid.appendChild(buildSummaryCard('Moves', String(this.summary.total_moves || this.analyses.length || 0), 'Entire game'));
+
+      const visibleCard = buildSummaryCard('Visible Now', '0', 'Current filtered set');
+      this.elements.visibleSummaryValue = visibleCard.querySelector('.review-summary-value');
+      this.elements.visibleSummaryDetail = visibleCard.querySelector('.review-summary-detail');
+      summaryGrid.appendChild(visibleCard);
+
+      summaryGrid.appendChild(buildSummaryCard('Mistakes', String(this.summary.total_mistakes || 0), 'All severities'));
+      summaryGrid.appendChild(buildSummaryCard('Major', String(this.summary.major_mistakes || 0), 'Largest drops'));
+      summaryGrid.appendChild(buildSummaryCard('Losing Swings', String(this.summary.losing_moves || 0), 'Lost winning positions'));
+      summaryGrid.appendChild(
+        buildSummaryCard(
+          `${playerDisplayName('blue')} Mistakes`,
+          String(this.summary.mistake_by_player ? this.summary.mistake_by_player.blue : 0),
+          'Full game'
+        )
+      );
+      summaryGrid.appendChild(
+        buildSummaryCard(
+          `${playerDisplayName('red')} Mistakes`,
+          String(this.summary.mistake_by_player ? this.summary.mistake_by_player.red : 0),
+          'Full game'
+        )
+      );
+      hero.appendChild(summaryGrid);
+
+      return hero;
     }
-    root.appendChild(criticalPanel);
 
-    const tablePanel = createElement('section', 'review-panel');
-    tablePanel.appendChild(createElement('h2', null, 'Move List'));
-    tablePanel.appendChild(buildMoveTable(analyses));
-    root.appendChild(tablePanel);
+    buildFilterButton(label, key, extraClassName) {
+      const button = createElement('button', `review-filter-toggle${extraClassName ? ` ${extraClassName}` : ''}`, label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        this.state[key] = !this.state[key];
+        this.state.hoveredMoveNumber = null;
+        this.refreshFilteredUi();
+      });
+      this.elements[`${key}Button`] = button;
+      return button;
+    }
 
-    return root;
+    buildControlBar() {
+      const panel = createElement('section', 'review-panel review-control-bar');
+      const top = createElement('div', 'review-control-top');
+      top.appendChild(createElement('h2', 'review-panel-title', 'Filters'));
+      this.elements.controlStatus = createElement('p', 'review-control-status');
+      top.appendChild(this.elements.controlStatus);
+      panel.appendChild(top);
+
+      const toggleRow = createElement('div', 'review-filter-row');
+      toggleRow.appendChild(this.buildFilterButton(playerDisplayName('blue'), 'showBlue', 'player-blue'));
+      toggleRow.appendChild(this.buildFilterButton(playerDisplayName('red'), 'showRed', 'player-red'));
+      toggleRow.appendChild(this.buildFilterButton('Show Minor', 'showMinor'));
+      toggleRow.appendChild(this.buildFilterButton('Include Quiet Moves', 'showQuietMoves'));
+      panel.appendChild(toggleRow);
+
+      const footer = createElement('div', 'review-control-footer');
+      this.elements.controlHint = createElement(
+        'p',
+        'review-control-hint',
+        'Hover a move on the right to preview it on the board. Click a move to pin it.'
+      );
+      footer.appendChild(this.elements.controlHint);
+
+      const resetButton = createElement('button', 'review-filter-reset', 'Reset Filters');
+      resetButton.type = 'button';
+      resetButton.addEventListener('click', () => {
+        this.state.showBlue = this.defaultFilters.showBlue;
+        this.state.showRed = this.defaultFilters.showRed;
+        this.state.showMinor = this.defaultFilters.showMinor;
+        this.state.showQuietMoves = this.defaultFilters.showQuietMoves;
+        this.state.hoveredMoveNumber = null;
+        this.refreshFilteredUi();
+      });
+      footer.appendChild(resetButton);
+      panel.appendChild(footer);
+
+      return panel;
+    }
+
+    updateFilterButtons() {
+      const buttonStates = [
+        ['showBlueButton', this.state.showBlue],
+        ['showRedButton', this.state.showRed],
+        ['showMinorButton', this.state.showMinor],
+        ['showQuietMovesButton', this.state.showQuietMoves],
+      ];
+
+      buttonStates.forEach(([elementKey, isActive]) => {
+        const button = this.elements[elementKey];
+        if (!button) {
+          return;
+        }
+        button.classList.toggle('is-active', Boolean(isActive));
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      });
+    }
+
+    updateSummaryAndStatus() {
+      const totalMoves = this.analyses.length;
+      const visibleMoves = this.visibleAnalyses.length;
+      if (this.elements.visibleSummaryValue) {
+        this.elements.visibleSummaryValue.textContent = String(visibleMoves);
+      }
+      if (this.elements.visibleSummaryDetail) {
+        this.elements.visibleSummaryDetail.textContent = `of ${totalMoves} moves shown`;
+      }
+      if (this.elements.controlStatus) {
+        this.elements.controlStatus.textContent = visibleMoves === totalMoves
+          ? `${totalMoves} moves shown`
+          : `${visibleMoves} of ${totalMoves} moves shown`;
+      }
+    }
+
+    refreshFilteredUi() {
+      this.visibleAnalyses = this.getVisibleAnalyses();
+      this.ensureSelectionIsVisible();
+      const active = this.activeAnalysis();
+
+      this.updateFilterButtons();
+      this.updateSummaryAndStatus();
+      this.renderSpotlight();
+      this.renderMoveRail();
+      this.renderFocusPanel(active);
+      this.renderChart(active);
+      this.syncActiveStates(active);
+    }
+
+    refreshActiveUi() {
+      const active = this.activeAnalysis();
+      this.renderFocusPanel(active);
+      this.renderChart(active);
+      this.syncActiveStates(active);
+    }
+
+    setHoveredMoveNumber(moveNumber) {
+      if (this.state.hoveredMoveNumber === moveNumber) {
+        return;
+      }
+      this.state.hoveredMoveNumber = moveNumber;
+      this.refreshActiveUi();
+    }
+
+    clearHoveredMoveNumber(moveNumber) {
+      if (moveNumber !== null && Number(this.state.hoveredMoveNumber) !== Number(moveNumber)) {
+        return;
+      }
+      if (this.state.hoveredMoveNumber === null) {
+        return;
+      }
+      this.state.hoveredMoveNumber = null;
+      this.refreshActiveUi();
+    }
+
+    selectMoveNumber(moveNumber) {
+      this.state.selectedMoveNumber = Number(moveNumber);
+      this.state.hoveredMoveNumber = null;
+      this.refreshActiveUi();
+    }
+
+    attachMoveInteractions(element, moveNumber) {
+      element.addEventListener('mouseenter', () => {
+        this.setHoveredMoveNumber(Number(moveNumber));
+      });
+      element.addEventListener('mouseleave', () => {
+        this.clearHoveredMoveNumber(Number(moveNumber));
+      });
+      element.addEventListener('focus', () => {
+        this.setHoveredMoveNumber(Number(moveNumber));
+      });
+      element.addEventListener('blur', () => {
+        this.clearHoveredMoveNumber(Number(moveNumber));
+      });
+      element.addEventListener('click', () => {
+        this.selectMoveNumber(Number(moveNumber));
+      });
+    }
+
+    renderSpotlight() {
+      this.spotlightButtons.clear();
+      this.elements.spotlightPanel.innerHTML = '';
+
+      const titleRow = createElement('div', 'review-spotlight-header');
+      titleRow.appendChild(createElement('h2', 'review-panel-title', 'Biggest Swings'));
+      titleRow.appendChild(createElement('p', 'review-spotlight-note', 'Fast jump targets from the current filtered set'));
+      this.elements.spotlightPanel.appendChild(titleRow);
+
+      const spotlightMoves = this.getSpotlightAnalyses(this.visibleAnalyses);
+      if (spotlightMoves.length === 0) {
+        this.elements.spotlightPanel.appendChild(
+          createElement(
+            'p',
+            'review-moment-copy',
+            this.visibleAnalyses.length === 0
+              ? 'No moves match the current filters.'
+              : 'No visible losing swings or mistake moves under the current filters.'
+          )
+        );
+        return;
+      }
+
+      const list = createElement('div', 'review-spotlight-list');
+      spotlightMoves.forEach((analysis) => {
+        const button = createElement('button', `review-spotlight-button ${severityClass(analysis)}`);
+        button.type = 'button';
+        button.innerHTML = `
+          <span class="review-spotlight-title">Move ${escapeHtml(String(analysis.move_number))} · ${escapeHtml(analysis.move_played_trmph)}</span>
+          <span class="review-spotlight-meta">${escapeHtml(playerDisplayName(analysis.player))} · ${escapeHtml(formatImpact(analysis))}</span>
+        `;
+        this.attachMoveInteractions(button, analysis.move_number);
+        this.spotlightButtons.set(Number(analysis.move_number), button);
+        list.appendChild(button);
+      });
+      this.elements.spotlightPanel.appendChild(list);
+    }
+
+    buildMoveCard(analysis) {
+      const severity = severityClass(analysis);
+      const button = createElement('button', `review-move-card ${severity}`);
+      button.type = 'button';
+      button.innerHTML = `
+        <span class="review-move-card-top">
+          <span class="review-move-card-title">Move ${escapeHtml(String(analysis.move_number))}</span>
+          <span class="review-move-card-played">${escapeHtml(analysis.move_played_trmph)}</span>
+          <span class="review-severity-badge ${severity}">${escapeHtml(momentBadgeText(analysis))}</span>
+        </span>
+        <span class="review-move-card-meta">
+          <span class="review-card-chip player-${escapeHtml(analysis.player)}">${escapeHtml(playerDisplayName(analysis.player))}</span>
+          <span class="review-card-chip">${escapeHtml(formatPhase(analysis.game_phase))}</span>
+          <span class="review-card-chip">${escapeHtml(impactLabel(analysis))} ${escapeHtml(formatImpact(analysis))}</span>
+          <span class="review-card-chip">Best ${escapeHtml(analysis.best_move_trmph)}</span>
+          <span class="review-card-chip">Policy rank ${escapeHtml(String(analysis.move_played_policy_rank))}</span>
+        </span>
+        <span class="review-move-card-copy">${escapeHtml(analysis.mistake_reason || (isQuietAnalysis(analysis) ? 'No review threshold crossed for this move.' : ''))}</span>
+      `;
+      this.attachMoveInteractions(button, analysis.move_number);
+      return button;
+    }
+
+    renderMoveRail() {
+      this.moveButtons.clear();
+      this.elements.moveList.innerHTML = '';
+      const visibleCount = this.visibleAnalyses.length;
+      const totalCount = this.analyses.length;
+      this.elements.moveRailCount.textContent = visibleCount === totalCount
+        ? `${totalCount} moves`
+        : `${visibleCount} of ${totalCount} moves`;
+
+      if (this.visibleAnalyses.length === 0) {
+        const empty = createElement('div', 'review-empty review-filter-empty');
+        empty.textContent = 'No moves match the current filters. Reset filters or re-enable a hidden category.';
+        this.elements.moveList.appendChild(empty);
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      this.visibleAnalyses.forEach((analysis) => {
+        const card = this.buildMoveCard(analysis);
+        this.moveButtons.set(Number(analysis.move_number), card);
+        fragment.appendChild(card);
+      });
+      this.elements.moveList.appendChild(fragment);
+    }
+
+    buildFocusStats(analysis) {
+      const stats = [
+        ['Player', playerDisplayName(analysis.player)],
+        ['Phase', formatPhase(analysis.game_phase)],
+        ['Played', analysis.move_played_trmph],
+        ['Best', analysis.best_move_trmph],
+        [impactLabel(analysis), formatImpact(analysis)],
+        ['Review', analysis.review_metric_label || 'Win probability'],
+        ['Policy Rank', String(analysis.move_played_policy_rank)],
+        ['Candidates', `${String(analysis.candidate_move_count)} reviewed`],
+        ['Legal Moves', String(analysis.legal_move_count)],
+      ];
+
+      if (isSwapAwareOpening(analysis)) {
+        stats.push(['Played from 50%', formatDistanceToEven(Number(analysis.move_played_distance_to_even))]);
+        stats.push(['Best from 50%', formatDistanceToEven(Number(analysis.best_move_distance_to_even))]);
+      } else {
+        stats.push(['Before', formatPercent(analysis.position_win_probability_for_player)]);
+        stats.push(['After', formatPercent(analysis.move_played_win_probability_for_player)]);
+      }
+      return stats;
+    }
+
+    renderFocusPanel(activeAnalysis) {
+      this.elements.focusPanel.innerHTML = '';
+
+      if (!activeAnalysis) {
+        const empty = createElement('div', 'review-empty');
+        empty.textContent = 'No move is available to preview under the current filters.';
+        this.elements.focusPanel.appendChild(empty);
+        return;
+      }
+
+      const header = createElement('div', 'review-focus-header');
+      const titleGroup = createElement('div', 'review-focus-title-group');
+      titleGroup.appendChild(createElement('p', 'review-focus-kicker', `${playerDisplayName(activeAnalysis.player)} · ${formatPhase(activeAnalysis.game_phase)}`));
+      titleGroup.appendChild(createElement('h2', 'review-focus-title', `Move ${activeAnalysis.move_number}: ${activeAnalysis.move_played_trmph}`));
+      titleGroup.appendChild(createElement('p', 'review-focus-subtitle', 'Hover a move in the explorer to preview it instantly, or click a move to pin it here.'));
+      header.appendChild(titleGroup);
+
+      const badges = createElement('div', 'review-focus-badges');
+      const severity = severityClass(activeAnalysis);
+      badges.appendChild(createElement('span', `review-severity-badge ${severity}`, momentBadgeText(activeAnalysis)));
+      if (activeAnalysis.best_move_trmph === activeAnalysis.move_played_trmph) {
+        badges.appendChild(createElement('span', 'review-chip review-chip-soft', 'Played matched best'));
+      }
+      header.appendChild(badges);
+      this.elements.focusPanel.appendChild(header);
+
+      const boardShell = createElement('div', 'review-board-shell review-focus-board-shell');
+      const board = createElement('div', 'review-board review-focus-board');
+      boardShell.appendChild(board);
+      boardShell.appendChild(buildBoardLegend());
+      this.elements.focusPanel.appendChild(boardShell);
+      renderBoard(board, activeAnalysis);
+
+      const statGrid = createElement('div', 'review-focus-grid');
+      this.buildFocusStats(activeAnalysis).forEach(([label, value]) => {
+        statGrid.appendChild(buildStatCard(label, value));
+      });
+      this.elements.focusPanel.appendChild(statGrid);
+
+      const explanation = createElement('section', 'review-explanation');
+      explanation.appendChild(createElement('h3', 'review-section-heading', 'What Changed'));
+      explanation.appendChild(createElement('p', 'review-moment-copy', activeAnalysis.mistake_reason));
+      this.elements.focusPanel.appendChild(explanation);
+
+      this.elements.focusPanel.appendChild(buildSuggestionList(activeAnalysis));
+
+      if (isSwapAwareOpening(activeAnalysis)) {
+        this.elements.focusPanel.appendChild(
+          createElement(
+            'p',
+            'review-focus-footnote',
+            'Move 1 uses the swap-aware balance metric, so impact is measured by distance from an even 50% opening rather than raw first-player value.'
+          )
+        );
+      }
+    }
+
+    renderChart(activeAnalysis) {
+      this.elements.chartPanel.innerHTML = '';
+      this.elements.chartPanel.appendChild(createElement('h2', 'review-panel-title', 'Game Arc'));
+
+      const selectionText = activeAnalysis
+        ? `Previewing move ${activeAnalysis.move_number} on the chart. Filtered-out moves stay on the line but are dimmed.`
+        : 'All moves are shown on the trajectory.';
+      this.elements.chartPanel.appendChild(createElement('p', 'review-chart-selection', selectionText));
+
+      const frame = createElement('div', 'review-chart-frame');
+      const visibleMoveNumbers = new Set(this.visibleAnalyses.map((analysis) => Number(analysis.move_number)));
+      frame.innerHTML = buildChartSvg(
+        this.payload.win_probability_trajectory || [],
+        activeAnalysis ? Number(activeAnalysis.move_number) : null,
+        visibleMoveNumbers
+      );
+      this.elements.chartPanel.appendChild(frame);
+      this.elements.chartPanel.appendChild(
+        createElement(
+          'p',
+          'review-chart-note',
+          `Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from ${playerDisplayName('blue')}'s perspective; move 1 still uses the swap-aware balance metric.`
+        )
+      );
+    }
+
+    syncActiveStates(activeAnalysis) {
+      const activeMoveNumber = activeAnalysis ? Number(activeAnalysis.move_number) : null;
+      const selectedMoveNumber = Number(this.state.selectedMoveNumber);
+
+      this.moveButtons.forEach((button, moveNumber) => {
+        const isActive = Number(moveNumber) === activeMoveNumber;
+        const isSelected = Number(moveNumber) === selectedMoveNumber;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-selected', isSelected);
+        button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      });
+
+      this.spotlightButtons.forEach((button, moveNumber) => {
+        const isActive = Number(moveNumber) === activeMoveNumber;
+        const isSelected = Number(moveNumber) === selectedMoveNumber;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-selected', isSelected);
+        button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+      });
+    }
   }
 
   function clearAndAppend(root, node) {
@@ -456,13 +965,18 @@
 
   function mount(root, payload) {
     applyStoredThemePreferences();
-    clearAndAppend(root, buildResults(payload));
+    const explorer = new ReviewExplorer(root, payload);
+    explorer.mount();
   }
 
   function mountStandalone(root, payload) {
     const layout = createElement('div', 'review-page-layout');
-    layout.appendChild(buildResults(payload));
+    const content = createElement('div');
+    layout.appendChild(content);
     clearAndAppend(root, layout);
+    applyStoredThemePreferences();
+    const explorer = new ReviewExplorer(content, payload);
+    explorer.mount();
   }
 
   global.HexGameReviewUi = {
