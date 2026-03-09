@@ -330,6 +330,11 @@
   gap: 8px;
 }
 
+.review-focus-summary {
+  display: grid;
+  gap: 8px;
+}
+
 .review-focus-board-shell {
   margin-top: 0;
 }

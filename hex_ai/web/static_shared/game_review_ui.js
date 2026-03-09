@@ -840,6 +840,33 @@
       return facts;
     }
 
+    buildFocusSummary(analysis) {
+      const section = createElement('section', 'review-focus-summary');
+      const header = createElement('div', 'review-focus-header');
+      const titleGroup = createElement('div', 'review-focus-title-group');
+      titleGroup.appendChild(createElement('p', 'review-focus-kicker', `${playerDisplayName(analysis.player)} · ${formatPhase(analysis.game_phase)}`));
+      titleGroup.appendChild(createElement('h2', 'review-focus-title', `Move ${analysis.move_number}: ${analysis.move_played_trmph}`));
+      header.appendChild(titleGroup);
+
+      const badges = createElement('div', 'review-focus-badges');
+      const severity = severityClass(analysis);
+      badges.appendChild(createElement('span', `review-severity-badge ${severity}`, momentBadgeText(analysis)));
+      if (analysis.best_move_trmph === analysis.move_played_trmph) {
+        badges.appendChild(createElement('span', 'review-chip review-chip-soft', 'Played matched best'));
+      }
+      header.appendChild(badges);
+
+      section.appendChild(header);
+      section.appendChild(
+        createElement(
+          'p',
+          'review-focus-subtitle',
+          'Hover a move to preview it. Click a move to keep it selected.'
+        )
+      );
+      return section;
+    }
+
     buildTransportButton(label, disabled, onClick, extraClassName) {
       const button = createElement('button', `review-transport-button${extraClassName ? ` ${extraClassName}` : ''}`, label);
       button.type = 'button';
@@ -954,22 +981,6 @@
         return;
       }
 
-      const header = createElement('div', 'review-focus-header');
-      const titleGroup = createElement('div', 'review-focus-title-group');
-      titleGroup.appendChild(createElement('p', 'review-focus-kicker', `${playerDisplayName(activeAnalysis.player)} · ${formatPhase(activeAnalysis.game_phase)}`));
-      titleGroup.appendChild(createElement('h2', 'review-focus-title', `Move ${activeAnalysis.move_number}: ${activeAnalysis.move_played_trmph}`));
-      titleGroup.appendChild(createElement('p', 'review-focus-subtitle', 'Hover a move to preview it. Click a move to keep it selected.'));
-      header.appendChild(titleGroup);
-
-      const badges = createElement('div', 'review-focus-badges');
-      const severity = severityClass(activeAnalysis);
-      badges.appendChild(createElement('span', `review-severity-badge ${severity}`, momentBadgeText(activeAnalysis)));
-      if (activeAnalysis.best_move_trmph === activeAnalysis.move_played_trmph) {
-        badges.appendChild(createElement('span', 'review-chip review-chip-soft', 'Played matched best'));
-      }
-      header.appendChild(badges);
-      this.elements.focusPanel.appendChild(header);
-
       const boardShell = createElement('div', 'review-board-shell review-focus-board-shell');
       const board = createElement('div', 'review-board review-focus-board');
       boardShell.appendChild(board);
@@ -981,6 +992,7 @@
       this.elements.focusPanel.appendChild(this.buildControlBar());
       this.updateFilterButtons();
       this.updateSummaryAndStatus();
+      this.elements.focusPanel.appendChild(this.buildFocusSummary(activeAnalysis));
 
       const quickGrid = createElement('div', 'review-focus-quick-grid');
       this.buildQuickFacts(activeAnalysis).forEach(([label, value]) => {
