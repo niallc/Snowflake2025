@@ -77,6 +77,13 @@
   gap: 18px;
 }
 
+.review-inline-filters {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-primary);
+}
+
 .review-hero,
 .review-panel {
   background: var(--bg-secondary);
@@ -282,7 +289,7 @@
   position: sticky;
   top: 16px;
   max-height: calc(100vh - 32px);
-  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }
 
 .review-rail-panel {
@@ -428,6 +435,7 @@
 }
 
 .review-focus-detail {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -611,6 +619,8 @@
   text-align: left;
   border-radius: 18px;
   padding: 12px;
+  display: grid;
+  gap: 6px;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -675,6 +685,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -683,49 +694,25 @@
   color: var(--text-primary);
 }
 
-.review-move-card-played {
+.review-move-card-impact {
   font-weight: 700;
   color: var(--button-primary-bg);
 }
 
-.review-move-card-meta {
+.review-move-card-subline {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
-}
-
-.review-card-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-primary);
-  background: color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-tertiary));
   color: var(--text-secondary);
   font-size: 0.84rem;
 }
 
-.review-card-chip.player-blue {
-  background: color-mix(in srgb, var(--board-piece-blue-fill) 16%, var(--bg-secondary));
-  border-color: color-mix(in srgb, var(--board-piece-blue-fill) 28%, var(--border-primary));
-  color: color-mix(in srgb, var(--board-piece-blue-fill) 72%, var(--text-primary));
-}
-
-.review-card-chip.player-red {
-  background: color-mix(in srgb, var(--board-piece-red-fill) 16%, var(--bg-secondary));
-  border-color: color-mix(in srgb, var(--board-piece-red-fill) 28%, var(--border-primary));
-  color: color-mix(in srgb, var(--board-piece-red-fill) 68%, var(--text-primary));
-}
-
 .review-move-card-copy {
-  margin-top: 10px;
   color: var(--text-secondary);
-  line-height: 1.45;
+  line-height: 1.35;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 }
 

@@ -382,7 +382,6 @@
       this.analysisByMoveNumber = new Map(this.analyses.map((analysis) => [Number(analysis.move_number), analysis]));
       this.elements = {};
       this.moveButtons = new Map();
-      this.spotlightButtons = new Map();
 
       const baseState = {
         showBlue: true,
@@ -576,102 +575,34 @@
 
     buildLayout() {
       const results = createElement('div', 'review-results');
-      results.appendChild(this.buildOverviewSection());
-      results.appendChild(this.buildControlBar());
 
       const stage = createElement('section', 'review-stage-grid');
 
       const focusColumn = createElement('div', 'review-focus-column');
       this.elements.focusPanel = createElement('section', 'review-panel review-focus-panel');
-      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
       focusColumn.appendChild(this.elements.focusPanel);
-      focusColumn.appendChild(this.elements.chartPanel);
 
       const railColumn = createElement('div', 'review-rail-column');
-      this.elements.spotlightPanel = createElement('section', 'review-panel review-spotlight-panel');
 
       const railPanel = createElement('section', 'review-panel review-rail-panel');
       const railHeader = createElement('div', 'review-rail-header');
-      railHeader.appendChild(createElement('h2', 'review-panel-title', 'Move Explorer'));
+      railHeader.appendChild(createElement('h2', 'review-panel-title', 'Mistakes And Moves'));
       this.elements.moveRailCount = createElement('p', 'review-rail-count');
       railHeader.appendChild(this.elements.moveRailCount);
       railPanel.appendChild(railHeader);
       this.elements.moveList = createElement('div', 'review-move-list');
       railPanel.appendChild(this.elements.moveList);
 
-      railColumn.appendChild(this.elements.spotlightPanel);
       railColumn.appendChild(railPanel);
 
       stage.appendChild(focusColumn);
       stage.appendChild(railColumn);
       results.appendChild(stage);
 
+      this.elements.chartPanel = createElement('section', 'review-panel review-chart-panel');
+      results.appendChild(this.elements.chartPanel);
+
       clearAndAppend(this.root, results);
-    }
-
-    buildOverviewSection() {
-      const hero = createElement('section', 'review-hero');
-      const heroTop = createElement('div', 'review-hero-top');
-
-      const heading = createElement('div');
-      heading.appendChild(createElement('p', 'review-hero-kicker', 'Review Explorer'));
-      heading.appendChild(createElement('h2', 'review-hero-title', 'Game review, rebuilt around move-by-move exploration'));
-      heading.appendChild(
-        createElement(
-          'p',
-          'review-page-subtitle',
-          'Use filters to narrow the review, then hover or pin moves to inspect the board, win swing, and candidate alternatives.'
-        )
-      );
-      heroTop.appendChild(heading);
-
-      const meta = createElement('div', 'review-hero-meta');
-      meta.appendChild(createElement('span', 'review-chip', `Model ${String(this.analysisMetadata.model || 'unknown')}`));
-      meta.appendChild(
-        createElement(
-          'span',
-          'review-chip',
-          `Board ${String(this.analysisMetadata.display_board_size || '?')}x${String(this.analysisMetadata.display_board_size || '?')}`
-        )
-      );
-      meta.appendChild(
-        createElement(
-          'span',
-          'review-chip',
-          `Candidates top ${String(this.analysisMetadata.candidate_policy_top_k || '?')} + played`
-        )
-      );
-      heroTop.appendChild(meta);
-      hero.appendChild(heroTop);
-
-      const summaryGrid = createElement('div', 'review-summary-grid');
-      summaryGrid.appendChild(buildSummaryCard('Moves', String(this.summary.total_moves || this.analyses.length || 0), 'Entire game'));
-
-      const visibleCard = buildSummaryCard('Visible Now', '0', 'Current filtered set');
-      this.elements.visibleSummaryValue = visibleCard.querySelector('.review-summary-value');
-      this.elements.visibleSummaryDetail = visibleCard.querySelector('.review-summary-detail');
-      summaryGrid.appendChild(visibleCard);
-
-      summaryGrid.appendChild(buildSummaryCard('Mistakes', String(this.summary.total_mistakes || 0), 'All severities'));
-      summaryGrid.appendChild(buildSummaryCard('Major', String(this.summary.major_mistakes || 0), 'Largest drops'));
-      summaryGrid.appendChild(buildSummaryCard('Losing Swings', String(this.summary.losing_moves || 0), 'Lost winning positions'));
-      summaryGrid.appendChild(
-        buildSummaryCard(
-          `${playerDisplayName('blue')} Mistakes`,
-          String(this.summary.mistake_by_player ? this.summary.mistake_by_player.blue : 0),
-          'Full game'
-        )
-      );
-      summaryGrid.appendChild(
-        buildSummaryCard(
-          `${playerDisplayName('red')} Mistakes`,
-          String(this.summary.mistake_by_player ? this.summary.mistake_by_player.red : 0),
-          'Full game'
-        )
-      );
-      hero.appendChild(summaryGrid);
-
-      return hero;
     }
 
     buildFilterButton(label, key, extraClassName) {
@@ -687,9 +618,9 @@
     }
 
     buildControlBar() {
-      const panel = createElement('section', 'review-panel review-control-bar');
+      const panel = createElement('section', 'review-inline-filters');
       const top = createElement('div', 'review-control-top');
-      top.appendChild(createElement('h2', 'review-panel-title', 'Filters'));
+      top.appendChild(createElement('h3', 'review-section-heading', 'Show'));
       this.elements.controlStatus = createElement('p', 'review-control-status');
       top.appendChild(this.elements.controlStatus);
       panel.appendChild(top);
@@ -744,18 +675,9 @@
     }
 
     updateSummaryAndStatus() {
-      const totalMoves = this.analyses.length;
       const visibleMoves = this.visibleAnalyses.length;
-      if (this.elements.visibleSummaryValue) {
-        this.elements.visibleSummaryValue.textContent = String(visibleMoves);
-      }
-      if (this.elements.visibleSummaryDetail) {
-        this.elements.visibleSummaryDetail.textContent = `of ${totalMoves} moves shown`;
-      }
       if (this.elements.controlStatus) {
-        this.elements.controlStatus.textContent = visibleMoves === totalMoves
-          ? `${totalMoves} moves shown`
-          : `${visibleMoves} of ${totalMoves} moves shown`;
+        this.elements.controlStatus.textContent = `${visibleMoves} moves shown`;
       }
     }
 
@@ -769,7 +691,6 @@
 
       this.updateFilterButtons();
       this.updateSummaryAndStatus();
-      this.renderSpotlight();
       this.renderMoveRail();
       this.renderFocusPanel(active);
       this.renderChart(active);
@@ -830,58 +751,22 @@
       });
     }
 
-    renderSpotlight() {
-      this.spotlightButtons.clear();
-      this.elements.spotlightPanel.innerHTML = '';
-
-      const titleRow = createElement('div', 'review-spotlight-header');
-      titleRow.appendChild(createElement('h2', 'review-panel-title', 'Biggest Swings'));
-      titleRow.appendChild(createElement('p', 'review-spotlight-note', 'Fast jump targets from the current filtered set'));
-      this.elements.spotlightPanel.appendChild(titleRow);
-
-      const spotlightMoves = this.getSpotlightAnalyses(this.visibleAnalyses);
-      if (spotlightMoves.length === 0) {
-        this.elements.spotlightPanel.appendChild(
-          createElement(
-            'p',
-            'review-moment-copy',
-            this.visibleAnalyses.length === 0
-              ? 'No moves match the current filters.'
-              : 'No visible losing swings or mistake moves under the current filters.'
-          )
-        );
-        return;
-      }
-
-      const list = createElement('div', 'review-spotlight-list');
-      spotlightMoves.forEach((analysis) => {
-        const button = createElement('button', `review-spotlight-button ${severityClass(analysis)}`);
-        button.type = 'button';
-        button.innerHTML = `
-          <span class="review-spotlight-title">Move ${escapeHtml(String(analysis.move_number))} · ${escapeHtml(analysis.move_played_trmph)}</span>
-          <span class="review-spotlight-meta">${escapeHtml(playerDisplayName(analysis.player))} · ${escapeHtml(formatImpact(analysis))}</span>
-        `;
-        this.attachMoveInteractions(button, analysis.move_number);
-        this.spotlightButtons.set(Number(analysis.move_number), button);
-        list.appendChild(button);
-      });
-      this.elements.spotlightPanel.appendChild(list);
-    }
-
     buildMoveCard(analysis) {
       const severity = severityClass(analysis);
       const button = createElement('button', `review-move-card ${severity}`);
       button.type = 'button';
       button.innerHTML = `
         <span class="review-move-card-top">
-          <span class="review-move-card-title">Move ${escapeHtml(String(analysis.move_number))}</span>
-          <span class="review-move-card-played">${escapeHtml(analysis.move_played_trmph)}</span>
+          <span class="review-move-card-title">#${escapeHtml(String(analysis.move_number))} ${escapeHtml(analysis.move_played_trmph)}</span>
+          <span class="review-move-card-impact">${escapeHtml(formatImpact(analysis))}</span>
           <span class="review-severity-badge ${severity}">${escapeHtml(momentBadgeText(analysis))}</span>
         </span>
-        <span class="review-move-card-meta">
-          <span class="review-card-chip player-${escapeHtml(analysis.player)}">${escapeHtml(playerDisplayName(analysis.player))}</span>
-          <span class="review-card-chip">${escapeHtml(formatPhase(analysis.game_phase))}</span>
-          <span class="review-card-chip">${escapeHtml(impactLabel(analysis))} ${escapeHtml(formatImpact(analysis))}</span>
+        <span class="review-move-card-subline">
+          <span>${escapeHtml(playerDisplayName(analysis.player))}</span>
+          <span>&middot;</span>
+          <span>${escapeHtml(formatPhase(analysis.game_phase))}</span>
+          <span>&middot;</span>
+          <span>Best ${escapeHtml(analysis.best_move_trmph)}</span>
         </span>
         <span class="review-move-card-copy">${escapeHtml(analysis.mistake_reason || (isQuietAnalysis(analysis) ? 'No review threshold crossed for this move.' : ''))}</span>
       `;
@@ -1073,7 +958,7 @@
       const titleGroup = createElement('div', 'review-focus-title-group');
       titleGroup.appendChild(createElement('p', 'review-focus-kicker', `${playerDisplayName(activeAnalysis.player)} · ${formatPhase(activeAnalysis.game_phase)}`));
       titleGroup.appendChild(createElement('h2', 'review-focus-title', `Move ${activeAnalysis.move_number}: ${activeAnalysis.move_played_trmph}`));
-      titleGroup.appendChild(createElement('p', 'review-focus-subtitle', 'Hover a move in the explorer to preview it instantly, or click a move to pin it here.'));
+      titleGroup.appendChild(createElement('p', 'review-focus-subtitle', 'Hover a move to preview it. Click a move to keep it selected.'));
       header.appendChild(titleGroup);
 
       const badges = createElement('div', 'review-focus-badges');
@@ -1093,6 +978,9 @@
       renderBoard(board, activeAnalysis);
 
       this.elements.focusPanel.appendChild(this.buildTransportBar());
+      this.elements.focusPanel.appendChild(this.buildControlBar());
+      this.updateFilterButtons();
+      this.updateSummaryAndStatus();
 
       const quickGrid = createElement('div', 'review-focus-quick-grid');
       this.buildQuickFacts(activeAnalysis).forEach(([label, value]) => {
@@ -1108,7 +996,7 @@
       this.elements.chartPanel.appendChild(createElement('h2', 'review-panel-title', 'Game Arc'));
 
       const selectionText = activeAnalysis
-        ? `Previewing move ${activeAnalysis.move_number} on the chart. Filtered-out moves stay on the line but are dimmed.`
+        ? `Move ${activeAnalysis.move_number} is highlighted on the chart. Hidden moves stay on the line but are faded.`
         : 'All moves are shown on the trajectory.';
       this.elements.chartPanel.appendChild(createElement('p', 'review-chart-selection', selectionText));
 
@@ -1124,7 +1012,7 @@
         createElement(
           'p',
           'review-chart-note',
-          `Solid line shows the played game. Dashed line shows the best reviewed candidate for each move from ${playerDisplayName('blue')}'s perspective; move 1 still uses the swap-aware balance metric.`
+          'Solid line shows the played game. Dashed line shows the strongest reviewed alternative for each move. Move 1 still uses the swap-aware opening measure.'
         )
       );
     }
@@ -1134,14 +1022,6 @@
       const selectedMoveNumber = Number(this.state.selectedMoveNumber);
 
       this.moveButtons.forEach((button, moveNumber) => {
-        const isActive = Number(moveNumber) === activeMoveNumber;
-        const isSelected = Number(moveNumber) === selectedMoveNumber;
-        button.classList.toggle('is-active', isActive);
-        button.classList.toggle('is-selected', isSelected);
-        button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
-      });
-
-      this.spotlightButtons.forEach((button, moveNumber) => {
         const isActive = Number(moveNumber) === activeMoveNumber;
         const isSelected = Number(moveNumber) === selectedMoveNumber;
         button.classList.toggle('is-active', isActive);
