@@ -2759,6 +2759,103 @@ class HexGame {
         return this.stripVirtualPrefillIfPresent(bareMoves);
     }
 
+    findFirstDifferingMoveIndex(currentMoves, pastedMoves) {
+        const sharedLength = Math.min(currentMoves.length, pastedMoves.length);
+        for (let index = 0; index < sharedLength; index += 1) {
+            if (currentMoves[index] !== pastedMoves[index]) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    buildPastedSequencePlan(validation) {
+        const normalizedMoves = typeof validation.normalizedMoves === 'string'
+            ? validation.normalizedMoves
+            : '';
+        const requestedDisplayBoardSize = Number.isFinite(validation.targetDisplayBoardSize)
+            ? validation.targetDisplayBoardSize
+            : this.validateBoardSize();
+        const currentDisplayBoardSize = this.validateBoardSize();
+        const currentBareMoves = this.getCurrentBareTrmphMoves();
+
+        if (!normalizedMoves) {
+            return {
+                action: 'noop',
+                message: 'The pasted game record did not contain any playable moves.',
+                requestedDisplayBoardSize,
+            };
+        }
+
+        const pastedMoves = this.parseTrmphMoves(normalizedMoves, requestedDisplayBoardSize);
+        if (!currentBareMoves) {
+            return {
+                action: 'replace',
+                baseTrmph: '',
+                sequenceToApply: normalizedMoves,
+                requestedDisplayBoardSize,
+            };
+        }
+
+        const currentMoves = this.parseTrmphMoves(currentBareMoves, currentDisplayBoardSize);
+        if (requestedDisplayBoardSize !== currentDisplayBoardSize) {
+            return {
+                action: 'replace',
+                baseTrmph: '',
+                sequenceToApply: normalizedMoves,
+                requestedDisplayBoardSize,
+                confirmMessage:
+                    'This board already has moves.\n'
+                    + `The pasted game uses ${requestedDisplayBoardSize}x${requestedDisplayBoardSize} instead of ${currentDisplayBoardSize}x${currentDisplayBoardSize}.\n`
+                    + 'Replace the current board and switch play area?',
+            };
+        }
+
+        const differingMoveIndex = this.findFirstDifferingMoveIndex(currentMoves, pastedMoves);
+        if (differingMoveIndex === -1) {
+            if (currentMoves.length === pastedMoves.length) {
+                return {
+                    action: 'noop',
+                    message: 'The pasted game already matches the current board.',
+                    requestedDisplayBoardSize,
+                };
+            }
+
+            if (currentMoves.length < pastedMoves.length) {
+                return {
+                    action: 'append',
+                    baseTrmph: this.currentTRMPH,
+                    sequenceToApply: pastedMoves.slice(currentMoves.length).join(''),
+                    requestedDisplayBoardSize,
+                };
+            }
+
+            return {
+                action: 'replace',
+                baseTrmph: '',
+                sequenceToApply: normalizedMoves,
+                requestedDisplayBoardSize,
+                confirmMessage:
+                    'This board already has moves.\n'
+                    + `The pasted game is shorter and would rewind the position from move ${currentMoves.length} to move ${pastedMoves.length}.\n`
+                    + 'Replace the current board with the pasted game?',
+            };
+        }
+
+        const differingMoveNumber = differingMoveIndex + 1;
+        return {
+            action: 'replace',
+            baseTrmph: '',
+            sequenceToApply: normalizedMoves,
+            requestedDisplayBoardSize,
+            confirmMessage:
+                'This board already has moves.\n'
+                + `The pasted game differs starting at move ${differingMoveNumber} `
+                + `(${currentMoves[differingMoveIndex]} vs ${pastedMoves[differingMoveIndex]}).\n`
+                + 'Replace the current board with the pasted game?',
+        };
+    }
+
     buildTrmphBoardUrl() {
         if (!Number.isFinite(this.boardSize)) {
             throw new Error('BOARD_SIZE not initialized from backend');
@@ -3029,6 +3126,7 @@ class HexGame {
                 valid: true,
                 error: null,
                 targetDisplayBoardSize: metadata.targetDisplayBoardSize,
+                normalizedMoves: '',
             };
         }
 
@@ -3054,6 +3152,7 @@ class HexGame {
             valid: true,
             error: null,
             targetDisplayBoardSize: metadata.targetDisplayBoardSize,
+            normalizedMoves: cleanedForDisplayBoard,
         };
     }
 
@@ -3071,19 +3170,27 @@ class HexGame {
             return;
         }
 
+        let pastePlan;
+        try {
+            pastePlan = this.buildPastedSequencePlan(validation);
+        } catch (error) {
+            this.showTrmphError(error.message || 'Could not understand the pasted game record.');
+            return;
+        }
+        if (pastePlan.action === 'noop') {
+            this.hideTrmphError();
+            this.showSuccess(pastePlan.message);
+            return;
+        }
+        if (pastePlan.confirmMessage && !window.confirm(pastePlan.confirmMessage)) {
+            return;
+        }
+
         // Clear opening-guide markers immediately when applying a sequence.
         this.clearAllOpeningGuideMarkers();
 
         // Hide instruction text after moves are already present.
         this.hideInstructionText();
-
-        const requestedDisplayBoardSize = Number.isFinite(validation.targetDisplayBoardSize)
-            ? validation.targetDisplayBoardSize
-            : this.validateBoardSize();
-        const currentDisplayBoardSize = this.validateBoardSize();
-        const requestedBaseTrmph = requestedDisplayBoardSize === currentDisplayBoardSize
-            ? this.currentTRMPH
-            : '';
 
         this.cancelScheduledAutoMove();
         this.setLoading(true);
@@ -3092,10 +3199,10 @@ class HexGame {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    trmph: requestedBaseTrmph,
-                    trmph_sequence: input,
+                    trmph: pastePlan.baseTrmph,
+                    trmph_sequence: pastePlan.sequenceToApply,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: requestedDisplayBoardSize,
+                    display_board_size: pastePlan.requestedDisplayBoardSize,
                     pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
@@ -3114,7 +3221,7 @@ class HexGame {
             const responseDisplayBoardSize = parseInt(data.display_board_size, 10);
             const nextDisplayBoardSize = Number.isFinite(responseDisplayBoardSize)
                 ? responseDisplayBoardSize
-                : requestedDisplayBoardSize;
+                : pastePlan.requestedDisplayBoardSize;
             const displayBoardSizeChanged = nextDisplayBoardSize !== this.displayBoardSize;
             if (displayBoardSizeChanged) {
                 this.displayBoardSize = nextDisplayBoardSize;

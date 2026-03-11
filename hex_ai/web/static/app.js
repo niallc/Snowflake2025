@@ -2946,6 +2946,183 @@ function updateModelDropdown(selectId, modelId, modelName) {
 }
 
 // --- TRMPH Sequence Functions ---
+function stripTrmphPreambleText(trmphText) {
+  const normalized = typeof trmphText === 'string' ? trmphText.trim() : '';
+  return normalized.replace(/^#\d+,/, '');
+}
+
+function getAllowedTrmphUrlPrefixes() {
+  const configuredPrefixes = state && state.constants && Array.isArray(state.constants.TRMPH_ALLOWED_URL_PREFIXES)
+    ? state.constants.TRMPH_ALLOWED_URL_PREFIXES.filter((prefix) => typeof prefix === 'string' && prefix.trim())
+    : [];
+  if (configuredPrefixes.length > 0) {
+    return configuredPrefixes;
+  }
+
+  const boardSize = getConfiguredBoardSize();
+  return [
+    `https://trmph.com/hex/board#${boardSize},`,
+    `http://trmph.com/hex/board#${boardSize},`,
+    `trmph.com/hex/board#${boardSize},`,
+  ];
+}
+
+function compactGameRecordSnippet(text, maxLen = 24) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLen) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLen - 3)}...`;
+}
+
+function quoteGameRecordSnippet(text) {
+  return `"${String(text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function formatUnexpectedGameRecordToken(token, after) {
+  const tokenSnippet = compactGameRecordSnippet(token) || 'end of input';
+  const afterSnippet = compactGameRecordSnippet(after);
+  if (afterSnippet) {
+    return `Couldn't understand the game record. I received unexpected token ${quoteGameRecordSnippet(tokenSnippet)} after ${quoteGameRecordSnippet(afterSnippet)}.`;
+  }
+  return `Couldn't understand the game record. I received unexpected token ${quoteGameRecordSnippet(tokenSnippet)} at the start of the record.`;
+}
+
+function formatUnexpectedGameRecordTokenAtPosition(record, position) {
+  const normalizedRecord = typeof record === 'string' ? record : '';
+  const start = Math.max(0, Math.min(normalizedRecord.length, Number(position) || 0));
+  const remainder = normalizedRecord.slice(start);
+  const tokenMatch = remainder.match(/^[A-Za-z0-9]+/);
+  const token = tokenMatch ? tokenMatch[0] : (remainder.charAt(0) || 'end of input');
+  return formatUnexpectedGameRecordToken(token, normalizedRecord.slice(0, start));
+}
+
+function normalizeSequenceInputForComparison(input) {
+  const boardSize = getConfiguredBoardSize();
+  const prefixes = getAllowedTrmphUrlPrefixes();
+  let normalizedInput = String(input || '').trim();
+
+  for (const prefix of prefixes) {
+    if (normalizedInput.startsWith(prefix)) {
+      normalizedInput = `#${boardSize},${normalizedInput.slice(prefix.length)}`;
+      break;
+    }
+  }
+
+  const looksLikeUrl = normalizedInput.includes('://') || normalizedInput.startsWith('www.') || normalizedInput.startsWith('trmph.com/');
+  if (looksLikeUrl && !normalizedInput.startsWith(`#${boardSize},`)) {
+    throw new Error(`Unsupported URL format. Only exact TRMPH URL prefixes are allowed: ${prefixes.join(', ')}`);
+  }
+
+  let working = normalizedInput;
+  if (working.startsWith('#')) {
+    working = stripTrmphPreambleText(working);
+  }
+
+  working = working.replace(/\bmoves\b/gi, '');
+  working = working.replace(/\bswap\b/gi, '');
+  working = working.replace(/\bresign\b/gi, '');
+  working = working.replace(/\b\d+\./g, '');
+  working = working.replace(/[^a-zA-Z0-9]/g, '');
+  return working.toLowerCase();
+}
+
+function splitBareTrmphMovesForComparison(bareMoves, boardSize = getConfiguredBoardSize()) {
+  const letters = 'abcdefghijklmnopqrstuvwxyz'.substring(0, boardSize);
+  const moves = [];
+  let i = 0;
+  while (i < bareMoves.length) {
+    if (!letters.includes(bareMoves[i])) {
+      throw new Error(formatUnexpectedGameRecordTokenAtPosition(bareMoves, i));
+    }
+    let j = i + 1;
+    while (j < bareMoves.length && /\d/.test(bareMoves[j])) {
+      j++;
+    }
+    if (j === i + 1) {
+      throw new Error(formatUnexpectedGameRecordTokenAtPosition(bareMoves, i));
+    }
+    const move = bareMoves.slice(i, j);
+    const number = parseInt(move.slice(1), 10);
+    if (!Number.isFinite(number) || number < 1 || number > boardSize) {
+      throw new Error(formatUnexpectedGameRecordToken(move, bareMoves.slice(0, i)));
+    }
+    moves.push(move);
+    i = j;
+  }
+  return moves;
+}
+
+function findFirstDifferingMoveIndex(currentMoves, pastedMoves) {
+  const sharedLength = Math.min(currentMoves.length, pastedMoves.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    if (currentMoves[index] !== pastedMoves[index]) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function buildSequencePastePlan(input) {
+  const normalizedMoves = normalizeSequenceInputForComparison(input);
+  if (!normalizedMoves) {
+    return {
+      action: 'noop',
+      message: 'The pasted game record did not contain any playable moves.',
+    };
+  }
+
+  const currentBareMoves = stripTrmphPreambleText(state.trmph);
+  const pastedMoves = splitBareTrmphMovesForComparison(normalizedMoves);
+  if (!currentBareMoves) {
+    return {
+      action: 'replace',
+      baseTrmph: buildEmptyTrmph(),
+      sequenceToApply: normalizedMoves,
+    };
+  }
+
+  const currentMoves = splitBareTrmphMovesForComparison(currentBareMoves);
+  const differingMoveIndex = findFirstDifferingMoveIndex(currentMoves, pastedMoves);
+  if (differingMoveIndex === -1) {
+    if (currentMoves.length === pastedMoves.length) {
+      return {
+        action: 'noop',
+        message: 'The pasted game already matches the current board.',
+      };
+    }
+
+    if (currentMoves.length < pastedMoves.length) {
+      return {
+        action: 'append',
+        baseTrmph: state.trmph,
+        sequenceToApply: pastedMoves.slice(currentMoves.length).join(''),
+      };
+    }
+
+    return {
+      action: 'replace',
+      baseTrmph: buildEmptyTrmph(),
+      sequenceToApply: normalizedMoves,
+      confirmMessage:
+        'This board already has moves.\n'
+        + `The pasted game is shorter and would rewind the position from move ${currentMoves.length} to move ${pastedMoves.length}.\n`
+        + 'Replace the current board with the pasted game?',
+    };
+  }
+
+  return {
+    action: 'replace',
+    baseTrmph: buildEmptyTrmph(),
+    sequenceToApply: normalizedMoves,
+    confirmMessage:
+      'This board already has moves.\n'
+      + `The pasted game differs starting at move ${differingMoveIndex + 1} `
+      + `(${currentMoves[differingMoveIndex]} vs ${pastedMoves[differingMoveIndex]}).\n`
+      + 'Replace the current board with the pasted game?',
+  };
+}
+
 async function applyTrmphSequence() {
   const trmphSequenceInput = document.getElementById('trmph-sequence-input');
   const statusElement = document.getElementById('trmph-sequence-status');
@@ -2957,14 +3134,23 @@ async function applyTrmphSequence() {
   }
   
   try {
+    const pastePlan = buildSequencePastePlan(trmphSequence);
+    if (pastePlan.action === 'noop') {
+      showTrmphStatus(pastePlan.message, 'success');
+      return;
+    }
+    if (pastePlan.confirmMessage && !window.confirm(pastePlan.confirmMessage)) {
+      return;
+    }
+
     showTrmphStatus('Applying TRMPH sequence...', 'info');
-    
+    const previousSnapshot = cloneCurrentStateSnapshot();
     const response = await fetch('/api/apply_trmph_sequence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        trmph: state.trmph,
-        trmph_sequence: trmphSequence,
+        trmph: pastePlan.baseTrmph,
+        trmph_sequence: pastePlan.sequenceToApply,
         model_id: getCurrentPlayerSettings().model_id,
         temperature: getCurrentPlayerSettings().temperature,
         verbose: state.verbose_level
@@ -2991,6 +3177,14 @@ async function applyTrmphSequence() {
     state.policy = result.policy;
     state.value = result.value_signed;
     state.win_probability = result.win_probability;
+
+    if (previousSnapshot.trmph !== state.trmph) {
+      HISTORY_UTILS.pushDistinct(state.move_history, previousSnapshot, {
+        getKey: getSnapshotHistoryKey,
+        maxEntries: 5000
+      });
+      state.redo_history = [];
+    }
     
     // Update the TRMPH string display
     document.getElementById('trmph-string').value = state.trmph;
