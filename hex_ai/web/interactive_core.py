@@ -10,6 +10,45 @@ import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState
 
 
+def build_whitelisted_trmph_url_prefixes(*, board_size: int) -> tuple[str, ...]:
+    """Return the exact full-URL prefixes accepted for TRMPH board links."""
+    return (f"https://trmph.com/hex/board#{board_size},",)
+
+
+def normalize_game_input_with_exact_trmph_url_whitelist(
+    text: str,
+    *,
+    board_size: int,
+    allowed_url_prefixes: Iterable[str] | None = None,
+) -> str:
+    """
+    Normalize move input while only allowing full TRMPH links from exact prefixes.
+
+    This preserves the existing bare-move and `#<size>,` flows, but prevents generic
+    URL-like strings from being cleaned into something that accidentally parses.
+    """
+    prefixes = tuple(allowed_url_prefixes or build_whitelisted_trmph_url_prefixes(board_size=board_size))
+
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        raise ValueError("Input must be a string")
+
+    stripped = text.strip()
+    for prefix in prefixes:
+        if stripped.startswith(prefix):
+            stripped = f"#{board_size},{stripped[len(prefix):]}"
+            break
+    else:
+        if "://" in stripped or stripped.startswith("www."):
+            raise ValueError(
+                "Unsupported URL format. Only exact TRMPH URL prefixes are allowed: "
+                + ", ".join(prefixes)
+            )
+
+    return fc.normalize_game_input(stripped, board_size=board_size)
+
+
 def validate_trmph_input(trmph_string, *, board_size: int):
     """
     Validate TRMPH input format.

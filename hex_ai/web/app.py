@@ -55,7 +55,9 @@ from hex_ai.web.mcts_interactive_utils import (
     run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
+    build_whitelisted_trmph_url_prefixes,
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
+    normalize_game_input_with_exact_trmph_url_whitelist,
     validate_api_input as core_validate_api_input,
     validate_boolean_flag as core_validate_boolean_flag,
     validate_elo_rating as core_validate_elo_rating,
@@ -1137,6 +1139,15 @@ def validate_trmph_input(trmph_string):
     return core_validate_trmph_input(trmph_string, board_size=BOARD_SIZE)
 
 
+def normalize_game_input(text: str) -> str:
+    """Normalize move input while only accepting exact whitelisted TRMPH links."""
+    return normalize_game_input_with_exact_trmph_url_whitelist(
+        text,
+        board_size=BOARD_SIZE,
+        allowed_url_prefixes=build_whitelisted_trmph_url_prefixes(board_size=BOARD_SIZE),
+    )
+
+
 def _validate_move_within_display_board(move_text: str, display_board_size: int) -> None:
     row, col = fc.trmph_move_to_rowcol(move_text, board_size=BOARD_SIZE)
     if row >= display_board_size or col >= display_board_size:
@@ -1152,6 +1163,7 @@ def validate_api_input(data, required_fields=None, optional_fields=None):
         optional_fields=optional_fields,
         logger=app.logger,
         reject_unexpected=True,
+        normalize_game_input_fn=normalize_game_input,
         trmph_validator=validate_trmph_input,
         default_display_board_size=DEFAULT_DISPLAY_BOARD_SIZE,
         display_board_size_validator=validate_display_board_size,

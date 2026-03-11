@@ -49,7 +49,9 @@ from hex_ai.web.mcts_interactive_utils import (
     run_interactive_mcts_search,
 )
 from hex_ai.web.interactive_core import (
+    build_whitelisted_trmph_url_prefixes,
     create_game_state_from_trmph_input as core_create_game_state_from_trmph_input,
+    normalize_game_input_with_exact_trmph_url_whitelist,
     validate_api_input as core_validate_api_input,
     validate_trmph_input as core_validate_trmph_input,
 )
@@ -126,6 +128,16 @@ def validate_trmph_input(trmph):
     """Validate TRMPH format."""
     return core_validate_trmph_input(trmph, board_size=BOARD_SIZE)
 
+
+def normalize_game_input(text: str) -> str:
+    """Normalize move input while only accepting exact whitelisted TRMPH links."""
+    return normalize_game_input_with_exact_trmph_url_whitelist(
+        text,
+        board_size=BOARD_SIZE,
+        allowed_url_prefixes=build_whitelisted_trmph_url_prefixes(board_size=BOARD_SIZE),
+    )
+
+
 def validate_api_input(data, required_fields=None, optional_fields=None, *, reject_unexpected=False):
     """Centralized validation for API endpoints."""
     return core_validate_api_input(
@@ -134,6 +146,7 @@ def validate_api_input(data, required_fields=None, optional_fields=None, *, reje
         optional_fields=optional_fields,
         logger=app.logger,
         reject_unexpected=reject_unexpected,
+        normalize_game_input_fn=normalize_game_input,
         trmph_validator=validate_trmph_input,
         boolean_fields={"pie_rule_enabled"},
     )
