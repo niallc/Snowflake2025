@@ -347,6 +347,8 @@ def gumbel_alpha_zero_root_batched(
     total_leaves_evaluated = 0
     distinct_leaves_evaluated = 0
     last_round_rows: List[Dict[str, Any]] = []
+    stage_target_rows_by_action: Dict[int, Dict[str, Any]] = {}
+    prune_steps_completed = 0
     forced_stats_totals: Dict[str, Any] = {
         "batch_count": 0,
         "batch_sizes": [],
@@ -454,6 +456,33 @@ def gumbel_alpha_zero_root_batched(
             "excluded_rows": top_m_excluded_rows,
         }
     )
+
+    def record_stage_rows(
+        rows: List[Dict[str, Any]],
+        *,
+        stage_rank: int,
+        score_group: int,
+    ) -> None:
+        """Record compact per-action rows for downstream v3 target construction."""
+        for row in rows:
+            action = int(row["tensor_action"])
+            if action in stage_target_rows_by_action:
+                raise RuntimeError(
+                    "Duplicate tensor_action in compact Gumbel target rows: "
+                    f"{action}"
+                )
+            score_without_gumbel = float(row["score_without_gumbel"])
+            if not np.isfinite(score_without_gumbel):
+                raise RuntimeError(
+                    "Non-finite score_without_gumbel while recording compact "
+                    f"Gumbel target rows for action {action}: {score_without_gumbel!r}"
+                )
+            stage_target_rows_by_action[action] = {
+                "tensor_action": action,
+                "stage_rank": int(stage_rank),
+                "score_group": int(score_group),
+                "score_without_gumbel": score_without_gumbel,
+            }
     
     # Round allocation and MCTS execution timing
     round_start = time.perf_counter()
@@ -607,6 +636,14 @@ def gumbel_alpha_zero_root_batched(
         ranked_actions = [int(row["tensor_action"]) for row in post_round_rows]
         kept_actions = ranked_actions[:keep]
         dropped_actions = ranked_actions[keep:]
+        prune_stage_rank = prune_steps_completed + 1
+        dropped_rows = post_round_rows[keep:]
+        record_stage_rows(
+            dropped_rows,
+            stage_rank=prune_stage_rank,
+            score_group=prune_stage_rank,
+        )
+        prune_steps_completed = prune_stage_rank
         emit_trace(
             {
                 "type": "gumbel_round_end",
@@ -648,6 +685,25 @@ def gumbel_alpha_zero_root_batched(
 
     cand = [int(row["tensor_action"]) for row in final_rank_rows]
     selected_action = int(cand[0])
+    final_score_group = prune_steps_completed + 1
+    for row in final_rank_rows:
+        action = int(row["tensor_action"])
+        stage_rank = final_score_group + 1 if action == selected_action else final_score_group
+        record_stage_rows(
+            [row],
+            stage_rank=stage_rank,
+            score_group=final_score_group,
+        )
+
+    if len(stage_target_rows_by_action) != len(top_m_selected_rows):
+        raise RuntimeError(
+            "Compact Gumbel stage rows do not cover the full Top-m candidate set "
+            f"(covered={len(stage_target_rows_by_action)}, top_m={len(top_m_selected_rows)})."
+        )
+    stage_target_rows = [
+        stage_target_rows_by_action[int(row["tensor_action"])]
+        for row in top_m_selected_rows
+    ]
     emit_trace(
         {
             "type": "gumbel_final_selection",
@@ -677,6 +733,7 @@ def gumbel_alpha_zero_root_batched(
         "last_round_rows": last_round_rows,
         "top_m_selected_rows": top_m_selected_rows,
         "top_m_excluded_rows": top_m_excluded_rows,
+        "stage_target_rows": stage_target_rows,
     }
     
     return selected_action, performance_metrics

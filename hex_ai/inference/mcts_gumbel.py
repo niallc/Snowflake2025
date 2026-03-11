@@ -552,6 +552,77 @@ class MCTSGumbelMixin:
 
         return compact_rows
 
+    @staticmethod
+    def _extract_required_gumbel_stage_target_rows(
+        gumbel_metrics: Dict[str, Any],
+    ) -> List[Dict[str, float]]:
+        """Extract compact v3 target rows for stage-aware Gumbel supervision."""
+        stage_rows_raw = gumbel_metrics.get("stage_target_rows", None)
+        if not isinstance(stage_rows_raw, list) or not stage_rows_raw:
+            raise RuntimeError(
+                "Missing required Gumbel stage_target_rows in gumbel metrics."
+            )
+
+        compact_rows: List[Dict[str, float]] = []
+        seen_actions: set[int] = set()
+        for row in stage_rows_raw:
+            if not isinstance(row, dict):
+                raise RuntimeError(
+                    "Invalid Gumbel stage_target_rows entry type: expected dict."
+                )
+            action_raw = row.get("tensor_action", None)
+            stage_rank_raw = row.get("stage_rank", None)
+            score_group_raw = row.get("score_group", None)
+            score_raw = row.get("score_without_gumbel", None)
+            if (
+                action_raw is None
+                or stage_rank_raw is None
+                or score_group_raw is None
+                or score_raw is None
+            ):
+                raise RuntimeError(
+                    "Gumbel stage_target_rows entries must include tensor_action, "
+                    "stage_rank, score_group, and score_without_gumbel."
+                )
+
+            action = int(action_raw)
+            if action in seen_actions:
+                raise RuntimeError(
+                    f"Duplicate tensor_action {action} in gumbel stage_target_rows."
+                )
+            seen_actions.add(action)
+
+            stage_rank = int(stage_rank_raw)
+            score_group = int(score_group_raw)
+            if stage_rank <= 0:
+                raise RuntimeError(
+                    "Invalid stage_rank in gumbel stage_target_rows: "
+                    f"{stage_rank_raw!r}"
+                )
+            if score_group <= 0:
+                raise RuntimeError(
+                    "Invalid score_group in gumbel stage_target_rows: "
+                    f"{score_group_raw!r}"
+                )
+
+            score = float(score_raw)
+            if not np.isfinite(score):
+                raise RuntimeError(
+                    "Non-finite score_without_gumbel in gumbel stage_target_rows: "
+                    f"{score_raw!r}"
+                )
+
+            compact_rows.append(
+                {
+                    "tensor_action": action,
+                    "stage_rank": stage_rank,
+                    "score_group": score_group,
+                    "score_without_gumbel": score,
+                }
+            )
+
+        return compact_rows
+
     def _record_required_gumbel_target_fields(
         self,
         gumbel_metrics: Dict[str, Any],
@@ -566,7 +637,11 @@ class MCTSGumbelMixin:
         compact_candidate_rows = self._extract_required_gumbel_top_m_candidate_rows(
             gumbel_metrics
         )
+        compact_stage_rows = self._extract_required_gumbel_stage_target_rows(
+            gumbel_metrics
+        )
         self._gumbel_final_rank_rows = compact_rows
+        self._gumbel_stage_target_rows = compact_stage_rows
         self._gumbel_top_m_candidate_rows = compact_candidate_rows
         self._gumbel_final_score_gap_top1_top2 = (
             float(compact_rows[0]["score_without_gumbel"] - compact_rows[1]["score_without_gumbel"])

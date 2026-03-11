@@ -85,6 +85,109 @@ DEFAULT_LOGITS_L2_LAMBDA = 1e-5
 # Rationale: Directly penalizes logit scale/variance to prevent gradient explosion
 # GPT recommendation: start at 1e-6, increase to 5e-6, 1e-5, or rarely 3e-5 if needed
 
+
+def get_legal_moves_from_board_tensor(board: torch.Tensor) -> torch.Tensor:
+    """
+    Determine legal moves from board state tensor.
+
+    Legal moves in Hex are the empty cells, derived from the blue/red stone
+    occupancy channels. The helper is kept at module scope so analysis code can
+    reuse the exact training semantics without instantiating the trainer.
+    """
+    blue_channel = board[:, 0]
+    red_channel = board[:, 1]
+    empty_positions = (blue_channel == 0) & (red_channel == 0)
+    return empty_positions.view(board.shape[0], -1)
+
+
+def is_one_hot_like_target(
+    target: torch.Tensor,
+    *,
+    support_epsilon: float = TARGET_SUPPORT_EPSILON,
+) -> torch.Tensor:
+    """
+    Return a per-row mask indicating whether targets are one-hot-like.
+
+    A row is considered one-hot-like when exactly one action has mass above
+    `support_epsilon`. This matches the training-time branch that keeps legacy
+    label smoothing for played-move targets while leaving richer search targets
+    as soft distributions.
+    """
+    if target.ndim != 2:
+        raise RuntimeError(
+            f"CRITICAL BUG: target must be 2D in is_one_hot_like_target, got shape {tuple(target.shape)}"
+        )
+    support_count = (target > support_epsilon).sum(dim=1)
+    return support_count == 1
+
+
+def materialize_policy_targets_for_loss(
+    policy_target: torch.Tensor,
+    legal_mask: torch.Tensor,
+    *,
+    label_smoothing: float,
+    soft_target_legal_mix_alpha: float,
+    support_epsilon: float = TARGET_SUPPORT_EPSILON,
+) -> torch.Tensor:
+    """
+    Normalize and regularize policy targets exactly as training does pre-loss.
+
+    This intentionally excludes the illegal-mass debug path, which remains in
+    `PolicyValueLoss._compute_policy_loss()` so training still emits the richer
+    diagnostics when malformed data is encountered.
+    """
+    if policy_target.ndim != 2 or policy_target.shape != legal_mask.shape:
+        raise RuntimeError(
+            "CRITICAL BUG: policy_target/legal_mask shape mismatch in "
+            "materialize_policy_targets_for_loss(). "
+            f"Got policy_target={tuple(policy_target.shape)}, legal_mask={tuple(legal_mask.shape)}"
+        )
+
+    target = policy_target
+    if not torch.isfinite(target).all():
+        raise RuntimeError(
+            "CRITICAL BUG: policy_target contains non-finite values in "
+            "materialize_policy_targets_for_loss()."
+        )
+    if (target < 0).any():
+        raise RuntimeError(
+            "CRITICAL BUG: policy_target contains negative values in "
+            "materialize_policy_targets_for_loss()."
+        )
+
+    target_mass = target.sum(dim=1, keepdim=True)
+    if (target_mass <= 0).any():
+        raise RuntimeError(
+            "CRITICAL BUG: policy_target has non-positive probability mass in "
+            "materialize_policy_targets_for_loss(). Zero-vector targets should "
+            "have been filtered before this call."
+        )
+    target = target / target_mass.clamp_min(1e-12)
+
+    one_hot_like_mask = is_one_hot_like_target(
+        target, support_epsilon=support_epsilon
+    )
+    legal_counts = legal_mask.sum(dim=1).clamp_min(1)
+    uniform = legal_mask.to(dtype=target.dtype) / legal_counts.unsqueeze(1).to(
+        dtype=target.dtype
+    )
+
+    if soft_target_legal_mix_alpha > 0:
+        alpha = float(soft_target_legal_mix_alpha)
+        soft_target_mask = (~one_hot_like_mask).unsqueeze(1)
+        if soft_target_mask.any():
+            mixed_target = (1 - alpha) * target + alpha * uniform
+            target = torch.where(soft_target_mask, mixed_target, target)
+
+    if label_smoothing > 0:
+        epsilon = float(label_smoothing)
+        one_hot_like_mask_expanded = one_hot_like_mask.unsqueeze(1)
+        if one_hot_like_mask_expanded.any():
+            smoothed_target = (1 - epsilon) * target + epsilon * uniform
+            target = torch.where(one_hot_like_mask_expanded, smoothed_target, target)
+
+    return target
+
 class PolicyValueLoss(nn.Module):
     """Combined loss for policy and value heads with support for missing policy targets."""
     
@@ -119,17 +222,7 @@ class PolicyValueLoss(nn.Module):
         Returns:
             Legal moves mask of shape (batch_size, height * width) where True indicates legal moves
         """
-        # Extract blue and red channels (ignore player channel)
-        blue_channel = board[:, 0]  # (batch_size, height, width)
-        red_channel = board[:, 1]   # (batch_size, height, width)
-        
-        # A position is legal if both blue and red channels are 0 (empty)
-        empty_positions = (blue_channel == 0) & (red_channel == 0)  # (batch_size, height, width)
-        
-        # Flatten to match policy output shape
-        legal_moves = empty_positions.view(board.shape[0], -1)  # (batch_size, height * width)
-        
-        return legal_moves
+        return get_legal_moves_from_board_tensor(board)
     
     def _debug_illegal_targets(self, board: torch.Tensor, policy_target: torch.Tensor, 
                               legal_mask: torch.Tensor, target_indices: torch.Tensor, 
@@ -398,12 +491,7 @@ class PolicyValueLoss(nn.Module):
         `support_epsilon`. This allows us to keep legacy label smoothing for
         played-move one-hot targets while preserving richer soft search targets.
         """
-        if target.ndim != 2:
-            raise RuntimeError(
-                f"CRITICAL BUG: target must be 2D in _is_one_hot_like_target, got shape {tuple(target.shape)}"
-            )
-        support_count = (target > support_epsilon).sum(dim=1)  # (batch_size,)
-        return support_count == 1
+        return is_one_hot_like_target(target, support_epsilon=support_epsilon)
     
     def forward(self, policy_pred: torch.Tensor, value_pred: torch.Tensor,
                 policy_target: torch.Tensor, value_target: torch.Tensor, 
@@ -671,26 +759,13 @@ class PolicyValueLoss(nn.Module):
                 "Training stopped to prevent silent failures. Check debug output above for details."
             )
 
-        one_hot_like_mask = self._is_one_hot_like_target(target)
-        if self.soft_target_legal_mix_alpha > 0:
-            alpha = self.soft_target_legal_mix_alpha
-            soft_target_mask = (~one_hot_like_mask).unsqueeze(1)
-            if soft_target_mask.any():
-                legal_counts = legal_mask.sum(dim=1).clamp_min(1)
-                uniform = legal_mask.to(dtype=target.dtype) / legal_counts.unsqueeze(1).to(
-                    dtype=target.dtype
-                )
-                mixed_target = (1 - alpha) * target + alpha * uniform
-                target = torch.where(soft_target_mask, mixed_target, target)
-
-        if self.label_smoothing > 0:
-            legal_counts = legal_mask.sum(dim=1).clamp_min(1)
-            epsilon = self.label_smoothing
-            uniform = legal_mask.float() / legal_counts.unsqueeze(1)
-            one_hot_like_mask_expanded = one_hot_like_mask.unsqueeze(1)
-            if one_hot_like_mask_expanded.any():
-                smoothed_target = (1 - epsilon) * target + epsilon * uniform
-                target = torch.where(one_hot_like_mask_expanded, smoothed_target, target)
+        target = materialize_policy_targets_for_loss(
+            target,
+            legal_mask,
+            label_smoothing=self.label_smoothing,
+            soft_target_legal_mix_alpha=self.soft_target_legal_mix_alpha,
+            support_epsilon=TARGET_SUPPORT_EPSILON,
+        )
 
         logp = torch.log_softmax(logits, dim=1)
         policy_loss = -(target * logp).sum(dim=1).mean()

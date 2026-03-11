@@ -7,8 +7,9 @@ Authoritative semantics and end-to-end usage notes for policy targets live in:
 Policy-target source-code semantics:
   V: visit-count distribution target; also used for externally injected
      opening-book moves (stored as one-hot on the chosen move)
-  G: Gumbel candidate-set target built from clean log-priors plus
-     completed-Q scores with a visit-damped value scale
+  G: Gumbel stage-aware target built from compact elimination summaries:
+     broader support than finalists-only, but with later survival and the
+     selected move receiving higher score than earlier-eliminated actions
   C: policy-masked row (unused for policy loss)
   T: visit-count distribution in searched terminal-move cases; one-hot only
      when the terminal move is known without search

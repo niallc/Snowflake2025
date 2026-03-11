@@ -67,8 +67,9 @@ TRAINING_RED_WIN = 1.0
 TRMPH_PREFIX = "#13,"
 
 # Policy-target construction contract version shared by all game generators.
-# Bump only when the stored search-target semantics change.
-POLICY_TARGET_CONSTRUCTION_VERSION = 2
+# v3 switches Gumbel-root targets from full Top-m rescoring to a stage-aware
+# broader-support target derived from elimination depth and local final scores.
+POLICY_TARGET_CONSTRUCTION_VERSION = 3
 
 # Default hyperparameters
 LEARNING_RATE = 8e-4

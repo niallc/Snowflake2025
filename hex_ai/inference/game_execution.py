@@ -40,7 +40,7 @@ from hex_ai.move_provenance import (
     MOVE_CODE_VISIT_COUNT,
 )
 from hex_ai.policy_target_construction import (
-    build_policy_target_vector_from_gumbel_candidate_scores,
+    build_policy_target_vector_from_gumbel_stage_scores,
     build_policy_target_vector_from_mcts_result,
 )
 from hex_ai.utils.format_conversion import (
@@ -501,19 +501,15 @@ def _build_policy_target_vector_from_mcts_result(
     )
 
 
-def _build_policy_target_vector_from_gumbel_candidate_scores(
+def _build_policy_target_vector_from_gumbel_stage_scores(
     mcts_result: Any,
     *,
     board_size: int,
-    gumbel_c_visit: float,
-    gumbel_c_scale: float,
 ) -> np.ndarray:
-    """Build v2 dense policy target from the full Gumbel top-m candidate set."""
-    return build_policy_target_vector_from_gumbel_candidate_scores(
+    """Build dense v3 Gumbel policy target from stage-aware summaries."""
+    return build_policy_target_vector_from_gumbel_stage_scores(
         mcts_result,
         board_size=board_size,
-        gumbel_c_visit=gumbel_c_visit,
-        gumbel_c_scale=gumbel_c_scale,
     )
 
 
@@ -737,11 +733,9 @@ def play_deterministic_game(
                     raise RuntimeError(
                         "Gumbel-root tournament move missing MCTS result payload."
                     )
-                policy_target = _build_policy_target_vector_from_gumbel_candidate_scores(
+                policy_target = _build_policy_target_vector_from_gumbel_stage_scores(
                     mcts_result,
                     board_size=board_size,
-                    gumbel_c_visit=float(strategy_config.gumbel_c_visit),
-                    gumbel_c_scale=float(strategy_config.gumbel_c_scale),
                 )
             elif provenance_code in {
                 MOVE_CODE_VISIT_COUNT,

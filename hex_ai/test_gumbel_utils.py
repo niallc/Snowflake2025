@@ -232,6 +232,15 @@ def test_gumbel_alpha_zero_root_batched_preserves_valid_path_behavior():
 
     assert selected_action in root.legal_indices
     assert metrics["selected_action"] == selected_action
+    stage_rows = metrics["stage_target_rows"]
+    assert isinstance(stage_rows, list)
+    assert len(stage_rows) == 4
+    assert {int(row["tensor_action"]) for row in stage_rows} == {0, 1, 2, 3}
+    assert max(int(row["stage_rank"]) for row in stage_rows) == max(
+        int(row["stage_rank"])
+        for row in stage_rows
+        if int(row["tensor_action"]) == int(selected_action)
+    )
     assert mcts.calls == 2
 
 

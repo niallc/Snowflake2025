@@ -40,7 +40,7 @@ from hex_ai.move_provenance import (
     sidecar_path_for_trmph,
 )
 from hex_ai.policy_target_construction import (
-    build_policy_target_vector_from_gumbel_candidate_scores,
+    build_policy_target_vector_from_gumbel_stage_scores,
     build_policy_target_vector_from_mcts_result,
 )
 from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
@@ -779,7 +779,7 @@ class SelfPlayEngine:
                     move_provenance_codes.append(provenance_code)
                     if provenance_code == MOVE_CODE_GUMBEL_ROOT:
                         policy_target_rows.append(
-                            self._build_policy_target_vector_from_gumbel_candidate_scores(
+                            self._build_policy_target_vector_from_gumbel_stage_scores(
                                 mcts_result, board_size=board_size
                             )
                         )
@@ -928,88 +928,13 @@ class SelfPlayEngine:
             board_size=board_size,
         )
 
-    def _extract_gumbel_top_m_candidate_rows(
-        self,
-        stats: Dict[str, Any],
-        *,
-        action_count: int,
-    ) -> List[Dict[str, float]]:
-        """Validate and return the recorded clean Gumbel top-m candidate rows."""
-        rows = stats.get("gumbel_top_m_candidate_rows")
-        if not isinstance(rows, list) or not rows:
-            raise ValueError(
-                "Gumbel move is missing gumbel_top_m_candidate_rows in MCTS stats; "
-                "cannot build Gumbel-specific policy target."
-            )
-
-        extracted_rows: List[Dict[str, float]] = []
-        seen_indices: set[int] = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                raise TypeError(
-                    f"gumbel_top_m_candidate_rows entries must be dict, got {type(row)}"
-                )
-            action_raw = row.get("tensor_action")
-            log_prior_raw = row.get("log_prior")
-            if action_raw is None or log_prior_raw is None:
-                raise ValueError(
-                    "gumbel_top_m_candidate_rows entries must include tensor_action and log_prior"
-                )
-            action_idx = int(action_raw)
-            if action_idx < 0 or action_idx >= action_count:
-                raise ValueError(
-                    f"Invalid tensor_action {action_idx} for action_count {action_count}"
-                )
-            if action_idx in seen_indices:
-                raise ValueError(
-                    f"Duplicate tensor_action {action_idx} in gumbel_top_m_candidate_rows"
-                )
-            log_prior = float(log_prior_raw)
-            if not np.isfinite(log_prior):
-                raise ValueError(
-                    f"Non-finite log_prior for tensor_action {action_idx}: {log_prior_raw!r}"
-                )
-            seen_indices.add(action_idx)
-            extracted_rows.append(
-                {
-                    "tensor_action": action_idx,
-                    "log_prior": log_prior,
-                }
-            )
-        return extracted_rows
-
-    def _compute_gumbel_policy_target_value_scale(
-        self,
-        visit_counts: List[int],
-    ) -> float:
-        """
-        Convert search-scale Gumbel parameters into a milder training-target scale.
-
-        At low budgets we intentionally damp the value term so Gumbel targets keep
-        meaningful mass on the full searched candidate set instead of collapsing to
-        an almost one-hot target over the final survivors.
-        """
-        if not visit_counts:
-            raise ValueError("visit_counts must be non-empty for Gumbel policy target construction")
-        max_visits = max(int(visits) for visits in visit_counts)
-        if max_visits <= 0:
-            raise ValueError(
-                "Gumbel policy target construction requires at least one visited candidate action"
-            )
-
-        c_visit = float(self.mcts_config.gumbel_c_visit)
-        c_scale = float(self.mcts_config.gumbel_c_scale)
-        return float(c_scale * max_visits / (c_visit + max_visits))
-
-    def _build_policy_target_vector_from_gumbel_candidate_scores(
+    def _build_policy_target_vector_from_gumbel_stage_scores(
         self, mcts_result: Any, *, board_size: int
     ) -> np.ndarray:
-        """Build dense policy target from the full Gumbel top-m candidate set."""
-        return build_policy_target_vector_from_gumbel_candidate_scores(
+        """Build dense v3 policy target from stage-aware Gumbel summaries."""
+        return build_policy_target_vector_from_gumbel_stage_scores(
             mcts_result,
             board_size=board_size,
-            gumbel_c_visit=float(self.mcts_config.gumbel_c_visit),
-            gumbel_c_scale=float(self.mcts_config.gumbel_c_scale),
         )
 
     def _validate_game_data(self, game_data: Dict[str, Any], game_id: Optional[int] = None) -> None:

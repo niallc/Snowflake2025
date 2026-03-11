@@ -4,11 +4,17 @@ Shared policy-target construction helpers for self-play and tournaments.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Dict, List
 
 import numpy as np
 
 from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size, trmph_to_tensor
+
+
+GUMBEL_V3_STAGE_GAP = 0.6
+GUMBEL_V3_LOCAL_SCORE_WEIGHT = 0.30
+GUMBEL_V3_SOFTMAX_TEMPERATURE = 0.85
 
 
 def build_policy_target_vector_from_mcts_result(
@@ -47,17 +53,17 @@ def build_policy_target_vector_from_mcts_result(
     return vec
 
 
-def _extract_gumbel_top_m_candidate_rows(
+def _extract_gumbel_stage_target_rows(
     stats: Dict[str, Any],
     *,
     action_count: int,
 ) -> List[Dict[str, float]]:
-    """Validate and return the recorded clean Gumbel top-m candidate rows."""
-    rows = stats.get("gumbel_top_m_candidate_rows")
+    """Validate and return compact per-candidate rows for v3 Gumbel targets."""
+    rows = stats.get("gumbel_stage_target_rows")
     if not isinstance(rows, list) or not rows:
         raise ValueError(
-            "Gumbel move is missing gumbel_top_m_candidate_rows in MCTS stats; "
-            "cannot build Gumbel-specific policy target."
+            "Gumbel move is missing gumbel_stage_target_rows in MCTS stats; "
+            "cannot build v3 Gumbel policy target."
         )
 
     extracted_rows: List[Dict[str, float]] = []
@@ -65,13 +71,21 @@ def _extract_gumbel_top_m_candidate_rows(
     for row in rows:
         if not isinstance(row, dict):
             raise TypeError(
-                f"gumbel_top_m_candidate_rows entries must be dict, got {type(row)}"
+                f"gumbel_stage_target_rows entries must be dict, got {type(row)}"
             )
         action_raw = row.get("tensor_action")
-        log_prior_raw = row.get("log_prior")
-        if action_raw is None or log_prior_raw is None:
+        stage_rank_raw = row.get("stage_rank")
+        score_group_raw = row.get("score_group")
+        score_raw = row.get("score_without_gumbel")
+        if (
+            action_raw is None
+            or stage_rank_raw is None
+            or score_group_raw is None
+            or score_raw is None
+        ):
             raise ValueError(
-                "gumbel_top_m_candidate_rows entries must include tensor_action and log_prior"
+                "gumbel_stage_target_rows entries must include tensor_action, "
+                "stage_rank, score_group, and score_without_gumbel"
             )
         action_idx = int(action_raw)
         if action_idx < 0 or action_idx >= action_count:
@@ -80,118 +94,91 @@ def _extract_gumbel_top_m_candidate_rows(
             )
         if action_idx in seen_indices:
             raise ValueError(
-                f"Duplicate tensor_action {action_idx} in gumbel_top_m_candidate_rows"
+                f"Duplicate tensor_action {action_idx} in gumbel_stage_target_rows"
             )
-        log_prior = float(log_prior_raw)
-        if not np.isfinite(log_prior):
+        stage_rank = int(stage_rank_raw)
+        score_group = int(score_group_raw)
+        if stage_rank <= 0:
             raise ValueError(
-                f"Non-finite log_prior for tensor_action {action_idx}: {log_prior_raw!r}"
+                f"Invalid stage_rank for tensor_action {action_idx}: {stage_rank_raw!r}"
+            )
+        if score_group <= 0:
+            raise ValueError(
+                f"Invalid score_group for tensor_action {action_idx}: {score_group_raw!r}"
+            )
+        score = float(score_raw)
+        if not np.isfinite(score):
+            raise ValueError(
+                "Non-finite score_without_gumbel for tensor_action "
+                f"{action_idx}: {score_raw!r}"
             )
         seen_indices.add(action_idx)
         extracted_rows.append(
             {
                 "tensor_action": action_idx,
-                "log_prior": log_prior,
+                "stage_rank": stage_rank,
+                "score_group": score_group,
+                "score_without_gumbel": score,
             }
         )
     return extracted_rows
 
 
-def _compute_gumbel_policy_target_value_scale(
-    visit_counts: List[int],
-    *,
-    gumbel_c_visit: float,
-    gumbel_c_scale: float,
-) -> float:
-    """
-    Convert search-scale Gumbel parameters into a milder training-target scale.
-    """
-    if not visit_counts:
-        raise ValueError("visit_counts must be non-empty for Gumbel policy target construction")
-    max_visits = max(int(visits) for visits in visit_counts)
-    if max_visits <= 0:
-        raise ValueError(
-            "Gumbel policy target construction requires at least one visited candidate action"
-        )
-
-    c_visit = float(gumbel_c_visit)
-    c_scale = float(gumbel_c_scale)
-    return float(c_scale * max_visits / (c_visit + max_visits))
-
-
-def build_policy_target_vector_from_gumbel_candidate_scores(
+def build_policy_target_vector_from_gumbel_stage_scores(
     mcts_result: Any,
     *,
     board_size: int,
-    gumbel_c_visit: float,
-    gumbel_c_scale: float,
 ) -> np.ndarray:
     """
-    Build dense policy target from the full Gumbel top-m candidate set.
+    Build dense v3 Gumbel policy target from elimination-stage summaries.
 
     Contract:
-    - Uses `stats["gumbel_top_m_candidate_rows"]` for the clean pre-search
-      log-priors of the searched candidate set.
-    - Uses root child Q-values for visited candidates and `gumbel_v_pi_01`
-      as the completed-Q fallback for any unvisited candidate.
-    - Applies softmax over the searched candidate set only.
+    - Uses `stats["gumbel_stage_target_rows"]`, a compact per-candidate summary
+      produced by the Gumbel root-selection loop.
+    - Each row carries:
+      - `stage_rank`: later elimination / final survival gets a larger base
+      - `score_group`: candidates sharing the same last-active comparison pool
+      - `score_without_gumbel`: noise-free local ranking score
+    - Normalizes local scores to [0,1] within each score group and combines them
+      with the stage base:
+        z(a) = 0.6 * stage_rank(a) + 0.30 * local_scaled_score(a)
+      then applies softmax(z / 0.85) over the searched candidate set only.
     - Leaves all non-candidate legal actions at probability 0.
+    - Enforces that the selected move is the unique top-scored action under the
+      stored v3 target contract.
     """
     stats = getattr(mcts_result, "stats", {}) or {}
-    root = getattr(mcts_result, "root_node", None)
-    if root is None:
-        raise ValueError(
-            "Gumbel move is missing root_node on MCTS result; "
-            "cannot build Gumbel-specific policy target."
-        )
-
     action_count = board_size * board_size
-    candidate_rows = _extract_gumbel_top_m_candidate_rows(
+    candidate_rows = _extract_gumbel_stage_target_rows(
         stats, action_count=action_count
     )
-    v_pi_raw = stats.get("gumbel_v_pi_01")
-    if v_pi_raw is None:
-        raise ValueError(
-            "Gumbel move is missing gumbel_v_pi_01 in MCTS stats; "
-            "cannot build Gumbel-specific policy target."
-        )
-    v_pi_01 = float(v_pi_raw)
-    if not np.isfinite(v_pi_01):
-        raise ValueError(f"Invalid gumbel_v_pi_01 value: {v_pi_raw!r}")
 
-    action_to_legal_idx = {
-        int(action): idx for idx, action in enumerate(root.legal_indices)
-    }
-    candidate_visit_counts: List[int] = []
+    grouped_scores: Dict[int, List[float]] = defaultdict(list)
     for row in candidate_rows:
-        action_idx = int(row["tensor_action"])
-        legal_idx = action_to_legal_idx.get(action_idx)
-        if legal_idx is None:
-            raise RuntimeError(
-                f"Gumbel candidate tensor_action {action_idx} missing from root legal_indices"
-            )
-        candidate_visit_counts.append(int(root.N[legal_idx]))
-
-    value_scale = _compute_gumbel_policy_target_value_scale(
-        candidate_visit_counts,
-        gumbel_c_visit=gumbel_c_visit,
-        gumbel_c_scale=gumbel_c_scale,
-    )
+        grouped_scores[int(row["score_group"])].append(
+            float(row["score_without_gumbel"])
+        )
 
     action_indices: List[int] = []
-    raw_scores: List[float] = []
+    target_logits: List[float] = []
     for row in candidate_rows:
         action_idx = int(row["tensor_action"])
-        log_prior = float(row["log_prior"])
-        legal_idx = action_to_legal_idx[action_idx]
-        visits = int(root.N[legal_idx])
-        if visits > 0:
-            q_01 = float((float(root.Q[legal_idx]) + 1.0) / 2.0)
+        stage_rank = int(row["stage_rank"])
+        score_group = int(row["score_group"])
+        raw_score = float(row["score_without_gumbel"])
+        score_pool = grouped_scores[score_group]
+        pool_min = min(score_pool)
+        pool_max = max(score_pool)
+        if pool_max <= pool_min + 1e-12:
+            local_scaled = 0.5
         else:
-            q_01 = v_pi_01
-        raw_score = float(log_prior + value_scale * (q_01 - v_pi_01))
+            local_scaled = (raw_score - pool_min) / (pool_max - pool_min)
+        target_logit = (
+            GUMBEL_V3_STAGE_GAP * float(stage_rank)
+            + GUMBEL_V3_LOCAL_SCORE_WEIGHT * float(local_scaled)
+        )
         action_indices.append(action_idx)
-        raw_scores.append(raw_score)
+        target_logits.append(float(target_logit))
 
     selected_move = mcts_result.move
     selected_idx = rowcol_to_tensor_with_size(
@@ -203,13 +190,22 @@ def build_policy_target_vector_from_gumbel_candidate_scores(
             f"the searched candidate set (selected={selected_idx}, candidates={action_indices})."
         )
 
-    scores_arr = np.asarray(raw_scores, dtype=np.float64)
-    max_score = float(np.max(scores_arr))
-    exp_scores = np.exp(scores_arr - max_score)
+    logits_arr = np.asarray(target_logits, dtype=np.float64)
+    top_idx = action_indices[int(np.argmax(logits_arr))]
+    if selected_idx != top_idx:
+        raise RuntimeError(
+            "Gumbel v3 target construction mismatch: selected move is not the "
+            "top-scored action under the stored stage-aware target "
+            f"(selected={selected_idx}, top={top_idx})."
+        )
+
+    scaled_logits = logits_arr / float(GUMBEL_V3_SOFTMAX_TEMPERATURE)
+    max_score = float(np.max(scaled_logits))
+    exp_scores = np.exp(scaled_logits - max_score)
     exp_sum = float(np.sum(exp_scores))
     if exp_sum <= 0.0 or not np.isfinite(exp_sum):
         raise RuntimeError(
-            "Invalid Gumbel candidate-score normalization "
+            "Invalid Gumbel v3 target normalization "
             "(non-positive/invalid softmax denominator)."
         )
     probs = exp_scores / exp_sum

@@ -725,6 +725,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._gumbel_final_rank_top_move_trmph = None
         self._gumbel_final_rank_top5 = None
         self._gumbel_final_rank_rows = None
+        self._gumbel_stage_target_rows = None
         self._gumbel_top_m_candidate_rows = None
         self._gumbel_final_score_gap_top1_top2 = None
         self._gumbel_final_score_gap_top1_top3 = None
@@ -810,6 +811,7 @@ class BaselineMCTS(MCTSGumbelMixin):
                 "gumbel_top_m_candidate_rows": self._gumbel_top_m_candidate_rows,
                 "gumbel_final_rank_top5": self._gumbel_final_rank_top5,
                 "gumbel_final_rank_rows": self._gumbel_final_rank_rows,
+                "gumbel_stage_target_rows": self._gumbel_stage_target_rows,
                 "gumbel_final_score_gap_top1_top2": self._gumbel_final_score_gap_top1_top2,
                 "gumbel_final_score_gap_top1_top3": self._gumbel_final_score_gap_top1_top3,
             })
