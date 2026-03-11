@@ -189,6 +189,8 @@ DEFAULT_DISPLAY_BOARD_SIZE = BOARD_SIZE
 DISPLAY_BOARD_SIZE_OPTIONS = list(range(BOARD_SIZE, MIN_DISPLAY_BOARD_SIZE - 1, -1))
 
 TRMPH_BOARD_SHARE_BASE_URL = "https://trmph.com/hex/board"
+TRMPH_LINK_BOARD_SIZES = tuple(dict.fromkeys(size for size in (11, BOARD_SIZE) if 1 <= size <= BOARD_SIZE))
+TRMPH_ALLOWED_URL_PREFIXES = build_whitelisted_trmph_url_prefixes(board_sizes=TRMPH_LINK_BOARD_SIZES)
 
 _DISPLAY_MASK_CACHE = {}
 
@@ -1144,7 +1146,7 @@ def normalize_game_input(text: str) -> str:
     return normalize_game_input_with_exact_trmph_url_whitelist(
         text,
         board_size=BOARD_SIZE,
-        allowed_url_prefixes=build_whitelisted_trmph_url_prefixes(board_size=BOARD_SIZE),
+        allowed_url_prefixes=TRMPH_ALLOWED_URL_PREFIXES,
     )
 
 
@@ -1894,6 +1896,7 @@ def api_constants():
     return jsonify({
         "BOARD_SIZE": BOARD_SIZE,
         "TRMPH_BOARD_SHARE_BASE_URL": TRMPH_BOARD_SHARE_BASE_URL,
+        "TRMPH_ALLOWED_URL_PREFIXES": TRMPH_ALLOWED_URL_PREFIXES,
         "PIECE_VALUES": {
             "EMPTY": Piece.EMPTY.value,
             "BLUE": Piece.BLUE.value,

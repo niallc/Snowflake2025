@@ -10,9 +10,31 @@ import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState
 
 
-def build_whitelisted_trmph_url_prefixes(*, board_size: int) -> tuple[str, ...]:
+def build_whitelisted_trmph_url_prefixes(
+    *,
+    board_size: int | None = None,
+    board_sizes: Iterable[int] | None = None,
+) -> tuple[str, ...]:
     """Return the exact full-URL prefixes accepted for TRMPH board links."""
-    return (f"https://trmph.com/hex/board#{board_size},",)
+    sizes = []
+    if board_sizes is not None:
+        sizes.extend(int(size) for size in board_sizes)
+    if board_size is not None:
+        sizes.append(int(board_size))
+    if not sizes:
+        raise ValueError("At least one board size is required")
+
+    unique_sizes = tuple(dict.fromkeys(sizes))
+    prefixes = []
+    for size in unique_sizes:
+        prefixes.extend(
+            (
+                f"https://trmph.com/hex/board#{size},",
+                f"http://trmph.com/hex/board#{size},",
+                f"trmph.com/hex/board#{size},",
+            )
+        )
+    return tuple(prefixes)
 
 
 def normalize_game_input_with_exact_trmph_url_whitelist(
@@ -40,7 +62,7 @@ def normalize_game_input_with_exact_trmph_url_whitelist(
             stripped = f"#{board_size},{stripped[len(prefix):]}"
             break
     else:
-        if "://" in stripped or stripped.startswith("www."):
+        if "://" in stripped or stripped.startswith("www.") or stripped.startswith("trmph.com/"):
             raise ValueError(
                 "Unsupported URL format. Only exact TRMPH URL prefixes are allowed: "
                 + ", ".join(prefixes)

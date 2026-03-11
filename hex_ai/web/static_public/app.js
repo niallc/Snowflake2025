@@ -66,6 +66,7 @@ class HexGame {
         // Difficulty levels will be loaded from backend in loadGameConstants()
         this.difficultyLevels = null;
         this.trmphBoardShareBaseUrl = null;
+        this.trmphAllowedUrlPrefixes = [];
         this.virtualBoardPrefillMoves = {};
         this.openingGuideWeakThreshold = 0.40;
         this.openingGuideStrongThreshold = 0.55;
@@ -1595,6 +1596,12 @@ class HexGame {
                 throw new Error('TRMPH_BOARD_SHARE_BASE_URL is missing from backend constants');
             }
             this.trmphBoardShareBaseUrl = data.TRMPH_BOARD_SHARE_BASE_URL.trim();
+            this.trmphAllowedUrlPrefixes = Array.isArray(data.TRMPH_ALLOWED_URL_PREFIXES)
+                ? data.TRMPH_ALLOWED_URL_PREFIXES
+                    .filter((prefix) => typeof prefix === 'string')
+                    .map((prefix) => prefix.trim())
+                    .filter((prefix) => prefix.length > 0)
+                : [];
 
             if (!data.VIRTUAL_BOARD_PREFILL_MOVES || typeof data.VIRTUAL_BOARD_PREFILL_MOVES !== 'object') {
                 throw new Error('VIRTUAL_BOARD_PREFILL_MOVES is missing from backend constants');
@@ -2813,17 +2820,12 @@ class HexGame {
     // VALIDATION AND UTILITIES
     // =============================================================================
 
-    parseTrmphMoves(trmphString) {
+    parseTrmphMoves(trmphString, boardSize = this.validateBoardSize()) {
         // Parse TRMPH string into individual moves (matches Python split_trmph_moves + strip_trmph_preamble)
-        const boardSize = this.validateBoardSize();
         const letters = 'abcdefghijklmnopqrstuvwxyz'.substring(0, boardSize);
 
         // Strip preamble first (like Python strip_trmph_preamble)
-        let bareMoves = trmphString;
-        const preambleMatch = trmphString.match(/^#(\d+),/);
-        if (preambleMatch) {
-            bareMoves = trmphString.substring(preambleMatch[0].length);
-        }
+        const bareMoves = this.stripTrmphPreamble(trmphString);
 
         // Split into moves (like Python split_trmph_moves)
         const moves = [];
@@ -2842,9 +2844,93 @@ class HexGame {
         return moves;
     }
 
+    stripTrmphPreamble(trmphString) {
+        const normalized = typeof trmphString === 'string' ? trmphString : '';
+        const preambleMatch = normalized.match(/^#(\d+),/);
+        if (!preambleMatch) {
+            return normalized;
+        }
+        return normalized.substring(preambleMatch[0].length);
+    }
+
+    getAllowedTrmphUrlPrefixes() {
+        if (Array.isArray(this.trmphAllowedUrlPrefixes) && this.trmphAllowedUrlPrefixes.length > 0) {
+            return this.trmphAllowedUrlPrefixes;
+        }
+        const fallbackBoardSize = Number.isFinite(this.boardSize) ? this.boardSize : 13;
+        const allowedSizes = [...new Set([11, fallbackBoardSize])];
+        return allowedSizes.flatMap((size) => ([
+            `https://trmph.com/hex/board#${size},`,
+            `http://trmph.com/hex/board#${size},`,
+            `trmph.com/hex/board#${size},`,
+        ]));
+    }
+
+    extractTrmphInputMetadata(input) {
+        const trimmed = typeof input === 'string' ? input.trim() : '';
+        const prefixes = this.getAllowedTrmphUrlPrefixes();
+
+        let normalizedInput = trimmed;
+        for (const prefix of prefixes) {
+            if (!trimmed.startsWith(prefix)) {
+                continue;
+            }
+            const prefixMatch = prefix.match(/#(\d+),$/);
+            if (!prefixMatch) {
+                continue;
+            }
+            normalizedInput = `#${prefixMatch[1]},${trimmed.substring(prefix.length)}`;
+            break;
+        }
+
+        const looksLikeUrl = trimmed.includes('://') || trimmed.startsWith('www.') || trimmed.startsWith('trmph.com/');
+        if (looksLikeUrl && normalizedInput === trimmed) {
+            return {
+                error: `Unsupported URL format. Only exact TRMPH URL prefixes are allowed: ${prefixes.join(', ')}`,
+                normalizedInput,
+                targetDisplayBoardSize: this.validateBoardSize(),
+            };
+        }
+
+        let targetDisplayBoardSize = this.validateBoardSize();
+        const preambleMatch = normalizedInput.match(/^#(\d+),/);
+        if (preambleMatch) {
+            const parsedBoardSize = parseInt(preambleMatch[1], 10);
+            if (
+                Number.isFinite(parsedBoardSize) &&
+                Array.isArray(this.displayBoardSizeOptions) &&
+                this.displayBoardSizeOptions.includes(parsedBoardSize)
+            ) {
+                targetDisplayBoardSize = parsedBoardSize;
+            } else if (Number.isFinite(parsedBoardSize) && parsedBoardSize !== this.boardSize) {
+                return {
+                    error: `Unsupported TRMPH board size: ${parsedBoardSize}`,
+                    normalizedInput,
+                    targetDisplayBoardSize,
+                };
+            } else if (Number.isFinite(parsedBoardSize)) {
+                targetDisplayBoardSize = parsedBoardSize;
+            }
+        }
+
+        return {
+            error: null,
+            normalizedInput,
+            targetDisplayBoardSize,
+        };
+    }
+
     cleanInput(input) {
+        let working = typeof input === 'string' ? input : '';
+        let preamble = '';
+        const preambleMatch = working.match(/^#(\d+),/);
+        if (preambleMatch) {
+            preamble = preambleMatch[0];
+            working = working.substring(preamble.length);
+        }
+
         // Remove move numbers (e.g. "1.", "12.")
-        let cleaned = input.replace(/\b\d+\./g, '');
+        let cleaned = working.replace(/\b\d+\./g, '');
 
         // Remove "swap" keyword (case insensitive)
         cleaned = cleaned.replace(/swap/gi, '');
@@ -2852,11 +2938,10 @@ class HexGame {
         // Remove all non-alphanumeric characters
         cleaned = cleaned.replace(/[^a-zA-Z0-9]/g, '');
 
-        return cleaned;
+        return preamble + cleaned;
     }
 
-    stripVirtualPrefillIfPresent(cleanedMoves) {
-        const displaySize = this.validateBoardSize();
+    stripVirtualPrefillIfPresent(cleanedMoves, displaySize = this.validateBoardSize()) {
         const prefill = this.virtualBoardPrefillMoves[displaySize] || '';
         if (prefill && cleanedMoves.startsWith(prefill)) {
             return cleanedMoves.substring(prefill.length);
@@ -2875,20 +2960,33 @@ class HexGame {
             return { valid: false, error: 'Input cannot be empty or just whitespace' };
         }
 
+        const metadata = this.extractTrmphInputMetadata(trimmed);
+        if (metadata.error) {
+            return { valid: false, error: metadata.error };
+        }
+
         // Clean the input for validation purposes (remove numbers, swap, etc.)
         // We validate the *intent* (the moves), not the exact formatting
-        const cleaned = this.cleanInput(trimmed);
-        const cleanedForDisplayBoard = this.stripVirtualPrefillIfPresent(cleaned);
+        const cleaned = this.cleanInput(metadata.normalizedInput);
+        const bareCleanedMoves = this.stripTrmphPreamble(cleaned);
+        const cleanedForDisplayBoard = this.stripVirtualPrefillIfPresent(
+            bareCleanedMoves,
+            metadata.targetDisplayBoardSize,
+        );
 
         if (!cleanedForDisplayBoard) {
-            return { valid: true, error: null };
+            return {
+                valid: true,
+                error: null,
+                targetDisplayBoardSize: metadata.targetDisplayBoardSize,
+            };
         }
 
         // Check move count by parsing the TRMPH string properly
         // This handles moves of varying length (a1, b13, m12, etc.)
         try {
-            const moves = this.parseTrmphMoves(cleanedForDisplayBoard);
-            const boardSize = this.validateBoardSize();
+            const boardSize = metadata.targetDisplayBoardSize;
+            const moves = this.parseTrmphMoves(cleanedForDisplayBoard, boardSize);
             const maxMoves = boardSize * boardSize; // Complete game moves
             if (moves.length > maxMoves) {
                 return { valid: false, error: `[Frontend: Count] Too many moves (maximum ${maxMoves} moves for a complete game)` };
@@ -2898,7 +2996,7 @@ class HexGame {
         }
 
         // Validate TRMPH format dynamically based on board size
-        const boardSize = this.validateBoardSize();
+        const boardSize = metadata.targetDisplayBoardSize;
         const lastLetter = String.fromCharCode(96 + boardSize); // 'a' + boardSize - 1
         const lastNumber = boardSize;
 
@@ -2920,7 +3018,11 @@ class HexGame {
             };
         }
 
-        return { valid: true, error: null };
+        return {
+            valid: true,
+            error: null,
+            targetDisplayBoardSize: metadata.targetDisplayBoardSize,
+        };
     }
 
     async applyTrmphSequence() {
@@ -2943,6 +3045,14 @@ class HexGame {
         // Hide instruction text after moves are already present.
         this.hideInstructionText();
 
+        const requestedDisplayBoardSize = Number.isFinite(validation.targetDisplayBoardSize)
+            ? validation.targetDisplayBoardSize
+            : this.validateBoardSize();
+        const currentDisplayBoardSize = this.validateBoardSize();
+        const requestedBaseTrmph = requestedDisplayBoardSize === currentDisplayBoardSize
+            ? this.currentTRMPH
+            : '';
+
         this.cancelScheduledAutoMove();
         this.setLoading(true);
         try {
@@ -2950,10 +3060,10 @@ class HexGame {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    trmph: this.currentTRMPH,
+                    trmph: requestedBaseTrmph,
                     trmph_sequence: input,
                     elo_rating: this.validateEloRating(),
-                    display_board_size: this.validateBoardSize(),
+                    display_board_size: requestedDisplayBoardSize,
                     pie_rule_enabled: this.getPieRuleRequestEnabled()
                 })
             });
@@ -2968,6 +3078,26 @@ class HexGame {
             this.clearLocalGameResult();
             this.updatePositionEvaluationFromResponse(data);
             this.applyPieRuleStateFromResponse(data, false);
+
+            const responseDisplayBoardSize = parseInt(data.display_board_size, 10);
+            const nextDisplayBoardSize = Number.isFinite(responseDisplayBoardSize)
+                ? responseDisplayBoardSize
+                : requestedDisplayBoardSize;
+            const displayBoardSizeChanged = nextDisplayBoardSize !== this.displayBoardSize;
+            if (displayBoardSizeChanged) {
+                this.displayBoardSize = nextDisplayBoardSize;
+                if (this.boardSizeSelect) {
+                    this.boardSizeSelect.value = String(nextDisplayBoardSize);
+                }
+                localStorage.setItem('hex_ai_display_board_size', String(nextDisplayBoardSize));
+                this.configureHeatmapTopKBounds();
+                this.clearHeatmapData();
+                this.updateHeatmapControls();
+                this.updateInstructionTextForBoardMode();
+                this.clearCachedBoardRenderingState();
+                this.gameHistory = [];
+                this.redoHistory = [];
+            }
 
             this.recordReachedState(data.new_trmph, true);
             this.legalMoves = data.legal_moves || [];
