@@ -8,6 +8,7 @@ class UserSettingsPage {
         this.colorSchemeSelect = document.getElementById('color-scheme');
         this.pieceStyleSelect = document.getElementById('piece-style');
         this.openingGuideEnabledCheck = document.getElementById('opening-guide-enabled');
+        this.computerResignEnabledCheck = document.getElementById('computer-resign-enabled');
         this.resetDefaultsBtn = document.getElementById('reset-defaults-btn');
 
         this.defaultSettings = {
@@ -16,6 +17,7 @@ class UserSettingsPage {
             color_scheme: 'wood',
             piece_style: 'disc',
             opening_guide_enabled: false,
+            computer_resign_enabled: true,
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
@@ -32,6 +34,7 @@ class UserSettingsPage {
             colorScheme: 'hex_ai_color_scheme',
             pieceStyle: 'hex_ai_piece_style',
             openingGuideEnabled: 'hex_ai_opening_guide_enabled',
+            computerResignEnabled: 'hex_ai_computer_resign_enabled',
             darkMode: 'hex_ai_dark_mode',
         };
     }
@@ -43,7 +46,8 @@ class UserSettingsPage {
             !this.eloSlider ||
             !this.colorSchemeSelect ||
             !this.pieceStyleSelect ||
-            !this.openingGuideEnabledCheck
+            !this.openingGuideEnabledCheck ||
+            !this.computerResignEnabledCheck
         ) {
             console.error('Settings page is missing required elements');
             return;
@@ -68,6 +72,9 @@ class UserSettingsPage {
         window.addEventListener('storage', (event) => {
             if (event.key === this.storageKeys.darkMode) {
                 this.applySavedDarkModePreference();
+            }
+            if (event.key === this.storageKeys.computerResignEnabled && this.computerResignEnabledCheck) {
+                this.computerResignEnabledCheck.checked = this.normalizeComputerResignEnabled(event.newValue);
             }
         });
 
@@ -127,6 +134,7 @@ class UserSettingsPage {
         this.colorSchemeSelect.value = this.normalizeColorScheme(settings.color_scheme);
         this.pieceStyleSelect.value = this.normalizePieceStyle(settings.piece_style);
         this.openingGuideEnabledCheck.checked = this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled);
+        this.computerResignEnabledCheck.checked = this.normalizeComputerResignEnabled(settings.computer_resign_enabled);
         this.updateEloDisplay();
     }
 
@@ -137,6 +145,7 @@ class UserSettingsPage {
             color_scheme: this.normalizeColorScheme(this.colorSchemeSelect.value),
             piece_style: this.normalizePieceStyle(this.pieceStyleSelect.value),
             opening_guide_enabled: this.openingGuideEnabledCheck.checked,
+            computer_resign_enabled: this.computerResignEnabledCheck.checked,
         };
     }
 
@@ -154,6 +163,14 @@ class UserSettingsPage {
     }
 
     normalizeOpeningGuideEnabled(rawValue) {
+        return this.normalizeBooleanSetting(rawValue, this.defaultSettings.opening_guide_enabled);
+    }
+
+    normalizeComputerResignEnabled(rawValue) {
+        return this.normalizeBooleanSetting(rawValue, this.defaultSettings.computer_resign_enabled);
+    }
+
+    normalizeBooleanSetting(rawValue, fallbackValue) {
         if (typeof rawValue === 'boolean') {
             return rawValue;
         }
@@ -163,7 +180,7 @@ class UserSettingsPage {
         if (rawValue === 'false') {
             return false;
         }
-        return this.defaultSettings.opening_guide_enabled;
+        return fallbackValue;
     }
 
     applySavedDarkModePreference() {
@@ -184,6 +201,9 @@ class UserSettingsPage {
         const storedOpeningGuideEnabled = this.normalizeOpeningGuideEnabled(
             localStorage.getItem(this.storageKeys.openingGuideEnabled)
         );
+        const storedComputerResignEnabled = this.normalizeComputerResignEnabled(
+            localStorage.getItem(this.storageKeys.computerResignEnabled)
+        );
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
         const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
 
@@ -201,6 +221,7 @@ class UserSettingsPage {
                 ? storedPieceStyle
                 : this.defaultSettings.piece_style,
             opening_guide_enabled: storedOpeningGuideEnabled,
+            computer_resign_enabled: storedComputerResignEnabled,
         };
     }
 
@@ -236,6 +257,9 @@ class UserSettingsPage {
                 color_scheme: 'wood',
                 piece_style: 'disc',
                 opening_guide_enabled: false,
+                computer_resign_enabled: typeof payload.DEFAULT_COMPUTER_RESIGN_ENABLED === 'boolean'
+                    ? payload.DEFAULT_COMPUTER_RESIGN_ENABLED
+                    : true,
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
@@ -270,6 +294,7 @@ class UserSettingsPage {
                 color_scheme: this.normalizeColorScheme(settings.color_scheme),
                 piece_style: this.normalizePieceStyle(settings.piece_style),
                 opening_guide_enabled: this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled),
+                computer_resign_enabled: this.normalizeComputerResignEnabled(settings.computer_resign_enabled),
             };
 
             localStorage.setItem(this.storageKeys.preferredBoardSize, String(normalizedSettings.preferred_board_size));
@@ -277,6 +302,7 @@ class UserSettingsPage {
             localStorage.setItem(this.storageKeys.colorScheme, String(normalizedSettings.color_scheme));
             localStorage.setItem(this.storageKeys.pieceStyle, String(normalizedSettings.piece_style));
             localStorage.setItem(this.storageKeys.openingGuideEnabled, String(normalizedSettings.opening_guide_enabled));
+            localStorage.setItem(this.storageKeys.computerResignEnabled, String(normalizedSettings.computer_resign_enabled));
             this.applySettingsToForm(normalizedSettings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {

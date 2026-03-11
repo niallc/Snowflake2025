@@ -43,6 +43,7 @@ from hex_ai.web.small_board_opening_calibration import (
 )
 from hex_ai.web.gameplay_response import (
     apply_trmph_sequence_to_state,
+    build_position_evaluation_fields,
     build_engine_error_payload,
     build_engine_move_response,
     build_game_state_response,
@@ -285,6 +286,7 @@ def apply_display_mask_to_state(state: HexGameState, display_board_size: int) ->
 # =============================================================================
 
 DEFAULT_PIE_RULE_ENABLED = True
+DEFAULT_COMPUTER_RESIGN_ENABLED = True
 PIE_RULE_SWAP_ALPHA = 4.0
 PIE_RULE_FORCE_NO_SWAP_AT = 0.01
 PIE_RULE_FORCE_SWAP_AT = 0.99
@@ -772,6 +774,10 @@ def _build_pie_rule_opening_move_response(
             "pie_rule_opening_score_remap_applied": opening_choice[
                 "opening_score_remap_applied"
             ],
+            **_build_position_evaluation_fields_for_model_id(
+                state=new_state,
+                model_id=model_id,
+            ),
         },
     )
     result["mcts_config"] = mcts_config
@@ -827,6 +833,10 @@ def _build_pie_rule_swap_move_response(
                 pie_rule_enabled=pie_rule_enabled,
                 pie_decision=pie_decision,
                 pie_rule_action="swapped",
+            ),
+            **_build_position_evaluation_fields_for_model_id(
+                state=state,
+                model_id=model_id,
             ),
         },
     )
@@ -1598,6 +1608,22 @@ def build_move_response(
     )
 
 
+def _build_position_evaluation_fields_for_model_id(
+    state,
+    model_id,
+    *,
+    trmph_for_inference=None,
+):
+    """Evaluate the current position for the side to move using the selected model."""
+    inference_trmph = state.to_trmph() if trmph_for_inference is None else trmph_for_inference
+    model = get_model(model_id)
+    _, value_signed = model.simple_infer(inference_trmph)
+    return build_position_evaluation_fields(
+        value_signed=float(value_signed),
+        player_enum=state.current_player_enum,
+    )
+
+
 def _check_game_over_early_return(state, display_board_size):
     """Check if game is over and return early response if so."""
     if state.game_over:
@@ -1675,20 +1701,24 @@ def _execute_mcts_search(state, model_id, mcts_config):
     )
     return move
 
-def _apply_move_and_build_response(state, move, display_board_size):
+def _apply_move_and_build_response(state, move, display_board_size, model_id):
     """Apply the selected move and build the response."""
     selected_move_trmph = fc.rowcol_to_trmph(*move)
     app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
     
     # Apply the move
     app.logger.info(f"Applying move: {selected_move_trmph}")
-    state = apply_move_to_state_trmph(state, selected_move_trmph)
-    app.logger.info(f"Move applied. New state game_over: {state.game_over}")
+    new_state = apply_move_to_state_trmph(state, selected_move_trmph)
+    app.logger.info(f"Move applied. New state game_over: {new_state.game_over}")
     
     return build_move_response(
-        state,
+        new_state,
         display_board_size=display_board_size,
-        move_made=selected_move_trmph
+        move_made=selected_move_trmph,
+        additional_fields=_build_position_evaluation_fields_for_model_id(
+            state=new_state,
+            model_id=model_id,
+        ),
     )
 
 def _prepare_mcts_parameters(num_simulations, exploration_constant, temperature, temperature_end, enable_gumbel, gumbel_max_sims):
@@ -1719,7 +1749,7 @@ def _execute_mcts_move_workflow(state, model_id, mcts_params, display_board_size
     move = _execute_mcts_search(state, model_id, mcts_config)
     
     # Apply move and build response
-    return _apply_move_and_build_response(state, move, display_board_size)
+    return _apply_move_and_build_response(state, move, display_board_size, model_id)
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -1869,6 +1899,7 @@ def api_constants():
         "MIN_DISPLAY_BOARD_SIZE": MIN_DISPLAY_BOARD_SIZE,
         "VIRTUAL_BOARD_PREFILL_MOVES": VIRTUAL_BOARD_PREFILL_MOVES,
         "DEFAULT_PIE_RULE_ENABLED": DEFAULT_PIE_RULE_ENABLED,
+        "DEFAULT_COMPUTER_RESIGN_ENABLED": DEFAULT_COMPUTER_RESIGN_ENABLED,
         "PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13": PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13,
         "DIFFICULTY_LEVELS": get_difficulty_levels(),
         "ELO_CONFIG": {
@@ -2466,13 +2497,19 @@ def _execute_policy_move_from_validated_data(validated_data, inline_heatmap_opti
             new_state,
             display_board_size=display_board_size,
             move_made=move_trmph,
-            additional_fields=build_pie_rule_response_fields(
-                trmph=trmph,
-                state=state,
-                pie_rule_enabled=pie_rule_enabled,
-                pie_decision=pie_decision,
-                pie_rule_action="declined" if pie_decision else "none",
-            ),
+            additional_fields={
+                **build_pie_rule_response_fields(
+                    trmph=trmph,
+                    state=state,
+                    pie_rule_enabled=pie_rule_enabled,
+                    pie_decision=pie_decision,
+                    pie_rule_action="declined" if pie_decision else "none",
+                ),
+                **_build_position_evaluation_fields_for_model_id(
+                    state=new_state,
+                    model_id=model_id,
+                ),
+            },
         )
         
         # Add configuration to result for frontend verification

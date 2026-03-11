@@ -494,6 +494,110 @@ h1 {
   }
 }
 
+body.resign-modal-open {
+  overflow: hidden;
+}
+
+.resign-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--modal-overlay);
+}
+
+.resign-dialog {
+  position: relative;
+  width: min(100%, 420px);
+  background: var(--modal-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.resign-confetti {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 220px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.resign-confetti-piece {
+  position: absolute;
+  top: -18px;
+  width: 12px;
+  height: 24px;
+  border-radius: 4px;
+  opacity: 0;
+  animation-name: resign-confetti-fall;
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+}
+
+@keyframes resign-confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -24px, 0) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--confetti-drift, 0px), 260px, 0) rotate(var(--confetti-rotate, 540deg));
+  }
+}
+
+.resign-dialog-content {
+  position: relative;
+  padding: 44px 24px 24px;
+}
+
+.resign-dialog-content h2 {
+  margin: 0 0 12px;
+  font-size: clamp(2rem, 7vw, 2.7rem);
+  line-height: 1;
+}
+
+.resign-dialog-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.resign-checkbox-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+}
+
+.resign-checkbox-row input {
+  margin: 3px 0 0;
+}
+
+.resign-help {
+  margin-top: 12px !important;
+  color: var(--text-secondary);
+}
+
+.resign-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
 /* Removed redundant landscape fallback - handled by main landscape media query */
 
 /* SVG Board Sizing - Critical for Mobile Hexagonal Board */
@@ -975,6 +1079,26 @@ input[type="checkbox"] {
     bottom: 8px;
     width: auto;
     padding: 10px;
+  }
+
+  .resign-dialog-content {
+    padding: 38px 18px 18px;
+  }
+
+  .resign-dialog-actions {
+    justify-content: stretch;
+  }
+
+  .resign-dialog-actions .btn-primary,
+  .resign-dialog-actions .btn-secondary {
+    flex: 1 1 140px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resign-confetti-piece {
+    animation: none;
+    opacity: 0;
   }
 }
 

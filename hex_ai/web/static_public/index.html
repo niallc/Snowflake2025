@@ -135,6 +135,24 @@
       </div>
     </div>
   </div>
+  <div id="computer-resign-modal" class="resign-modal" hidden>
+    <div class="resign-dialog" role="dialog" aria-modal="true" aria-labelledby="computer-resign-title" aria-describedby="computer-resign-message">
+      <div id="computer-resign-confetti" class="resign-confetti" aria-hidden="true"></div>
+      <div class="resign-dialog-content">
+        <h2 id="computer-resign-title">I resign</h2>
+        <p id="computer-resign-message">The computer resigned this game.</p>
+        <label class="resign-checkbox-row" for="computer-resign-enabled-modal">
+          <input id="computer-resign-enabled-modal" type="checkbox" checked>
+          <span>Keep automatic computer resign enabled</span>
+        </label>
+        <p class="resign-help">You can turn this off later on the <a href="/settings">Settings page</a>.</p>
+        <div class="resign-dialog-actions">
+          <a href="/settings" class="btn-secondary">Settings</a>
+          <button id="computer-resign-close" type="button" class="btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="cookie-consent-banner" class="cookie-consent-banner" hidden role="region" aria-label="Cookie notice">
     <p>
       We use one optional cookie for basic usage analytics (rough active-user counts).

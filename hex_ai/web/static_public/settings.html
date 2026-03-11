@@ -60,6 +60,15 @@
         <p class="settings-help">When enabled, empty-board move-1 dots show weak/strong/balanced openings.</p>
       </div>
 
+      <div class="control-panel">
+        <h3>Computer Resign</h3>
+        <div class="player-row">
+          <label for="computer-resign-enabled">Allow automatic resign:</label>
+          <input id="computer-resign-enabled" type="checkbox">
+        </div>
+        <p class="settings-help">When enabled, the computer resigns instead of moving if its current win chance is below 5%.</p>
+      </div>
+
       <div class="settings-actions">
         <button type="submit" class="btn-primary">Save Settings</button>
         <button id="reset-defaults-btn" type="button" class="btn-secondary">Reset Defaults</button>

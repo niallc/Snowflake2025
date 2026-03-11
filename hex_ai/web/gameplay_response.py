@@ -14,6 +14,14 @@ def moves_to_trmph(moves):
     return [fc.rowcol_to_trmph(row, col) for row, col in moves]
 
 
+def build_position_evaluation_fields(*, value_signed: float, player_enum) -> dict[str, Any]:
+    """Build standardized value-head fields for the current player to move."""
+    return {
+        "value_signed": float(value_signed),
+        "win_probability": ValuePredictor.get_win_probability(float(value_signed), player_enum),
+    }
+
+
 def build_game_state_response(
     state,
     *,
@@ -45,8 +53,10 @@ def build_game_state_response(
             fc.tensor_to_trmph(index): float(probability)
             for index, probability in enumerate(policy_probs)
         },
-        "value_signed": float(value_signed),
-        "win_probability": ValuePredictor.get_win_probability(value_signed, player_enum),
+        **build_position_evaluation_fields(
+            value_signed=float(value_signed),
+            player_enum=player_enum,
+        ),
     }
 
     if additional_fields:

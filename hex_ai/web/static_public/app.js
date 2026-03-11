@@ -38,6 +38,15 @@ class HexGame {
         this.pieRuleCanSwap = false;
         this.pieRuleAction = 'none';
         this.pieRuleArmed = true;
+        this.computerResignEnabled = true;
+        this.defaultComputerResignEnabled = true;
+        this.computerResignThreshold = 0.05;
+        this.computerResignStorageKey = 'hex_ai_computer_resign_enabled';
+        this.currentPositionWinProbability = null;
+        this.currentPositionValueSigned = null;
+        this.localGameResult = null;
+        this.resignModalOpen = false;
+        this.lastFocusedElementBeforeResignModal = null;
         this.sessionStateStorageKey = 'hex_ai_session_state_v1';
         this.sessionStateVersion = 1;
         this.historyUtils = window.HexHistoryUtils;
@@ -70,6 +79,7 @@ class HexGame {
         this.initializeColorScheme();
         this.initializePieceStyle();
         this.initializeOpeningGuidePreference();
+        this.initializeComputerResignPreference();
         this.refreshThemeColors();
         this.loadGameConstants();
         this.updateHeatmapControls();
@@ -119,6 +129,11 @@ class HexGame {
         this.pieRulePlayer = document.getElementById('pie-rule-player');
         this.pieRulePlayerColor = document.getElementById('pie-rule-player-color');
         this.swapFlash = document.getElementById('swap-flash');
+        this.computerResignModal = document.getElementById('computer-resign-modal');
+        this.computerResignMessage = document.getElementById('computer-resign-message');
+        this.computerResignSettingsCheck = document.getElementById('computer-resign-enabled-modal');
+        this.computerResignCloseBtn = document.getElementById('computer-resign-close');
+        this.computerResignConfetti = document.getElementById('computer-resign-confetti');
     }
 
     initializeDifficultyDropdown() {
@@ -286,6 +301,38 @@ class HexGame {
             });
         }
 
+        if (this.computerResignSettingsCheck) {
+            this.computerResignSettingsCheck.addEventListener('change', (e) => {
+                this.setComputerResignEnabled(e.target.checked);
+            });
+        }
+
+        if (this.computerResignCloseBtn) {
+            this.computerResignCloseBtn.addEventListener('click', () => {
+                this.hideComputerResignModal();
+            });
+        }
+
+        if (this.computerResignModal) {
+            this.computerResignModal.addEventListener('click', (event) => {
+                if (event.target === this.computerResignModal) {
+                    this.hideComputerResignModal();
+                }
+            });
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && this.resignModalOpen) {
+                this.hideComputerResignModal();
+            }
+        });
+
+        window.addEventListener('storage', (event) => {
+            if (event.key === this.computerResignStorageKey) {
+                this.initializeComputerResignPreference();
+            }
+        });
+
         window.addEventListener('pagehide', () => {
             this.persistSessionState();
         });
@@ -395,6 +442,143 @@ class HexGame {
         }
         this.openingGuideEnabled = false;
         localStorage.setItem(this.openingGuideStorageKey, 'false');
+    }
+
+    initializeComputerResignPreference() {
+        const storedValue = localStorage.getItem(this.computerResignStorageKey);
+        if (storedValue === 'true' || storedValue === 'false') {
+            this.computerResignEnabled = storedValue === 'true';
+        } else {
+            this.computerResignEnabled = this.defaultComputerResignEnabled;
+            localStorage.setItem(this.computerResignStorageKey, String(this.computerResignEnabled));
+        }
+        this.syncComputerResignPreferenceUi();
+    }
+
+    setComputerResignEnabled(enabled, { persist = true } = {}) {
+        this.computerResignEnabled = Boolean(enabled);
+        if (persist) {
+            localStorage.setItem(this.computerResignStorageKey, String(this.computerResignEnabled));
+        }
+        this.syncComputerResignPreferenceUi();
+    }
+
+    syncComputerResignPreferenceUi() {
+        if (this.computerResignSettingsCheck) {
+            this.computerResignSettingsCheck.checked = this.computerResignEnabled;
+        }
+    }
+
+    updatePositionEvaluationFromResponse(data) {
+        const winProbability = Number(data?.win_probability);
+        const valueSigned = Number(data?.value_signed);
+        this.currentPositionWinProbability = Number.isFinite(winProbability) ? winProbability : null;
+        this.currentPositionValueSigned = Number.isFinite(valueSigned) ? valueSigned : null;
+    }
+
+    shouldComputerResignForCurrentPosition() {
+        return this.computerResignEnabled &&
+            !this.localGameResult &&
+            Number.isFinite(this.currentPositionWinProbability) &&
+            this.currentPositionWinProbability < this.computerResignThreshold;
+    }
+
+    clearLocalGameResult() {
+        this.localGameResult = null;
+        this.hideComputerResignModal({ restoreFocus: false });
+    }
+
+    formatWinProbability(probability) {
+        if (!Number.isFinite(probability)) {
+            return '0.0%';
+        }
+        if (window.HexHeatmap && typeof window.HexHeatmap.formatPercent === 'function') {
+            return window.HexHeatmap.formatPercent(probability);
+        }
+        return `${(probability * 100).toFixed(1)}%`;
+    }
+
+    populateComputerResignConfetti() {
+        if (!this.computerResignConfetti) {
+            return;
+        }
+        const colors = ['#ff6b6b', '#ffd166', '#29a7ff', '#7bd389', '#c77dff', '#ff9f1c'];
+        this.computerResignConfetti.innerHTML = '';
+        for (let i = 0; i < 24; i++) {
+            const piece = document.createElement('span');
+            piece.className = 'resign-confetti-piece';
+            piece.style.left = `${Math.random() * 100}%`;
+            piece.style.backgroundColor = colors[i % colors.length];
+            piece.style.setProperty('--confetti-drift', `${Math.round(Math.random() * 100 - 50)}px`);
+            piece.style.setProperty('--confetti-rotate', `${360 + Math.round(Math.random() * 420)}deg`);
+            piece.style.animationDelay = `${(Math.random() * 0.4).toFixed(2)}s`;
+            piece.style.animationDuration = `${(1.8 + Math.random() * 1.1).toFixed(2)}s`;
+            this.computerResignConfetti.appendChild(piece);
+        }
+    }
+
+    showComputerResignModal({ resigningPlayer, winner, winProbability }) {
+        if (!this.computerResignModal) {
+            return;
+        }
+        const resigningName = this.getPlayerDisplayName(resigningPlayer);
+        const winnerName = this.getPlayerDisplayName(winner);
+        if (this.computerResignMessage) {
+            this.computerResignMessage.textContent = `${resigningName} was only ${this.formatWinProbability(winProbability)} to win, so ${winnerName} wins by resignation. You can turn automatic resign off on the Settings page.`;
+        }
+        this.syncComputerResignPreferenceUi();
+        this.populateComputerResignConfetti();
+        this.lastFocusedElementBeforeResignModal = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        this.computerResignModal.hidden = false;
+        document.body.classList.add('resign-modal-open');
+        this.resignModalOpen = true;
+        if (this.computerResignCloseBtn) {
+            this.computerResignCloseBtn.focus();
+        }
+    }
+
+    hideComputerResignModal({ restoreFocus = true } = {}) {
+        if (!this.computerResignModal || this.computerResignModal.hidden) {
+            return;
+        }
+        this.computerResignModal.hidden = true;
+        document.body.classList.remove('resign-modal-open');
+        this.resignModalOpen = false;
+        if (this.computerResignConfetti) {
+            this.computerResignConfetti.innerHTML = '';
+        }
+        if (
+            restoreFocus &&
+            this.lastFocusedElementBeforeResignModal &&
+            typeof this.lastFocusedElementBeforeResignModal.focus === 'function'
+        ) {
+            this.lastFocusedElementBeforeResignModal.focus();
+        }
+        this.lastFocusedElementBeforeResignModal = null;
+    }
+
+    handleComputerResignation() {
+        const resigningPlayer = this.getCurrentPlayer();
+        const winner = resigningPlayer === 'blue' ? 'red' : 'blue';
+        this.cancelScheduledAutoMove();
+        this.hideInstructionText();
+        this.clearStatusLine();
+        this.localGameResult = {
+            reason: 'computer_resign',
+            resigningPlayer,
+            winner,
+            winProbability: this.currentPositionWinProbability,
+        };
+        this.updateLegalMovesHighlighting();
+        this.updateButtonStates();
+        this.showSuccess(`${this.getPlayerDisplayName(winner)} wins by resignation!`);
+        this.showComputerResignModal({
+            resigningPlayer,
+            winner,
+            winProbability: this.currentPositionWinProbability,
+        });
     }
 
     isDiscPieceStyle() {
@@ -1445,8 +1629,19 @@ class HexGame {
             } else {
                 this.pieRuleEnabled = backendPieDefault;
             }
+            this.defaultComputerResignEnabled = typeof data.DEFAULT_COMPUTER_RESIGN_ENABLED === 'boolean'
+                ? data.DEFAULT_COMPUTER_RESIGN_ENABLED
+                : true;
+            const savedComputerResign = localStorage.getItem(this.computerResignStorageKey);
+            if (savedComputerResign === 'true' || savedComputerResign === 'false') {
+                this.computerResignEnabled = savedComputerResign === 'true';
+            } else {
+                this.computerResignEnabled = this.defaultComputerResignEnabled;
+                localStorage.setItem(this.computerResignStorageKey, String(this.computerResignEnabled));
+            }
             const restoredSession = this.restoreSessionState(validSizes, this.minElo, this.maxElo);
             this.syncPlayerToggleInputs();
+            this.syncComputerResignPreferenceUi();
             this.updatePieRuleUi();
 
             // Update slider and display with backend values
@@ -1490,6 +1685,7 @@ class HexGame {
 
     async resetGame() {
         this.cancelScheduledAutoMove();
+        this.clearLocalGameResult();
         this.setLoading(true);
         try {
             this.currentTRMPH = "";
@@ -1518,6 +1714,7 @@ class HexGame {
         if (this.isLoading || this.gameHistory.length === 0) return;
 
         this.cancelScheduledAutoMove();
+        this.clearLocalGameResult();
         this.setLoading(true);
         try {
             if (!this.undoHistoryStep()) {
@@ -1544,8 +1741,13 @@ class HexGame {
     }
 
     async makeComputerMove() {
-        if (this.isLoading) return;
+        if (this.isLoading || this.localGameResult) return;
         this.autoMoveTimeoutId = null;
+
+        if (this.shouldComputerResignForCurrentPosition()) {
+            this.handleComputerResignation();
+            return;
+        }
 
         // Hide instruction text since computer is making a move
         this.hideInstructionText();
@@ -1567,6 +1769,8 @@ class HexGame {
             const data = await response.json();
 
             if (data.success) {
+                this.clearLocalGameResult();
+                this.updatePositionEvaluationFromResponse(data);
                 this.applyPieRuleStateFromResponse(data, true);
 
                 // Log the MCTS configuration that was actually used
@@ -1619,11 +1823,17 @@ class HexGame {
     }
 
     shouldMakeComputerMove(currentPlayer) {
+        if (this.localGameResult) {
+            return false;
+        }
         return (currentPlayer === 'blue' && this.blueComputer) ||
             (currentPlayer === 'red' && this.redComputer);
     }
 
     scheduleAutoMove() {
+        if (this.localGameResult) {
+            return;
+        }
         this.cancelScheduledAutoMove();
         this.autoMoveTimeoutId = setTimeout(() => {
             this.autoMoveTimeoutId = null;
@@ -1669,6 +1879,8 @@ class HexGame {
                 return;
             }
 
+            this.clearLocalGameResult();
+            this.updatePositionEvaluationFromResponse(data);
             this.applyPieRuleStateFromResponse(data, false);
 
             // Store legal moves for move validation
@@ -2223,7 +2435,7 @@ class HexGame {
     // =============================================================================
 
     async onCellClick(e) {
-        if (this.isLoading) {
+        if (this.isLoading || this.localGameResult) {
             console.log('Loading, ignoring click');
             return;
         }
@@ -2265,6 +2477,8 @@ class HexGame {
 
             // Clear transient status messages once a user move is accepted.
             this.clearStatusLine();
+            this.clearLocalGameResult();
+            this.updatePositionEvaluationFromResponse(data);
             this.applyPieRuleStateFromResponse(data, false);
 
             this.recordReachedState(data.new_trmph, true);
@@ -2290,6 +2504,9 @@ class HexGame {
 
     isLegalMove(row, col) {
         // Check if this move is legal using the legal moves from the API
+        if (this.localGameResult) {
+            return false;
+        }
         if (!this.legalMoves) {
             console.log('No legal moves available');
             return false;
@@ -2387,7 +2604,7 @@ class HexGame {
 
     setLoading(loading) {
         this.isLoading = loading;
-        this.computerMoveBtn.disabled = loading;
+        this.computerMoveBtn.disabled = loading || Boolean(this.localGameResult);
         this.resetBtn.disabled = loading;
         this.undoBtn.disabled = loading;
         this.redoBtn.disabled = loading;
@@ -2397,6 +2614,7 @@ class HexGame {
     }
 
     updateButtonStates() {
+        this.computerMoveBtn.disabled = this.isLoading || Boolean(this.localGameResult);
         // Update undo button state
         this.undoBtn.disabled = this.isLoading || this.gameHistory.length === 0;
 
@@ -2467,6 +2685,7 @@ class HexGame {
         if (this.isLoading || this.redoHistory.length === 0) return;
 
         this.cancelScheduledAutoMove();
+        this.clearLocalGameResult();
         this.setLoading(true);
         try {
             if (!this.redoHistoryStep()) {
@@ -2713,6 +2932,8 @@ class HexGame {
                 return;
             }
 
+            this.clearLocalGameResult();
+            this.updatePositionEvaluationFromResponse(data);
             this.applyPieRuleStateFromResponse(data, false);
 
             this.recordReachedState(data.new_trmph, true);
