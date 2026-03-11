@@ -498,6 +498,10 @@ body.resign-modal-open {
   overflow: hidden;
 }
 
+.resign-modal[hidden] {
+  display: none;
+}
+
 .resign-modal {
   position: fixed;
   inset: 0;

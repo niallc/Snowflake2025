@@ -9,6 +9,7 @@ class UserSettingsPage {
         this.pieceStyleSelect = document.getElementById('piece-style');
         this.openingGuideEnabledCheck = document.getElementById('opening-guide-enabled');
         this.computerResignEnabledCheck = document.getElementById('computer-resign-enabled');
+        this.computerResignMinMoveInput = document.getElementById('computer-resign-min-move');
         this.resetDefaultsBtn = document.getElementById('reset-defaults-btn');
 
         this.defaultSettings = {
@@ -18,6 +19,7 @@ class UserSettingsPage {
             piece_style: 'disc',
             opening_guide_enabled: false,
             computer_resign_enabled: true,
+            computer_resign_min_move: 15,
         };
         this.colorSchemeOptions = [
             { value: 'wood', label: 'Soft Wood (Black/White Pieces)' },
@@ -35,6 +37,7 @@ class UserSettingsPage {
             pieceStyle: 'hex_ai_piece_style',
             openingGuideEnabled: 'hex_ai_opening_guide_enabled',
             computerResignEnabled: 'hex_ai_computer_resign_enabled',
+            computerResignMinMove: 'hex_ai_computer_resign_min_move',
             darkMode: 'hex_ai_dark_mode',
         };
     }
@@ -47,7 +50,8 @@ class UserSettingsPage {
             !this.colorSchemeSelect ||
             !this.pieceStyleSelect ||
             !this.openingGuideEnabledCheck ||
-            !this.computerResignEnabledCheck
+            !this.computerResignEnabledCheck ||
+            !this.computerResignMinMoveInput
         ) {
             console.error('Settings page is missing required elements');
             return;
@@ -75,6 +79,11 @@ class UserSettingsPage {
             }
             if (event.key === this.storageKeys.computerResignEnabled && this.computerResignEnabledCheck) {
                 this.computerResignEnabledCheck.checked = this.normalizeComputerResignEnabled(event.newValue);
+            }
+            if (event.key === this.storageKeys.computerResignMinMove && this.computerResignMinMoveInput) {
+                this.computerResignMinMoveInput.value = String(
+                    this.normalizeComputerResignMinMove(event.newValue)
+                );
             }
         });
 
@@ -135,6 +144,9 @@ class UserSettingsPage {
         this.pieceStyleSelect.value = this.normalizePieceStyle(settings.piece_style);
         this.openingGuideEnabledCheck.checked = this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled);
         this.computerResignEnabledCheck.checked = this.normalizeComputerResignEnabled(settings.computer_resign_enabled);
+        this.computerResignMinMoveInput.value = String(
+            this.normalizeComputerResignMinMove(settings.computer_resign_min_move)
+        );
         this.updateEloDisplay();
     }
 
@@ -146,6 +158,7 @@ class UserSettingsPage {
             piece_style: this.normalizePieceStyle(this.pieceStyleSelect.value),
             opening_guide_enabled: this.openingGuideEnabledCheck.checked,
             computer_resign_enabled: this.computerResignEnabledCheck.checked,
+            computer_resign_min_move: this.normalizeComputerResignMinMove(this.computerResignMinMoveInput.value),
         };
     }
 
@@ -168,6 +181,14 @@ class UserSettingsPage {
 
     normalizeComputerResignEnabled(rawValue) {
         return this.normalizeBooleanSetting(rawValue, this.defaultSettings.computer_resign_enabled);
+    }
+
+    normalizeComputerResignMinMove(rawValue) {
+        const parsed = parseInt(rawValue, 10);
+        if (!Number.isFinite(parsed)) {
+            return this.defaultSettings.computer_resign_min_move;
+        }
+        return Math.max(1, parsed);
     }
 
     normalizeBooleanSetting(rawValue, fallbackValue) {
@@ -204,6 +225,9 @@ class UserSettingsPage {
         const storedComputerResignEnabled = this.normalizeComputerResignEnabled(
             localStorage.getItem(this.storageKeys.computerResignEnabled)
         );
+        const storedComputerResignMinMove = this.normalizeComputerResignMinMove(
+            localStorage.getItem(this.storageKeys.computerResignMinMove)
+        );
         const allowedSchemes = new Set(this.colorSchemeOptions.map((option) => option.value));
         const allowedStyles = new Set(this.pieceStyleOptions.map((option) => option.value));
 
@@ -222,6 +246,7 @@ class UserSettingsPage {
                 : this.defaultSettings.piece_style,
             opening_guide_enabled: storedOpeningGuideEnabled,
             computer_resign_enabled: storedComputerResignEnabled,
+            computer_resign_min_move: storedComputerResignMinMove,
         };
     }
 
@@ -237,6 +262,7 @@ class UserSettingsPage {
             const boardOptions = Array.isArray(payload.DISPLAY_BOARD_SIZE_OPTIONS)
                 ? payload.DISPLAY_BOARD_SIZE_OPTIONS
                 : [13];
+            const maxResignMove = Math.max(...boardOptions, 13) ** 2;
             const eloConfig = payload.ELO_CONFIG || {};
             const minElo = Number.isFinite(parseInt(eloConfig.MIN_ELO, 10))
                 ? parseInt(eloConfig.MIN_ELO, 10)
@@ -260,6 +286,9 @@ class UserSettingsPage {
                 computer_resign_enabled: typeof payload.DEFAULT_COMPUTER_RESIGN_ENABLED === 'boolean'
                     ? payload.DEFAULT_COMPUTER_RESIGN_ENABLED
                     : true,
+                computer_resign_min_move: Number.isFinite(parseInt(payload.DEFAULT_COMPUTER_RESIGN_MIN_MOVE, 10))
+                    ? Math.max(1, parseInt(payload.DEFAULT_COMPUTER_RESIGN_MIN_MOVE, 10))
+                    : 15,
             };
             const settings = this.getValidatedStoredSettings(boardOptions, minElo, maxElo);
 
@@ -268,6 +297,8 @@ class UserSettingsPage {
             this.populatePieceStyleOptions(this.pieceStyleOptions);
             this.eloSlider.min = String(minElo);
             this.eloSlider.max = String(maxElo);
+            this.computerResignMinMoveInput.min = '1';
+            this.computerResignMinMoveInput.max = String(maxResignMove);
             this.applySettingsToForm(settings);
 
             this.setStatus('Settings loaded.');
@@ -280,6 +311,8 @@ class UserSettingsPage {
             this.populatePieceStyleOptions(this.pieceStyleOptions);
             this.eloSlider.min = '1';
             this.eloSlider.max = '2350';
+            this.computerResignMinMoveInput.min = '1';
+            this.computerResignMinMoveInput.max = '169';
             this.applySettingsToForm(this.defaultSettings);
             this.setStatus('Could not load server defaults. Using local fallback values.', 'error');
         }
@@ -295,6 +328,7 @@ class UserSettingsPage {
                 piece_style: this.normalizePieceStyle(settings.piece_style),
                 opening_guide_enabled: this.normalizeOpeningGuideEnabled(settings.opening_guide_enabled),
                 computer_resign_enabled: this.normalizeComputerResignEnabled(settings.computer_resign_enabled),
+                computer_resign_min_move: this.normalizeComputerResignMinMove(settings.computer_resign_min_move),
             };
 
             localStorage.setItem(this.storageKeys.preferredBoardSize, String(normalizedSettings.preferred_board_size));
@@ -303,6 +337,7 @@ class UserSettingsPage {
             localStorage.setItem(this.storageKeys.pieceStyle, String(normalizedSettings.piece_style));
             localStorage.setItem(this.storageKeys.openingGuideEnabled, String(normalizedSettings.opening_guide_enabled));
             localStorage.setItem(this.storageKeys.computerResignEnabled, String(normalizedSettings.computer_resign_enabled));
+            localStorage.setItem(this.storageKeys.computerResignMinMove, String(normalizedSettings.computer_resign_min_move));
             this.applySettingsToForm(normalizedSettings);
             this.setStatus('Settings saved.', 'success');
         } catch (error) {

@@ -40,8 +40,11 @@ class HexGame {
         this.pieRuleArmed = true;
         this.computerResignEnabled = true;
         this.defaultComputerResignEnabled = true;
+        this.computerResignMinMove = 15;
+        this.defaultComputerResignMinMove = 15;
         this.computerResignThreshold = 0.05;
         this.computerResignStorageKey = 'hex_ai_computer_resign_enabled';
+        this.computerResignMinMoveStorageKey = 'hex_ai_computer_resign_min_move';
         this.currentPositionWinProbability = null;
         this.currentPositionValueSigned = null;
         this.localGameResult = null;
@@ -328,7 +331,10 @@ class HexGame {
         });
 
         window.addEventListener('storage', (event) => {
-            if (event.key === this.computerResignStorageKey) {
+            if (
+                event.key === this.computerResignStorageKey ||
+                event.key === this.computerResignMinMoveStorageKey
+            ) {
                 this.initializeComputerResignPreference();
             }
         });
@@ -445,13 +451,19 @@ class HexGame {
     }
 
     initializeComputerResignPreference() {
-        const storedValue = localStorage.getItem(this.computerResignStorageKey);
-        if (storedValue === 'true' || storedValue === 'false') {
-            this.computerResignEnabled = storedValue === 'true';
+        const storedEnabledValue = localStorage.getItem(this.computerResignStorageKey);
+        if (storedEnabledValue === 'true' || storedEnabledValue === 'false') {
+            this.computerResignEnabled = storedEnabledValue === 'true';
         } else {
             this.computerResignEnabled = this.defaultComputerResignEnabled;
             localStorage.setItem(this.computerResignStorageKey, String(this.computerResignEnabled));
         }
+        const storedMinMoveValue = localStorage.getItem(this.computerResignMinMoveStorageKey);
+        this.computerResignMinMove = this.normalizeComputerResignMinMove(
+            storedMinMoveValue,
+            this.defaultComputerResignMinMove
+        );
+        localStorage.setItem(this.computerResignMinMoveStorageKey, String(this.computerResignMinMove));
         this.syncComputerResignPreferenceUi();
     }
 
@@ -469,6 +481,14 @@ class HexGame {
         }
     }
 
+    normalizeComputerResignMinMove(rawValue, fallbackValue = this.defaultComputerResignMinMove) {
+        const parsed = parseInt(rawValue, 10);
+        if (!Number.isFinite(parsed)) {
+            return fallbackValue;
+        }
+        return Math.max(1, parsed);
+    }
+
     updatePositionEvaluationFromResponse(data) {
         const winProbability = Number(data?.win_probability);
         const valueSigned = Number(data?.value_signed);
@@ -479,6 +499,7 @@ class HexGame {
     shouldComputerResignForCurrentPosition() {
         return this.computerResignEnabled &&
             !this.localGameResult &&
+            this.getUpcomingMoveNumber() >= this.computerResignMinMove &&
             Number.isFinite(this.currentPositionWinProbability) &&
             this.currentPositionWinProbability < this.computerResignThreshold;
     }
@@ -1632,6 +1653,9 @@ class HexGame {
             this.defaultComputerResignEnabled = typeof data.DEFAULT_COMPUTER_RESIGN_ENABLED === 'boolean'
                 ? data.DEFAULT_COMPUTER_RESIGN_ENABLED
                 : true;
+            this.defaultComputerResignMinMove = Number.isFinite(parseInt(data.DEFAULT_COMPUTER_RESIGN_MIN_MOVE, 10))
+                ? Math.max(1, parseInt(data.DEFAULT_COMPUTER_RESIGN_MIN_MOVE, 10))
+                : 15;
             const savedComputerResign = localStorage.getItem(this.computerResignStorageKey);
             if (savedComputerResign === 'true' || savedComputerResign === 'false') {
                 this.computerResignEnabled = savedComputerResign === 'true';
@@ -1639,6 +1663,11 @@ class HexGame {
                 this.computerResignEnabled = this.defaultComputerResignEnabled;
                 localStorage.setItem(this.computerResignStorageKey, String(this.computerResignEnabled));
             }
+            this.computerResignMinMove = this.normalizeComputerResignMinMove(
+                localStorage.getItem(this.computerResignMinMoveStorageKey),
+                this.defaultComputerResignMinMove
+            );
+            localStorage.setItem(this.computerResignMinMoveStorageKey, String(this.computerResignMinMove));
             const restoredSession = this.restoreSessionState(validSizes, this.minElo, this.maxElo);
             this.syncPlayerToggleInputs();
             this.syncComputerResignPreferenceUi();
@@ -2540,6 +2569,10 @@ class HexGame {
     getCurrentPlayer() {
         // Internal turn order: even moves = blue, odd moves = red.
         return this.moveCount % 2 === 0 ? 'blue' : 'red';
+    }
+
+    getUpcomingMoveNumber() {
+        return this.moveCount + 1;
     }
 
     rowColToTRMPH(row, col) {
