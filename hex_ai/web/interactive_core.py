@@ -10,6 +10,58 @@ import hex_ai.utils.format_conversion as fc
 from hex_ai.inference.game_engine import HexGameState
 
 
+def _compact_game_record_snippet(text: str, *, max_len: int = 24) -> str:
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if len(normalized) <= max_len:
+        return normalized
+    return f"{normalized[:max_len - 3]}..."
+
+
+def _quote_game_record_snippet(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _format_unexpected_game_record_token(token: str, after: str) -> str:
+    token_snippet = _compact_game_record_snippet(token) or "end of input"
+    after_snippet = _compact_game_record_snippet(after)
+    if after_snippet:
+        return (
+            "Couldn't understand the game record. "
+            f"I received unexpected token {_quote_game_record_snippet(token_snippet)} "
+            f"after {_quote_game_record_snippet(after_snippet)}."
+        )
+    return (
+        "Couldn't understand the game record. "
+        f"I received unexpected token {_quote_game_record_snippet(token_snippet)} "
+        "at the start of the record."
+    )
+
+
+def _format_unexpected_game_record_token_at_position(record: str, position: int) -> str:
+    start = max(0, min(len(record), int(position)))
+    remainder = record[start:]
+    token_match = re.match(r"[A-Za-z0-9]+", remainder)
+    token = token_match.group(0) if token_match else (remainder[:1] or "end of input")
+    after = record[:start]
+    return _format_unexpected_game_record_token(token, after)
+
+
+def _split_trmph_moves_for_validation(bare_moves: str) -> list[str]:
+    moves = []
+    i = 0
+    while i < len(bare_moves):
+        if bare_moves[i] not in string.ascii_lowercase:
+            raise ValueError(_format_unexpected_game_record_token_at_position(bare_moves, i))
+        j = i + 1
+        while j < len(bare_moves) and bare_moves[j].isdigit():
+            j += 1
+        if j == i + 1:
+            raise ValueError(_format_unexpected_game_record_token_at_position(bare_moves, i))
+        moves.append(bare_moves[i:j])
+        i = j
+    return moves
+
+
 def build_whitelisted_trmph_url_prefixes(
     *,
     board_size: int | None = None,
@@ -88,31 +140,33 @@ def validate_trmph_input(trmph_string, *, board_size: int):
     if not trmph_string:
         return True, None
 
-    max_col = string.ascii_lowercase[board_size - 1]
-    if board_size <= 9:
-        number_pattern = f"[1-{board_size}]"
-    else:
-        number_pattern = f"(1[0-{board_size % 10}]|[1-9])"
+    prefix = f"#{board_size},"
+    if trmph_string.startswith("#") and not trmph_string.startswith(prefix):
+        invalid_prefix = trmph_string.split(",", 1)[0]
+        if "," in trmph_string:
+            invalid_prefix += ","
+        return False, _format_unexpected_game_record_token(invalid_prefix, "")
 
-    trmph_pattern_with_prefix = re.compile(f"^#{board_size},([a-{max_col}]{number_pattern})+$")
-    trmph_pattern_without_prefix = re.compile(f"^([a-{max_col}]{number_pattern})+$")
-
-    if not (trmph_pattern_with_prefix.match(trmph_string) or trmph_pattern_without_prefix.match(trmph_string)):
-        return (
-            False,
-            f"Invalid TRMPH format. Only letters a-{max_col} followed by numbers 1-{board_size} "
-            f"are allowed (e.g., a1b2c3 or #{board_size},a1b2c3)",
-        )
+    bare_moves = trmph_string[len(prefix):] if trmph_string.startswith(prefix) else trmph_string
+    if not bare_moves:
+        return True, None
 
     try:
-        prefix = f"#{board_size},"
-        bare_moves = trmph_string[len(prefix):] if trmph_string.startswith(prefix) else trmph_string
-        moves = fc.split_trmph_moves(bare_moves)
-        max_moves = board_size * board_size
-        if len(moves) > max_moves:
-            return False, f"Too many moves (maximum {max_moves} moves for a complete game)"
+        moves = _split_trmph_moves_for_validation(bare_moves)
     except ValueError as exc:
-        return False, f"Invalid TRMPH format: {exc}"
+        return False, str(exc)
+
+    max_moves = board_size * board_size
+    if len(moves) > max_moves:
+        return False, f"Too many moves (maximum {max_moves} moves for a complete game)"
+
+    parsed_prefix = ""
+    for move in moves:
+        try:
+            fc.trmph_move_to_rowcol(move, board_size=board_size)
+        except ValueError:
+            return False, _format_unexpected_game_record_token(move, parsed_prefix)
+        parsed_prefix += move
 
     return True, None
 
@@ -220,7 +274,9 @@ def validate_api_input(
                 validator = lambda value: validate_trmph_input(value, board_size=13)
             is_valid, error_msg = validator(normalized_input)
             if not is_valid:
-                return False, f"Invalid {field} [DEBUG-CHECK]: {error_msg}", None
+                if field in {"trmph", "trmph_sequence"}:
+                    return False, error_msg, None
+                return False, f"Invalid {field}: {error_msg}", None
 
             try:
                 if (

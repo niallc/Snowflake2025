@@ -2832,11 +2832,14 @@ class HexGame {
         let i = 0;
         while (i < bareMoves.length) {
             if (!letters.includes(bareMoves[i])) {
-                throw new Error(`Expected letter at position ${i} in ${bareMoves}`);
+                throw new Error(this.formatUnexpectedGameRecordTokenAtPosition(bareMoves, i));
             }
             let j = i + 1;
             while (j < bareMoves.length && /\d/.test(bareMoves[j])) {
                 j++;
+            }
+            if (j === i + 1) {
+                throw new Error(this.formatUnexpectedGameRecordTokenAtPosition(bareMoves, i));
             }
             moves.push(bareMoves.substring(i, j));
             i = j;
@@ -2851,6 +2854,51 @@ class HexGame {
             return normalized;
         }
         return normalized.substring(preambleMatch[0].length);
+    }
+
+    compactGameRecordSnippet(text, maxLen = 24) {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        if (normalized.length <= maxLen) {
+            return normalized;
+        }
+        return `${normalized.slice(0, maxLen - 3)}...`;
+    }
+
+    quoteGameRecordSnippet(text) {
+        return `"${String(text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+
+    formatUnexpectedGameRecordToken(token, after) {
+        const tokenSnippet = this.compactGameRecordSnippet(token) || 'end of input';
+        const afterSnippet = this.compactGameRecordSnippet(after);
+        if (afterSnippet) {
+            return `Couldn't understand the game record. I received unexpected token ${this.quoteGameRecordSnippet(tokenSnippet)} after ${this.quoteGameRecordSnippet(afterSnippet)}.`;
+        }
+        return `Couldn't understand the game record. I received unexpected token ${this.quoteGameRecordSnippet(tokenSnippet)} at the start of the record.`;
+    }
+
+    formatUnexpectedGameRecordTokenAtPosition(record, position) {
+        const normalizedRecord = typeof record === 'string' ? record : '';
+        const start = Math.max(0, Math.min(normalizedRecord.length, Number(position) || 0));
+        const remainder = normalizedRecord.slice(start);
+        const tokenMatch = remainder.match(/^[A-Za-z0-9]+/);
+        const token = tokenMatch ? tokenMatch[0] : (remainder.charAt(0) || 'end of input');
+        return this.formatUnexpectedGameRecordToken(token, normalizedRecord.slice(0, start));
+    }
+
+    validateParsedTrmphMove(move, boardSize, afterMoves = '') {
+        const normalizedMove = typeof move === 'string' ? move : '';
+        const letters = 'abcdefghijklmnopqrstuvwxyz'.substring(0, boardSize);
+        if (normalizedMove.length < 2 || normalizedMove.length > 4) {
+            throw new Error(this.formatUnexpectedGameRecordToken(normalizedMove, afterMoves));
+        }
+
+        const letter = normalizedMove[0].toLowerCase();
+        const numberText = normalizedMove.slice(1);
+        const number = parseInt(numberText, 10);
+        if (!letters.includes(letter) || !/^\d+$/.test(numberText) || !Number.isFinite(number) || number < 1 || number > boardSize) {
+            throw new Error(this.formatUnexpectedGameRecordToken(normalizedMove, afterMoves));
+        }
     }
 
     getAllowedTrmphUrlPrefixes() {
@@ -2932,8 +2980,10 @@ class HexGame {
         // Remove move numbers (e.g. "1.", "12.")
         let cleaned = working.replace(/\b\d+\./g, '');
 
-        // Remove "swap" keyword (case insensitive)
-        cleaned = cleaned.replace(/swap/gi, '');
+        // Remove copy-paste wrapper words and non-move markers.
+        cleaned = cleaned.replace(/\bmoves\b/gi, '');
+        cleaned = cleaned.replace(/\bswap\b/gi, '');
+        cleaned = cleaned.replace(/\bresign\b/gi, '');
 
         // Remove all non-alphanumeric characters
         cleaned = cleaned.replace(/[^a-zA-Z0-9]/g, '');
@@ -2991,31 +3041,13 @@ class HexGame {
             if (moves.length > maxMoves) {
                 return { valid: false, error: `[Frontend: Count] Too many moves (maximum ${maxMoves} moves for a complete game)` };
             }
+            let parsedPrefix = '';
+            for (const move of moves) {
+                this.validateParsedTrmphMove(move, boardSize, parsedPrefix);
+                parsedPrefix += move;
+            }
         } catch (error) {
-            return { valid: false, error: `[Frontend: Parse] Invalid TRMPH format: ${error.message}` };
-        }
-
-        // Validate TRMPH format dynamically based on board size
-        const boardSize = metadata.targetDisplayBoardSize;
-        const lastLetter = String.fromCharCode(96 + boardSize); // 'a' + boardSize - 1
-        const lastNumber = boardSize;
-
-        let numberPattern;
-        if (boardSize <= 9) {
-            numberPattern = `[1-${lastNumber}]`;
-        } else {
-            numberPattern = `(1[0-${lastNumber % 10}]|[1-9])`;
-        }
-
-        // Regex check on the CLEANED input
-        // Note: We use case-insensitive flag 'i' here to allow "A1" to pass validation
-        // The backend will normalize it to lowercase
-        const trmphRegex = new RegExp(`^([a-${lastLetter}]${numberPattern})+$`, 'i');
-        if (!trmphRegex.test(cleanedForDisplayBoard)) {
-            return {
-                valid: false,
-                error: `[Frontend: Regex] Invalid format. Only letters a-${lastLetter} followed by numbers 1-${lastNumber} are allowed (e.g., a1b2c3)`
-            };
+            return { valid: false, error: error.message || 'Could not understand the game record.' };
         }
 
         return {

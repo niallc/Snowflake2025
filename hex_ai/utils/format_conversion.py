@@ -327,8 +327,10 @@ def normalize_game_input(text: str, board_size: int = BOARD_SIZE) -> str:
     except ValueError:
         pass
 
-    # Remove "swap" keyword
-    clean_text = re.sub(r'swap', '', text, flags=re.IGNORECASE)
+    # Remove copy-paste wrapper words and non-move markers
+    clean_text = re.sub(r'\bmoves\b', '', text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'\bswap\b', '', clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'\bresign\b', '', clean_text, flags=re.IGNORECASE)
     
     # Remove move numbers (e.g. "1.", "10.")
     clean_text = re.sub(r'\b\d+\.', '', clean_text)
@@ -359,16 +361,5 @@ def normalize_game_input(text: str, board_size: int = BOARD_SIZE) -> str:
             # If parsing fails, return original cleaned text and let validation handle it
             logger.warning(f"Failed to transpose swap moves: {e}")
             
-    # Strict Validation
-    if clean_text and not clean_text.isalnum():
-        raise ValueError("Invalid format: Input contains characters other than letters and numbers.")
-
-    if clean_text and not any(c.isdigit() for c in clean_text):
-         raise ValueError("Invalid format: Input must contain move numbers (e.g. a3).")
-         
-    if clean_text:
-        if not re.match(r'^([a-zA-Z]\d+)+$', clean_text):
-             raise ValueError("Invalid format: Input does not look like a sequence of moves (e.g. a3e6).")
-
     # Convert to lowercase to ensure consistency with TRMPH format (e.g. a3, not A3)
     return clean_text.lower()
