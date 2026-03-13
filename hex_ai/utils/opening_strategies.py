@@ -19,8 +19,9 @@ PIE_RULE_VALUE_BALANCED_MIN_MOVE_PROBABILITY = 0.0003  # 0.03%
 PIE_RULE_VALUE_BALANCED_CYCLE_LENGTH = 10_000
 PIE_RULE_VALUE_BALANCED_SHUFFLE_SEED = 20260226
 
-# Rounded first-move Blue win probabilities from the value network (13x13),
-# captured from checkpoints/hyperparameter_tuning/pipeline_20260310_060618/epoch181_mini12.pt.gz.
+# Rounded first-move Blue win probabilities from the current 13x13 value
+# network, captured from
+# checkpoints/hyperparameter_tuning/pipeline_20260310_060618/epoch181_mini12.pt.gz.
 # Rounded to 3 significant figures to keep tuning simple and avoid overfitting to noisy precision.
 PIE_RULE_VALUE_BALANCED_OPENING_WIN_RATES_13X13: Dict[str, float] = {
     "a1": 0.271,     "a2": 0.450,     "a3": 0.455,     "a4": 0.624,     "a5": 0.680,

@@ -88,7 +88,7 @@ def extract_games_from_file(file_path: Path) -> List[str]:
     with open(file_path, 'r') as f:
         for line in f:
             line = line.strip()
-            # Game lines start with #13, (board size + format)
+            # Current training-corpus game lines start with #13, (board size + format)
             # Header lines start with just # (metadata)
             if line and line.startswith('#13,'):
                 # Remove any inline comments (everything after # that's not part of the game)

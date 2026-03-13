@@ -1,6 +1,6 @@
-# Value Head Specification (Current)
+# Value Head Specification
 
-**Last updated:** 2026-02-16
+**Last updated:** 2026-03-13
 
 ## Overview
 
@@ -10,31 +10,59 @@ The value head predicts a **signed value** in `[-1, 1]` from the board state.
 - `-1` means certain **Blue** win
 - `0` means neutral
 
-The model output is `value_signed` (not a probability). Convert to probability only when needed.
+The model output is `value_signed`, not a probability.
 
-## Output Contract
+## Current runtime contract
 
-Model forward returns:
+The family-standard board API is:
 
-- `policy_logits`: shape `(B, BOARD_SIZE*BOARD_SIZE)`
+- `model.forward_from_boards(boards, move_stage=None, batch_idx=None)`
+- `model.forward_value_only_from_boards(boards, move_stage=None)`
+
+The helper boundary used by training/inference is:
+
+- `hex_ai.model_interface.forward_model(...)`
+- `hex_ai.model_interface.forward_value_only_model(...)`
+
+Forward returns:
+
+- `policy_logits`: shape `(B, board_area)`
 - `value_signed`: shape `(B, 1)`, tanh-activated, in `[-1, 1]`
 
-## Architecture
+For current models, `board_area = BOARD_SIZE * BOARD_SIZE` for the configured
+runtime board size.
 
-Current architecture uses a KataGo-inspired value head:
+## Current architecture
 
-- trunk feature preprocessing (`1x1 conv + BN + ReLU`)
+The current value head in `hex_ai/models.py` uses:
+
+- trunk feature preprocessing via `1x1 conv + BN + ReLU`
 - global average pooling
-- concatenation with normalized move-stage feature (`[0,1]`)
+- concatenation with normalized `move_stage`
+- `LayerNorm`
 - MLP
-- `K` parallel scalar outputs + learned linear combination
-- final `tanh` to enforce signed range
+- `K` parallel scalar outputs with learned linear combination
+- final `tanh`
 
 Implementation reference:
 
 - `/Users/niallHome/Documents/programming/Snowflake2025/hex_ai/models.py`
 
-## Training Targets and Loss
+## Planned next-family change
+
+The active network-design note recommends keeping the same value semantics while
+upgrading the pooled features for the next family:
+
+- replace GAP-only pooled features with `mean + max`
+- keep `move_stage`
+- keep the MLP + `K`-output combination pattern
+
+See:
+
+- `/Users/niallHome/Documents/programming/Snowflake2025/write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md`
+- `/Users/niallHome/Documents/programming/Snowflake2025/write_ups/Training_Architecture_Change_Discussion_2026-03-13.md`
+
+## Training targets and loss
 
 Training data stores winner targets in probability space:
 
@@ -57,7 +85,7 @@ Implementation references:
 - `/Users/niallHome/Documents/programming/Snowflake2025/hex_ai/models.py`
 - `/Users/niallHome/Documents/programming/Snowflake2025/hex_ai/training.py`
 
-## Probability Conversion
+## Probability conversion
 
 Convert signed output to Red win probability:
 
@@ -73,23 +101,26 @@ Implementation reference:
 
 - `/Users/niallHome/Documents/programming/Snowflake2025/hex_ai/value_utils.py`
 
-## MCTS Semantics
+## MCTS semantics
 
 MCTS internally uses signed values and reference-frame transforms.
 
 - signed values remain in `[-1,1]` for search logic
-- convert to probability at API/output boundaries
+- convert to probability only at API/output boundaries
 
 For current MCTS termination/output contracts, see:
 
 - `/Users/niallHome/Documents/programming/Snowflake2025/docs/mcts_early_termination.md`
 
-## Minimal Examples
+## Minimal examples
 
 ### Inference
 
 ```python
-policy_logits, value_signed = model(board_batch)  # value_signed in [-1, 1]
+from hex_ai.model_interface import forward_model
+from hex_ai.value_utils import ValuePredictor
+
+policy_logits, value_signed = forward_model(model, board_batch)
 p_red = ValuePredictor.model_output_to_probability(float(value_signed[0].item()))
 ```
 
@@ -102,17 +133,37 @@ from hex_ai.enums import Player
 p_current = ValuePredictor.get_win_probability(float(value_signed), Player.RED)
 ```
 
-### Minimax-style signed value from root-player perspective
+### Root-player signed value
 
 ```python
 from hex_ai.value_utils import ValuePredictor
 
-root_ref_signed = ValuePredictor.convert_to_minimax_value(red_ref_signed=value_signed, root_player=root_player)
+root_ref_signed = ValuePredictor.convert_to_minimax_value(
+    red_ref_signed=value_signed,
+    root_player=root_player,
+)
 ```
 
-## Rules to Keep Code Consistent
+## Board-size note
+
+The project direction is toward board-size-parameterized play/training, even
+though some runtime/data components still assume the configured default board
+size today.
+
+For value-head work, prefer wording and interfaces that depend on:
+
+- the runtime board tensor shape
+- or the configured board size
+
+Do not describe the value head as inherently `13x13`-only unless a specific
+implementation path truly still is.
+
+## Consistency rules
 
 1. Treat model value output as signed `[-1,1]`, not as probability.
-2. Use shared conversion helpers in `value_utils` (do not re-implement conversions ad hoc).
-3. Name variables explicitly (`value_signed`, `win_probability`) to avoid mixing semantics.
-4. Fail fast on invalid ranges in interfaces carrying probabilities.
+2. Use shared conversion helpers in `value_utils`.
+3. Prefer `forward_from_boards(...)` or `model_interface.forward_model(...)`
+   over calling family-specific `forward(...)` signatures directly.
+4. Name variables explicitly (`value_signed`, `win_probability`) to avoid
+   mixing semantics.
+5. Fail fast on invalid ranges at interface boundaries.

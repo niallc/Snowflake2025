@@ -8,30 +8,10 @@ The architecture follows a two-headed design:
 - Policy head: Predicts move probabilities for each board position
 - Value head: Predicts the probability of winning from the current position
 
-TODO: Remaining Updates Needed
-==============================
-
-The KataGo-inspired architecture is now implemented. Remaining tasks:
-
-1. CHECKPOINT COMPATIBILITY:
-   - Old checkpoints are not compatible with new architecture
-   - Need migration strategy or version handling for existing checkpoints
-   - New model has different parameter count and structure
-
-2. TESTING UPDATES:
-   - Update existing model tests to provide move_stage parameter
-   - Add tests for move_stage computation edge cases
-   - Test checkpoint loading/saving with new architecture
-
-3. DOCUMENTATION UPDATES:
-   - Update model documentation with new API
-   - Document move_stage computation and value ranges
-   - Update training guides with new loss functions
-
-4. PERFORMANCE MONITORING:
-   - Benchmark performance impact of new architecture
-   - Monitor memory usage changes in production
-   - Compare training stability with new loss functions
+Active architecture design references:
+- write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md
+- write_ups/Training_Architecture_Change_Discussion_2026-03-13.md
+- docs/value_head_specification.md
 """
 
 import torch
@@ -450,7 +430,7 @@ class TwoHeadedResNet(nn.Module):
     Two-headed ResNet architecture for Hex AI, inspired by KataGo.
     
     This model uses a ResNet backbone with two separate heads:
-    - Policy head: Predicts move probabilities (169 outputs for 13x13 board)
+    - Policy head: Predicts move probabilities over the configured board area
     - Value head: Predicts Red's win probability (1 output)
     
     The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
@@ -468,9 +448,11 @@ class TwoHeadedResNet(nn.Module):
         self.model_type = "katago_inspired"
         self.num_blocks = num_blocks
         self.trunk_channels = trunk_channels
+        self.board_size = BOARD_SIZE
         
         # Input layer: Convert board representation to initial features
-        # Input shape: (batch_size, 3, 13, 13) for two players + player-to-move channel
+        # Input shape: (batch_size, 3, board_size, board_size) for two players
+        # plus player-to-move channel.
         self.input_conv = nn.Conv2d(3, trunk_channels, 
                                    kernel_size=5, stride=1, padding=2, bias=False)
         self.input_bn = nn.BatchNorm2d(trunk_channels)
@@ -570,13 +552,13 @@ class TwoHeadedResNet(nn.Module):
         Forward pass through the two-headed ResNet.
         
         Args:
-            x: Input tensor of shape (batch_size, 3, 13, 13)
+            x: Input tensor of shape (batch_size, 3, board_size, board_size)
             move_stage: Normalized move number tensor of shape (batch_size,) in [0,1] range
             batch_idx: Current batch index for monitoring (optional)
             
         Returns:
             Tuple of (policy_logits, value_signed):
-            - policy_logits: Shape (batch_size, 169)
+            - policy_logits: Shape (batch_size, board_size * board_size)
             - value_signed: Shape (batch_size, 1) - Signed value in [-1,1] range (tanh-activated)
         """
         # Shared trunk
@@ -770,7 +752,7 @@ class TwoHeadedResNet(nn.Module):
         Value-only inference path for faster leaf evaluation.
         
         Args:
-            x: Input tensor of shape (batch_size, 3, 13, 13)
+            x: Input tensor of shape (batch_size, 3, board_size, board_size)
             move_stage: Normalized move number tensor of shape (batch_size,) in [0,1] range
             
         Returns:
@@ -904,6 +886,7 @@ def get_model_summary(model: nn.Module) -> str:
             else f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels"
         )
         
+        spatial_shape = f"{BOARD_SIZE}x{BOARD_SIZE} (configured default)"
         summary = f"""
 Model Summary:
 ==============
@@ -911,15 +894,15 @@ Total Parameters: {total_params:,}
 Model Type: {model_variant}
 
 Architecture:
-- Input: (batch_size, 3, 13, 13)
+- Input: (batch_size, 3, {BOARD_SIZE}, {BOARD_SIZE}) [{spatial_shape}]
 {trunk_line}
   * {plain_blocks} plain ResNet blocks
   * {gpool_blocks} global pooling blocks (every 3rd block)
-- Policy Head: Global pooling bias injection preserving 13x13 spatial structure
+- Policy Head: Global pooling bias injection preserving board spatial structure
 - Value Head: Stage-conditioned multi-output ensemble ({k_outputs} outputs) with LayerNorm
 
 Output:
-- Policy Logits: (batch_size, 169) - row-major flattened from 13x13
+- Policy Logits: (batch_size, {POLICY_OUTPUT_SIZE}) - row-major flattened from configured board size
 - Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 - Requires move_stage input: (batch_size,) in [0,1] range
 """
@@ -940,6 +923,7 @@ Output:
             else f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels"
         )
         
+        spatial_shape = f"{BOARD_SIZE}x{BOARD_SIZE} (configured default)"
         summary = f"""
 Model Summary:
 ==============
@@ -947,19 +931,20 @@ Total Parameters: {total_params:,}
 Model Type: {model_variant}
 
 Architecture:
-- Input: (batch_size, 3, 13, 13)
+- Input: (batch_size, 3, {BOARD_SIZE}, {BOARD_SIZE}) [{spatial_shape}]
 {trunk_line}
   * {plain_blocks} plain ResNet blocks
   * {gpool_blocks} global pooling blocks (every 3rd block)
-- Policy Head: Global pooling bias injection preserving 13x13 spatial structure
+- Policy Head: Global pooling bias injection preserving board spatial structure
 - Value Head: Standard with GAP ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
-- Policy Logits: (batch_size, 169) - row-major flattened from 13x13
+- Policy Logits: (batch_size, {POLICY_OUTPUT_SIZE}) - row-major flattened from configured board size
 - Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 """
     else:
         # Legacy architecture
+        spatial_shape = f"{BOARD_SIZE}x{BOARD_SIZE} (configured default)"
         summary = f"""
 Model Summary:
 ==============
@@ -967,13 +952,13 @@ Total Parameters: {total_params:,}
 Model Type: {model.__class__.__name__} (Legacy)
 
 Architecture:
-- Input: (batch_size, 3, 13, 13)
+- Input: (batch_size, 3, {BOARD_SIZE}, {BOARD_SIZE}) [{spatial_shape}]
 - ResNet Body: 4 stages with {CHANNEL_PROGRESSION} channels (no downsampling)
-- Policy Head: Convolutional (1x1 convs) preserving 13x13 spatial structure
+- Policy Head: Convolutional (1x1 convs) preserving board spatial structure
 - Value Head: Standard with GAP ({VALUE_OUTPUT_SIZE} outputs)
 
 Output:
-- Policy Logits: (batch_size, 169) - row-major flattened from 13x13
+- Policy Logits: (batch_size, {POLICY_OUTPUT_SIZE}) - row-major flattened from configured board size
 - Value Signed: (batch_size, 1) with tanh activation ([-1,1] range)
 """
     return summary

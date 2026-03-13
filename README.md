@@ -50,17 +50,21 @@ python scripts/setup_directories.py
 ## Quick Start
 
 ### For Coding Agents
-If you're a coding agent working on this project:
+If you're a coding agent working on this project, start with:
 
-1. **Quick Setup Check**: `python scripts/agent_setup.py`
-2. **Environment Validation**: `python scripts/validate_environment.py`
-3. **Common Commands**: `make help`
-4. **Detailed Guidance**: See `AGENT_GUIDANCE.md`
+1. `AGENTS.md` for repo-specific working rules
+2. `write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md` for the active network-design review
+3. `write_ups/Training_Architecture_Change_Discussion_2026-03-13.md` for the implementation-facing architecture roadmap
+4. `docs/value_head_specification.md` for the current value-head/runtime contract
 
-**⚠️ IMPORTANT**: This project requires:
-- Virtual environment: `hex_ai_env`
-- Editable install: `pip install -e .`
-- Never skip environment checks in code!
+Important environment note:
+- activate `hex_ai_env`
+- use `pip install -e .`
+- this repo enforces virtualenv usage via `hex_ai/__init__.py`
+
+Board-size note:
+- the current default training/inference configuration is `13x13`
+- the project direction is toward board-size-parameterized play/training, so avoid introducing new docs/comments that imply `13x13` is a permanent design limit
 
 ## Main Entry Points
 
@@ -99,6 +103,14 @@ python scripts/training_pipeline.py \
 
 ### Model Discovery
 Find the most recent trained models in `hex_ai/inference/model_config.py`. This is the central configuration for model paths used throughout the project.
+
+### Architecture Notes
+For current neural-net design work, these are the main references in the repo:
+
+- `write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md`
+- `write_ups/Training_Architecture_Change_Discussion_2026-03-13.md`
+- `docs/value_head_specification.md`
+- `hex_ai/models.py`
 
 ## Project Structure
 
@@ -171,8 +183,8 @@ source hex_ai_env/bin/activate
 # Ensure editable install is present (one-time per venv)
 pip install -e .
 
-# Validate environment
-python scripts/validate_environment.py
+# Quick import check
+python -c "import hex_ai; print('hex_ai import OK')"
 ```
 
 **PyTorch not found**: If you get "no module named torch":

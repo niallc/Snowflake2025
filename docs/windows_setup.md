@@ -113,10 +113,9 @@ This avoids needing to set `PYTHONPATH` manually.
 
 ## 6. Verify the Installation
 
-With the virtual environment active, run the quick setup validation script and verify imports:
+With the virtual environment active, verify imports directly:
 
 ```powershell
-python scripts\agent_setup.py
 python -c "import hex_ai; print('hex_ai import OK')"
 ```
 

@@ -61,3 +61,23 @@ This file captures project-specific guidance for Codex agents working in this re
 - For ongoing exploratory sweeps, using the current `best` model is acceptable (and often preferred by the user for practical relevance).
 - Important behavior: `scripts/adaptive_mcts_parameter_manager.py --model-spec best` freezes a resolved model path into each state file at first run; each new `out-dir` can therefore lock a different checkpoint if `best` changes.
 - If strict apples-to-apples parameter comparison is required, pin the same resolved model path across compared states (or reuse the same state/out-dir lineage).
+
+### 2026-03-13 - Active Network Architecture References
+- For the upcoming neural-net architecture work, start with:
+  - `write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md`
+  - `write_ups/Training_Architecture_Change_Discussion_2026-03-13.md`
+  - `docs/value_head_specification.md`
+- Treat those as the current source of truth for:
+  - the planned next model family,
+  - which KataGo / Gumbel ideas are intentionally in scope,
+  - and which older architecture questions are already settled.
+- When implementing architecture changes, also read the live code entry points:
+  - `hex_ai/models.py`
+  - `hex_ai/model_interface.py`
+  - `hex_ai/model_spec.py`
+
+### 2026-03-13 - Board-Size Wording and Scope
+- Do not describe the project as permanently `13x13`-only in new comments or docs.
+- Prefer wording like "configured board size", "current default board size", or "current training size" unless a component is truly hardcoded.
+- It is fine to keep fail-fast guards where the runtime is not yet board-size-parameterized; be explicit that those are current implementation limits, not project philosophy.
+- If you touch architecture/docs, prefer designs that stay compatible with future square-board-size parameterization unless that adds meaningful complexity.

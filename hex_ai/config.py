@@ -26,9 +26,12 @@ CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 VERBOSE_LEVEL = 2
 
 # Training configuration
+# Current default board size for training/inference. The broader project
+# direction is toward board-size-parameterized play rather than treating this
+# as a permanent fixed limit.
 BOARD_SIZE = 13 
 NUM_PLAYERS = 2 
-POLICY_OUTPUT_SIZE = BOARD_SIZE * BOARD_SIZE  # 169 for 13x13 board
+POLICY_OUTPUT_SIZE = BOARD_SIZE * BOARD_SIZE  # Number of on-board moves
 VALUE_OUTPUT_SIZE = 1
 
 # Fixed Tree Search configuration
@@ -64,6 +67,9 @@ TRAINING_BLUE_WIN = 0.0
 TRAINING_RED_WIN = 1.0
 
 # TRMPH format constants
+# Current training corpus uses the configured board-size preamble. Broader
+# multi-board-size support will require parameterizing callers that assume a
+# fixed prefix.
 TRMPH_PREFIX = "#13,"
 
 # Policy-target construction contract version shared by all game generators.
