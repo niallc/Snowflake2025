@@ -114,7 +114,7 @@ class SimpleModelInference:
         self,
         checkpoint_path: str,
         device: str = None,
-        model_type: str = "katago_inspired",
+        model_type: Optional[str] = None,
         cache_size: int = 30000,
         max_batch_size: int = 1000,
         enable_caching: bool = True,
@@ -127,7 +127,8 @@ class SimpleModelInference:
         Args:
             checkpoint_path: Path to the model checkpoint
             device: Device to use ('cuda', 'mps', 'cpu', or None for auto-detection)
-            model_type: Type of model architecture
+            model_type: Optional model family override. When omitted, the checkpoint
+                metadata determines the architecture.
             cache_size: Size of the LRU cache for inference results
             max_batch_size: Maximum batch size for inference
             enable_caching: Whether to enable caching
@@ -161,6 +162,8 @@ class SimpleModelInference:
         
         # Initialize the model wrapper
         self.model = ModelWrapper(checkpoint_path, self.device, model_type)
+        self.model_spec = self.model.model_spec
+        self.model_type = self.model_spec.model_type
         model_policy_board_size = self._extract_model_policy_board_size(
             getattr(self.model, "model", None)
         )

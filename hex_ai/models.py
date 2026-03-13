@@ -378,6 +378,7 @@ class TwoHeadedResNet(nn.Module):
     
     def __init__(self, num_blocks: int = 7, trunk_channels: int = 128):
         super().__init__()
+        self.model_type = "katago_inspired"
         self.num_blocks = num_blocks
         self.trunk_channels = trunk_channels
         
@@ -540,8 +541,11 @@ class TwoHeadedResNet(nn.Module):
         return self.value_head(trunk_out, move_stage)
 
 
-def create_model(model_type: str = "katago_inspired", 
-                num_blocks: int = 7, trunk_channels: int = 128) -> TwoHeadedResNet:
+def create_model(
+    model_type: str = "katago_inspired",
+    num_blocks: int = 7,
+    trunk_channels: int = 128,
+) -> nn.Module:
     """
     Factory function to create a model instance.
     
@@ -763,6 +767,5 @@ def is_new_architecture(model: nn.Module) -> bool:
             hasattr(model.value_head, 'k_outputs') and
             hasattr(model, 'trunk_channels') and
             hasattr(model, 'num_blocks'))
-
 
 

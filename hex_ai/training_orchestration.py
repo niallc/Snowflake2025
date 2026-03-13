@@ -23,7 +23,8 @@ import logging
 import random
 import re
 
-from .models import TwoHeadedResNet
+from .model_spec import model_spec_from_hyperparameters
+from .models import create_model
 from .training import Trainer
 from .config import BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE, DEFAULT_POOL_SIZE, DEFAULT_REFILL_THRESHOLD, DEFAULT_MAX_MEMORY_GB
 from hex_ai.mini_epoch_orchestrator import MiniEpochOrchestrator
@@ -373,6 +374,9 @@ def run_single_experiment(
     trainer_params = {}
     
     # Model parameters - expect only the correct parameter names
+    model_params['model_type'] = exp_config['hyperparameters'].get(
+        'model_type', 'katago_inspired'
+    )
     required_model_params = {'num_blocks', 'trunk_channels'}
     for param in required_model_params:
         if param in exp_config['hyperparameters']:
@@ -398,12 +402,12 @@ def run_single_experiment(
     # The value head now has a fixed bottleneck design
     
     # Trainer parameters (everything else except batch_size, model parameters, and legacy parameters)
-    model_param_keys = {'num_blocks', 'trunk_channels'}  # Keys that map to model parameters
+    model_param_keys = {'model_type', 'num_blocks', 'trunk_channels'}  # Keys that map to model parameters
     legacy_params = {'dropout_prob'}  # Legacy parameters that should be ignored
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
                      if k not in model_param_keys and k not in legacy_params and k != 'batch_size'}
     
-    model = TwoHeadedResNet(**model_params).to(device)
+    model = create_model(**model_params).to(device)
     
     trainer = Trainer(
         model=model,
@@ -584,7 +588,8 @@ def save_experiment_metadata(
             'experiment_name': experiment_name,
             'timestamp': datetime.now().isoformat(),
             'hyperparameters': hyperparameters,
-            'training_config': training_config
+            'training_config': training_config,
+            'model_spec': model_spec_from_hyperparameters(hyperparameters).to_dict(),
         }
         
         # Save metadata directly in results_path (no extra directory)

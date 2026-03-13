@@ -12,6 +12,12 @@ from typing import Tuple, List, Optional, Dict
 import logging
 
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
+from .model_spec import (
+    DEFAULT_MODEL_TYPE,
+    load_checkpoint_payload,
+    model_spec_from_model,
+    resolve_model_spec_from_checkpoint_payload,
+)
 from hex_ai.value_utils import ValuePredictor
 
 
@@ -35,6 +41,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "eps": [1e-8],  # Term added to denominator for numerical stability
     
     # New KataGo-inspired architecture parameters
+    "model_type": [DEFAULT_MODEL_TYPE],
     "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
     "trunk_channels": [128],  # Number of channels in trunk
     "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
@@ -56,6 +63,7 @@ HYPERPARAMETER_SHORT_LABELS = {
     "value_weight_decay_factor": "vwdf",
     "policy_weight": "pw",
     "value_weight": "vw",
+    "model_type": "mt",
     "num_blocks": "nb",
     "trunk_channels": "tc",
     "betas": "betas",
@@ -162,6 +170,7 @@ def save_checkpoint(model: torch.nn.Module,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,
+        'model_spec': model_spec_from_model(model).to_dict(),
     }
     
     if compress:
@@ -192,18 +201,17 @@ def load_checkpoint(model: torch.nn.Module,
     Returns:
         Tuple of (epoch, loss)
     """
-    # Check if file is gzipped by reading the first two bytes
-    def is_gzipped(filepath):
-        with open(filepath, 'rb') as f:
-            return f.read(2) == b'\x1f\x8b'
-    
-    if is_gzipped(filepath):
-        import gzip
-        with gzip.open(filepath, 'rb') as f:
-            checkpoint = torch.load(f, weights_only=False)
-    else:
-        checkpoint = torch.load(filepath, weights_only=False)
-        
+    checkpoint = load_checkpoint_payload(filepath)
+    checkpoint_model_spec = resolve_model_spec_from_checkpoint_payload(checkpoint)
+    runtime_model_spec = model_spec_from_model(model)
+    if checkpoint_model_spec != runtime_model_spec:
+        raise ValueError(
+            "Checkpoint model spec does not match runtime model spec. "
+            f"checkpoint={checkpoint_model_spec.to_dict()} "
+            f"runtime={runtime_model_spec.to_dict()} "
+            f"path={filepath}"
+        )
+
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return checkpoint['epoch'], checkpoint['loss']

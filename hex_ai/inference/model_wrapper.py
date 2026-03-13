@@ -1,10 +1,16 @@
-import gzip
-import os
-import torch
 import logging
 import time
-from hex_ai.models import create_model, compute_move_stage, is_new_architecture
 from typing import Optional, Tuple, List, Union, Dict, Any
+
+import torch
+
+from hex_ai.model_spec import (
+    ModelSpec,
+    build_model_from_spec,
+    load_checkpoint_payload,
+    resolve_model_spec_from_checkpoint_payload,
+)
+from hex_ai.models import compute_move_stage, is_new_architecture
 from hex_ai.training_utils import get_device
 
 # NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
@@ -22,16 +28,17 @@ class ModelWrapper:
         self,
         checkpoint_path: str,
         device: Optional[str] = None,
-        model_type: str = "katago_inspired"
+        model_type: Optional[str] = None,
     ):
         """
         Args:
             checkpoint_path: Path to the model checkpoint (.pt or .pth file, possibly .gz)
             device: 'cpu', 'cuda', 'mps', or None for auto-detect
-            model_type: Model architecture type (default: 'katago_inspired')
+            model_type: Optional model family override. When omitted, the checkpoint
+                metadata determines the architecture.
         """
         self.device = self._detect_device(device)
-        self.model = self._load_model(checkpoint_path, model_type)
+        self.model, self.model_spec = self._load_model(checkpoint_path, model_type)
         self.model.eval()
         self.model.to(self.device)
         # Memory note:
@@ -47,6 +54,7 @@ class ModelWrapper:
                 param_device = torch.device("unknown")
             logging.getLogger(__name__).info(
                 f"ModelWrapper initialized: wrapper_device={self.device}, param_device={param_device}, "
+                f"model_spec={self.model_spec.to_dict()}, "
                 f"mps_available={torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False}, "
                 f"cuda_available={torch.cuda.is_available()}"
             )
@@ -58,21 +66,27 @@ class ModelWrapper:
             return torch.device(device)
         return get_device()
 
-    def _load_model(self, checkpoint_path: str, model_type: str):
-        model = create_model(model_type)
+    def _load_model(
+        self, checkpoint_path: str, model_type: Optional[str]
+    ) -> Tuple[torch.nn.Module, ModelSpec]:
         try:
-            if checkpoint_path.endswith('.gz'):
-                with gzip.open(checkpoint_path, 'rb') as f:
-                    checkpoint = torch.load(f, map_location=self.device, weights_only=False)
-            else:
-                checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+            checkpoint = load_checkpoint_payload(
+                checkpoint_path, map_location=self.device
+            )
+            model_spec = resolve_model_spec_from_checkpoint_payload(checkpoint)
+            if model_type is not None and model_type != model_spec.model_type:
+                raise ValueError(
+                    "Explicit model_type does not match checkpoint model spec. "
+                    f"explicit={model_type} checkpoint={model_spec.model_type}"
+                )
+            model = build_model_from_spec(model_spec)
             if 'model_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['model_state_dict'])
             else:
                 model.load_state_dict(checkpoint)
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint {checkpoint_path}: {e}")
-        return model
+        return model, model_spec
 
 
 
@@ -111,9 +125,8 @@ class ModelWrapper:
             # Validate model architecture
             if not is_new_architecture(self.model):
                 raise ValueError(
-                    f"Model does not support new architecture. Expected model with move_stage support. "
-                    f"Model type: {type(self.model).__name__}. "
-                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                    "Model does not support the current inference interface with move_stage. "
+                    f"Loaded model type: {type(self.model).__name__}."
                 )
             
             # Compute move_stage from board state and call model
@@ -153,9 +166,8 @@ class ModelWrapper:
             # Validate model architecture
             if not is_new_architecture(self.model):
                 raise ValueError(
-                    f"Model does not support new architecture. Expected model with move_stage support. "
-                    f"Model type: {type(self.model).__name__}. "
-                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                    "Model does not support the current inference interface with move_stage. "
+                    f"Loaded model type: {type(self.model).__name__}."
                 )
             
             # Compute move_stage from board state and call model
@@ -192,9 +204,8 @@ class ModelWrapper:
             # Validate model architecture
             if not is_new_architecture(self.model):
                 raise ValueError(
-                    f"Model does not support new architecture. Expected model with move_stage support. "
-                    f"Model type: {type(self.model).__name__}. "
-                    f"Please use a model created with create_model(model_type='katago_inspired') or update the model."
+                    "Model does not support the current inference interface with move_stage. "
+                    f"Loaded model type: {type(self.model).__name__}."
                 )
             
             # Compute move_stage from board state and call model

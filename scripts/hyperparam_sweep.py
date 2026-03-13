@@ -227,6 +227,9 @@ Examples:
     parser.add_argument("--target_samples_per_mini_epoch", type=int, default=TARGET_SAMPLES_PER_MINI_EPOCH,
                        help="Target unaugmented samples per mini-epoch")
     parser.add_argument("--no_augmentation", action="store_true", help="Disable data augmentation")
+    parser.add_argument("--model-type", type=str, help="Override model family (default: katago_inspired)")
+    parser.add_argument("--num-blocks", type=int, help="Override trunk depth")
+    parser.add_argument("--trunk-channels", type=int, help="Override trunk width")
     policy_target_group = parser.add_mutually_exclusive_group()
     policy_target_group.add_argument(
         "--use-policy-search-targets",
@@ -344,6 +347,12 @@ Examples:
         config = dict(config)  # Make a copy to avoid mutating the sweep dict
         if "policy_weight" in config:
             config["value_weight"] = 1.0 - config["policy_weight"]
+        if args.model_type is not None:
+            config["model_type"] = args.model_type
+        if args.num_blocks is not None:
+            config["num_blocks"] = args.num_blocks
+        if args.trunk_channels is not None:
+            config["trunk_channels"] = args.trunk_channels
         if args.use_policy_search_targets:
             config["use_policy_search_targets"] = True
         elif args.no_use_policy_search_targets:

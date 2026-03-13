@@ -103,6 +103,8 @@ class PipelineConfig:
     max_mini_epochs_per_run: Optional[int] = None
     resume_mode: str = "next_epoch"
     target_end_epoch: Optional[int] = None
+    training_resume_checkpoint: Optional[str] = None
+    train_from_scratch: bool = False
     allow_missing_stream_sidecar_fallback: bool = False
     internal_training_chunk_run: bool = False
     run_timestamp_override: Optional[str] = None
@@ -130,6 +132,18 @@ class PipelineConfig:
         # Generate model filename
         self.model_filename = f"epoch{self.model_epoch}_mini{self.model_mini}.pt.gz"
         self.model_full_path = os.path.join(self.model_path, self.model_filename)
+        if self.train_from_scratch and self.training_resume_checkpoint is not None:
+            raise ValueError(
+                "Cannot set both training_resume_checkpoint and train_from_scratch."
+            )
+        if self.train_from_scratch:
+            self.training_resume_from = None
+        elif self.training_resume_checkpoint is not None:
+            self.training_resume_from = os.path.expanduser(
+                self.training_resume_checkpoint
+            )
+        else:
+            self.training_resume_from = self.model_full_path
         
         # Generate data directories for this run
         if self.selfplay_dir is None:
@@ -147,6 +161,14 @@ class PipelineConfig:
         # Validate model exists
         if check_model and not os.path.exists(self.model_full_path):
             raise FileNotFoundError(f"Model not found: {self.model_full_path}")
+        if (
+            self.run_training
+            and self.training_resume_from is not None
+            and not os.path.exists(self.training_resume_from)
+        ):
+            raise FileNotFoundError(
+                f"Training resume checkpoint not found: {self.training_resume_from}"
+            )
         
         # Validate data directories exist
         if check_data:
@@ -312,7 +334,7 @@ class SelfPlayStep:
         games_per_worker = self.config.num_games // self.config.num_workers
         remaining_games = self.config.num_games % self.config.num_workers
         
-        self.logger.info(f"Model: {self.config.model_full_path}")
+        self.logger.info(f"Self-play model: {self.config.model_full_path}")
         self.logger.info(f"Total games: {self.config.num_games}")
         self.logger.info(f"Workers: {self.config.num_workers}")
         self.logger.info(f"Board size: {self.config.board_size}")
@@ -710,7 +732,7 @@ class TrainingStep:
         all_validation_dirs: List[str],
         all_validation_shard_ranges: List[str],
         results_dir: str,
-        resume_from: str,
+        resume_from: Optional[str],
         max_mini_epochs: Optional[int],
         resume_mode: str,
         target_end_epoch: Optional[int],
@@ -808,6 +830,9 @@ class TrainingStep:
 
         # Preserve explicit hyperparameter overrides across chunk runs.
         override_arg_map = {
+            "model_type": "--model-type",
+            "num_blocks": "--num-blocks",
+            "trunk_channels": "--trunk-channels",
             "learning_rate": "--learning-rate",
             "batch_size": "--train-batch-size",
             "weight_decay": "--weight-decay",
@@ -853,7 +878,7 @@ class TrainingStep:
                 all_validation_dirs=all_validation_dirs,
                 all_validation_shard_ranges=all_validation_shard_ranges,
                 results_dir=results_dir,
-                resume_from=self.config.model_full_path,
+                resume_from=self.config.training_resume_from,
                 max_mini_epochs=None,
                 resume_mode="next_epoch",
                 target_end_epoch=self.config.target_end_epoch,
@@ -862,7 +887,28 @@ class TrainingStep:
             self.logger.info(f"Training completed: {results}")
             return results_dir
 
-        starting_checkpoint = Path(self.config.model_full_path)
+        if self.config.training_resume_from is None:
+            self.logger.warning(
+                "Chunked training restart mode is not supported for train-from-scratch runs yet. "
+                "Falling back to a single-process training run."
+            )
+            results = self._run_training_once(
+                experiments=experiments,
+                all_data_dirs=all_data_dirs,
+                all_shard_ranges=all_shard_ranges,
+                all_validation_dirs=all_validation_dirs,
+                all_validation_shard_ranges=all_validation_shard_ranges,
+                results_dir=results_dir,
+                resume_from=None,
+                max_mini_epochs=None,
+                resume_mode="next_epoch",
+                target_end_epoch=self.config.target_end_epoch,
+                allow_missing_stream_sidecar_fallback=self.config.allow_missing_stream_sidecar_fallback,
+            )
+            self.logger.info(f"Training completed: {results}")
+            return results_dir
+
+        starting_checkpoint = Path(self.config.training_resume_from)
         if not starting_checkpoint.exists():
             raise FileNotFoundError(
                 f"Starting checkpoint not found: {starting_checkpoint}"
@@ -968,14 +1014,22 @@ class TrainingStep:
                     else "none"
                 ),
             )
-            self.logger.info(f"Restart chunk summary: resume checkpoint {self.config.model_full_path}")
+            if self.config.training_resume_from is None:
+                self.logger.info("Restart chunk summary: fresh model initialization")
+            else:
+                self.logger.info(
+                    f"Restart chunk summary: resume checkpoint {self.config.training_resume_from}"
+                )
         else:
             self.logger.info(f"New training data directory: {new_shuffled_dir}")
             self.logger.info(f"Existing training data directories: {self.config.training_data_dirs}")
             self.logger.info(f"Shard ranges: {self.config.shard_ranges}")
             self.logger.info(f"Results directory: {results_dir}")
             self.logger.info(f"Max samples: {self.config.max_samples}")
-            self.logger.info(f"Resume from: {self.config.model_full_path}")
+            if self.config.training_resume_from is None:
+                self.logger.info("Resume from: fresh model initialization")
+            else:
+                self.logger.info(f"Resume from: {self.config.training_resume_from}")
 
         experiments = self._build_experiments()
 
@@ -1006,7 +1060,7 @@ class TrainingStep:
             all_validation_dirs=all_validation_dirs,
             all_validation_shard_ranges=all_validation_shard_ranges,
             results_dir=results_dir,
-            resume_from=self.config.model_full_path,
+            resume_from=self.config.training_resume_from,
             max_mini_epochs=self.config.max_mini_epochs_per_run,
             resume_mode=self.config.resume_mode,
             target_end_epoch=self.config.target_end_epoch,
@@ -1043,7 +1097,11 @@ class TrainingPipeline:
         self.logger.info("HEX AI TRAINING PIPELINE")
         self.logger.info("=" * 60)
         self.logger.info(f"Run timestamp: {self.config.run_timestamp}")
-        self.logger.info(f"Model: {self.config.model_full_path}")
+        self.logger.info(f"Self-play model: {self.config.model_full_path}")
+        if self.config.training_resume_from is None:
+            self.logger.info("Training init: fresh model initialization")
+        else:
+            self.logger.info(f"Training init checkpoint: {self.config.training_resume_from}")
         if self.config.internal_training_chunk_run:
             self.logger.info("Configuration: internal training chunk restart mode")
         else:
@@ -1435,8 +1493,28 @@ Examples:
     )
     parser.add_argument("--override-checkpoint-hyperparameters", action="store_true", 
                        help="Override checkpoint hyperparameters with current sweep settings (resets optimizer state)")
+    training_init_group = parser.add_mutually_exclusive_group()
+    training_init_group.add_argument(
+        "--training-resume-checkpoint",
+        type=str,
+        help=(
+            "Optional checkpoint path for the training lineage. "
+            "When omitted, training resumes from the same checkpoint used for self-play."
+        ),
+    )
+    training_init_group.add_argument(
+        "--train-from-scratch",
+        action="store_true",
+        help=(
+            "Start training from a fresh model initialization while still allowing "
+            "self-play to use the selected incumbent checkpoint."
+        ),
+    )
     
     # Hyperparameter override arguments
+    parser.add_argument("--model-type", type=str, help="Override model family (default: katago_inspired)")
+    parser.add_argument("--num-blocks", type=int, help="Override trunk depth")
+    parser.add_argument("--trunk-channels", type=int, help="Override trunk width")
     parser.add_argument("--learning-rate", type=float, help="Override learning rate (e.g., 1e-4)")
     parser.add_argument("--train-batch-size", type=int, help="Override training batch size")
     parser.add_argument("--weight-decay", type=float, help="Override weight decay")
@@ -1551,6 +1629,12 @@ def main():
 
         # Collect hyperparameter overrides
         hyperparameter_overrides = {}
+        if args.model_type is not None:
+            hyperparameter_overrides["model_type"] = [args.model_type]
+        if args.num_blocks is not None:
+            hyperparameter_overrides["num_blocks"] = [args.num_blocks]
+        if args.trunk_channels is not None:
+            hyperparameter_overrides["trunk_channels"] = [args.trunk_channels]
         if args.learning_rate is not None:
             hyperparameter_overrides["learning_rate"] = [args.learning_rate]
         if args.train_batch_size is not None:
@@ -1618,6 +1702,8 @@ def main():
             max_validation_samples=args.max_validation_samples,
             results_dir=args.results_dir,
             restart_every_mini_epochs=args.restart_every_mini_epochs,
+            training_resume_checkpoint=args.training_resume_checkpoint,
+            train_from_scratch=args.train_from_scratch,
             allow_missing_stream_sidecar_fallback=args.allow_missing_stream_sidecar_fallback,
             max_mini_epochs_per_run=args.max_mini_epochs_per_run,
             resume_mode=args.resume_mode,

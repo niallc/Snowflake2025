@@ -36,6 +36,11 @@ from .config import (
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 )
 from hex_ai.data_pipeline import discover_training_data_files_all
+from hex_ai.model_spec import (
+    load_checkpoint_payload,
+    model_spec_from_model,
+    resolve_model_spec_from_checkpoint_payload,
+)
 from hex_ai.training_utils import get_device, TrainingUtilities
 from hex_ai.training_logger import TrainingLogger, get_memory_usage, get_gpu_memory_usage, get_weight_statistics, get_gradient_norm
 from hex_ai.system_utils import get_system_info, calculate_optimal_batch_size
@@ -1374,7 +1379,8 @@ class Trainer:
             'train_metrics': train_metrics,
             'val_metrics': val_metrics,
             'best_val_loss': self.best_val_loss,
-            'mixed_precision': self.mixed_precision.use_mixed_precision
+            'mixed_precision': self.mixed_precision.use_mixed_precision,
+            'model_spec': model_spec_from_model(self.model).to_dict(),
         }
         
         if compress:
@@ -1403,18 +1409,17 @@ class Trainer:
                                                instead of checkpoint hyperparameters. This ensures clean
                                                hyperparameter experiments but may affect training stability.
         """
-        # Check if file is gzipped by reading the first two bytes
-        def is_gzipped(filepath):
-            with open(filepath, 'rb') as f:
-                return f.read(2) == b'\x1f\x8b'
-        
-        if is_gzipped(path):
-            import gzip
-            with gzip.open(path, 'rb') as f:
-                checkpoint = torch.load(f, map_location=self.device, weights_only=False)
-        else:
-            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-            
+        checkpoint = load_checkpoint_payload(path, map_location=self.device)
+        checkpoint_model_spec = resolve_model_spec_from_checkpoint_payload(checkpoint)
+        runtime_model_spec = model_spec_from_model(self.model)
+        if checkpoint_model_spec != runtime_model_spec:
+            raise ValueError(
+                "Checkpoint model spec does not match trainer model spec. "
+                f"checkpoint={checkpoint_model_spec.to_dict()} "
+                f"trainer={runtime_model_spec.to_dict()} "
+                f"path={path}"
+            )
+
         self.model.load_state_dict(checkpoint['model_state_dict'])
         
         if override_checkpoint_hyperparameters:
@@ -1693,7 +1698,11 @@ class Trainer:
             'learning_rate': self.optimizer.param_groups[0]['lr'],
             'batch_size': self.train_loader.batch_size,
             'dataset_size': 'N/A',
-            'network_structure': f"ResNet{getattr(self.model, 'num_blocks', '?')}",
+            'network_structure': (
+                f"{getattr(self.model, 'model_type', type(self.model).__name__)}_"
+                f"{getattr(self.model, 'num_blocks', '?')}x"
+                f"{getattr(self.model, 'trunk_channels', '?')}"
+            ),
             'policy_weight': getattr(self.criterion, 'policy_weight', ''),
             'value_weight': getattr(self.criterion, 'value_weight', ''),
             'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
