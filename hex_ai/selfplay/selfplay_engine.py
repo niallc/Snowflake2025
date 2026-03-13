@@ -40,7 +40,7 @@ from hex_ai.move_provenance import (
     sidecar_path_for_trmph,
 )
 from hex_ai.policy_target_construction import (
-    build_policy_target_vector_from_gumbel_stage_scores,
+    build_policy_target_vector_from_gumbel_final_pair_scores,
     build_policy_target_vector_from_mcts_result,
 )
 from hex_ai.selfplay.generation_summary import SelfPlayGenerationSummary
@@ -779,7 +779,7 @@ class SelfPlayEngine:
                     move_provenance_codes.append(provenance_code)
                     if provenance_code == MOVE_CODE_GUMBEL_ROOT:
                         policy_target_rows.append(
-                            self._build_policy_target_vector_from_gumbel_stage_scores(
+                            self._build_policy_target_vector_from_gumbel_final_pair_scores(
                                 mcts_result, board_size=board_size
                             )
                         )
@@ -928,11 +928,11 @@ class SelfPlayEngine:
             board_size=board_size,
         )
 
-    def _build_policy_target_vector_from_gumbel_stage_scores(
+    def _build_policy_target_vector_from_gumbel_final_pair_scores(
         self, mcts_result: Any, *, board_size: int
     ) -> np.ndarray:
-        """Build dense v3 policy target from stage-aware Gumbel summaries."""
-        return build_policy_target_vector_from_gumbel_stage_scores(
+        """Build dense v4 policy target from the final noise-free survivor pair."""
+        return build_policy_target_vector_from_gumbel_final_pair_scores(
             mcts_result,
             board_size=board_size,
         )

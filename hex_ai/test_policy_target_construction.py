@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from hex_ai.policy_target_construction import (
+    build_policy_target_vector_from_gumbel_final_pair_scores,
     build_policy_target_vector_from_gumbel_stage_scores,
 )
 
@@ -65,6 +66,84 @@ def test_build_policy_target_vector_from_gumbel_stage_scores_fails_when_selected
 
     with pytest.raises(RuntimeError, match="selected move is not the top-scored action"):
         build_policy_target_vector_from_gumbel_stage_scores(
+            mcts_result,
+            board_size=2,
+        )
+
+
+def test_build_policy_target_vector_from_gumbel_final_pair_scores_keeps_only_top_two():
+    mcts_result = SimpleNamespace(
+        move=(0, 0),
+        stats={
+            "gumbel_final_rank_rows": [
+                {"tensor_action": 0, "score_without_gumbel": 1.50},
+                {"tensor_action": 1, "score_without_gumbel": 0.50},
+                {"tensor_action": 2, "score_without_gumbel": -0.25},
+            ]
+        },
+    )
+
+    vec = build_policy_target_vector_from_gumbel_final_pair_scores(
+        mcts_result,
+        board_size=2,
+    )
+
+    expected = np.array(
+        [
+            0.7311,
+            0.2689,
+            0.0000,
+            0.0000,
+        ],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_allclose(vec, expected, atol=1e-4, rtol=0.0)
+    assert int(np.argmax(vec)) == 0
+    assert np.isclose(float(vec.sum()), 1.0, atol=1e-6)
+
+
+def test_build_policy_target_vector_from_gumbel_final_pair_scores_one_hot_when_only_one_survivor():
+    mcts_result = SimpleNamespace(
+        move=(0, 1),
+        stats={
+            "gumbel_final_rank_rows": [
+                {"tensor_action": 1, "score_without_gumbel": 2.25},
+            ]
+        },
+    )
+
+    vec = build_policy_target_vector_from_gumbel_final_pair_scores(
+        mcts_result,
+        board_size=2,
+    )
+
+    expected = np.array(
+        [
+            0.0000,
+            1.0000,
+            0.0000,
+            0.0000,
+        ],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_allclose(vec, expected, atol=1e-6, rtol=0.0)
+
+
+def test_build_policy_target_vector_from_gumbel_final_pair_scores_fails_when_selected_move_is_not_top():
+    mcts_result = SimpleNamespace(
+        move=(0, 1),
+        stats={
+            "gumbel_final_rank_rows": [
+                {"tensor_action": 0, "score_without_gumbel": 1.50},
+                {"tensor_action": 1, "score_without_gumbel": 1.25},
+            ]
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="selected move is not the top noise-free final action"):
+        build_policy_target_vector_from_gumbel_final_pair_scores(
             mcts_result,
             board_size=2,
         )

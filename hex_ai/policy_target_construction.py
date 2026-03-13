@@ -15,6 +15,7 @@ from hex_ai.utils.format_conversion import rowcol_to_tensor_with_size, trmph_to_
 GUMBEL_V3_STAGE_GAP = 0.6
 GUMBEL_V3_LOCAL_SCORE_WEIGHT = 0.30
 GUMBEL_V3_SOFTMAX_TEMPERATURE = 0.85
+GUMBEL_V4_FINAL_PAIR_SOFTMAX_TEMPERATURE = 1.0
 
 
 def build_policy_target_vector_from_mcts_result(
@@ -124,6 +125,65 @@ def _extract_gumbel_stage_target_rows(
     return extracted_rows
 
 
+def _extract_gumbel_final_rank_rows(
+    stats: Dict[str, Any],
+    *,
+    action_count: int,
+) -> List[Dict[str, float]]:
+    """Validate and return compact final-rank rows for v4 Gumbel targets."""
+    rows = stats.get("gumbel_final_rank_rows")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(
+            "Gumbel move is missing gumbel_final_rank_rows in MCTS stats; "
+            "cannot build v4 Gumbel policy target."
+        )
+
+    extracted_rows: List[Dict[str, float]] = []
+    seen_indices: set[int] = set()
+    previous_score: float | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"gumbel_final_rank_rows entries must be dict, got {type(row)}"
+            )
+        action_raw = row.get("tensor_action")
+        score_raw = row.get("score_without_gumbel")
+        if action_raw is None or score_raw is None:
+            raise ValueError(
+                "gumbel_final_rank_rows entries must include tensor_action "
+                "and score_without_gumbel"
+            )
+        action_idx = int(action_raw)
+        if action_idx < 0 or action_idx >= action_count:
+            raise ValueError(
+                f"Invalid tensor_action {action_idx} for action_count {action_count}"
+            )
+        if action_idx in seen_indices:
+            raise ValueError(
+                f"Duplicate tensor_action {action_idx} in gumbel_final_rank_rows"
+            )
+        score = float(score_raw)
+        if not np.isfinite(score):
+            raise ValueError(
+                "Non-finite score_without_gumbel for tensor_action "
+                f"{action_idx}: {score_raw!r}"
+            )
+        if previous_score is not None and score > previous_score + 1e-12:
+            raise ValueError(
+                "gumbel_final_rank_rows must be sorted by descending "
+                "score_without_gumbel"
+            )
+        previous_score = score
+        seen_indices.add(action_idx)
+        extracted_rows.append(
+            {
+                "tensor_action": action_idx,
+                "score_without_gumbel": score,
+            }
+        )
+    return extracted_rows
+
+
 def build_policy_target_vector_from_gumbel_stage_scores(
     mcts_result: Any,
     *,
@@ -217,6 +277,76 @@ def build_policy_target_vector_from_gumbel_stage_scores(
     total = float(vec.sum())
     if total <= 0.0:
         raise RuntimeError("Gumbel policy target vector has zero mass.")
+    if not np.isclose(total, 1.0, atol=1e-6):
+        vec /= total
+    return vec
+
+
+def build_policy_target_vector_from_gumbel_final_pair_scores(
+    mcts_result: Any,
+    *,
+    board_size: int,
+) -> np.ndarray:
+    """
+    Build dense v4 Gumbel policy target from the final noise-free survivor pair.
+
+    Contract:
+    - Uses `stats["gumbel_final_rank_rows"]`, already sorted by descending
+      `score_without_gumbel`.
+    - Keeps only the top two final survivors from that list.
+    - Applies softmax(score / temperature) over that final pair only.
+    - Leaves all non-final-pair legal actions at probability 0.
+    - Falls back to one-hot when only one final survivor is present.
+    - Enforces that the selected move is the top noise-free final action.
+    """
+    stats = getattr(mcts_result, "stats", {}) or {}
+    action_count = board_size * board_size
+    final_rows = _extract_gumbel_final_rank_rows(
+        stats,
+        action_count=action_count,
+    )
+
+    selected_move = mcts_result.move
+    selected_idx = rowcol_to_tensor_with_size(
+        int(selected_move[0]), int(selected_move[1]), board_size
+    )
+    top_idx = int(final_rows[0]["tensor_action"])
+    if selected_idx != top_idx:
+        raise RuntimeError(
+            "Gumbel v4 target construction mismatch: selected move is not the "
+            "top noise-free final action "
+            f"(selected={selected_idx}, top={top_idx})."
+        )
+
+    final_pair_rows = final_rows[:2]
+    if len(final_pair_rows) == 1:
+        vec = np.zeros(action_count, dtype=np.float32)
+        vec[selected_idx] = 1.0
+        return vec
+
+    action_indices = [int(row["tensor_action"]) for row in final_pair_rows]
+    scores_arr = np.asarray(
+        [float(row["score_without_gumbel"]) for row in final_pair_rows],
+        dtype=np.float64,
+    )
+    scaled_scores = scores_arr / float(GUMBEL_V4_FINAL_PAIR_SOFTMAX_TEMPERATURE)
+    max_score = float(np.max(scaled_scores))
+    exp_scores = np.exp(scaled_scores - max_score)
+    exp_sum = float(np.sum(exp_scores))
+    if exp_sum <= 0.0 or not np.isfinite(exp_sum):
+        raise RuntimeError(
+            "Invalid Gumbel v4 final-pair normalization "
+            "(non-positive/invalid softmax denominator)."
+        )
+    probs = exp_scores / exp_sum
+
+    vec = np.zeros(action_count, dtype=np.float32)
+    for action_idx, prob in zip(action_indices, probs):
+        vec[action_idx] = float(prob)
+
+    total = float(vec.sum())
+    if total <= 0.0:
+        raise RuntimeError("Gumbel v4 final-pair target vector has zero mass.")
     if not np.isclose(total, 1.0, atol=1e-6):
         vec /= total
     return vec

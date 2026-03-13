@@ -40,7 +40,7 @@ from hex_ai.move_provenance import (
     MOVE_CODE_VISIT_COUNT,
 )
 from hex_ai.policy_target_construction import (
-    build_policy_target_vector_from_gumbel_stage_scores,
+    build_policy_target_vector_from_gumbel_final_pair_scores,
     build_policy_target_vector_from_mcts_result,
 )
 from hex_ai.utils.format_conversion import (
@@ -501,105 +501,16 @@ def _build_policy_target_vector_from_mcts_result(
     )
 
 
-def _build_policy_target_vector_from_gumbel_stage_scores(
+def _build_policy_target_vector_from_gumbel_final_pair_scores(
     mcts_result: Any,
     *,
     board_size: int,
 ) -> np.ndarray:
-    """Build dense v3 Gumbel policy target from stage-aware summaries."""
-    return build_policy_target_vector_from_gumbel_stage_scores(
+    """Build dense v4 Gumbel policy target from the final noise-free survivor pair."""
+    return build_policy_target_vector_from_gumbel_final_pair_scores(
         mcts_result,
         board_size=board_size,
     )
-
-
-def _build_policy_target_vector_from_gumbel_final_scores(
-    mcts_result: Any, *, board_size: int
-) -> np.ndarray:
-    """
-    Legacy v1 Gumbel policy target helper retained for debugging/comparison.
-
-    Build dense policy target from final noise-free Gumbel ranking scores.
-
-    Contract:
-    - Uses `stats["gumbel_final_rank_rows"]` entries (tensor_action + score_without_gumbel).
-    - Applies softmax over the scored action set only.
-    - Leaves all non-scored legal actions at probability 0.
-    - Enforces that the top score action is exactly the selected move.
-    """
-    stats = getattr(mcts_result, "stats", {}) or {}
-    rows = stats.get("gumbel_final_rank_rows")
-    if not isinstance(rows, list) or not rows:
-        raise ValueError(
-            "Gumbel move is missing gumbel_final_rank_rows in MCTS stats; "
-            "cannot build Gumbel-specific policy target."
-        )
-
-    action_count = board_size * board_size
-    action_indices: List[int] = []
-    raw_scores: List[float] = []
-    seen_indices: set[int] = set()
-
-    for row in rows:
-        if not isinstance(row, dict):
-            raise TypeError(
-                f"gumbel_final_rank_rows entries must be dict, got {type(row)}"
-            )
-        action_raw = row.get("tensor_action")
-        score_raw = row.get("score_without_gumbel")
-        if action_raw is None or score_raw is None:
-            raise ValueError(
-                "gumbel_final_rank_rows entries must include tensor_action and score_without_gumbel"
-            )
-        action_idx = int(action_raw)
-        if action_idx < 0 or action_idx >= action_count:
-            raise ValueError(
-                f"Invalid tensor_action {action_idx} for board size {board_size}"
-            )
-        if action_idx in seen_indices:
-            raise ValueError(
-                f"Duplicate tensor_action {action_idx} in gumbel_final_rank_rows"
-            )
-        score = float(score_raw)
-        if not np.isfinite(score):
-            raise ValueError(
-                f"Non-finite score_without_gumbel for tensor_action {action_idx}: {score_raw!r}"
-            )
-        seen_indices.add(action_idx)
-        action_indices.append(action_idx)
-        raw_scores.append(score)
-
-    selected_move = mcts_result.move
-    selected_idx = rowcol_to_tensor_with_size(
-        int(selected_move[0]), int(selected_move[1]), board_size
-    )
-    top_idx = action_indices[int(np.argmax(np.asarray(raw_scores, dtype=np.float64)))]
-    if selected_idx != top_idx:
-        raise RuntimeError(
-            "Gumbel target construction mismatch: selected move is not the top noise-free "
-            f"Gumbel score action (selected={selected_idx}, top={top_idx})."
-        )
-
-    scores_arr = np.asarray(raw_scores, dtype=np.float64)
-    max_score = float(np.max(scores_arr))
-    exp_scores = np.exp(scores_arr - max_score)
-    exp_sum = float(np.sum(exp_scores))
-    if exp_sum <= 0.0 or not np.isfinite(exp_sum):
-        raise RuntimeError(
-            "Invalid Gumbel final-score normalization (non-positive/invalid softmax denominator)."
-        )
-    probs = exp_scores / exp_sum
-
-    vec = np.zeros(action_count, dtype=np.float32)
-    for action_idx, prob in zip(action_indices, probs):
-        vec[action_idx] = float(prob)
-
-    total = float(vec.sum())
-    if total <= 0.0:
-        raise RuntimeError("Gumbel policy target vector has zero mass.")
-    if not np.isclose(total, 1.0, atol=1e-6):
-        vec /= total
-    return vec
 
 
 def _resolve_provenance_code_from_selected_move_source(source_raw: Any) -> str:
@@ -733,7 +644,7 @@ def play_deterministic_game(
                     raise RuntimeError(
                         "Gumbel-root tournament move missing MCTS result payload."
                     )
-                policy_target = _build_policy_target_vector_from_gumbel_stage_scores(
+                policy_target = _build_policy_target_vector_from_gumbel_final_pair_scores(
                     mcts_result,
                     board_size=board_size,
                 )

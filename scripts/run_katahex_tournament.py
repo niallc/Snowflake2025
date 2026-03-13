@@ -65,7 +65,7 @@ from hex_ai.inference.model_cache import create_temporary_model_cache
 from hex_ai.inference.game_execution import (
     OpeningPosition,
     TOURNAMENT_NON_TRAINABLE_PROVENANCE_CODE,
-    _build_policy_target_vector_from_gumbel_stage_scores,
+    _build_policy_target_vector_from_gumbel_final_pair_scores,
     _build_policy_target_vector_from_mcts_result,
     _one_hot_policy_target_vector,
     _resolve_provenance_code_from_selected_move_source,
@@ -361,7 +361,7 @@ def play_katahex_vs_sf25_game(
                             raise RuntimeError(
                                 "Gumbel-root SF25 tournament move missing MCTS result payload."
                             )
-                        policy_target = _build_policy_target_vector_from_gumbel_stage_scores(
+                        policy_target = _build_policy_target_vector_from_gumbel_final_pair_scores(
                             mcts_result,
                             board_size=board_size,
                         )
