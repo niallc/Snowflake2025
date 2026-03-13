@@ -730,6 +730,20 @@ class TrainingStep:
 
         return max(candidates, key=_key)
 
+    def _resolve_chunked_target_end_epoch(
+        self,
+        starting_checkpoint: Optional[Path],
+    ) -> int:
+        """Resolve the absolute end epoch for a chunked training lineage."""
+        if self.config.target_end_epoch is not None:
+            return self.config.target_end_epoch
+        if starting_checkpoint is None:
+            return self.NUM_EPOCHS_PER_PIPELINE_RUN
+        initial_epoch, _initial_mini = self._parse_epoch_mini_from_checkpoint(
+            starting_checkpoint
+        )
+        return initial_epoch + self.NUM_EPOCHS_PER_PIPELINE_RUN
+
     def _run_training_once(
         self,
         *,
@@ -894,12 +908,14 @@ class TrainingStep:
             self.logger.info(f"Training completed: {results}")
             return results_dir
 
+        first_child_resume_mode = self.config.resume_mode
         if self.config.training_resume_from is None:
-            self.logger.warning(
-                "Chunked training restart mode is not supported for train-from-scratch runs yet. "
-                "Falling back to a single-process training run."
+            target_end_epoch = self._resolve_chunked_target_end_epoch(None)
+            self.logger.info(
+                f"Chunked training restart mode enabled (every {self.config.restart_every_mini_epochs} mini-epochs) "
+                f"from fresh initialization. Target end epoch: {target_end_epoch}"
             )
-            results = self._run_training_once(
+            initial_result = self._run_training_once(
                 experiments=experiments,
                 all_data_dirs=all_data_dirs,
                 all_shard_ranges=all_shard_ranges,
@@ -907,32 +923,36 @@ class TrainingStep:
                 all_validation_shard_ranges=all_validation_shard_ranges,
                 results_dir=results_dir,
                 resume_from=None,
-                max_mini_epochs=None,
+                max_mini_epochs=self.config.restart_every_mini_epochs,
                 resume_mode="next_epoch",
-                target_end_epoch=self.config.target_end_epoch,
+                target_end_epoch=target_end_epoch,
                 allow_missing_stream_sidecar_fallback=self.config.allow_missing_stream_sidecar_fallback,
             )
-            self.logger.info(f"Training completed: {results}")
-            return results_dir
-
-        starting_checkpoint = Path(self.config.training_resume_from)
-        if not starting_checkpoint.exists():
-            raise FileNotFoundError(
-                f"Starting checkpoint not found: {starting_checkpoint}"
+            if initial_result.get("already_complete"):
+                self.logger.info("Chunked training supervisor: target already reached.")
+                return results_dir
+            if not bool(initial_result.get("stopped_due_to_max_mini_epochs")):
+                self.logger.info(
+                    "Chunked training supervisor: training completed all planned epochs."
+                )
+                return results_dir
+            latest_resume_checkpoint = self._find_latest_checkpoint(Path(results_dir))
+            first_child_resume_mode = "same_epoch"
+        else:
+            starting_checkpoint = Path(self.config.training_resume_from)
+            if not starting_checkpoint.exists():
+                raise FileNotFoundError(
+                    f"Starting checkpoint not found: {starting_checkpoint}"
+                )
+            target_end_epoch = self._resolve_chunked_target_end_epoch(
+                starting_checkpoint
             )
-        initial_epoch, _initial_mini = self._parse_epoch_mini_from_checkpoint(starting_checkpoint)
-        target_end_epoch = (
-            self.config.target_end_epoch
-            if self.config.target_end_epoch is not None
-            else (initial_epoch + self.NUM_EPOCHS_PER_PIPELINE_RUN)
-        )
+            self.logger.info(
+                f"Chunked training restart mode enabled (every {self.config.restart_every_mini_epochs} mini-epochs). "
+                f"Target end epoch: {target_end_epoch}"
+            )
+            latest_resume_checkpoint = starting_checkpoint
 
-        self.logger.info(
-            f"Chunked training restart mode enabled (every {self.config.restart_every_mini_epochs} mini-epochs). "
-            f"Target end epoch: {target_end_epoch}"
-        )
-
-        latest_resume_checkpoint = starting_checkpoint
         chunk_idx = 0
 
         while True:
@@ -942,7 +962,7 @@ class TrainingStep:
             # Subsequent chunks use same-epoch resume to preserve within-epoch
             # continuity using sidecars produced by prior chunks.
             resume_mode = (
-                self.config.resume_mode
+                first_child_resume_mode
                 if chunk_idx == 1
                 else "same_epoch"
             )

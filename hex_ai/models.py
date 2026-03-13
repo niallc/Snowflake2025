@@ -135,6 +135,42 @@ class ResNetBlock(nn.Module):
         return out
 
 
+class BottleneckResNetBlock(nn.Module):
+    """
+    Constant-width residual block with a narrower internal bottleneck.
+
+    This keeps full board resolution while reducing the expensive 3x3 compute,
+    which is the main efficiency lesson we want to test from the Gumbel appendix.
+    """
+
+    def __init__(self, channels: int, bottleneck_channels: int):
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            channels, bottleneck_channels, kernel_size=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(bottleneck_channels)
+        self.conv2 = nn.Conv2d(
+            bottleneck_channels,
+            bottleneck_channels,
+            kernel_size=3,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = nn.BatchNorm2d(bottleneck_channels)
+        self.conv3 = nn.Conv2d(
+            bottleneck_channels, channels, kernel_size=1, bias=False
+        )
+        self.bn3 = nn.BatchNorm2d(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out += x
+        out = F.relu(out)
+        return out
+
+
 class GlobalPoolingResidualBlock(nn.Module):
     """
     Residual block with both local conv and global pooling re-injection,
@@ -179,6 +215,57 @@ class GlobalPoolingResidualBlock(nn.Module):
         g = self.fc(g).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
         
         # Combine: residual + gated global bias
+        out = F.relu(x + local + self.g_alpha * g)
+        return out
+
+
+class BottleneckGlobalPoolingResidualBlock(nn.Module):
+    """
+    Gpool residual block with a bottlenecked local path.
+
+    The local path is compute-reduced while the global bias path stays aligned
+    with the current live architecture so we change one main variable at a time.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        bottleneck_channels: int,
+        gpool_channels: int = 16,
+    ):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(
+            channels, bottleneck_channels, kernel_size=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(bottleneck_channels)
+        self.conv2 = nn.Conv2d(
+            bottleneck_channels,
+            bottleneck_channels,
+            kernel_size=3,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = nn.BatchNorm2d(bottleneck_channels)
+        self.conv3 = nn.Conv2d(
+            bottleneck_channels, channels, kernel_size=1, bias=False
+        )
+        self.bn3 = nn.BatchNorm2d(channels)
+
+        self.gconv = nn.Conv2d(channels, gpool_channels, kernel_size=1, bias=False)
+        self.gbn = nn.BatchNorm2d(gpool_channels)
+        self.fc = nn.Linear(gpool_channels, channels)
+        self.g_alpha = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        local = F.relu(self.bn1(self.conv1(x)))
+        local = F.relu(self.bn2(self.conv2(local)))
+        local = self.bn3(self.conv3(local))
+
+        g = self.gbn(self.gconv(x))
+        g = g.mean(dim=(2, 3))
+        g = self.fc(g).unsqueeze(-1).unsqueeze(-1)
+
         out = F.relu(x + local + self.g_alpha * g)
         return out
 
@@ -463,8 +550,8 @@ class TwoHeadedResNet(nn.Module):
         for name, module in self.named_modules():
             if module is bn_module:
                 # Check if this is the second BN in a residual block
-                # Pattern: trunk.X.bn2 or similar for the last BN in each block
-                if 'trunk' in name and name.endswith('.bn2'):
+                # Pattern: trunk.X.bn2 / trunk.X.bn3 for the last BN in each block
+                if 'trunk' in name and (name.endswith('.bn2') or name.endswith('.bn3')):
                     return True
                 # Also check for shortcut BNs (though they're less common in our architecture)
                 if 'shortcut' in name and name.endswith('.1'):  # shortcut.1 is usually the BN
@@ -705,6 +792,40 @@ class TwoHeadedResNet(nn.Module):
         return self.forward_value_only(boards, move_stage)
 
 
+class TwoHeadedBottleneckResNet(TwoHeadedResNet):
+    """
+    Bottleneck-trunk variant of the current KataGo-inspired family.
+
+    It keeps the same stem, heads, full board resolution, and periodic global
+    pooling pattern, but makes the trunk blocks cheaper so we can test deeper
+    or wider challengers without paying the full cost of plain full-width blocks.
+    """
+
+    def __init__(self, num_blocks: int = 9, trunk_channels: int = 128):
+        super().__init__(num_blocks=num_blocks, trunk_channels=trunk_channels)
+        self.model_type = "katago_bottleneck"
+        self.bottleneck_channels = max(1, trunk_channels // 2)
+
+        blocks = []
+        for i in range(num_blocks):
+            if i % 3 == 2:
+                blocks.append(
+                    BottleneckGlobalPoolingResidualBlock(
+                        trunk_channels,
+                        bottleneck_channels=self.bottleneck_channels,
+                    )
+                )
+            else:
+                blocks.append(
+                    BottleneckResNetBlock(
+                        trunk_channels,
+                        bottleneck_channels=self.bottleneck_channels,
+                    )
+                )
+        self.trunk = nn.Sequential(*blocks)
+        self._initialize_weights()
+
+
 def create_model(
     model_type: str = "katago_inspired",
     num_blocks: int = 7,
@@ -714,7 +835,7 @@ def create_model(
     Factory function to create a model instance.
     
     Args:
-        model_type: Type of model to create (only "katago_inspired" supported)
+        model_type: Type of model to create
         num_blocks: Number of residual blocks in the trunk
         trunk_channels: Number of channels in the trunk (constant throughout)
         
@@ -723,10 +844,15 @@ def create_model(
     """
     if model_type == "katago_inspired":
         return TwoHeadedResNet(num_blocks=num_blocks, trunk_channels=trunk_channels)
+    if model_type == "katago_bottleneck":
+        return TwoHeadedBottleneckResNet(
+            num_blocks=num_blocks,
+            trunk_channels=trunk_channels,
+        )
     else:
         raise ValueError(
-            f"Unknown model type: {model_type}. Only 'katago_inspired' is supported. "
-            f"Legacy model types are no longer supported. Please update your code to use 'katago_inspired'."
+            f"Unknown model type: {model_type}. Supported model types are "
+            "'katago_inspired' and 'katago_bottleneck'."
         )
 
 
@@ -765,16 +891,28 @@ def get_model_summary(model: nn.Module) -> str:
         gpool_blocks = model.num_blocks // 3
         plain_blocks = model.num_blocks - gpool_blocks
         k_outputs = model.value_head.k_outputs
+        bottleneck_channels = getattr(model, "bottleneck_channels", None)
+        model_variant = (
+            f"{model.__class__.__name__} (KataGo-inspired bottleneck)"
+            if bottleneck_channels is not None
+            else f"{model.__class__.__name__} (KataGo-inspired)"
+        )
+        trunk_line = (
+            f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels "
+            f"and {bottleneck_channels} bottleneck channels"
+            if bottleneck_channels is not None
+            else f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels"
+        )
         
         summary = f"""
 Model Summary:
 ==============
 Total Parameters: {total_params:,}
-Model Type: {model.__class__.__name__} (KataGo-inspired)
+Model Type: {model_variant}
 
 Architecture:
 - Input: (batch_size, 3, 13, 13)
-- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels
+{trunk_line}
   * {plain_blocks} plain ResNet blocks
   * {gpool_blocks} global pooling blocks (every 3rd block)
 - Policy Head: Global pooling bias injection preserving 13x13 spatial structure
@@ -789,16 +927,28 @@ Output:
         # KataGo-inspired architecture without enhanced value head
         gpool_blocks = model.num_blocks // 3
         plain_blocks = model.num_blocks - gpool_blocks
+        bottleneck_channels = getattr(model, "bottleneck_channels", None)
+        model_variant = (
+            f"{model.__class__.__name__} (KataGo-inspired bottleneck)"
+            if bottleneck_channels is not None
+            else f"{model.__class__.__name__} (KataGo-inspired)"
+        )
+        trunk_line = (
+            f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels "
+            f"and {bottleneck_channels} bottleneck channels"
+            if bottleneck_channels is not None
+            else f"- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels"
+        )
         
         summary = f"""
 Model Summary:
 ==============
 Total Parameters: {total_params:,}
-Model Type: {model.__class__.__name__} (KataGo-inspired)
+Model Type: {model_variant}
 
 Architecture:
 - Input: (batch_size, 3, 13, 13)
-- Trunk: {model.num_blocks} blocks with constant {model.trunk_channels} channels
+{trunk_line}
   * {plain_blocks} plain ResNet blocks
   * {gpool_blocks} global pooling blocks (every 3rd block)
 - Policy Head: Global pooling bias injection preserving 13x13 spatial structure
