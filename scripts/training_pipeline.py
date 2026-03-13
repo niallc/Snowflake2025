@@ -648,6 +648,13 @@ class TrainingStep:
     def _build_experiments(self) -> List[Dict[str, Any]]:
         """Build experiment definitions from the hyperparameter sweep config."""
         sweep = create_hyperparameter_sweep(self.config.hyperparameter_overrides)
+        architecture_params = ("model_type", "num_blocks", "trunk_channels")
+
+        def _format_label(param: str, value: Any) -> str:
+            short_label = HYPERPARAMETER_SHORT_LABELS.get(param, param)
+            if isinstance(value, float):
+                return f"{short_label}{value:.0e}"
+            return f"{short_label}{value}"
 
         import itertools
         param_names = list(sweep.keys())
@@ -663,18 +670,18 @@ class TrainingStep:
                 config["value_weight"] = 1.0 - config["policy_weight"]
 
             exp_name = f"pipeline_sweep_{i}"
+            fixed_architecture_labels = [
+                _format_label(param, config[param])
+                for param in architecture_params
+                if param in self.config.hyperparameter_overrides and param in config
+            ]
             if len(all_configs) > 1:
                 varying_params = [k for k, v in sweep.items() if len(v) > 1]
                 if varying_params:
-                    labels = []
-                    for param in varying_params:
-                        short_label = HYPERPARAMETER_SHORT_LABELS.get(param, param)
-                        value = config[param]
-                        if isinstance(value, float):
-                            labels.append(f"{short_label}{value:.0e}")
-                        else:
-                            labels.append(f"{short_label}{value}")
+                    labels = [_format_label(param, config[param]) for param in varying_params]
                     exp_name = f"pipeline_sweep_{i}_{'_'.join(labels)}"
+            elif fixed_architecture_labels:
+                exp_name = f"pipeline_sweep_{i}_{'_'.join(fixed_architecture_labels)}"
 
             experiments.append(
                 {

@@ -37,7 +37,7 @@ The KataGo-inspired architecture is now implemented. Remaining tasks:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Any, Dict, List, Tuple
 
 from .config import (
     BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE,
@@ -503,6 +503,18 @@ class TwoHeadedResNet(nn.Module):
         
         return policy_logits, value_signed
 
+    def forward_from_boards(
+        self,
+        boards: torch.Tensor,
+        *,
+        move_stage: torch.Tensor | None = None,
+        batch_idx: int | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Run the family-standard forward pass from board tensors."""
+        if move_stage is None:
+            move_stage = compute_move_stage(boards)
+        return self(boards, move_stage, batch_idx=batch_idx)
+
     def get_policy_head_final_layer_params(self):
         """
         Get parameters for the policy head final conv layer with higher weight decay.
@@ -525,6 +537,146 @@ class TwoHeadedResNet(nn.Module):
                 other_params.append(param)
         return other_params
 
+    def _separate_params_by_weight_decay(
+        self,
+        params: List[nn.Parameter],
+    ) -> Tuple[List[nn.Parameter], List[nn.Parameter]]:
+        """
+        Split parameters into weight-decayed and exempt groups.
+
+        Keeping this model-owned avoids trainer coupling to exact head/trunk
+        structure when new families are introduced.
+        """
+        parameter_names = {id(param): name for name, param in self.named_parameters()}
+        weight_decay_params: List[nn.Parameter] = []
+        no_weight_decay_params: List[nn.Parameter] = []
+
+        for param in params:
+            param_name = parameter_names.get(id(param))
+            if param_name is None:
+                raise RuntimeError(
+                    f"CRITICAL BUG: Could not find parameter name for parameter {param}. "
+                    "All optimizer-group parameters must map back to named_parameters()."
+                )
+
+            if any(
+                norm_type in param_name
+                for norm_type in ["bn", "norm", "batch_norm", "layer_norm"]
+            ) or param_name.endswith(".bias"):
+                no_weight_decay_params.append(param)
+            else:
+                weight_decay_params.append(param)
+
+        return weight_decay_params, no_weight_decay_params
+
+    def build_optimizer_param_groups(
+        self,
+        *,
+        learning_rate: float,
+        weight_decay: float,
+        value_learning_rate_factor: float,
+        value_weight_decay_factor: float,
+    ) -> List[Dict[str, Any]]:
+        """
+        Build optimizer parameter groups for this model family.
+        """
+        policy_final_params = self.get_policy_head_final_layer_params()
+        policy_other_params = self.get_policy_head_other_params()
+
+        value_head_params = list(self.value_head.parameters())
+        excluded_param_ids = {
+            id(param)
+            for param in policy_final_params + policy_other_params + value_head_params
+        }
+        trunk_params = [
+            param for param in self.parameters() if id(param) not in excluded_param_ids
+        ]
+
+        trunk_weight_decay, trunk_no_weight_decay = self._separate_params_by_weight_decay(
+            trunk_params
+        )
+        (
+            policy_other_weight_decay,
+            policy_other_no_weight_decay,
+        ) = self._separate_params_by_weight_decay(policy_other_params)
+        (
+            policy_final_weight_decay,
+            policy_final_no_weight_decay,
+        ) = self._separate_params_by_weight_decay(policy_final_params)
+        (
+            value_head_weight_decay,
+            value_head_no_weight_decay,
+        ) = self._separate_params_by_weight_decay(value_head_params)
+
+        param_groups: List[Dict[str, Any]] = []
+
+        if trunk_weight_decay:
+            param_groups.append(
+                {
+                    "params": trunk_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": weight_decay,
+                }
+            )
+        if trunk_no_weight_decay:
+            param_groups.append(
+                {
+                    "params": trunk_no_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": 0.0,
+                }
+            )
+        if policy_other_weight_decay:
+            param_groups.append(
+                {
+                    "params": policy_other_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": weight_decay,
+                }
+            )
+        if policy_other_no_weight_decay:
+            param_groups.append(
+                {
+                    "params": policy_other_no_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": 0.0,
+                }
+            )
+        if policy_final_weight_decay:
+            param_groups.append(
+                {
+                    "params": policy_final_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": weight_decay * 2.0,
+                }
+            )
+        if policy_final_no_weight_decay:
+            param_groups.append(
+                {
+                    "params": policy_final_no_weight_decay,
+                    "lr": learning_rate,
+                    "weight_decay": 0.0,
+                }
+            )
+        if value_head_weight_decay:
+            param_groups.append(
+                {
+                    "params": value_head_weight_decay,
+                    "lr": learning_rate * value_learning_rate_factor,
+                    "weight_decay": weight_decay * value_weight_decay_factor,
+                }
+            )
+        if value_head_no_weight_decay:
+            param_groups.append(
+                {
+                    "params": value_head_no_weight_decay,
+                    "lr": learning_rate * value_learning_rate_factor,
+                    "weight_decay": 0.0,
+                }
+            )
+
+        return param_groups
+
     @torch.no_grad()
     def forward_value_only(self, x: torch.Tensor, move_stage: torch.Tensor) -> torch.Tensor:
         """
@@ -539,6 +691,18 @@ class TwoHeadedResNet(nn.Module):
         """
         trunk_out = self.forward_shared(x)
         return self.value_head(trunk_out, move_stage)
+
+    @torch.no_grad()
+    def forward_value_only_from_boards(
+        self,
+        boards: torch.Tensor,
+        *,
+        move_stage: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Run value-only inference from raw board tensors."""
+        if move_stage is None:
+            move_stage = compute_move_stage(boards)
+        return self.forward_value_only(boards, move_stage)
 
 
 def create_model(
@@ -755,17 +919,19 @@ def compute_move_stage(board: torch.Tensor) -> torch.Tensor:
 
 def is_new_architecture(model: nn.Module) -> bool:
     """
-    Check if a model uses the new KataGo-inspired architecture.
+    Check whether a model implements the current multi-architecture runtime API.
     
     Args:
         model: PyTorch model to check
         
     Returns:
-        bool: True if model uses new architecture, False otherwise
+        bool: True if the model exposes the required runtime helpers, False otherwise
     """
-    return (hasattr(model, 'value_head') and 
-            hasattr(model.value_head, 'k_outputs') and
-            hasattr(model, 'trunk_channels') and
-            hasattr(model, 'num_blocks'))
-
-
+    return all(
+        callable(getattr(model, method_name, None))
+        for method_name in (
+            "forward_from_boards",
+            "forward_value_only_from_boards",
+            "build_optimizer_param_groups",
+        )
+    )

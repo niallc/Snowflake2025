@@ -5,9 +5,7 @@ This module provides efficient model caching to avoid reloading models
 for every move during tournaments.
 """
 
-import os
-from typing import Dict, Optional, Tuple
-from pathlib import Path
+from typing import Dict
 
 from hex_ai.inference.simple_model_inference import SimpleModelInference
 from hex_ai.inference.model_wrapper import ModelWrapper
@@ -49,13 +47,8 @@ class ModelCache:
         """Get or create a ModelWrapper instance."""
         normalized_path = get_normalized_path(checkpoint_path)
         if normalized_path not in self._wrapper_models:
-            # Get the simple model first to extract model_type
             simple_model = self.get_simple_model(checkpoint_path)
-            self._wrapper_models[normalized_path] = ModelWrapper(
-                checkpoint_path, 
-                device=None, 
-                model_type=simple_model.model_type
-            )
+            self._wrapper_models[normalized_path] = simple_model.model
         return self._wrapper_models[normalized_path]
     
     def clear_cache(self) -> None:

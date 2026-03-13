@@ -23,14 +23,14 @@ import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
-from hex_ai.models import compute_move_stage, compute_value_loss, MAX_LOG_COSH_INPUT_ABS
+from hex_ai.model_interface import build_optimizer_param_groups, forward_model
+from hex_ai.models import compute_value_loss, MAX_LOG_COSH_INPUT_ABS
 from hex_ai.nan_debug_utils import (
     check_for_nan_and_debug, calculate_validation_metrics_statistics, create_batch_analysis, find_nan_batch_indices,
     initialize_global_first_nan_detector, get_global_first_nan_detector, cleanup_global_first_nan_detector
 )
 
 from .config import VERBOSE_LEVEL
-from .models import TwoHeadedResNet
 from .config import (
     LEARNING_RATE, BATCH_SIZE, NUM_EPOCHS, POLICY_LOSS_WEIGHT, VALUE_LOSS_WEIGHT,
     BOARD_SIZE, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -882,7 +882,7 @@ class MixedPrecisionTrainer:
 class Trainer:
     """Training manager for Hex AI models."""
     
-    def __init__(self, model: TwoHeadedResNet, 
+    def __init__(self, model: nn.Module, 
                  train_loader: DataLoader,
                  val_loader: Optional[DataLoader] = None,
                  learning_rate: float = LEARNING_RATE,
@@ -962,125 +962,15 @@ class Trainer:
         # Initialize mixed precision
         self.mixed_precision = MixedPrecisionTrainer(device)
         
-        # Create parameter groups for different learning rates and weight decay
-        # Use the model's built-in policy head stability mechanisms
-        
-        def separate_params_by_weight_decay(params):
-            """
-            Separate parameters into those that should and shouldn't have weight decay.
-            
-            Weight decay should NOT be applied to:
-            - BatchNorm/LayerNorm weight and bias parameters
-            - All bias parameters (including Linear layer biases)
-            
-            Weight decay SHOULD be applied to:
-            - Conv2d weight parameters
-            - Linear weight parameters
-            """
-            weight_decay_params = []
-            no_weight_decay_params = []
-            
-            for param in params:
-                # Get the parameter name to check its type
-                param_name = None
-                for name, p in model.named_parameters():
-                    if id(p) == id(param):
-                        param_name = name
-                        break
-                
-                if param_name is None:
-                    raise RuntimeError(
-                        f"CRITICAL BUG: Could not find parameter name for parameter {param}. "
-                        f"This indicates a bug in the parameter separation logic. "
-                        f"All model parameters should have identifiable names for proper weight decay handling."
-                    )
-                
-                # Check if this is a norm layer parameter or bias
-                if any(norm_type in param_name for norm_type in ['bn', 'norm', 'batch_norm', 'layer_norm']):
-                    no_weight_decay_params.append(param)
-                elif param_name.endswith('.bias'):
-                    no_weight_decay_params.append(param)
-                else:
-                    weight_decay_params.append(param)
-            
-            return weight_decay_params, no_weight_decay_params
-        
-        # Get policy head parameter groups (with higher weight decay for final layer)
-        policy_final_params = model.get_policy_head_final_layer_params()
-        policy_other_params = model.get_policy_head_other_params()
-        
-        # Get value head parameters
-        value_head_params = list(model.value_head.parameters())
-        value_head_param_ids = {id(p) for p in value_head_params}
-        
-        # Get all other parameters (excluding policy head and value head)
-        other_param_ids = {id(p) for p in policy_final_params + policy_other_params + value_head_params}
-        trunk_params = [p for p in model.parameters() if id(p) not in other_param_ids]
-        
-        # Separate each parameter group by weight decay eligibility
-        trunk_weight_decay, trunk_no_weight_decay = separate_params_by_weight_decay(trunk_params)
-        policy_other_weight_decay, policy_other_no_weight_decay = separate_params_by_weight_decay(policy_other_params)
-        policy_final_weight_decay, policy_final_no_weight_decay = separate_params_by_weight_decay(policy_final_params)
-        value_head_weight_decay, value_head_no_weight_decay = separate_params_by_weight_decay(value_head_params)
-        
-        # Create parameter groups with proper weight decay separation
-        param_groups = []
-        
-        # Trunk parameters
-        if trunk_weight_decay:
-            param_groups.append({
-                'params': trunk_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': weight_decay
-            })
-        if trunk_no_weight_decay:
-            param_groups.append({
-                'params': trunk_no_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': 0.0
-            })
-        
-        # Policy head other parameters
-        if policy_other_weight_decay:
-            param_groups.append({
-                'params': policy_other_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': weight_decay
-            })
-        if policy_other_no_weight_decay:
-            param_groups.append({
-                'params': policy_other_no_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': 0.0
-            })
-        
-        # Policy head final layer parameters (higher weight decay)
-        if policy_final_weight_decay:
-            param_groups.append({
-                'params': policy_final_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': weight_decay * 2.0  # Higher weight decay for policy final layer
-            })
-        if policy_final_no_weight_decay:
-            param_groups.append({
-                'params': policy_final_no_weight_decay,
-                'lr': learning_rate,
-                'weight_decay': 0.0
-            })
-        
-        # Value head parameters
-        if value_head_weight_decay:
-            param_groups.append({
-                'params': value_head_weight_decay,
-                'lr': learning_rate * value_learning_rate_factor,
-                'weight_decay': weight_decay * value_weight_decay_factor
-            })
-        if value_head_no_weight_decay:
-            param_groups.append({
-                'params': value_head_no_weight_decay,
-                'lr': learning_rate * value_learning_rate_factor,
-                'weight_decay': 0.0
-            })
+        # Let the model family own optimizer grouping so new architectures can
+        # define their own policy/value/trunk split without trainer edits.
+        param_groups = build_optimizer_param_groups(
+            model,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            value_learning_rate_factor=value_learning_rate_factor,
+            value_weight_decay_factor=value_weight_decay_factor,
+        )
         
         # Optimizer and loss
         self.optimizer = optim.AdamW(param_groups, betas=betas, eps=eps)
@@ -1198,7 +1088,11 @@ class Trainer:
                 
                 # Forward pass with mixed precision
                 with self.mixed_precision.autocast_context():
-                    policy_pred, value_pred = self.model(boards, move_stage)
+                    policy_pred, value_pred = forward_model(
+                        self.model,
+                        boards,
+                        move_stage=move_stage,
+                    )
                     total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
                 
                 
@@ -1597,7 +1491,11 @@ class Trainer:
         # Forward pass with mixed precision
         self.optimizer.zero_grad(set_to_none=True)
         with self.mixed_precision.autocast_context():
-            policy_pred, value_pred = self.model(boards, move_stage)
+            policy_pred, value_pred = forward_model(
+                self.model,
+                boards,
+                move_stage=move_stage,
+            )
             total_loss, loss_dict = self.criterion(policy_pred, value_pred, policies, values, boards)
         
         

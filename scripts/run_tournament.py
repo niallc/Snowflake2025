@@ -77,6 +77,10 @@ from hex_ai.inference.model_config import (
     get_all_model_participants_from_generations,
     get_primary_model_paths_from_recent_generations,
 )
+from hex_ai.model_spec import (
+    architecture_label_from_model_spec,
+    resolve_model_spec_for_checkpoint_path,
+)
 from hex_ai.utils.gumbel_validation import check_gumbel_configurations
 from hex_ai.inference.strategy_config import StrategyConfig
 from hex_ai.utils.tournament_logging import get_command_line
@@ -647,6 +651,7 @@ def _build_checkpoint_participant(
     if "temperature" not in participant_config:
         participant_config["temperature"] = 1.0
 
+    model_spec = resolve_model_spec_for_checkpoint_path(checkpoint.file_path)
     return TournamentParticipant(
         name=checkpoint.name,
         strategy_config=participant_config,
@@ -655,8 +660,25 @@ def _build_checkpoint_participant(
             "epoch": checkpoint.epoch,
             "mini_epoch": checkpoint.mini,
             "checkpoint_number": checkpoint.checkpoint_number,
+            "model_spec": model_spec.to_dict(),
+            "architecture_label": architecture_label_from_model_spec(model_spec),
         },
     )
+
+
+def _attach_model_spec_metadata(
+    participant: TournamentParticipant,
+) -> TournamentParticipant:
+    """Ensure tournament participant metadata carries explicit architecture info."""
+    model_path = participant.strategy_config.get("model_path")
+    if not model_path:
+        return participant
+    model_spec = resolve_model_spec_for_checkpoint_path(model_path)
+    participant.metadata["model_spec"] = model_spec.to_dict()
+    participant.metadata["architecture_label"] = architecture_label_from_model_spec(
+        model_spec
+    )
+    return participant
 
 
 def _split_csv_arg(value: Optional[str]) -> List[str]:
@@ -716,9 +738,12 @@ def _build_explicit_knockout_participant(
     if "temperature" not in participant_config:
         participant_config["temperature"] = 1.0
 
+    model_spec = resolve_model_spec_for_checkpoint_path(resolved_path)
     metadata: Dict[str, Any] = {
         "checkpoint_file": str(resolved_path),
         "source_dir": str(resolved_path.parent),
+        "model_spec": model_spec.to_dict(),
+        "architecture_label": architecture_label_from_model_spec(model_spec),
     }
     match = CHECKPOINT_NAME_REGEX.match(resolved_path.name)
     if match:
@@ -1333,7 +1358,7 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
                 "strategy_name": str(strategy_config)
             }
         )
-        round_robin_participants.append(participant)
+        round_robin_participants.append(_attach_model_spec_metadata(participant))
     
     # Handle knockout participants: from MODEL_GENERATIONS, latest-run sampling, or directory discovery.
     knockout_participants = None
@@ -1352,7 +1377,12 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
 
     if args.knockout_from_generations:
         # Get all participants from MODEL_GENERATIONS
-        knockout_participants = get_all_model_participants_from_generations(knockout_config)
+        knockout_participants = [
+            _attach_model_spec_metadata(participant)
+            for participant in get_all_model_participants_from_generations(
+                knockout_config
+            )
+        ]
         print(f"Loaded {len(knockout_participants)} models from MODEL_GENERATIONS")
     elif args.most_recent is not None or args.most_recent_biased is not None:
         try:
@@ -1407,7 +1437,9 @@ def run_two_stage_tournament(args, strategy_configs, model_paths, openings, comm
     if has_extra_knockout_checkpoints:
         try:
             extra_knockout_participants = [
-                _build_explicit_knockout_participant(path, knockout_config)
+                _attach_model_spec_metadata(
+                    _build_explicit_knockout_participant(path, knockout_config)
+                )
                 for path in extra_knockout_checkpoint_paths
             ]
         except (FileNotFoundError, ValueError) as error:

@@ -9,7 +9,9 @@ to rely on hardcoded defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import gzip
+import json
 from pathlib import Path
 import re
 from typing import Any, Dict, Mapping, Optional, Union
@@ -91,6 +93,11 @@ def build_model_from_spec(model_spec: ModelSpec):
     return create_model(**model_spec.to_model_kwargs())
 
 
+def architecture_label_from_model_spec(model_spec: ModelSpec) -> str:
+    """Return a compact human-readable architecture label."""
+    return f"{model_spec.model_type}_{int(model_spec.num_blocks)}x{int(model_spec.trunk_channels)}"
+
+
 def model_spec_from_model(model: Any) -> ModelSpec:
     """Extract a spec from a live model instance."""
     model_type = str(getattr(model, "model_type", DEFAULT_MODEL_TYPE))
@@ -169,6 +176,34 @@ def resolve_model_spec_from_checkpoint_payload(
     return infer_model_spec_from_state_dict(state_dict)
 
 
+def resolve_model_spec_for_checkpoint_path(
+    checkpoint_path: Union[str, Path],
+    map_location: Optional[Any] = None,
+) -> ModelSpec:
+    """
+    Resolve model spec for a checkpoint path.
+
+    Prefer nearby experiment metadata because it is much cheaper than loading a
+    full checkpoint, then fall back to reading the checkpoint payload itself.
+    """
+    resolved = str(Path(checkpoint_path).expanduser().resolve())
+    return _resolve_model_spec_for_checkpoint_path_cached(resolved, _map_location_key(map_location))
+
+
+@lru_cache(maxsize=512)
+def _resolve_model_spec_for_checkpoint_path_cached(
+    checkpoint_path: str,
+    map_location_key: Optional[str],
+) -> ModelSpec:
+    del map_location_key
+    path = Path(checkpoint_path)
+    metadata_spec = _load_model_spec_from_nearby_experiment_metadata(path)
+    if metadata_spec is not None:
+        return metadata_spec
+    payload = load_checkpoint_payload(path, map_location="cpu")
+    return resolve_model_spec_from_checkpoint_payload(payload)
+
+
 def infer_model_spec_from_state_dict(state_dict: Mapping[str, Any]) -> ModelSpec:
     """
     Infer a legacy model spec from checkpoint weights.
@@ -209,6 +244,32 @@ def infer_model_spec_from_state_dict(state_dict: Mapping[str, Any]) -> ModelSpec
         trunk_channels=trunk_channels,
         board_size=BOARD_SIZE,
     )
+
+
+def _load_model_spec_from_nearby_experiment_metadata(
+    checkpoint_path: Path,
+) -> Optional[ModelSpec]:
+    metadata_path = checkpoint_path.parent / "experiment_metadata.json"
+    if not metadata_path.exists():
+        return None
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    if not isinstance(metadata, Mapping):
+        raise TypeError(
+            f"Experiment metadata must be a mapping, got {type(metadata)!r}"
+        )
+    if "model_spec" in metadata:
+        return ModelSpec.from_dict(metadata["model_spec"])
+    hyperparameters = metadata.get("hyperparameters")
+    if isinstance(hyperparameters, Mapping):
+        return model_spec_from_hyperparameters(hyperparameters)
+    return None
+
+
+def _map_location_key(map_location: Optional[Any]) -> Optional[str]:
+    if map_location is None:
+        return None
+    return str(map_location)
 
 
 def _is_gzipped(path: Path) -> bool:

@@ -11,6 +11,7 @@ import time
 from typing import Tuple, List, Optional, Dict
 import logging
 
+from .model_interface import forward_model
 from .config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 from .model_spec import (
     DEFAULT_MODEL_TYPE,
@@ -484,10 +485,28 @@ class ValueHeadAnalyzer:
         
         with torch.no_grad():
             for i in range(min(num_samples, len(self.dataset))):
-                board, policy, value = self.dataset[i]
+                sample = self.dataset[i]
+                if len(sample) == 4:
+                    board, policy, value, move_stage = sample
+                elif len(sample) == 3:
+                    board, policy, value = sample
+                    move_stage = None
+                else:
+                    raise ValueError(
+                        "Unexpected dataset sample format in ValueHeadAnalyzer: "
+                        f"expected 3 or 4 items, got {len(sample)}"
+                    )
                 board = board.unsqueeze(0).to(self.device)
-                
-                policy_pred, value_pred = self.model(board)
+                move_stage_tensor = (
+                    move_stage.unsqueeze(0).to(self.device)
+                    if move_stage is not None
+                    else None
+                )
+                policy_pred, value_pred = forward_model(
+                    self.model,
+                    board,
+                    move_stage=move_stage_tensor,
+                )
                 # Convert from [-1, 1] to [0, 1] range using centralized utility
                 value_prob = ValuePredictor.model_output_to_probability(value_pred.item())
                 
@@ -539,7 +558,7 @@ class ValueHeadAnalyzer:
         results = {}
         with torch.no_grad():
             for name, board in test_positions.items():
-                policy_pred, value_pred = self.model(board)
+                policy_pred, value_pred = forward_model(self.model, board)
                 # Convert from [-1, 1] to [0, 1] range using centralized utility
                 value_prob = ValuePredictor.model_output_to_probability(value_pred.item())
                 results[name] = value_prob

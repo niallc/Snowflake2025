@@ -4,13 +4,13 @@ from typing import Optional, Tuple, List, Union, Dict, Any
 
 import torch
 
+from hex_ai.model_interface import forward_model
 from hex_ai.model_spec import (
     ModelSpec,
     build_model_from_spec,
     load_checkpoint_payload,
     resolve_model_spec_from_checkpoint_payload,
 )
-from hex_ai.models import compute_move_stage, is_new_architecture
 from hex_ai.training_utils import get_device
 
 # NOTE: As of July 2025, the model expects (3, N, N) input: blue, red, player-to-move channels.
@@ -122,16 +122,7 @@ class ModelWrapper:
                     f"predict: input_device_before={before_device}, input_device_after={board_tensor.device}, model_device={next(self.model.parameters()).device}"
                 )
             
-            # Validate model architecture
-            if not is_new_architecture(self.model):
-                raise ValueError(
-                    "Model does not support the current inference interface with move_stage. "
-                    f"Loaded model type: {type(self.model).__name__}."
-                )
-            
-            # Compute move_stage from board state and call model
-            move_stage = compute_move_stage(board_tensor)
-            policy_logits, value_signed = self.model(board_tensor, move_stage)
+            policy_logits, value_signed = forward_model(self.model, board_tensor)
             
             # Remove batch dimension for single input
             if single_input:
@@ -163,16 +154,7 @@ class ModelWrapper:
                 logger.debug(
                     f"batch_predict: input_device_before={before_device}, input_device_after={board_tensors.device}, model_device={next(self.model.parameters()).device}"
                 )
-            # Validate model architecture
-            if not is_new_architecture(self.model):
-                raise ValueError(
-                    "Model does not support the current inference interface with move_stage. "
-                    f"Loaded model type: {type(self.model).__name__}."
-                )
-            
-            # Compute move_stage from board state and call model
-            move_stage = compute_move_stage(board_tensors)
-            policy_logits, value_signed = self.model(board_tensors, move_stage)
+            policy_logits, value_signed = forward_model(self.model, board_tensors)
             
             return policy_logits.cpu(), value_signed.cpu()
 
@@ -201,16 +183,7 @@ class ModelWrapper:
         # Time the actual neural network forward pass (pure inference)
         pure_forward_start = time.perf_counter()
         with torch.no_grad():
-            # Validate model architecture
-            if not is_new_architecture(self.model):
-                raise ValueError(
-                    "Model does not support the current inference interface with move_stage. "
-                    f"Loaded model type: {type(self.model).__name__}."
-                )
-            
-            # Compute move_stage from board state and call model
-            move_stage = compute_move_stage(board_tensors)
-            policy_logits, value_signed = self.model(board_tensors, move_stage)
+            policy_logits, value_signed = forward_model(self.model, board_tensors)
         pure_forward_ms = (time.perf_counter() - pure_forward_start) * 1000.0
         
         # Time device synchronization
