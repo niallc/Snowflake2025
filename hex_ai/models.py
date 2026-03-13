@@ -6,7 +6,7 @@ including the main TwoHeadedResNet model and supporting components.
 
 The architecture follows a two-headed design:
 - Policy head: Predicts move probabilities for each board position
-- Value head: Predicts the probability of winning from the current position
+- Value head: Predicts a signed win value from the current position
 
 Active architecture design references:
 - write_ups/Current_Network_vs_KataGo_Gumbel_2026-03-13.md
@@ -531,10 +531,11 @@ class TwoHeadedResNet(nn.Module):
     
     This model uses a ResNet backbone with two separate heads:
     - Policy head: Predicts move probabilities over the configured board area
-    - Value head: Predicts Red's win probability (1 output)
+    - Value head: Predicts Red-referenced signed value (1 output)
     
-    The value head predicts Red's win probability because Red wins are labeled as 1.0 in training.
-    The output is a value in [-1, 1] range with tanh activation that should be converted to [0, 1] probability.
+    Red wins are labeled as 1.0 in training, and the runtime value head emits a
+    signed value in [-1, 1] with tanh activation. Convert at API boundaries if
+    a probability is needed.
     
     Key improvements from KataGo:
     - Flattened channel progression (constant trunk_channels instead of growing)

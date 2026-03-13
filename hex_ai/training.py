@@ -24,7 +24,7 @@ from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 
 from hex_ai.model_interface import build_optimizer_param_groups, forward_model
-from hex_ai.models import compute_value_loss, MAX_LOG_COSH_INPUT_ABS
+from hex_ai.models import compute_value_loss
 from hex_ai.nan_debug_utils import (
     check_for_nan_and_debug, calculate_validation_metrics_statistics, create_batch_analysis, find_nan_batch_indices,
     initialize_global_first_nan_detector, get_global_first_nan_detector, cleanup_global_first_nan_detector
@@ -48,20 +48,6 @@ from hex_ai.error_handling import get_board_state_error_tracker
 from hex_ai.value_utils import ValuePredictor
 
 logger = logging.getLogger(__name__)
-
-
-
-# Value loss gets ~5.7x more weight to balance cross-entropy vs MSE scales
-# Note about analysis of training runs that use different loss weights:
-# The analysis script *should* use fixed values for the policy and value weights.
-# The point is to produce a standardized loss calculation to make the loss that we see comparable across different training loss functions.
-# The policy loss will always be higher than the value loss so it's not fair to compare the balanced run against the others with the loss that *it trained with* because that is higher by *construction*.
-# Even with both better policy loss AND better value loss, if we weight the value loss higher we'll get a greater total loss.
-
-# So we need to make sure that the loss calculate for the PNG *does* use this fixed weight of the separate policy and training loss.
-# summarizing briefly: 
-POLICY_LOSS_WEIGHT = 0.15
-VALUE_LOSS_WEIGHT = 0.85
 
 
 # =============================================================================
@@ -625,10 +611,12 @@ class PolicyValueLoss(nn.Module):
             policy_loss, entropy_loss = self._compute_policy_loss(policy_pred, policy_target, board)
         
         # ----- Total loss -----
-        total_loss = (self.policy_weight * policy_loss + 
-                     self.value_weight * value_loss +
-                     self.entropy_weight * entropy_loss +
-                     logits_l2_loss)
+        total_loss = (
+            self.policy_weight * policy_loss
+            + self.value_weight * value_loss
+            + entropy_loss
+            + logits_l2_loss
+        )
         
         # TEMPORARY: Enhanced NaN detection for individual loss components
         # TODO: Remove after confirming training stability (3+ successful runs)
@@ -1541,16 +1529,11 @@ class Trainer:
         # Apply gradient clipping and track norms
         self._apply_gradient_clipping(state)
         
-        # CRITICAL: Check for NaN and extreme values in gradients after backward pass
+        # CRITICAL: Check for NaN values in gradients after backward pass
         has_nan_grad = False
-        has_extreme_grad = False
-        max_grad_norm = 0.0
         
         for name, param in self.model.named_parameters():
             if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                max_grad_norm = max(max_grad_norm, grad_norm)
-                
                 if torch.isnan(param.grad).any():
                     has_nan_grad = True
                     print(f"WARNING: NaN gradient detected in parameter {name}")
@@ -1560,15 +1543,6 @@ class Trainer:
             raise RuntimeError(
                 f"NaN detected in gradients after backward pass! "
                 f"This indicates gradient explosion. "
-                f"Check learning rate (current: {self.optimizer.param_groups[0]['lr']}), "
-                f"gradient clipping (current: {self.max_grad_norm}), "
-                f"and model architecture."
-            )
-        
-        if has_extreme_grad:
-            raise RuntimeError(
-                f"Extreme gradient norms detected! Max gradient norm: {max_grad_norm:.6f}. "
-                f"This indicates potential gradient explosion. "
                 f"Check learning rate (current: {self.optimizer.param_groups[0]['lr']}), "
                 f"gradient clipping (current: {self.max_grad_norm}), "
                 f"and model architecture."

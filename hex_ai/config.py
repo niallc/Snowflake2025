@@ -82,9 +82,16 @@ LEARNING_RATE = 8e-4
 BATCH_SIZE = 256
 NUM_EPOCHS = 10
 
-# Loss weights for standardized comparison
-POLICY_LOSS_WEIGHT = 0.8
-VALUE_LOSS_WEIGHT = 0.2
+# Default training loss weights.
+# Keep these normalized because the scripted training entry points derive the
+# value weight as the complement of the policy weight.
+POLICY_LOSS_WEIGHT = 0.6
+VALUE_LOSS_WEIGHT = 1.0 - POLICY_LOSS_WEIGHT
+
+if not 0.0 <= POLICY_LOSS_WEIGHT <= 1.0:
+    raise RuntimeError(
+        f"POLICY_LOSS_WEIGHT must be in [0, 1], got {POLICY_LOSS_WEIGHT}"
+    )
 
 # Model architecture
 RESNET_DEPTH = 18  # ResNet-18 for initial implementation
