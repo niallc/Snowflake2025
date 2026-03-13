@@ -377,7 +377,7 @@ def run_single_experiment(
     model_params['model_type'] = exp_config['hyperparameters'].get(
         'model_type', 'katago_inspired'
     )
-    required_model_params = {'num_blocks', 'trunk_channels'}
+    required_model_params = {'num_blocks', 'trunk_channels', 'board_size'}
     for param in required_model_params:
         if param in exp_config['hyperparameters']:
             model_params[param] = exp_config['hyperparameters'][param]
@@ -402,7 +402,7 @@ def run_single_experiment(
     # The value head now has a fixed bottleneck design
     
     # Trainer parameters (everything else except batch_size, model parameters, and legacy parameters)
-    model_param_keys = {'model_type', 'num_blocks', 'trunk_channels'}  # Keys that map to model parameters
+    model_param_keys = {'model_type', 'num_blocks', 'trunk_channels', 'board_size'}  # Keys that map to model parameters
     legacy_params = {'dropout_prob'}  # Legacy parameters that should be ignored
     trainer_params = {k: v for k, v in exp_config['hyperparameters'].items() 
                      if k not in model_param_keys and k not in legacy_params and k != 'batch_size'}

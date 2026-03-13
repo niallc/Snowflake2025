@@ -67,6 +67,7 @@ class ModelSpec:
             "model_type": self.model_type,
             "num_blocks": int(self.num_blocks),
             "trunk_channels": int(self.trunk_channels),
+            "board_size": int(self.board_size),
         }
 
     @classmethod
@@ -95,7 +96,10 @@ def build_model_from_spec(model_spec: ModelSpec):
 
 def architecture_label_from_model_spec(model_spec: ModelSpec) -> str:
     """Return a compact human-readable architecture label."""
-    return f"{model_spec.model_type}_{int(model_spec.num_blocks)}x{int(model_spec.trunk_channels)}"
+    return (
+        f"{model_spec.model_type}_{int(model_spec.num_blocks)}x"
+        f"{int(model_spec.trunk_channels)}_n{int(model_spec.board_size)}"
+    )
 
 
 def model_spec_from_model(model: Any) -> ModelSpec:
@@ -104,7 +108,7 @@ def model_spec_from_model(model: Any) -> ModelSpec:
     num_blocks = getattr(model, "num_blocks", None)
     trunk_channels = getattr(model, "trunk_channels", None)
     policy_head = getattr(model, "policy_head", None)
-    board_size = getattr(policy_head, "board_size", BOARD_SIZE)
+    board_size = getattr(model, "board_size", getattr(policy_head, "board_size", BOARD_SIZE))
     if num_blocks is None or trunk_channels is None:
         raise ValueError(
             f"Model {type(model).__name__} does not expose num_blocks/trunk_channels"

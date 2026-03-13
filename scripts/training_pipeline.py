@@ -647,8 +647,20 @@ class TrainingStep:
 
     def _build_experiments(self) -> List[Dict[str, Any]]:
         """Build experiment definitions from the hyperparameter sweep config."""
-        sweep = create_hyperparameter_sweep(self.config.hyperparameter_overrides)
-        architecture_params = ("model_type", "num_blocks", "trunk_channels")
+        sweep_overrides = dict(self.config.hyperparameter_overrides or {})
+        if "board_size" in sweep_overrides:
+            requested_board_sizes = {int(value) for value in sweep_overrides["board_size"]}
+            if requested_board_sizes != {int(self.config.board_size)}:
+                raise ValueError(
+                    "training_pipeline hyperparameter_overrides['board_size'] must "
+                    f"match PipelineConfig.board_size ({self.config.board_size}), "
+                    f"got {sorted(requested_board_sizes)}"
+                )
+        else:
+            sweep_overrides["board_size"] = [self.config.board_size]
+
+        sweep = create_hyperparameter_sweep(sweep_overrides)
+        architecture_params = ("model_type", "num_blocks", "trunk_channels", "board_size")
 
         def _format_label(param: str, value: Any) -> str:
             short_label = HYPERPARAMETER_SHORT_LABELS.get(param, param)

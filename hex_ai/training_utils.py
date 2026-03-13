@@ -45,6 +45,7 @@ DEFAULT_HYPERPARAMETER_SWEEP = {
     "model_type": [DEFAULT_MODEL_TYPE],
     "num_blocks": [7],  # Number of residual blocks - 6 blocks ≈ ResNet-18
     "trunk_channels": [128],  # Number of channels in trunk
+    "board_size": [BOARD_SIZE],  # Configured training board size
     "dropout_prob": [0],  # Legacy parameter (not used in current architecture)
     "use_policy_search_targets": [True],  # Consume per-position MCTS policy targets by default
     "soft_target_legal_mix_alpha": [0.017],  # Default legal-uniform mixing for non-one-hot policy targets
@@ -67,6 +68,7 @@ HYPERPARAMETER_SHORT_LABELS = {
     "model_type": "mt",
     "num_blocks": "nb",
     "trunk_channels": "tc",
+    "board_size": "n",
     "betas": "betas",
     "eps": "eps",
     "use_policy_search_targets": "psrch",

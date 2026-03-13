@@ -14,7 +14,7 @@ import sys
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
 from hex_ai.models import (
-    ResNetBlock, TwoHeadedResNet, create_model, 
+    ResNetBlock, TwoHeadedBottleneckPoolResNet, TwoHeadedResNet, create_model, 
     count_parameters, get_model_summary
 )
 from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
@@ -169,6 +169,38 @@ class TestModelFactory(unittest.TestCase):
         """Test creating KataGo-inspired model."""
         model = create_model("katago_inspired")
         self.assertIsInstance(model, TwoHeadedResNet)
+
+    def test_create_model_katago_bottleneck_pool_defaults(self):
+        """Test creating the pooled bottleneck challenger with family defaults."""
+        model = create_model("katago_bottleneck_pool")
+        self.assertIsInstance(model, TwoHeadedBottleneckPoolResNet)
+        self.assertEqual(model.num_blocks, 13)
+        self.assertEqual(model.trunk_channels, 224)
+        self.assertEqual(model.global_block_indices, (3, 8))
+        self.assertEqual(model.value_head.pool_mode, "mean_max")
+
+    def test_create_model_board_size_propagates(self):
+        """Test that board_size is carried into model construction and output shapes."""
+        board_size = 9
+        model = create_model("katago_bottleneck_pool", board_size=board_size)
+        self.assertEqual(model.board_size, board_size)
+        self.assertEqual(model.policy_head.board_size, board_size)
+
+        x = torch.randn(2, 3, board_size, board_size)
+        move_stage = torch.rand(2)
+        policy_logits, value = model(x, move_stage)
+
+        self.assertEqual(policy_logits.shape, (2, board_size * board_size))
+        self.assertEqual(value.shape, (2, VALUE_OUTPUT_SIZE))
+
+    def test_model_rejects_board_size_mismatch(self):
+        """Test that model board_size metadata matches runtime board tensors."""
+        model = create_model("katago_bottleneck_pool", board_size=9)
+        x = torch.randn(1, 3, 13, 13)
+        move_stage = torch.rand(1)
+
+        with self.assertRaises(ValueError):
+            model(x, move_stage)
     
     def test_create_model_invalid_type(self):
         """Test that invalid model type raises error."""
