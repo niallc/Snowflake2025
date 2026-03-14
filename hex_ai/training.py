@@ -1059,6 +1059,9 @@ class Trainer:
         first_nan_detector = get_global_first_nan_detector()
         
         self.model.eval()
+        validation_start_time = time.time()
+        validation_batches = 0
+        validation_samples = 0
         val_losses = []
         val_metrics = {
             'policy_loss': [],
@@ -1070,6 +1073,8 @@ class Trainer:
         
         with torch.no_grad():
             for batch_idx, (boards, policies, values, move_stage) in enumerate(self.val_loader):
+                validation_batches = batch_idx + 1
+                validation_samples += int(boards.shape[0])
                     
                 # Move to device
                 boards, policies, values, move_stage = TrainingUtilities.move_batch_to_device(boards, policies, values, move_stage, self.device)
@@ -1145,6 +1150,20 @@ class Trainer:
         # Handle NaN in validation averages
         if val_avg_has_nan:
             self._handle_validation_nan_debug(val_avg, val_metrics, epoch, mini_epoch)
+
+        validation_elapsed = time.time() - validation_start_time
+        val_avg['validation_time_seconds'] = float(validation_elapsed)
+        val_avg['validation_batches'] = int(validation_batches)
+        val_avg['validation_samples'] = int(validation_samples)
+
+        logger.info(
+            "Validation completed for epoch %s mini-epoch %s: %d batches, %d samples, %.2fs",
+            epoch,
+            mini_epoch,
+            validation_batches,
+            validation_samples,
+            validation_elapsed,
+        )
         
         return val_avg
     
@@ -1434,6 +1453,21 @@ class Trainer:
             'epoch': epoch_id,
             'hyperparams': hp,
             'training_time': mini_epoch_time,
+            'validation_time': (
+                val_metrics.get('validation_time_seconds', '')
+                if val_metrics
+                else ''
+            ),
+            'validation_batches': (
+                val_metrics.get('validation_batches', '')
+                if val_metrics
+                else ''
+            ),
+            'validation_samples': (
+                val_metrics.get('validation_samples', '')
+                if val_metrics
+                else ''
+            ),
             'epoch_time': mini_epoch_time,
             'samples_per_second': 0.0,  # Would need to calculate based on samples processed
             'memory_usage_mb': 0.0,  # Would need to calculate system memory usage
@@ -1633,7 +1667,13 @@ class Trainer:
             'best_val_loss': best_val_loss
         }
 
-    def train_on_batches(self, batch_iterable, epoch=None, mini_epoch=None, val_metrics=None) -> Dict[str, float]:
+    def train_on_batches(
+        self,
+        batch_iterable,
+        epoch=None,
+        mini_epoch=None,
+        run_validation_after_training: bool = False,
+    ) -> Dict[str, Optional[Dict[str, float]]]:
         """
         Train the model on a provided iterable of batches (mini-epoch).
 
@@ -1648,7 +1688,10 @@ class Trainer:
             batch_iterable: Iterable of batches to train on
             epoch: Current epoch number (for logging and numerical stability warmup)
             mini_epoch: Current mini-epoch number (for logging and numerical stability warmup)
-            val_metrics: Validation metrics from previous validation
+            run_validation_after_training: If True, run validation immediately
+                after finishing the mini-epoch and use that post-train
+                validation for CSV logging, scheduler stepping, and checkpoint
+                metadata.
 
         Unlike train(), this method:
         - Does NOT manage epochs, checkpointing, or validation
@@ -1662,7 +1705,9 @@ class Trainer:
             mini_epoch: Current mini-epoch number (int, optional, for debugging/dumping purposes)
 
         Returns:
-            Dictionary of average losses for the mini-epoch (policy_loss, value_loss, total_loss).
+            Dictionary containing:
+            - train_metrics: Average losses for the mini-epoch
+            - val_metrics: Optional post-train validation metrics
 
         Usage:
             # For mini-epoch orchestration:
@@ -1711,6 +1756,11 @@ class Trainer:
                     f"Check learning rate, gradient clipping, and model architecture."
                 )
         
+        # Validation should reflect the model *after* this mini-epoch's updates.
+        val_metrics = None
+        if run_validation_after_training and self.val_loader is not None:
+            val_metrics = self.validate(epoch=epoch, mini_epoch=mini_epoch)
+
         # Calculate diagnostic metrics
         diagnostics = self._calculate_diagnostic_metrics(val_metrics, state['gradient_norms'])
         
@@ -1722,4 +1772,7 @@ class Trainer:
             self.scheduler.step(val_metrics['total_loss'])
         
         
-        return mini_epoch_avg
+        return {
+            'train_metrics': mini_epoch_avg,
+            'val_metrics': val_metrics,
+        }

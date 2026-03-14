@@ -50,6 +50,7 @@ class TrainingLogger:
             
             # Performance metrics
             'training_time', 'epoch_time', 'samples_per_second',
+            'validation_time', 'validation_batches', 'validation_samples',
             'memory_usage_mb', 'gpu_memory_mb',
             
             # Training state
@@ -177,7 +178,10 @@ class TrainingLogger:
                   training_time: float,
                   epoch_time: float,
                   samples_per_second: float,
-                  memory_usage_mb: float,
+                  validation_time: float = 0.0,
+                  validation_batches: Optional[int] = None,
+                  validation_samples: Optional[int] = None,
+                  memory_usage_mb: float = 0.0,
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
                   post_clip_gradient_norm: Optional[float] = None,
@@ -241,6 +245,9 @@ class TrainingLogger:
             'training_time': training_time,
             'epoch_time': epoch_time,
             'samples_per_second': samples_per_second,
+            'validation_time': validation_time,
+            'validation_batches': validation_batches or '',
+            'validation_samples': validation_samples or '',
             'memory_usage_mb': memory_usage_mb,
             'gpu_memory_mb': gpu_memory_mb or '',
             
@@ -469,6 +476,9 @@ class TrainingLogger:
                   training_time: float = 0.0,
                   epoch_time: float = 0.0,
                   samples_per_second: float = 0.0,
+                  validation_time: float = 0.0,
+                  validation_batches: Optional[int] = None,
+                  validation_samples: Optional[int] = None,
                   memory_usage_mb: float = 0.0,
                   gpu_memory_mb: Optional[float] = None,
                   gradient_norm: Optional[float] = None,
@@ -513,6 +523,9 @@ class TrainingLogger:
             'training_time': training_time,
             'epoch_time': epoch_time,
             'samples_per_second': samples_per_second,
+            'validation_time': validation_time,
+            'validation_batches': validation_batches or '',
+            'validation_samples': validation_samples or '',
             'memory_usage_mb': memory_usage_mb,
             'gpu_memory_mb': gpu_memory_mb or '',
             # Training state
@@ -603,6 +616,9 @@ class TrainingLogger:
             'training_time': total_training_time,
             'epoch_time': '',
             'samples_per_second': '',
+            'validation_time': '',
+            'validation_batches': '',
+            'validation_samples': '',
             'memory_usage_mb': '',
             'gpu_memory_mb': '',
             

@@ -338,23 +338,20 @@ class MiniEpochOrchestrator:
                         break
                     continue
                 
-                # Validation (do this before training so we can pass metrics)
-                val_metrics = None
-                if self.val_loader is not None:
-                    val_metrics = self.trainer.validate(epoch=epoch+1, mini_epoch=mini_epoch_idx+1)
-                
                 # Check for shutdown before starting training
                 if self.shutdown_handler and self.shutdown_handler.shutdown_requested:
                     self.logger.info("Shutdown requested before training mini-epoch, stopping training")
                     raise GracefulShutdownRequested()
                 
                 # Train on this mini-epoch
-                train_metrics = self.trainer.train_on_batches(
+                mini_epoch_result = self.trainer.train_on_batches(
                     _mini_epoch_batch_stream(),
                     epoch=epoch+1,
                     mini_epoch=mini_epoch_idx+1,
-                    val_metrics=val_metrics
+                    run_validation_after_training=self.val_loader is not None,
                 )
+                train_metrics = mini_epoch_result['train_metrics']
+                val_metrics = mini_epoch_result.get('val_metrics')
 
                 # Keep checkpoint metadata aligned with filename epoch numbering.
                 self.trainer.current_epoch = epoch + 1
@@ -392,6 +389,9 @@ class MiniEpochOrchestrator:
                             f"policy={val_metrics.get('policy_loss', float('nan')):.4f}, "
                             f"value={val_metrics.get('value_loss', float('nan')):.4f} "
                         )
+                        val_time_seconds = val_metrics.get('validation_time_seconds')
+                        if val_time_seconds is not None:
+                            msg += f"| Val Time: {float(val_time_seconds):.1f}s "
                     msg += f"| Batches processed: {batch_count}"
                     self.logger.info(msg)
 
