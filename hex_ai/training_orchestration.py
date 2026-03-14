@@ -7,6 +7,7 @@ experiment management, and data pipeline coordination.
 
 import csv
 import json
+import math
 import time
 import traceback
 from contextlib import contextmanager
@@ -528,6 +529,12 @@ def run_single_experiment(
     # Run training
     try:
         result = orchestrator.run()
+        best_val_loss = getattr(trainer, "best_val_loss", None)
+        if val_loader is None or best_val_loss is None or not math.isfinite(best_val_loss):
+            best_val_loss = None
+        result["best_val_loss"] = best_val_loss
+        result["experiment_name"] = experiment_name
+        result["hyperparameters"] = exp_config.get("hyperparameters", {})
         return result
     except Exception as e:
         logger.error(f"Training failed: {e}")

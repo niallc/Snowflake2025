@@ -230,6 +230,13 @@ Examples:
     parser.add_argument("--model-type", type=str, help="Override model family (default: katago_inspired)")
     parser.add_argument("--num-blocks", type=int, help="Override trunk depth")
     parser.add_argument("--trunk-channels", type=int, help="Override trunk width")
+    parser.add_argument("--learning-rate", type=float, help="Override learning rate (e.g. 8e-4)")
+    parser.add_argument("--train-batch-size", type=int, help="Override training batch size")
+    parser.add_argument("--weight-decay", type=float, help="Override weight decay")
+    parser.add_argument("--policy-weight", type=float, help="Override policy weight (value weight will be 1-policy_weight)")
+    parser.add_argument("--max-grad-norm", type=float, help="Override max gradient norm")
+    parser.add_argument("--value-learning-rate-factor", type=float, help="Override value learning rate factor")
+    parser.add_argument("--value-weight-decay-factor", type=float, help="Override value weight decay factor")
     policy_target_group = parser.add_mutually_exclusive_group()
     policy_target_group.add_argument(
         "--use-policy-search-targets",
@@ -353,6 +360,21 @@ Examples:
             config["num_blocks"] = args.num_blocks
         if args.trunk_channels is not None:
             config["trunk_channels"] = args.trunk_channels
+        if args.learning_rate is not None:
+            config["learning_rate"] = args.learning_rate
+        if args.train_batch_size is not None:
+            config["batch_size"] = args.train_batch_size
+        if args.weight_decay is not None:
+            config["weight_decay"] = args.weight_decay
+        if args.policy_weight is not None:
+            config["policy_weight"] = args.policy_weight
+            config["value_weight"] = 1.0 - args.policy_weight
+        if args.max_grad_norm is not None:
+            config["max_grad_norm"] = args.max_grad_norm
+        if args.value_learning_rate_factor is not None:
+            config["value_learning_rate_factor"] = args.value_learning_rate_factor
+        if args.value_weight_decay_factor is not None:
+            config["value_weight_decay_factor"] = args.value_weight_decay_factor
         if args.use_policy_search_targets:
             config["use_policy_search_targets"] = True
         elif args.no_use_policy_search_targets:
