@@ -494,12 +494,14 @@ class ValueHead(nn.Module):
         # K parallel outputs and learned linear combination
         self.out_k = nn.Linear(hidden_dim // 2, k_outputs)  # pre-tanh K scalars
         self.comb = nn.Linear(k_outputs, 1, bias=False)     # learned linear comb
-        
-        # Initialize to start with ~average and near-zero outputs
+        self.reset_output_layer_initialization()
+
+    def reset_output_layer_initialization(self) -> None:
+        """Restore the intended near-neutral value-output initialization."""
         nn.init.constant_(self.out_k.weight, 0.0)
         nn.init.constant_(self.out_k.bias, 0.0)
         with torch.no_grad():
-            self.comb.weight.fill_(1.0 / k_outputs)
+            self.comb.weight.fill_(1.0 / self.k_outputs)
     
     def forward(self, trunk_feats: torch.Tensor, move_stage: torch.Tensor) -> torch.Tensor:
         """
@@ -620,7 +622,10 @@ class TwoHeadedResNet(nn.Module):
                 # Initialize layer norm layers
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-        
+
+        if hasattr(self, "value_head") and hasattr(self.value_head, "reset_output_layer_initialization"):
+            self.value_head.reset_output_layer_initialization()
+
         # Policy head final layer initialization is handled in PolicyHead._initialize_final_layer()
         # This ensures proper initialization with the new stability mechanisms
     

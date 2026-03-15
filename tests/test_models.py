@@ -161,6 +161,18 @@ class TestTwoHeadedResNet(unittest.TestCase):
         self.assertTrue(hasattr(model.value_head, 'k_outputs'))
         self.assertEqual(model.value_head.k_outputs, 4)
 
+    def test_value_head_output_layers_keep_explicit_neutral_initialization(self):
+        """Value-head output layers should preserve the intended near-neutral init."""
+        for model in (TwoHeadedResNet(), create_model("katago_bottleneck_pool")):
+            out_k_weight = model.value_head.out_k.weight.detach()
+            out_k_bias = model.value_head.out_k.bias.detach()
+            comb_weight = model.value_head.comb.weight.detach()
+
+            self.assertTrue(torch.allclose(out_k_weight, torch.zeros_like(out_k_weight)))
+            self.assertTrue(torch.allclose(out_k_bias, torch.zeros_like(out_k_bias)))
+            expected_comb = torch.full_like(comb_weight, 1.0 / model.value_head.k_outputs)
+            self.assertTrue(torch.allclose(comb_weight, expected_comb))
+
 
 class TestModelFactory(unittest.TestCase):
     """Test cases for the model factory function."""
