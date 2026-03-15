@@ -4,6 +4,7 @@ import json
 import numpy as np
 from flask_cors import CORS
 import logging
+import re
 from datetime import datetime
 import time
 import random
@@ -89,6 +90,9 @@ MODEL_BROWSER = create_model_browser()
 # Dynamic model registry for user-selected models (these override the central registry)
 DYNAMIC_MODELS = {}
 
+TRANSIENT_DYNAMIC_MODEL_ID_RE = re.compile(r"^model_\d+$")
+MODEL_SELECTION_REFRESH_HINT = "Reopen the model browser and select the checkpoint again."
+
 # Get centralized model cache
 MODEL_CACHE = get_model_cache()
 
@@ -153,6 +157,183 @@ def validate_api_input(data, required_fields=None, optional_fields=None, *, reje
         boolean_fields={"pie_rule_enabled"},
     )
 
+
+class ModelResolutionError(ValueError):
+    """Raised when a requested model cannot be resolved into a usable checkpoint path."""
+
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        reason: str,
+        user_message: str,
+        hint: str | None = None,
+        model_path: str | None = None,
+        details: dict | None = None,
+    ):
+        super().__init__(user_message)
+        self.model_id = model_id
+        self.reason = reason
+        self.hint = hint
+        self.model_path = model_path
+        self.details = details or {}
+
+    def to_api_payload(self) -> dict:
+        payload = {
+            "success": False,
+            "error": str(self),
+            "reason": self.reason,
+            "model_id": self.model_id,
+        }
+        if self.hint:
+            payload["hint"] = self.hint
+        if self.model_path:
+            payload["model_path"] = self.model_path
+        if self.details:
+            payload["details"] = self.details
+        return payload
+
+
+def _model_resolution_status_code(exc: ModelResolutionError) -> int:
+    if exc.reason == "stale_dynamic_model_id":
+        return 409
+    if exc.reason == "model_file_missing":
+        return 404
+    return 400
+
+
+@app.errorhandler(ModelResolutionError)
+def handle_model_resolution_error(exc: ModelResolutionError):
+    app.logger.warning(
+        "Model resolution error: reason=%s model_id=%s model_path=%s details=%s",
+        exc.reason,
+        exc.model_id,
+        exc.model_path,
+        exc.details,
+    )
+    return jsonify(exc.to_api_payload()), _model_resolution_status_code(exc)
+
+
+def _normalize_requested_model_path(model_path: str | None) -> str | None:
+    """Normalize browser-provided model paths while preserving checkpoints-relative paths."""
+    if not isinstance(model_path, str):
+        return None
+
+    normalized = model_path.strip()
+    if not normalized:
+        return None
+
+    normalized = os.path.normpath(normalized)
+    if not os.path.isabs(normalized):
+        return normalized
+
+    checkpoints_root = os.path.abspath("checkpoints")
+    checkpoints_prefix = checkpoints_root + os.sep
+    if normalized == checkpoints_root:
+        return "."
+    if normalized.startswith(checkpoints_prefix):
+        return os.path.relpath(normalized, checkpoints_root)
+    return normalized
+
+
+def _build_model_resolution_message(
+    model_id: str,
+    *,
+    reason: str,
+    model_path: str | None = None,
+    validation_error: str | None = None,
+) -> str:
+    dynamic_model_ids = sorted(DYNAMIC_MODELS.keys())
+    registered_model_ids = sorted(
+        {model_info["id"] for model_info in get_all_model_info() if "id" in model_info}
+    )
+
+    if reason == "stale_dynamic_model_id":
+        summary = "Selected model is no longer registered in this dev server."
+        explanation = (
+            "This usually means the page is holding a transient model ID from before a "
+            "Flask reload/restart, not a filename or encoding problem."
+        )
+    elif reason == "model_file_missing":
+        summary = "Selected model file could not be found."
+        explanation = "The requested checkpoint path is not currently loadable by the dev server."
+    else:
+        summary = "Selected model could not be resolved."
+        explanation = "The dev server could not map the requested model selection to a checkpoint."
+
+    lines = [summary, explanation, f"Requested model_id: {model_id}"]
+    if model_path:
+        lines.append(f"Requested model_path: {model_path}")
+    if validation_error:
+        lines.append(f"Validation error: {validation_error}")
+    lines.append(f"Next step: {MODEL_SELECTION_REFRESH_HINT}")
+    lines.append(
+        "Agent details: "
+        f"dynamic_model_ids={dynamic_model_ids}, "
+        f"registered_model_ids={registered_model_ids}"
+    )
+    return "\n".join(lines)
+
+
+def _raise_unknown_model_error(model_id: str) -> None:
+    reason = (
+        "stale_dynamic_model_id"
+        if isinstance(model_id, str) and TRANSIENT_DYNAMIC_MODEL_ID_RE.match(model_id)
+        else "unknown_model_id"
+    )
+    raise ModelResolutionError(
+        model_id=model_id,
+        reason=reason,
+        user_message=_build_model_resolution_message(model_id, reason=reason),
+        hint=MODEL_SELECTION_REFRESH_HINT,
+        details={
+            "dynamic_model_ids": sorted(DYNAMIC_MODELS.keys()),
+            "registered_model_ids": sorted(
+                {model_info["id"] for model_info in get_all_model_info() if "id" in model_info}
+            ),
+        },
+    )
+
+
+def _ensure_requested_dynamic_model_registered(model_id: str | None, model_path: str | None) -> None:
+    """Restore a transient dynamic model registration from request context when possible."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        return
+    if model_id in DYNAMIC_MODELS or is_valid_model_id(model_id):
+        return
+
+    normalized_model_path = _normalize_requested_model_path(model_path)
+    if normalized_model_path is None:
+        return
+
+    validation = MODEL_BROWSER.validate_model(normalized_model_path)
+    if not validation.get("valid"):
+        validation_error = validation.get("error") or "unknown validation failure"
+        reason = "model_file_missing" if "does not exist" in validation_error else "unknown_model_id"
+        raise ModelResolutionError(
+            model_id=model_id,
+            reason=reason,
+            user_message=_build_model_resolution_message(
+                model_id,
+                reason=reason,
+                model_path=normalized_model_path,
+                validation_error=validation_error,
+            ),
+            hint=MODEL_SELECTION_REFRESH_HINT,
+            model_path=normalized_model_path,
+            details={
+                "validation_error": validation_error,
+                "recovered_from_request": False,
+            },
+        )
+
+    register_dynamic_model(model_id, normalized_model_path)
+    app.logger.info(
+        "Restored dynamic model registration from request: %s -> %s",
+        model_id,
+        normalized_model_path,
+    )
+
 # --- Model Management ---
 def _resolve_model_path(model_id: str) -> str:
     """Resolve dynamic/registered/direct model inputs to a concrete file path."""
@@ -161,7 +342,22 @@ def _resolve_model_path(model_id: str) -> str:
         if not os.path.isabs(model_path):
             model_path = os.path.join("checkpoints", model_path)
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file does not exist: {model_path}")
+            raise ModelResolutionError(
+                model_id=model_id,
+                reason="model_file_missing",
+                user_message=_build_model_resolution_message(
+                    model_id,
+                    reason="model_file_missing",
+                    model_path=DYNAMIC_MODELS[model_id],
+                    validation_error=f"Model file does not exist: {model_path}",
+                ),
+                hint=MODEL_SELECTION_REFRESH_HINT,
+                model_path=DYNAMIC_MODELS[model_id],
+                details={
+                    "resolved_model_path": model_path,
+                    "dynamic_registry_hit": True,
+                },
+            )
         return model_path
 
     if is_valid_model_id(model_id):
@@ -174,7 +370,7 @@ def _resolve_model_path(model_id: str) -> str:
     app.logger.error(
         f"Available options: dynamic={list(DYNAMIC_MODELS.keys())}, registered={get_all_model_info()}"
     )
-    raise ValueError(f"Unknown model_id: {model_id}")
+    _raise_unknown_model_error(model_id)
 
 
 def get_model(model_id="best"):
@@ -500,6 +696,9 @@ def _load_model_or_error(model_id):
     """Load a model and return a response payload on failure."""
     try:
         model = get_model(model_id)
+    except ModelResolutionError as e:
+        app.logger.warning("Failed to resolve model %s: %s", model_id, e)
+        return None, e.to_api_payload()
     except Exception as e:
         app.logger.error(f"Failed to get model {model_id}: {e}")
         return None, build_engine_error_payload(
@@ -1217,6 +1416,7 @@ def api_game_review():
             "trmph",
             "display_board_size",
             "model_id",
+            "model_path",
             "candidate_top_k",
             "suggestion_count",
             "policy_temperature",
@@ -1262,6 +1462,7 @@ def api_game_review():
         return jsonify({"success": False, "error": "At least one move is required for review"}), 400
 
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
 
     try:
         reviewer = GameReviewer(
@@ -1282,6 +1483,9 @@ def api_game_review():
             },
         )
         return jsonify({"success": True, "review": review_to_json(review)})
+    except ModelResolutionError as exc:
+        app.logger.warning("Game review model resolution failed: %s", exc)
+        return jsonify(exc.to_api_payload()), _model_resolution_status_code(exc)
     except Exception as exc:
         app.logger.error("Error in api_game_review: %s", exc)
         return jsonify({"success": False, "error": "Failed to generate review"}), 500
@@ -1452,13 +1656,14 @@ def api_state():
     is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id", "temperature", "verbose"],
+        optional_fields=["model_id", "model_path", "temperature", "verbose"],
     )
     if not is_valid:
         return jsonify({"error": error_msg}), 400
 
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
     try:
@@ -1500,7 +1705,14 @@ def api_move_heatmap():
     is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id", "score_type", "selection_mode", "top_k", "policy_temperature"],
+        optional_fields=[
+            "model_id",
+            "model_path",
+            "score_type",
+            "selection_mode",
+            "top_k",
+            "policy_temperature",
+        ],
     )
     if not is_valid:
         return jsonify({"error": error_msg}), 400
@@ -1515,6 +1727,7 @@ def api_move_heatmap():
         return jsonify({"success": False, "error": str(e)}), 400
 
     model_id = parsed_heatmap_params["model_id"]
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     score_type = parsed_heatmap_params["score_type"]
     selection_mode = parsed_heatmap_params["selection_mode"]
     top_k = parsed_heatmap_params["top_k"]
@@ -1542,6 +1755,9 @@ def api_move_heatmap():
         }
         response.update(heatmap.to_dict())
         return jsonify(response)
+    except ModelResolutionError as e:
+        app.logger.warning(f"Move heatmap model resolution failed: {e}")
+        return jsonify(e.to_api_payload()), _model_resolution_status_code(e)
     except Exception as e:
         app.logger.error(f"Error in api_move_heatmap: {e}")
         return jsonify({"success": False, "error": f"Failed to compute move heatmap: {e}"}), 500
@@ -1553,7 +1769,7 @@ def api_apply_move():
     is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=["trmph", "move"],
-        optional_fields=["model_id", "temperature", "verbose"],
+        optional_fields=["model_id", "model_path", "temperature", "verbose"],
     )
     if not is_valid:
         return jsonify({"error": error_msg}), 400
@@ -1561,6 +1777,7 @@ def api_apply_move():
     trmph = validated_data.get("trmph")
     move = validated_data.get("move")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
     try:
@@ -1606,7 +1823,7 @@ def api_apply_trmph_sequence():
     is_valid, error_msg, validated_data = validate_api_input(
         data,
         required_fields=["trmph"],
-        optional_fields=["trmph_sequence", "model_id", "temperature", "verbose"],
+        optional_fields=["trmph_sequence", "model_id", "model_path", "temperature", "verbose"],
     )
     if not is_valid:
         return jsonify({"error": error_msg}), 400
@@ -1614,6 +1831,7 @@ def api_apply_trmph_sequence():
     trmph = validated_data.get("trmph")
     trmph_sequence = validated_data.get("trmph_sequence", "")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     temperature = validated_data.get("temperature", 1.0)
     verbose = validated_data.get("verbose", 0)
     try:
@@ -1761,13 +1979,14 @@ def api_policy_move():
     validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph"],
-        optional_fields=["model_id", "temperature", "verbose"],
+        optional_fields=["model_id", "model_path", "temperature", "verbose"],
     )
     if error_response:
         return error_response
 
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     temperature = validated_data.get("temperature", 0.15)  # Default policy temperature
     verbose = validated_data.get("verbose", 0)
     try:
@@ -1857,7 +2076,9 @@ def api_policy_move():
         app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
         
         return jsonify(result)
-        
+    except ModelResolutionError as e:
+        app.logger.warning(f"Policy move model resolution failed: {e}")
+        return jsonify(e.to_api_payload()), _model_resolution_status_code(e)
     except Exception as e:
         app.logger.error(f"Policy move error: {e}")
         return jsonify(
@@ -1880,6 +2101,7 @@ def api_mcts_move():
         required_fields=["trmph"],
         optional_fields=[
             "model_id",
+            "model_path",
             "num_simulations",
             "exploration_constant",
             "temperature",
@@ -1895,6 +2117,7 @@ def api_mcts_move():
 
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     num_simulations = validated_data.get("num_simulations", 200)
     exploration_constant = validated_data.get("exploration_constant", 2.8)
     temperature = validated_data.get("temperature", 1.0)
@@ -2013,13 +2236,14 @@ def api_fixed_tree_move():
     validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph", "search_widths"],
-        optional_fields=["model_id", "temperature", "verbose"],
+        optional_fields=["model_id", "model_path", "temperature", "verbose"],
     )
     if error_response:
         return error_response
 
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
+    _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
     search_widths = validated_data.get("search_widths")
     temperature = validated_data.get("temperature", FIXED_TREE_DEFAULT_TEMPERATURE)
     verbose = validated_data.get("verbose", 0)

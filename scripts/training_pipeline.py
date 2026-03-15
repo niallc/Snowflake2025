@@ -59,9 +59,9 @@ class PipelineConfig:
     """Configuration for the training pipeline."""
     
     # Model configuration
-    model_path: str
-    model_epoch: int  # No default - must be explicitly set
-    model_mini: int  # No default - must be explicitly set
+    model_path: Optional[str] = None
+    model_epoch: Optional[int] = None
+    model_mini: Optional[int] = None
     
     # Self-play configuration
     num_games: int = 100000
@@ -129,9 +129,23 @@ class PipelineConfig:
             else datetime.now().strftime("%Y%m%d_%H%M%S")
         )
         
-        # Generate model filename
-        self.model_filename = f"epoch{self.model_epoch}_mini{self.model_mini}.pt.gz"
-        self.model_full_path = os.path.join(self.model_path, self.model_filename)
+        has_model_reference = (
+            self.model_path is not None
+            and self.model_epoch is not None
+            and self.model_mini is not None
+        )
+        if any(v is not None for v in (self.model_path, self.model_epoch, self.model_mini)) and not has_model_reference:
+            raise ValueError(
+                "model_path, model_epoch, and model_mini must be provided together."
+            )
+
+        if has_model_reference:
+            self.model_filename = f"epoch{self.model_epoch}_mini{self.model_mini}.pt.gz"
+            self.model_full_path = os.path.join(self.model_path, self.model_filename)
+        else:
+            self.model_filename = None
+            self.model_full_path = None
+
         if self.train_from_scratch and self.training_resume_checkpoint is not None:
             raise ValueError(
                 "Cannot set both training_resume_checkpoint and train_from_scratch."
@@ -142,8 +156,10 @@ class PipelineConfig:
             self.training_resume_from = os.path.expanduser(
                 self.training_resume_checkpoint
             )
-        else:
+        elif self.model_full_path is not None:
             self.training_resume_from = self.model_full_path
+        else:
+            self.training_resume_from = None
         
         # Generate data directories for this run
         if self.selfplay_dir is None:
@@ -159,8 +175,21 @@ class PipelineConfig:
     def validate(self, check_model: bool = True, check_data: bool = True):
         """Validate configuration (called when actually running the pipeline)."""
         # Validate model exists
-        if check_model and not os.path.exists(self.model_full_path):
-            raise FileNotFoundError(f"Model not found: {self.model_full_path}")
+        if check_model:
+            if self.model_full_path is None:
+                raise ValueError(
+                    "A model checkpoint must be specified for self-play. "
+                    "Provide --model-path/--model-epoch/--model-mini or "
+                    "--use-current-best-model."
+                )
+            if not os.path.exists(self.model_full_path):
+                raise FileNotFoundError(f"Model not found: {self.model_full_path}")
+        if self.run_training and self.training_resume_from is None and not self.train_from_scratch:
+            raise ValueError(
+                "Training requires either --train-from-scratch, "
+                "--training-resume-checkpoint, or "
+                "--model-path/--model-epoch/--model-mini."
+            )
         if (
             self.run_training
             and self.training_resume_from is not None
@@ -1152,7 +1181,10 @@ class TrainingPipeline:
         self.logger.info("HEX AI TRAINING PIPELINE")
         self.logger.info("=" * 60)
         self.logger.info(f"Run timestamp: {self.config.run_timestamp}")
-        self.logger.info(f"Self-play model: {self.config.model_full_path}")
+        self.logger.info(
+            "Self-play model: %s",
+            self.config.model_full_path if self.config.model_full_path is not None else "not specified",
+        )
         if self.config.training_resume_from is None:
             self.logger.info("Training init: fresh model initialization")
         else:
@@ -1164,7 +1196,7 @@ class TrainingPipeline:
         
         # Validate configuration
         self.config.validate(
-            check_model=self.config.run_selfplay or self.config.run_training,
+            check_model=self.config.run_selfplay,
             check_data=self.config.run_training
         )
         
@@ -1427,9 +1459,24 @@ Examples:
     )
     
     # Model configuration
-    parser.add_argument("--model-path", help="Path to model checkpoint directory")
-    parser.add_argument("--model-epoch", type=int, help="Model epoch number (required unless using --use-current-best-model)")
-    parser.add_argument("--model-mini", type=int, help="Model mini-epoch number (required unless using --use-current-best-model)")
+    parser.add_argument(
+        "--model-path",
+        help=(
+            "Path to model checkpoint directory. Required for self-play and for "
+            "checkpoint-initialized training, but optional for "
+            "--train-from-scratch --no-selfplay runs."
+        ),
+    )
+    parser.add_argument(
+        "--model-epoch",
+        type=int,
+        help="Model epoch number (required when --model-path is used)",
+    )
+    parser.add_argument(
+        "--model-mini",
+        type=int,
+        help="Model mini-epoch number (required when --model-path is used)",
+    )
     parser.add_argument("--use-current-best-model", action="store_true", 
                        help="Use current best model from hex_ai.inference.model_config")
     
@@ -1637,6 +1684,16 @@ def main():
     try:
         # Parse arguments
         args = parse_arguments()
+
+        requires_selfplay_model = not args.no_selfplay
+        requires_training_reference = (
+            not args.no_training
+            and not args.train_from_scratch
+            and args.training_resume_checkpoint is None
+        )
+        requires_model_reference = (
+            requires_selfplay_model or requires_training_reference
+        )
         
         # Handle current best model option
         if args.use_current_best_model:
@@ -1672,10 +1729,16 @@ def main():
             except Exception as e:
                 raise ValueError(f"Could not get current best model path: {e}")
         elif not args.model_path:
-            raise ValueError("Must specify either --model-path or --use-current-best-model")
+            if requires_model_reference:
+                raise ValueError(
+                    "Must specify either --model-path or --use-current-best-model "
+                    "for self-play or checkpoint-initialized training."
+                )
+            args.model_epoch = None
+            args.model_mini = None
         
         # Validate that model_epoch and model_mini are set when using --model-path
-        if not args.use_current_best_model:
+        if args.model_path and not args.use_current_best_model:
             if args.model_epoch is None:
                 raise ValueError("--model-epoch is required when using --model-path")
             if args.model_mini is None:

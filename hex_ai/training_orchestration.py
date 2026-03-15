@@ -368,6 +368,16 @@ def run_single_experiment(
             raise ValueError(
                 f"Could not extract epoch/mini from checkpoint filename: {checkpoint_path.name}"
             )
+    elif target_end_epoch is not None:
+        if target_end_epoch < 1:
+            raise ValueError(
+                f"target_end_epoch must be >= 1, got {target_end_epoch}"
+            )
+        num_epochs = target_end_epoch
+        logger.info(
+            f"Fresh run requested target_end_epoch={target_end_epoch}; "
+            f"end_epoch={num_epochs}"
+        )
     
     # Create model and trainer
     # Filter hyperparameters for model vs trainer

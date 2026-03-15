@@ -152,6 +152,7 @@ let state = {
   auto_step_active: false,
   auto_step_timeout: null,
   available_models: [],
+  model_paths_by_id: {},
   verbose_level: 2, 
   computer_enabled: true, // Whether computer moves are enabled
   move_history: [], // Track move history for undo functionality
@@ -546,11 +547,57 @@ async function throwApiError(resp, fallbackMessage = 'API error') {
     const err = await resp.json();
     if (err && typeof err.error === 'string' && err.error.trim()) {
       message = err.error;
+      if (
+        typeof err.hint === 'string' &&
+        err.hint.trim() &&
+        !message.includes(err.hint)
+      ) {
+        message = `${message}\nHint: ${err.hint}`;
+      }
     }
   } catch (_ignore) {
     // Keep default fallback when body is not JSON.
   }
   throw new Error(message);
+}
+
+function rebuildModelPathMap(models = []) {
+  const nextPaths = {};
+  models.forEach((model) => {
+    if (!model || typeof model.id !== 'string' || !model.id.trim()) {
+      return;
+    }
+    const modelPath =
+      typeof model.path === 'string' && model.path.trim()
+        ? model.path
+        : (typeof model.relative_path === 'string' && model.relative_path.trim()
+            ? model.relative_path
+            : null);
+    if (modelPath) {
+      nextPaths[model.id] = modelPath;
+    }
+  });
+  state.model_paths_by_id = nextPaths;
+}
+
+function storeModelPath(modelId, modelPath) {
+  if (
+    typeof modelId === 'string' &&
+    modelId.trim() &&
+    typeof modelPath === 'string' &&
+    modelPath.trim()
+  ) {
+    state.model_paths_by_id[modelId] = modelPath;
+  }
+}
+
+function getModelRequestIdentity(modelId = 'best') {
+  const identity = { model_id: modelId };
+  const modelPath = state.model_paths_by_id[modelId];
+  if (typeof modelPath === 'string' && modelPath.trim()) {
+    identity.model_path = modelPath;
+  }
+  return identity;
 }
 
 async function fetchConstants() {
@@ -575,7 +622,12 @@ async function fetchState(trmph, model_id = 'best', temperature = 1.0) {
   const resp = await fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, model_id, temperature, verbose: state.verbose_level }),
+    body: JSON.stringify({
+      trmph,
+      temperature,
+      verbose: state.verbose_level,
+      ...getModelRequestIdentity(model_id),
+    }),
   });
   if (!resp.ok) await throwApiError(resp, 'State request failed');
   return await resp.json();
@@ -594,11 +646,11 @@ async function fetchMoveHeatmap(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       trmph,
-      model_id,
       score_type: scoreType,
       selection_mode: selectionMode,
       top_k: topK,
-      policy_temperature: policyTemperature
+      policy_temperature: policyTemperature,
+      ...getModelRequestIdentity(model_id),
     }),
   });
   if (!resp.ok) {
@@ -611,7 +663,13 @@ async function applyHumanMove(trmph, move, model_id = 'best', temperature = 1.0)
   const resp = await fetch('/api/apply_move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trmph, move, model_id, temperature, verbose: state.verbose_level }),
+    body: JSON.stringify({
+      trmph,
+      move,
+      temperature,
+      verbose: state.verbose_level,
+      ...getModelRequestIdentity(model_id),
+    }),
   });
   if (!resp.ok) await throwApiError(resp, 'Apply move request failed');
   return await resp.json();
@@ -636,9 +694,9 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         trmph, 
-        model_id, 
         temperature, 
         verbose,
+        ...getModelRequestIdentity(model_id),
         ...inlineHeatmapFields
       }),
     });
@@ -651,10 +709,10 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         trmph, 
-        model_id, 
         search_widths,
         temperature, 
         verbose,
+        ...getModelRequestIdentity(model_id),
         ...inlineHeatmapFields
       }),
     });
@@ -667,13 +725,13 @@ async function makeComputerMove(trmph, model_id, temperature, verbose,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         trmph, 
-        model_id, 
         num_simulations, 
         exploration_constant, 
         temperature, 
         verbose,
         enable_gumbel,
         gumbel_max_sims,
+        ...getModelRequestIdentity(model_id),
         ...inlineHeatmapFields
       }),
     });
@@ -1471,6 +1529,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const modelsResult = await fetchModels();
     state.available_models = modelsResult.models;
+    rebuildModelPathMap(state.available_models);
     
     // Update model selection dropdowns
     const blueSelect = document.getElementById('blue-model');
@@ -2777,7 +2836,7 @@ async function selectModel(modelPath, modelId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model_path: modelPath, model_id: modelId })
     });
-    if (!response.ok) throw new Error('Failed to select model');
+    if (!response.ok) await throwApiError(response, 'Failed to select model');
     const data = await response.json();
     return data;
   } catch (error) {
@@ -2918,6 +2977,7 @@ async function applySelectedModel() {
   if (result.success) {
     // Update the appropriate model dropdown
     const modelName = modelBrowserState.selectedModel.split('/').pop();
+    storeModelPath(result.model_id, result.model_path);
     
     if (modelBrowserState.currentPlayer === 'blue') {
       state.blue_model_id = result.model_id;
@@ -3162,15 +3222,14 @@ async function applyTrmphSequence() {
       body: JSON.stringify({
         trmph: pastePlan.baseTrmph,
         trmph_sequence: pastePlan.sequenceToApply,
-        model_id: getCurrentPlayerSettings().model_id,
         temperature: getCurrentPlayerSettings().temperature,
-        verbose: state.verbose_level
+        verbose: state.verbose_level,
+        ...getModelRequestIdentity(getCurrentPlayerSettings().model_id),
       })
     });
     
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to apply TRMPH sequence');
+      await throwApiError(response, 'Failed to apply TRMPH sequence');
     }
     
     const result = await response.json();
