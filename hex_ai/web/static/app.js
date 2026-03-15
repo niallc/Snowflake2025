@@ -1829,13 +1829,17 @@ function displayAlgorithmInfo(debugInfo) {
     if (algo.early_termination) {
       output += `Early Termination: YES (${algo.early_termination_reason})\n`;
       
+      if (algo.early_termination_details && algo.early_termination_details.win_probability !== null && algo.early_termination_details.win_probability !== undefined) {
+        const details = algo.early_termination_details;
+        output += `Termination Win Probability: ${(details.win_probability * 100).toFixed(1)}%\n`;
+      }
+
       // Add specific information for terminal move detection
       if (algo.early_termination_reason === 'terminal_move' && algo.early_termination_details) {
         const details = algo.early_termination_details;
         if (details.move) {
           output += `Terminal Move: ${details.move[0]},${details.move[1]} (${String.fromCharCode(97 + details.move[1])}${details.move[0] + 1})\n`;
         }
-        output += `Win Probability: ${(details.win_probability * 100).toFixed(1)}%\n`;
       }
     } else {
       output += `Early Termination: NO\n`;
@@ -1976,8 +1980,15 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   if (mctsDebugInfo.win_rate_analysis) {
     output += '=== WIN RATE ANALYSIS ===\n';
     const winRate = mctsDebugInfo.win_rate_analysis;
-    output += `Root Value: ${winRate.root_value.toFixed(4)}\n`;
-    output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
+    const rootValueLabel = winRate.root_value_source === 'root_network_eval'
+      ? 'Root Value (Root NN Eval)'
+      : 'Root Value';
+    output += `${rootValueLabel}: ${winRate.root_value.toFixed(4)}\n`;
+    if (winRate.best_child_value_available === false) {
+      output += 'Best Child Value: N/A (no child search)\n';
+    } else {
+      output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
+    }
     output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n\n`;
   }
   

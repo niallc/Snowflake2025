@@ -899,6 +899,21 @@ class TrainingStep:
         all_validation_shard_ranges: List[str],
         results_dir: str,
     ) -> str:
+        def _extract_single_experiment_result(results: Dict[str, Any]) -> Dict[str, Any]:
+            experiments_result = results.get("experiments")
+            if not isinstance(experiments_result, list) or len(experiments_result) != 1:
+                raise RuntimeError(
+                    "Chunked training restart mode expects exactly one experiment result, "
+                    f"got: {experiments_result!r}"
+                )
+            result = experiments_result[0]
+            if not isinstance(result, dict):
+                raise RuntimeError(
+                    "Chunked training restart mode expected experiment result dict, "
+                    f"got: {type(result).__name__}"
+                )
+            return result
+
         if len(experiments) != 1:
             self.logger.warning(
                 "Automatic chunked restarts currently support a single experiment. "
@@ -940,10 +955,11 @@ class TrainingStep:
                 target_end_epoch=target_end_epoch,
                 allow_missing_stream_sidecar_fallback=self.config.allow_missing_stream_sidecar_fallback,
             )
-            if initial_result.get("already_complete"):
+            initial_experiment_result = _extract_single_experiment_result(initial_result)
+            if initial_experiment_result.get("already_complete"):
                 self.logger.info("Chunked training supervisor: target already reached.")
                 return results_dir
-            if not bool(initial_result.get("stopped_due_to_max_mini_epochs")):
+            if not bool(initial_experiment_result.get("stopped_due_to_max_mini_epochs")):
                 self.logger.info(
                     "Chunked training supervisor: training completed all planned epochs."
                 )
@@ -1519,7 +1535,7 @@ Examples:
     parser.add_argument(
         "--restart-every-mini-epochs",
         type=int,
-        default=50,
+        default=10,
         help="Restart the training subprocess every N mini-epochs (default: 10, set 0 to disable).",
     )
     parser.add_argument(

@@ -63,6 +63,22 @@ def _assert_matching_board_sizes(state_board_size: int, node_board_size: int) ->
         )
 
 
+def _normalize_signed_value(value, *, source: str) -> float:
+    """Normalize a signed numeric value to a finite float in [-1, 1]."""
+    if isinstance(value, bool):
+        raise TypeError(f"{source} must be numeric, got bool")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{source} must be numeric, got {type(value)}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{source} must be finite, got {value}")
+    if not -1.0 <= value <= 1.0:
+        raise ValueError(f"{source} must be in [-1, 1], got {value}")
+
+    return value
+
+
 def _require_tree_data_signed_value(tree_data: dict, *, key: str) -> float:
     """Require a signed tree-data field and normalize it to float in [-1, 1]."""
     if not isinstance(tree_data, dict):
@@ -70,28 +86,9 @@ def _require_tree_data_signed_value(tree_data: dict, *, key: str) -> float:
     if key not in tree_data:
         raise KeyError(f"tree_data missing required key '{key}'")
 
-    value = tree_data[key]
-    if isinstance(value, bool):
-        raise TypeError(f"tree_data['{key}'] must be numeric, got bool")
-    try:
-        value = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(
-            f"tree_data['{key}'] must be numeric, "
-            f"got {type(tree_data[key])}"
-        ) from exc
-    if not math.isfinite(value):
-        raise ValueError(
-            f"tree_data['{key}'] must be finite, "
-            f"got {value}"
-        )
-    if not -1.0 <= value <= 1.0:
-        raise ValueError(
-            f"tree_data['{key}'] must be in [-1, 1], "
-            f"got {value}"
-        )
-
-    return value
+    return _normalize_signed_value(
+        tree_data[key], source=f"tree_data['{key}']"
+    )
 
 
 def _signed_value_to_checked_probability(v_signed: float, *, source_key: str) -> float:
@@ -348,7 +345,13 @@ def add_detailed_exploration_to_tree_data(tree_data: Dict[str, Any],
     return tree_data
 
 
-def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: int = 10, move_probs: Optional[Dict[str, float]] = None) -> dict:
+def format_mcts_tree_data_for_api(
+    root_node,
+    cache_misses: int,
+    max_pv_length: int = 10,
+    move_probs: Optional[Dict[str, float]] = None,
+    root_nn_value_ptm_ref_signed: Optional[float] = None,
+) -> dict:
     """
     Format MCTS tree data for API consumption.
     
@@ -366,6 +369,9 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
             "mcts_probabilities": {},
             "v_ptm_ref_signed_root": 0.0,
             "v_ptm_ref_signed_best_child": 0.0,
+            "root_value_source": "terminal_game_state",
+            "best_child_value_source": "terminal_game_state",
+            "best_child_value_available": False,
             "total_visits": 0,
             "inferences": 0,
             "total_nodes": 0,
@@ -407,24 +413,41 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
             else:
                 mcts_probabilities[move_trmph] = 0.0
 
-    # Get root value (average value of all children) - in player-to-move reference frame
-    # root.W contains accumulated values in player-to-move reference frame from backpropagation
+    root_value_source = "tree_visits"
+    best_child_value_source = "tree_children"
+    best_child_value_available = False
+
+    # Get root value (average value of all children) - in player-to-move reference frame.
+    # When no visits exist yet but the root has been evaluated, use the cached root
+    # network value so confidence-termination callers do not see a synthetic 0.0.
     if total_visits > 0:
         v_ptm_ref_signed_root = float(np.sum(root_node.W) / total_visits)
+    elif root_nn_value_ptm_ref_signed is not None:
+        v_ptm_ref_signed_root = _normalize_signed_value(
+            root_nn_value_ptm_ref_signed,
+            source="root_nn_value_ptm_ref_signed",
+        )
+        root_value_source = "root_network_eval"
     else:
         v_ptm_ref_signed_root = 0.0
+        root_value_source = "unavailable_no_visits"
 
     # Get best child value - in player-to-move reference frame
-    if len(root_node.Q) > 0:
+    if total_visits > 0 and len(root_node.Q) > 0:
         v_ptm_ref_signed_best_child = float(np.max(root_node.Q))
+        best_child_value_available = True
     else:
         v_ptm_ref_signed_best_child = 0.0
+        best_child_value_source = "unavailable_no_child_search"
 
     # For terminal move shortcut case, set appropriate values
     if total_visits == 1 and hasattr(root_node, 'terminal_moves') and any(root_node.terminal_moves):
         # Terminal move means guaranteed win for current player
         v_ptm_ref_signed_root = 1.0  # +1 = current player wins
         v_ptm_ref_signed_best_child = 1.0  # +1 = current player wins
+        root_value_source = "terminal_move_shortcut"
+        best_child_value_source = "terminal_move_shortcut"
+        best_child_value_available = True
 
     # Calculate total inferences (cache misses)
     total_inferences = cache_misses
@@ -440,6 +463,9 @@ def format_mcts_tree_data_for_api(root_node, cache_misses: int, max_pv_length: i
         "mcts_probabilities": mcts_probabilities,
         "v_ptm_ref_signed_root": v_ptm_ref_signed_root,
         "v_ptm_ref_signed_best_child": v_ptm_ref_signed_best_child,
+        "root_value_source": root_value_source,
+        "best_child_value_source": best_child_value_source,
+        "best_child_value_available": best_child_value_available,
         "total_visits": total_visits,
         "inferences": total_inferences,
         "total_nodes": total_nodes,

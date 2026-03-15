@@ -547,7 +547,13 @@ class BaselineMCTS(MCTSGumbelMixin):
         Returns:
             Dictionary containing formatted tree data for API consumption
         """
-        tree_data = format_mcts_tree_data_for_api(root, self.cache_misses, PRINCIPAL_VARIATION_MAX_LENGTH, move_probs)
+        tree_data = format_mcts_tree_data_for_api(
+            root,
+            self.cache_misses,
+            PRINCIPAL_VARIATION_MAX_LENGTH,
+            move_probs,
+            root_nn_value_ptm_ref_signed=self._get_cached_root_value_ptm_ref_signed(root),
+        )
         
         # Add detailed exploration data if available
         tree_data = add_detailed_exploration_to_tree_data(
@@ -556,8 +562,17 @@ class BaselineMCTS(MCTSGumbelMixin):
             self.exploration_trace, 
             self.simulation_count
         )
-        
+
         return tree_data
+
+    def _get_cached_root_value_ptm_ref_signed(self, root: MCTSNode) -> Optional[float]:
+        """Return cached root NN value in player-to-move reference frame when available."""
+        cached = self._get_from_cache(root.state_hash)
+        if cached is None:
+            return None
+
+        _, value_signed = cached
+        return float(red_ref_signed_to_ptm_ref_signed(float(value_signed), root.to_play))
 
     def get_win_probability(self, root: MCTSNode, root_state: HexGameState) -> float:
         """Get win probability for the current player."""

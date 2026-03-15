@@ -607,16 +607,24 @@ def _build_mcts_debug_info(
     """Assemble MCTS diagnostics payload."""
     algorithm = _resolve_mcts_algorithm_label(stats, algorithm_termination_info)
     root_win_prob = compute_win_probability_from_tree_data(tree_data)
+    best_child_value_available = bool(tree_data.get("best_child_value_available", True))
     best_child_signed_value = tree_data["v_ptm_ref_signed_best_child"]
-    best_child_win_prob = compute_best_child_win_probability_from_tree_data(tree_data)
+    best_child_win_prob = (
+        compute_best_child_win_probability_from_tree_data(tree_data)
+        if best_child_value_available
+        else None
+    )
     algorithm_win_prob = (
         algorithm_termination_info.win_probability if algorithm_termination_info else None
     )
     temperature_scaled_mcts_probs = tree_data.get("temperature_scaled_probabilities", {})
+    best_child_win_prob_str = (
+        f"{best_child_win_prob:.3f}" if best_child_win_prob is not None else "N/A"
+    )
 
     app.logger.debug(
         f"Value conversion: root_prob={root_win_prob:.3f}, "
-        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob:.3f}"
+        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob_str}"
     )
     if algorithm_termination_info:
         app.logger.debug(
@@ -674,7 +682,12 @@ def _build_mcts_debug_info(
         },
         "win_rate_analysis": {
             "root_value": tree_data["v_ptm_ref_signed_root"],
+            "root_value_source": tree_data.get("root_value_source", "tree_visits"),
             "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
+            "best_child_value_source": tree_data.get(
+                "best_child_value_source", "tree_children"
+            ),
+            "best_child_value_available": best_child_value_available,
             "win_probability": root_win_prob,
             "best_child_win_probability": best_child_win_prob,
         },
