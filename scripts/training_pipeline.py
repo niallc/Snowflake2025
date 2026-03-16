@@ -43,6 +43,7 @@ from hex_ai.file_utils import GracefulShutdown
 from hex_ai.error_handling import GracefulShutdownRequested
 from hex_ai.training_orchestration import run_hyperparameter_tuning_current_data
 from hex_ai.training_utils import create_hyperparameter_sweep, HYPERPARAMETER_SHORT_LABELS
+from hex_ai.model_spec import resolve_model_spec_for_checkpoint_path
 
 # Script imports (moved to top level)
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
@@ -1743,7 +1744,16 @@ def main():
                 raise ValueError("--model-epoch is required when using --model-path")
             if args.model_mini is None:
                 raise ValueError("--model-mini is required when using --model-path")
-        
+
+        training_resume_source = None
+        if not args.no_training and not args.train_from_scratch:
+            if args.training_resume_checkpoint is not None:
+                training_resume_source = os.path.expanduser(args.training_resume_checkpoint)
+            elif args.model_path is not None:
+                training_resume_source = os.path.join(
+                    args.model_path,
+                    f"epoch{args.model_epoch}_mini{args.model_mini}.pt.gz",
+                )
 
         # Collect hyperparameter overrides
         hyperparameter_overrides = {}
@@ -1753,6 +1763,35 @@ def main():
             hyperparameter_overrides["num_blocks"] = [args.num_blocks]
         if args.trunk_channels is not None:
             hyperparameter_overrides["trunk_channels"] = [args.trunk_channels]
+
+        if training_resume_source is not None:
+            missing_architecture_keys = [
+                key
+                for key in ("model_type", "num_blocks", "trunk_channels")
+                if key not in hyperparameter_overrides
+            ]
+            if missing_architecture_keys:
+                checkpoint_spec = resolve_model_spec_for_checkpoint_path(
+                    training_resume_source,
+                    map_location="cpu",
+                )
+                inferred_architecture = {
+                    "model_type": checkpoint_spec.model_type,
+                    "num_blocks": int(checkpoint_spec.num_blocks),
+                    "trunk_channels": int(checkpoint_spec.trunk_channels),
+                }
+                for key in missing_architecture_keys:
+                    hyperparameter_overrides[key] = [inferred_architecture[key]]
+                logger.info(
+                    "Inferred missing training architecture overrides from "
+                    "resume checkpoint %s: %s",
+                    training_resume_source,
+                    {
+                        key: inferred_architecture[key]
+                        for key in missing_architecture_keys
+                    },
+                )
+
         if args.learning_rate is not None:
             hyperparameter_overrides["learning_rate"] = [args.learning_rate]
         if args.train_batch_size is not None:
